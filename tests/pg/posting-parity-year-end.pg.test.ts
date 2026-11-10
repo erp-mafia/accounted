@@ -354,6 +354,18 @@ const FLOWS: Flow[] = [
         mappingSource: 'se.currency-revaluation',
       },
       {
+        // The close turns the revaluation back on the next year's first day (#58).
+        entry: 'Återföring omvärdering utländsk valuta 2025-12-31',
+        kind: 'ledger.currency_revaluation',
+        role: 'produced',
+        category: 'finance.banking',
+        occurred_on: '2026-01-01',
+        subject: (seed) => seed.ab.next,
+        amount: 500,
+        link_basis: USER,
+        mappingSource: 'se.currency-revaluation',
+      },
+      {
         entry: 'Årsbokslut 2025',
         kind: 'year_end.closing',
         role: 'produced',
@@ -981,7 +993,7 @@ describe('posting port parity, year-end (pg)', () => {
           const before = await Promise.all(companiesOf(seed).map(lastVoucherNumber))
           for (const flow of FLOWS) await runWithActor({ type: 'user' }, () => flow.run(seed))
           const after = await Promise.all(companiesOf(seed).map(lastVoucherNumber))
-          expect(after.map((n, i) => n - before[i]!), table).toEqual([6, 4, 1])
+          expect(after.map((n, i) => n - before[i]!), table).toEqual([7, 4, 1])
           for (const companyId of companiesOf(seed)) {
             expect((await linkCounts([companyId])).filter((e) => e.links > 0), table).toEqual([])
           }

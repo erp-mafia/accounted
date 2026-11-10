@@ -100,7 +100,7 @@ Unlock a locked period with \`POST /fiscal-periods/{id}/unlock\`. A closed perio
 \`POST /fiscal-periods/{id}/year-end\` is the single engine-touching step. It takes **no request body** (only the mandatory \`Idempotency-Key\` header); the next fiscal period is resolved automatically — an existing next period is reused, otherwise one is created. In order, \`executeYearEndClosing\`:
 
 1. Re-validates readiness (no drafts, no unexplained voucher gaps, trial balance balanced). Preview it first with \`GET /compliance/check?type=year_end_readiness&fiscal_period_id=$PERIOD_ID\`.
-2. Runs currency revaluation, posting FX gains/losses to \`3960\`/\`7960\` **before** the closing entry so they get swept into the result.
+2. Runs currency revaluation, posting FX gains/losses to \`3960\`/\`7960\` **before** the closing entry so they get swept into the result, and turns it back (återföring, \`source_type=currency_revaluation\`) on the first day of the next period: payments and later revaluations are measured from the original booking rate, so the next year books only the difference that arises in it.
 3. Posts one closing entry (\`source_type=year_end\`, series A, "Årsbokslut …"): it zeros every result account in BAS class 3-8 and books the net result **directly** onto \`2099\` "Årets resultat" (aktiebolag) — or \`2010\` "Eget kapital" for enskild firma. There is no \`8910\` intermediate step.
 4. Locks, then closes the period (irreversible per BFL 5 kap 8 §).
 5. Generates the opening-balance verifikat in the next period: every BAS class 1-2 account's UB becomes its IB, as a single balanced entry.

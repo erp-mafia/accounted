@@ -49,6 +49,7 @@ vi.mock('@/lib/reports/continuity-check', () => ({ validateBalanceContinuity: vi
 vi.mock('@/lib/bookkeeping/currency-revaluation', () => ({
   previewCurrencyRevaluation: vi.fn(async () => ({ items: [], lines: [], closingRates: {}, totalGain: 0, totalLoss: 0, netEffect: 0 })),
   executeCurrencyRevaluation: vi.fn(async () => null),
+  syncCurrencyRevaluationReversals: vi.fn(async () => ({ posted: [], stornoed: [] })),
 }))
 vi.mock('../result-appropriation-service', () => ({
   generateResultAppropriation: vi.fn(async () => null),
@@ -419,5 +420,90 @@ describe('year-end close engine input (posting port parity)', () => {
     // A close whose door handed nothing down records no basis, and its storno is system_derived.
     const notZeroed = runs.find((r) => r.name.startsWith('the result accounts do not zero'))!
     expect(notZeroed.events.map((e) => e.evidence)).toEqual([{}, { link_basis: 'system_derived' }])
+  })
+})
+
+describe('year-end close: the balansdag revaluation turned back on the next year\'s first day (accounted#58)', () => {
+  const REVALUATION = '00000000-0000-4000-8000-0000000e0f01'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.unstubAllEnvs()
+    vi.stubEnv('POSTING_EVENTS', '')
+    eventBus.clear()
+  })
+
+  /** One aktiebolag close whose step 2 posted a revaluation; every engine call in order. */
+  async function closeWithRevaluation() {
+    const { executeCurrencyRevaluation } = await import('@/lib/bookkeeping/currency-revaluation')
+    vi.mocked(executeCurrencyRevaluation).mockResolvedValueOnce({
+      entry: { id: REVALUATION },
+      preview: { items: [], lines: [], closingRates: {}, totalGain: 500, totalLoss: 0, netEffect: 500 },
+    } as never)
+    const calls: Array<[string, string]> = []
+    let closed = false
+    mockedCreate.mockImplementation(async (...args: unknown[]) => {
+      const input = args[3] as CreateJournalEntryInput
+      calls.push(['createJournalEntry', input.source_type])
+      if (input.source_type === 'year_end') closed = true
+      return { id: `je-${input.source_type}`, voucher_series: 'A', voucher_number: 1, entry_date: input.entry_date } as never
+    })
+    mockedReverse.mockImplementation(async (...args: unknown[]) => {
+      calls.push(['reverseEntry', args[3] as string])
+      return { id: 'storno', voucher_series: 'A', voucher_number: 2 } as never
+    })
+    vi.mocked(generateTrialBalance).mockImplementation(async () => {
+      const rows = closed ? closedRows('2099', 'Årets resultat') : [...BALANCE_ROWS, ...RESULT_ROWS]
+      return { rows, isBalanced: true, totalDebit: 0, totalCredit: 0 } as never
+    })
+    vi.mocked(validateBalanceContinuity).mockResolvedValue({ valid: true, discrepancies: [] } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue({ id: NEXT, name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } as never)
+    vi.mocked(fetchObjectClosingBalances).mockResolvedValue(new Map())
+    const periods: Record<string, Record<string, unknown>> = {
+      [CLOSING]: {
+        id: CLOSING, company_id: COMPANY, name: '2025', period_start: '2025-01-01', period_end: '2025-12-31',
+        is_closed: false, locked_at: null, closing_entry_id: null, opening_balance_entry_id: null, import_hold: false,
+      },
+      [NEXT]: { id: NEXT, company_id: COMPANY, name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false },
+    }
+    const { supabase } = createTableMockSupabase({
+      fiscal_periods: (chain: Chain) => ({ data: periods[eqOf(chain, 'id') as string] ?? null }),
+      journal_entries: { data: [], count: 0 },
+      company_settings: { data: { entity_type: 'aktiebolag', accounting_method: 'accrual' } },
+      invoices: { data: [] },
+      supplier_invoices: { data: [] },
+    })
+    return { supabase, calls, run: () => executeYearEndClosing(supabase as never, COMPANY, USER, CLOSING, () => ({ linkBasis: USER_CREATED })) }
+  }
+
+  it('turns the revaluation back into the next year before the closing entry', async () => {
+    const { syncCurrencyRevaluationReversals } = await import('@/lib/bookkeeping/currency-revaluation')
+    const sync = vi.mocked(syncCurrencyRevaluationReversals)
+    const { supabase, calls, run } = await closeWithRevaluation()
+    sync.mockImplementationOnce(async () => {
+      calls.push(['syncCurrencyRevaluationReversals', CLOSING])
+      return { posted: [], stornoed: [] }
+    })
+
+    await run()
+
+    expect(sync).toHaveBeenCalledWith(supabase, COMPANY, USER, CLOSING, expect.any(Function), { linkBasis: USER_CREATED })
+    // The next year it books into is the one the close opens.
+    await expect(sync.mock.calls[0]![4]()).resolves.toMatchObject({ id: NEXT, period_start: '2026-01-01' })
+    expect(calls.map(([fn, what]) => `${fn}:${what}`)).toEqual([
+      `syncCurrencyRevaluationReversals:${CLOSING}`,
+      'createJournalEntry:year_end',
+      'createJournalEntry:opening_balance',
+    ])
+  })
+
+  it('a refused återföring stornoes the revaluation and stops before the closing entry', async () => {
+    const { syncCurrencyRevaluationReversals } = await import('@/lib/bookkeeping/currency-revaluation')
+    vi.mocked(syncCurrencyRevaluationReversals).mockRejectedValueOnce(new Error('Bookkeeping is locked through 2026-02-28'))
+    const { calls, run } = await closeWithRevaluation()
+
+    await expect(run()).rejects.toThrow('locked through')
+
+    expect(calls).toEqual([['reverseEntry', REVALUATION]])
   })
 })

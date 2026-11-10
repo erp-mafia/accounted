@@ -107,6 +107,7 @@ function createMockSupabase(config: MockTablesConfig) {
             ...((() => {
               const chain: Record<string, unknown> = {}
               chain.eq = vi.fn().mockReturnValue(chain)
+              chain.is = vi.fn().mockReturnValue(chain)
               chain.select = vi.fn().mockReturnValue(chain)
               // Terminal: return count
               Object.defineProperty(chain, 'then', {
@@ -208,6 +209,7 @@ function createFullMockSupabase(config: MockTablesConfig) {
         const journalChain: Record<string, unknown> = {}
         journalChain.select = vi.fn().mockReturnValue(journalChain)
         journalChain.eq = vi.fn().mockReturnValue(journalChain)
+        journalChain.is = vi.fn().mockReturnValue(journalChain)
         journalChain.then = (resolve: (val: unknown) => void) => {
           resolve(countResult)
         }

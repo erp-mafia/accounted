@@ -233,6 +233,7 @@ vi.mock('@/lib/bookkeeping/currency-revaluation', () => ({
     netEffect: 0,
   }),
   executeCurrencyRevaluation: vi.fn().mockResolvedValue(null),
+  syncCurrencyRevaluationReversals: vi.fn().mockResolvedValue({ posted: [], stornoed: [] }),
 }))
 
 vi.mock('../period-service', () => ({
