@@ -328,7 +328,9 @@ export async function unapprovePaymentOrders(
  * When releasable, the person may ask again with releaseUnsigned: the bank is
  * asked once more, and on the same answer the order is cancelled here (crm#1282).
  * The bank keeps an unsigned payment it never executes; the invoice is free
- * for a new payment.
+ * for a new payment. A bank that refuses the cancel with an error instead of
+ * an answer says nothing of the payment: it is read once, and the same holds
+ * when the bank reports it unsigned (crm#1757).
  */
 export async function cancelPaymentOrder(
   ctx: OperationContext,
@@ -401,6 +403,32 @@ export async function cancelPaymentOrder(
     return done
   }
 
+  // A payment the bank holds unsigned and refused to cancel (refusedWhileUnsigned,
+  // or a refusal the bank's status read showed unsigned): released here on
+  // request when isReleasableUnsigned allows it, otherwise refused with whether
+  // it may be. extra: what the bank's refusal said, on the event and the refusal.
+  const releaseOrRefuseUnsigned = async (
+    signing: CancelSigning | null,
+    answer: PaymentCancelResult,
+    extra: Record<string, unknown> = {},
+  ): Promise<OperationOutcome<{ cancelled: boolean; status: string; released_unsigned?: boolean }>> => {
+    const releasable = isReleasableUnsigned(order, signing, answer, Date.now())
+    if (releasable && input.releaseUnsigned) {
+      const done = await markCancelled(order.status, { providerStatus: answer.providerStatus }, {
+        reason: 'UNSIGNED_AT_BANK_NOT_CANCELLABLE',
+        released_unsigned: true,
+        ...extra,
+      })
+      if (done) ctx.log.info('unsigned bank payment released here after the bank refused its cancel', { orderId: order.id })
+      return { ok: true, data: { cancelled: done, status: done ? 'cancelled' : order.status, released_unsigned: done } }
+    }
+    return {
+      ok: false,
+      code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED',
+      details: { payment_order_id: order.id, provider_status: answer.providerStatus, releasable, ...extra },
+    }
+  }
+
   if (order.status === 'draft' || order.status === 'approved') {
     if (input.dryRun) {
       return { ok: true, dryRun: true, preview: { payment_order_id: order.id, status: order.status, at_bank: false, bank_asked: false } }
@@ -435,7 +463,47 @@ export async function cancelPaymentOrder(
   } catch (error) {
     const failure = providerFailure(error)
     ctx.log.warn('bank payment cancel failed', { orderId: order.id, code: failure.details.provider_code })
-    return { ok: false, ...failure }
+    // The bank could not be reached, or its answer was lost: nothing more is known now.
+    if (failure.code !== 'PAYMENT_PROVIDER_REFUSED') return { ok: false, ...failure }
+    // The bank refused the cancel with an error, not an answer (crm#1757: a
+    // payment never signed, RCVD at the bank, could never be cancelled, and
+    // the person was told the bank did not accept the payment). The error
+    // says nothing of the payment, so it is read once, as after a cancel the
+    // bank did not confirm: one the bank closed unpaid closes here, and one it
+    // holds unsigned with no signature finished here is the unsigned refusal
+    // (crm#1282). Anything else stays as it is, never cancelled on our word.
+    const providerCode = failure.details.provider_code
+    await logPaymentOrderEvents(writer, [
+      {
+        company_id: ctx.companyId,
+        payment_order_id: order.id,
+        event_type: 'error',
+        from_status: order.status,
+        actor_user_id: ctx.userId,
+        detail: { code: 'BANK_CANCEL_NOT_CONFIRMED', answer: 'refused', provider_code: providerCode, provider_payment_id: order.provider_payment_id },
+      },
+    ], ctx.log)
+    const state = await readBankState(ctx, provider, party.ctx, order)
+    if (state && CLOSED_UNPAID.has(state.status)) {
+      const next = await applyProviderState(writer, order, state, ctx.userId, ctx.log)
+      if (CLOSED_UNPAID.has(next)) return { ok: true, data: { cancelled: next === 'cancelled', status: next } }
+    }
+    if (state?.status === 'submitted') {
+      // Read after the bank refused, so a signing started meanwhile counts.
+      const signing = await readSigning(ctx, order)
+      if (noSignatureHere(order, signing)) {
+        return releaseOrRefuseUnsigned(
+          signing,
+          { outcome: 'too_late', providerStatus: state.providerStatus, unsigned: true },
+          { provider_code: providerCode },
+        )
+      }
+    }
+    return {
+      ok: false,
+      code: 'PAYMENT_CANCEL_NOT_CONFIRMED',
+      details: { payment_order_id: order.id, provider_status: state?.providerStatus ?? null, provider_code: providerCode },
+    }
   }
   if (answer.outcome !== 'cancelled') {
     await logPaymentOrderEvents(writer, [
@@ -483,20 +551,7 @@ export async function cancelPaymentOrder(
     if (!refusedWhileUnsigned(order, answer, signing)) {
       return { ok: false, code: CANCEL_ANSWER_CODES[answer.outcome], details: { payment_order_id: order.id, provider_status: answer.providerStatus } }
     }
-    const releasable = isReleasableUnsigned(order, signing, answer, Date.now())
-    if (releasable && input.releaseUnsigned) {
-      const done = await markCancelled(order.status, { providerStatus: answer.providerStatus }, {
-        reason: 'UNSIGNED_AT_BANK_NOT_CANCELLABLE',
-        released_unsigned: true,
-      })
-      if (done) ctx.log.info('unsigned bank payment released here after the bank refused its cancel', { orderId: order.id })
-      return { ok: true, data: { cancelled: done, status: done ? 'cancelled' : order.status, released_unsigned: done } }
-    }
-    return {
-      ok: false,
-      code: 'PAYMENT_CANCEL_UNSIGNED_REFUSED',
-      details: { payment_order_id: order.id, provider_status: answer.providerStatus, releasable },
-    }
+    return releaseOrRefuseUnsigned(signing, answer)
   }
   const done = await markCancelled(order.status, { providerStatus: answer.providerStatus })
   if (!done) {
