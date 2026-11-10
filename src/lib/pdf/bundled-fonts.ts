@@ -63,14 +63,19 @@ async function readBundledFont(fileName: string): Promise<string> {
  * after a document that used Å or Ö but not A or O, such as the signing
  * stamp with initials "ÅÖ"; created here first, every glyph keeps its
  * character for the life of the process.
+ *
+ * Also used for an uploaded invoice font (lib/invoices/pdf-fonts.ts), whose
+ * four faces may share one parsed font: each parsed font is warmed once.
  */
-function warmGlyphCache(family: BundledPdfFontFamily): void {
+export function warmGlyphCache(family: string): void {
+  const warmed = new Set<unknown>()
   for (const [fontWeight, fontStyle] of [[400, 'normal'], [700, 'normal'], [400, 'italic'], [700, 'italic']] as const) {
     const font = Font.getFont({ fontFamily: family, fontWeight, fontStyle }).data as unknown as {
       characterSet?: number[]
       glyphForCodePoint?: (codePoint: number) => unknown
     } | null
-    if (!font?.characterSet || !font.glyphForCodePoint) continue
+    if (!font?.characterSet || !font.glyphForCodePoint || warmed.has(font)) continue
+    warmed.add(font)
     for (const codePoint of font.characterSet) font.glyphForCodePoint(codePoint)
   }
 }

@@ -13,7 +13,7 @@ import {
   toInvoiceFontDataUrl,
 } from '@/lib/invoices/font-files'
 import { createLogger } from '@/lib/logger'
-import { registerBundledFont } from '@/lib/pdf/bundled-fonts'
+import { registerBundledFont, warmGlyphCache } from '@/lib/pdf/bundled-fonts'
 import { createServiceClient } from '@/lib/supabase/server'
 
 export const CUSTOM_INVOICE_FONT_RENDER_PREFIX = 'InvoiceCustom-'
@@ -70,6 +70,30 @@ async function downloadCustomFontDataUrl(
   }
 }
 
+/**
+ * Make the four faces of an uploaded font one parsed font.
+ *
+ * The bold and italic faces are the same file as the regular one, but
+ * @react-pdf/renderer parses every registered face on its own, while the
+ * PDF embeds them as ONE font (pdfkit merges fonts by PostScript name). A
+ * glyph drawn in one face was embedded through the face that drew first,
+ * and fontkit cached it there without its character. The next invoice drawn
+ * in that face lost the glyph from the line and the text layer, for the life
+ * of the process (crm#1763: a bold total "5 124,00" printed as "124,00", the
+ * bold OCR number without its first digit, "Org.nr" read as "0rg.nr").
+ * warmGlyphCache creates every glyph a character maps to before that can
+ * happen, but not a ligature such as "fi", which no character maps to; with
+ * one parsed font, every glyph is embedded through the font that laid it out.
+ */
+function shareOneParsedFont(family: string): void {
+  const regular = Font.getFont({ fontFamily: family, fontWeight: 400, fontStyle: 'normal' })
+  for (const [fontWeight, fontStyle] of [[700, 'normal'], [400, 'italic'], [700, 'italic']] as const) {
+    const face = Font.getFont({ fontFamily: family, fontWeight, fontStyle })
+    face.data = regular.data
+    face.loadResultPromise = regular.loadResultPromise
+  }
+}
+
 async function registerCustomFont(company: CompanySettings): Promise<string | null> {
   const storagePath = company.invoice_custom_font_path
   if (!storagePath || invalidCustomFontPaths.has(storagePath)) return null
@@ -99,6 +123,8 @@ async function registerCustomFont(company: CompanySettings): Promise<string | nu
         invalidCustomFontPaths.add(storagePath)
         return null
       }
+      shareOneParsedFont(family)
+      warmGlyphCache(family)
       registeredFamilies.add(family)
       return family
     })()
