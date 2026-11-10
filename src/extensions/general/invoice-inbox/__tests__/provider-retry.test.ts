@@ -368,6 +368,23 @@ describe('retryProviderUnavailableReadings: the upload path gates', () => {
       expect.objectContaining({ companyId: 'co-1', pageCount: 12, gatedByPageCount: true, maxAutoExtractPages: 8 }),
     )
   })
+
+  it('reads with the mail the item came with, as its upload was read (crm#1749)', async () => {
+    const mailed = candidate('1', 'failed:provider_unavailable', {
+      email_subject: 'Your invoice of Nov 7, 2026',
+      email_received_at: '2026-11-07T07:41:00+00:00',
+    })
+    const { supabase, selects } = setup({ due: { 'failed:provider_unavailable': [mailed, candidate('2')] } })
+
+    await retryProviderUnavailableReadings(supabase, NOW)
+
+    const asked = selects[0].find((c) => c.method === 'select')?.args[0]
+    expect(asked).toContain('email_subject, email_received_at')
+    expect(vi.mocked(readForInbox).mock.calls.map(([, job]) => job.emailContext)).toEqual([
+      { subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00+00:00' },
+      { subject: null, receivedAt: null },
+    ])
+  })
 })
 
 describe('readingRetryOf: what the Inkorg promises', () => {
