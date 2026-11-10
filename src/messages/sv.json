@@ -12334,6 +12334,8 @@
     "opening_balances_title": "Ingående saldon (byte av lönesystem)",
     "opening_balances_description": "Fylls i vid byte till {appName} mitt under året: ackumulerade värden och semestersaldon från det tidigare lönesystemet.",
     "opening_balances_locked_notice": "Låst: den anställda har en bokförd lönekörning. Saldon låses upp om körningen korrigeras.",
+    "opening_balances_locked_none": "Kan inte läggas in: den anställda har redan en bokförd lönekörning. Korrigera körningen så låses saldona upp, och lägg in dem innan korrigeringen bokförs.",
+    "opening_balances_locked_open_run": "Öppna lönekörningen",
     "opening_balances_cutover_date": "Bytesdatum",
     "opening_balances_cutover_hint": "Första dagen i den första månad som körs i {appName} (alltid den 1:a).",
     "opening_balances_karens": "Karensavdrag senaste 12 mån",
