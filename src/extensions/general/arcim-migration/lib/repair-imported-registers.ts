@@ -129,6 +129,8 @@ function repairOf(resource: Resource, id: string, fill: CardRepair['fill'], part
 
 /** A customer card against the provider's record. `sourceMapped`: the import made the card from this record. */
 export function customerRepair(row: CustomerRow, dto: CustomerDto, sourceMapped: boolean, now: string): CardRepair | null {
+  // No provider, so no customer number: this repair fills none (crm#1744 left
+  // the numbers of earlier imports to a decision of their own).
   const mapped = mapCustomer(dto, '', '')
   const fill = buildCustomerMetadataEnrichment(row, mapped)
   const correct: Record<string, unknown> = {}
@@ -168,6 +170,7 @@ export function customerRepair(row: CustomerRow, dto: CustomerDto, sourceMapped:
 
 /** The supplier twin of customerRepair. */
 export function supplierRepair(row: SupplierRow, dto: SupplierDto, sourceMapped: boolean, now: string): CardRepair | null {
+  // No chart read, so no default account: as customerRepair (crm#1744).
   const mapped = mapSupplier(dto, '', '')
   const fill = buildSupplierEnrichment(row, mapped)
   const correct: Record<string, unknown> = {}

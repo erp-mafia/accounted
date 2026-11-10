@@ -438,6 +438,12 @@ export interface SupplierDto {
   bic?: string;
   /** The currency the supplier bills in (ISO 4217). */
   currencyCode?: string;
+  /**
+   * The account the provider proposes for the supplier's invoices (Fortnox's
+   * PreDefinedAccount), as the provider states it. Not vetted against any
+   * chart here: the migration keeps it only when the company's chart holds it.
+   */
+  defaultExpenseAccount?: string;
   defaultPaymentTermsDays?: number;
   note?: string;
   createdAt?: string;

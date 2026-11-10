@@ -34,6 +34,8 @@ export interface ExistingCustomerMetadata extends ExistingPartyDetails {
    * encrypted in personal_number.
    */
   customer_type?: string | null
+  /** The kundnummer; a matched card without one gets the provider's (crm#1744). */
+  customer_number?: string | null
 }
 
 export interface ExistingSupplierDetails extends ExistingPartyDetails {
@@ -47,6 +49,8 @@ export interface ExistingSupplierDetails extends ExistingPartyDetails {
   account_number?: string | null
   iban?: string | null
   bic?: string | null
+  /** The default account; filled only with one the mapped row vetted against the chart (crm#1744). */
+  default_expense_account?: string | null
 }
 
 /**
@@ -71,6 +75,7 @@ export interface CustomerMetadataEnrichment extends PartyDetailsEnrichment {
   invoice_email_cc_addresses?: string[]
   invoice_email_bcc_addresses?: string[]
   org_number?: string
+  customer_number?: string
 }
 
 export interface SupplierEnrichment extends PartyDetailsEnrichment {
@@ -81,11 +86,12 @@ export interface SupplierEnrichment extends PartyDetailsEnrichment {
   account_number?: string
   iban?: string
   bic?: string
+  default_expense_account?: string
 }
 
 const ADDRESS_COLUMNS = ['address_line1', 'address_line2', 'postal_code', 'city'] as const
 const SINGLE_COLUMNS = ['email', 'phone', 'country', 'vat_number', 'notes'] as const
-const SUPPLIER_COLUMNS = ['org_number', 'bankgiro', 'plusgiro', 'iban', 'bic'] as const
+const SUPPLIER_COLUMNS = ['org_number', 'bankgiro', 'plusgiro', 'iban', 'bic', 'default_expense_account'] as const
 
 /** A real provider value: an empty or blank string is no value. */
 function providerText(value: unknown): string | undefined {
@@ -139,6 +145,7 @@ export function buildCustomerMetadataEnrichment(
   const cc = emailList(mapped.invoice_email_cc_addresses)
   const bcc = emailList(mapped.invoice_email_bcc_addresses)
   const orgNumber = providerText(mapped.org_number)
+  const customerNumber = providerText(mapped.customer_number)
 
   if (existing.org_number === null && existing.customer_type !== 'individual' && orgNumber) {
     changes.org_number = orgNumber
@@ -146,6 +153,7 @@ export function buildCustomerMetadataEnrichment(
   if (existing.contact_person === null && contactPerson) changes.contact_person = contactPerson
   if (existing.invoice_email_cc_addresses === null && cc) changes.invoice_email_cc_addresses = cc
   if (existing.invoice_email_bcc_addresses === null && bcc) changes.invoice_email_bcc_addresses = bcc
+  if (existing.customer_number === null && customerNumber) changes.customer_number = customerNumber
 
   return Object.keys(changes).length > 0 ? changes : null
 }
@@ -207,6 +215,7 @@ export async function writeCustomerEnrichment(
       invoice_email_cc_addresses: changes.invoice_email_cc_addresses,
       invoice_email_bcc_addresses: changes.invoice_email_bcc_addresses,
       org_number: changes.org_number,
+      customer_number: changes.customer_number,
       email: changes.email,
       phone: changes.phone,
       address_line1: changes.address_line1,
@@ -223,6 +232,7 @@ export async function writeCustomerEnrichment(
   if (changes.invoice_email_cc_addresses !== undefined) query = query.is('invoice_email_cc_addresses', null)
   if (changes.invoice_email_bcc_addresses !== undefined) query = query.is('invoice_email_bcc_addresses', null)
   if (changes.org_number !== undefined) query = query.is('org_number', null)
+  if (changes.customer_number !== undefined) query = query.is('customer_number', null)
   if (changes.email !== undefined) query = query.is('email', null)
   if (changes.phone !== undefined) query = query.is('phone', null)
   if (fillsAddress(changes)) {
@@ -260,6 +270,7 @@ export async function writeSupplierEnrichment(
       account_number: changes.account_number,
       iban: changes.iban,
       bic: changes.bic,
+      default_expense_account: changes.default_expense_account,
       notes: changes.notes,
     })
     .eq('id', id)
@@ -277,6 +288,7 @@ export async function writeSupplierEnrichment(
   if (changes.account_number !== undefined) query = query.is('clearing_number', null).is('account_number', null)
   if (changes.iban !== undefined) query = query.is('iban', null)
   if (changes.bic !== undefined) query = query.is('bic', null)
+  if (changes.default_expense_account !== undefined) query = query.is('default_expense_account', null)
   if (changes.notes !== undefined) query = query.is('notes', null)
   const { data, error } = await query.select('id').maybeSingle()
   return { data: (data as { id: string } | null) ?? null, error }

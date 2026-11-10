@@ -21,7 +21,7 @@ import {
   stripOrgNumberFormatting,
   swedishNumberKind,
 } from '@/lib/invariants/org-number'
-import { isAccountNumber } from '@/lib/invariants/account-number'
+import { accountClass, isAccountNumber } from '@/lib/invariants/account-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
 import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
@@ -699,9 +699,55 @@ function paymentTermsDays(days: number | undefined): number {
   return days !== undefined && Number.isInteger(days) && days >= 0 && days <= 365 ? days : 30
 }
 
+/** The longest customer number the customer form and API accept (CustomerCreate, customer_number max 32). */
+const CUSTOMER_NUMBER_MAX_LENGTH = 32
+
+/**
+ * The customer number (kundnummer) the user knows the customer by at the
+ * source, as the customers.customer_number the invoice prints, or null
+ * (crm#1744). The import never wrote it, so every migrated customer lost it.
+ *
+ * Only a provider whose record names that number: Fortnox and Visma
+ * (CustomerNumber), Briox (customer_number) and Bokio (customerNumber; its
+ * mapper's customerNumber is the record's id). Björn Lundén and WINT hand
+ * over an id that is not known to be the number the user sees (see
+ * sourceCustomerNumber in customer-match), so they get none rather than an
+ * id printed as a kundnummer. Trimmed like the customer form; a number the
+ * form could not save (over 32 characters) is left out, not cut. No
+ * `provider`, no number. Not unique per company (20260709140000), so a
+ * number two source customers share lands on both.
+ */
+export function providerCustomerNumber(provider: string | undefined, dto: CustomerDto): string | null {
+  const raw = dto._raw ?? {}
+  const stated = provider === 'fortnox' || provider === 'visma' ? dto.customerNumber
+    : provider === 'briox' ? raw['customer_number'] ?? raw['customernumber']
+    : provider === 'bokio' ? raw['customerNumber']
+    : undefined
+  const number = typeof stated === 'string' ? stated.trim()
+    : typeof stated === 'number' && Number.isFinite(stated) ? String(stated)
+    : ''
+  return number && number.length <= CUSTOMER_NUMBER_MAX_LENGTH ? number : null
+}
+
+/**
+ * The account a supplier's provider proposes for its invoices, when it has
+ * the shape of one the supplier form offers as a default: a BAS cost account,
+ * class 4-7 (SupplierForm). Whether the company's chart holds it is the
+ * caller's read (mapSupplier's `activeAccounts`).
+ */
+export function proposedExpenseAccount(dto: Pick<SupplierDto, 'defaultExpenseAccount'>): string | null {
+  const account = dto.defaultExpenseAccount?.trim() ?? null
+  const cls = accountClass(account)
+  return cls !== null && cls >= 4 && cls <= 7 ? account : null
+}
+
 // ── Public mappers ──────────────────────────────────────────────────
 
-export function mapCustomer(dto: CustomerDto, userId: string, companyId: string): Record<string, unknown> {
+/**
+ * `provider`: the provider the record came from, for its customer number
+ * (providerCustomerNumber). Left out, the row carries no customer number.
+ */
+export function mapCustomer(dto: CustomerDto, userId: string, companyId: string, provider?: string): Record<string, unknown> {
   const addr = formatAddress(dto.party.postalAddress)
   const customerType = inferCustomerType(dto)
   const number = getOrgNumber(dto.party)
@@ -732,6 +778,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     company_id: companyId,
     name: dto.party.name,
     customer_type: customerType,
+    customer_number: providerCustomerNumber(provider, dto),
     contact_person: dto.party.contact?.name || null,
     email: dto.party.contact?.email || null,
     phone: dto.party.contact?.telephone || null,
@@ -788,8 +835,15 @@ function supplierCurrency(code: string | undefined): Currency {
   return CURRENCIES.find((currency) => currency === stated) ?? 'SEK'
 }
 
-export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {
+/**
+ * `activeAccounts`: the accounts the company's chart holds active, as far as
+ * the caller read them (the job worker reads the one a supplier proposes).
+ * Left out, the row carries no default account.
+ */
+export function mapSupplier(dto: SupplierDto, userId: string, companyId: string,
+  activeAccounts?: ReadonlySet<string>): Record<string, unknown> {
   const addr = formatAddress(dto.party.postalAddress)
+  const proposed = proposedExpenseAccount(dto)
   // Each one validated on its own, as an invoice's stated payee is: a
   // malformed IBAN is left out rather than stored or failing the row.
   const foreign = cleanSupplierPaymentDetails({ iban: dto.iban, bic: dto.bic })
@@ -810,8 +864,11 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
     ...supplierBankAccount(dto),
     iban: foreign.iban ?? null,
     bic: foreign.bic ?? null,
-    // No provider names a default expense account the chart here can trust.
-    default_expense_account: null,
+    // The account the provider proposes (Fortnox's PreDefinedAccount), only
+    // when the company's chart holds it active (crm#1744). A default naming an
+    // account the chart lacks would be put on every invoice from the supplier
+    // and refused at booking, so it is left out, never created.
+    default_expense_account: proposed !== null && activeAccounts?.has(proposed) ? proposed : null,
     default_payment_terms: paymentTermsDays(dto.defaultPaymentTermsDays),
     default_currency: supplierCurrency(dto.currencyCode),
     notes: dto.note || null,

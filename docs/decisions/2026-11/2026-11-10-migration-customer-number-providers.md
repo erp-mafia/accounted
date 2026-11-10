@@ -1,0 +1,1 @@
+[2026-11-10] The provider migration writes customer_number only where the record names the number the user sees (Fortnox, Visma, Briox, Bokio); Björn Lundén and WINT send an id, so none rather than an id printed as kundnummer. Not unique, so shared numbers land on all (crm#1744).
