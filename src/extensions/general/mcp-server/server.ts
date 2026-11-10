@@ -109,7 +109,9 @@ import {
   isReverseChargeBasisAccount,
   reverseChargeKindOnOwnAccount,
   reverseChargeKindRuta,
+  supplierInvoiceReverseChargeKind,
   type ReverseChargeKind,
+  type ReverseChargeSupplierType,
 } from '@/lib/bookkeeping/vat-entries'
 import { chartAccountNamesLoader, chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import {
@@ -10049,6 +10051,15 @@ export const tools: McpTool[] = [
           // keep NO_INVOICE_REGISTER_COVERAGE
         }
       }
+      // A register with nothing before today (empty after an SIE import, or
+      // registrations only) has its boundary at today: the whole invoice
+      // history is outside it, and an empty list read as "no invoices"
+      // (crm#1759). Said in so many words, not as "complete from today".
+      const coverageNote = !coverage.has_pre_register_invoices || !coverage.covers_from
+        ? null
+        : coverage.covers_from >= today
+          ? `Fakturaregistret har inga kundfakturor före ${coverage.covers_from}, men det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: kundfakturorna ligger som verifikat utanför registret (t.ex. efter en SIE-import, som för över verifikaten men inte fakturaregistret) och syns inte i detta svar, inte heller när listan är tom. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`
+          : `Fakturaregistret är fullständigt först från ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: kundfakturor därifrån kan ligga som verifikat utanför registret (t.ex. efter en migrering, eller när bara de obetalda fakturorna registrerades från det tidigare systemet) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`
 
       return {
         invoices,
@@ -10059,11 +10070,7 @@ export const tools: McpTool[] = [
         // Omitted (not nulled) on continuation pages: a null covers_from on
         // page 2 would read as "no coverage limit" when it just wasn't queried.
         ...(offset === 0 ? { invoice_register_coverage: coverage } : {}),
-        ...(coverage.has_pre_register_invoices && coverage.covers_from
-          ? {
-              coverage_note: `Fakturaregistret är fullständigt först från ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: kundfakturor därifrån kan ligga som verifikat utanför registret (t.ex. efter en migrering, eller när bara de obetalda fakturorna registrerades från det tidigare systemet) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
-            }
-          : {}),
+        ...(coverageNote ? { coverage_note: coverageNote } : {}),
       }
     },
   },
@@ -17752,12 +17759,12 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         inbox_item_id: { type: 'string' },
-        supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
+        supplier_id_override: { type: 'string', description: 'Use this supplier UUID instead of the matched one' },
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Default: supplier type, else line VAT' },
-        reverse_charge_kind: { type: 'string', enum: [...SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS], description: 'EU supplier, reverse charge: goods ruta 20 (4515); omitted = services, ruta 21' },
-        invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD). Use when OCR misses the date.' },
+        reverse_charge_kind: { type: 'string', enum: [...SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS], description: 'EU supplier only: goods ruta 20 (4515), omitted = services ruta 21. Swedish supplier: omit, reverse_charge = ruta 24' },
+        invoice_date_override: { type: 'string', description: 'Override extracted invoice date (YYYY-MM-DD)' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
-        exchange_rate_override: { type: 'number', description: 'SEK per 1 unit of invoice currency; skips the Riksbanken lookup.' },
+        exchange_rate_override: { type: 'number', description: 'SEK per unit of invoice currency; skips Riksbanken' },
         line_overrides: {
           type: 'array',
           description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line; apply_slp books särskild löneskatt on a 741x pension line; vat_deduction_share deducts only part of the line\'s moms.',
@@ -17766,7 +17773,7 @@ export const tools: McpTool[] = [
             additionalProperties: false,
             properties: {
               line_number: { type: 'number', description: '1-based index matching items_preview' },
-              account_number: { type: 'string', description: 'BAS account number for this line (e.g. "6420")' },
+              account_number: { type: 'string', description: 'BAS account for this line, e.g. "6420"' },
               apply_slp: {
                 type: 'boolean',
                 description: 'Book särskild löneskatt (24.26%, 7533 D / 2514 K) for this line at commit. Only valid when the line resolves to a 741x pension-premium account (tjänstepension); any other account is rejected at staging.',
@@ -17791,7 +17798,7 @@ export const tools: McpTool[] = [
           additionalProperties: { type: 'string' },
           description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every line not setting the key. Omitted: the supplier\'s default_dimensions; {} = none. Unknown values rejected: never auto-created.',
         },
-        notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
+        notes: { type: 'string', description: 'Notes appended to the supplier invoice' },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['inbox_item_id'],
@@ -18789,7 +18796,15 @@ export const tools: McpTool[] = [
             }
           : {}),
         vat_treatment: vatTreatment,
-        ...(reverseChargeKind.kind ? { reverse_charge_kind: reverseChargeKind.kind } : {}),
+        // The kind the registration books, by the rule every line builder
+        // reads (supplierInvoiceReverseChargeKind), on every reverse-charge
+        // invoice: a Swedish supplier's omvänd betalningsskyldighet is
+        // domestic_services (ruta 24) with no kind staged, and the dry run
+        // used to say nothing about it (crm#1747). params keep only a kind
+        // the caller sent: the column holds eu_goods or eu_services.
+        ...(reverseCharge
+          ? { reverse_charge_kind: supplierInvoiceReverseChargeKind(supplierType as ReverseChargeSupplierType, reverseChargeKind.kind) }
+          : {}),
         payment_reference: paymentReference,
         subtotal: params.subtotal,
         vat_amount: params.vat_amount,

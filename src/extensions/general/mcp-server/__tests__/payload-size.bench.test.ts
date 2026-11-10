@@ -938,6 +938,11 @@ describe('tools/list payload size guard', () => {
     // same +1 431 as the full catalog (see the case above). Measured 61 812.
     // 2026-10-28, fee rows on gnubok_match_batch_allocate (issue #131): +80,
     // measured 61 892. Ceiling unchanged.
+    // 2026-11-11 (crm#1742, crm#1747): mismatch_reason listed on the attach
+    // tool and the Swedish-supplier line on reverse_charge_kind, paid for on
+    // the same two tools (shorter field notes, the attach tool's "approver
+    // sees both sides" went). Measured 63 096 on the main of 2026-11-11.
+    // Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

@@ -3,7 +3,7 @@
  * answer `supabase.rpc(...)` from in-memory tables:
  *
  *   get_ar_ledger_invoices        20261023093950_ar_ledger_invoices_rpc.sql
- *   get_invoice_register_coverage 20261023094000_invoice_register_coverage_rpc.sql
+ *   get_invoice_register_coverage 20261110100000_invoice_register_coverage_empty_register.sql
  *   get_supplier_ledger_invoices  20261023094010_supplier_ledger_invoices_rpc.sql
  *   get_paid_invoice_days         20261023094020_kpi_invoice_reads.sql
  *   get_kpi_supplier_invoices     20261023094020_kpi_invoice_reads.sql
@@ -257,9 +257,7 @@ export function portInvoiceRegisterCoverage(tables: ReskontraTables, args: Row):
       i.status !== 'draft' &&
       (i.document_type ?? 'invoice') === 'invoice',
   )
-  if (register.length === 0) {
-    return { covers_from: null, has_pre_register_invoices: false, pre_register_in_period: false }
-  }
+  // An empty register is probed like one of registrations only: from today (crm#1759).
   const items = rowsOf(tables, 'invoice_items')
   const complete = register
     .filter((i) => i.journal_entry_id == null || items.some((it) => it.invoice_id === i.id))

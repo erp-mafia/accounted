@@ -376,7 +376,7 @@ export const MISMATCH_REASON = z
   .trim()
   .max(300)
   .optional()
-  .describe('Only after a DOC_ROW_MISMATCH refusal: why the document belongs to this transaction anyway.')
+  .describe('After DOC_ROW_MISMATCH: why it belongs here')
 
 const AttachOut = z.object({
   transaction_id: z.string().uuid(),
@@ -442,9 +442,10 @@ export const transactionsAttachDocument = defineOperation({
     name: 'gnubok_attach_document_to_transaction',
     title: 'Attach Document to Transaction',
     description:
-      'Stage attaching a document to a bank transaction. Check that date, amount and counterparty match the document first: the approver sees both sides.',
-    // Sent only after DOC_ROW_MISMATCH, whose remediation names it (crm#1479).
-    undeclaredInputs: ['mismatch_reason'],
+      'Stage attaching a document to a bank transaction. Check that date, amount and counterparty match the document first.',
+    // mismatch_reason is listed: DOC_ROW_MISMATCH's remediation asks for it,
+    // and a client that validates against the listed schema
+    // (additionalProperties: false) cannot send a key it was not given (crm#1742).
     visibility: 'default',
     keywords: ['bifoga underlag', 'kvitto', 'koppla underlag'],
     hints: { idempotent: true },

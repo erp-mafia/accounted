@@ -193,6 +193,7 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
     // Only the treatment is staged: the grant door refuses a param it does not know.
     expect(params).not.toHaveProperty('reverse_charge')
     expect(result.preview.vat_treatment).toBe('reverse_charge')
+    expect(result.preview.reverse_charge_kind).toBe(supplierType === 'eu_business' ? 'eu_services' : 'non_eu_services')
     expect(result.preview.compliance_warning).toBeUndefined()
 
     const row = await mcpCommit(params)
@@ -217,6 +218,7 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
 
     expect(params).toMatchObject({ vat_treatment: 'standard_25', subtotal: 1000, vat_amount: 250, total: 1250 })
     expect(result.preview.compliance_warning).toBeUndefined()
+    expect(result.preview).not.toHaveProperty('reverse_charge_kind')
 
     const row = await mcpCommit(params)
     expect(row).toMatchObject({ vat_treatment: 'standard_25', reverse_charge: false, total: 1250 })
@@ -255,6 +257,46 @@ describe('MCP inbox supplier invoice: a foreign supplier is omvänd skattskyldig
     const row = await mcpCommit(params)
 
     expect(row).toMatchObject({ vat_treatment: 'reverse_charge', reverse_charge: true })
+  })
+
+  // crm#1747: omvänd betalningsskyldighet from a Swedish supplier (byggtjänster,
+  // ML 16 kap 13 §; swedish-vat skill 2.1): basis 4425 in ruta 24, fiktiv moms
+  // 2647 (ruta 48) against 2614 (ruta 30). It needs no reverse_charge_kind,
+  // and the dry run names the kind it books instead of saying nothing.
+  it('a Swedish supplier\'s reverse charge: the dry run names domestic_services, the commit books ruta 24', async () => {
+    setUp('swedish_business')
+    const dryRun = (await inboxTool().execute(
+      { inbox_item_id: ITEM_ID, vat_treatment_override: 'reverse_charge', dry_run: true },
+      'company-1',
+      'user-1',
+      db.supabase as never,
+    )) as { preview: Record<string, unknown> }
+    expect(dryRun.preview).toMatchObject({ vat_treatment: 'reverse_charge', reverse_charge_kind: 'domestic_services', vat_amount: 0 })
+
+    const { result, params } = await mcpStage({ vat_treatment_override: 'reverse_charge' })
+    expect(result.preview.reverse_charge_kind).toBe('domestic_services')
+    // Only a kind the caller sent is staged: the column holds eu_goods or eu_services.
+    expect(params).not.toHaveProperty('reverse_charge_kind')
+
+    const row = await mcpCommit(params)
+    expect(row).toMatchObject({ vat_treatment: 'reverse_charge', reverse_charge: true, reverse_charge_kind: null })
+    const lines = registrationLines(row)
+    expect(lines).toEqual(expect.arrayContaining([
+      { account: '6540', debit: 1000, credit: 0 },
+      { account: '4425', debit: 1000, credit: 0 },
+      { account: '4598', debit: 0, credit: 1000 },
+      { account: '2647', debit: 250, credit: 0 },
+      { account: '2614', debit: 0, credit: 250 },
+      { account: '2440', debit: 0, credit: 1000 },
+    ]))
+    expect(lines.some((line) => line.account === '2645' || line.account === '2641')).toBe(false)
+  })
+
+  it('the reverse_charge_kind description says it is EU-only and what a Swedish supplier books instead', () => {
+    const properties = (inboxTool().inputSchema as { properties: Record<string, { description?: string; enum?: string[] }> }).properties
+    expect(properties.reverse_charge_kind.enum).toEqual(['eu_goods', 'eu_services'])
+    expect(properties.reverse_charge_kind.description).toMatch(/EU supplier only/)
+    expect(properties.reverse_charge_kind.description).toMatch(/Swedish supplier: omit.*ruta 24/)
   })
 
   it('an operation without a treatment takes the supplier\'s default at commit: reverse charge for an EU supplier', async () => {
@@ -409,9 +451,11 @@ describe('MCP inbox supplier invoice: EU goods or services (crm#1323)', () => {
 
   it('stages nothing extra without a kind, so a company grant still knows every param', async () => {
     setUp('eu_business')
-    const { params } = await mcpStage()
+    const { result, params } = await mcpStage()
 
     expect(params).not.toHaveProperty('reverse_charge_kind')
+    // The preview still names what the registration books (crm#1747).
+    expect(result.preview.reverse_charge_kind).toBe('eu_services')
     const row = await mcpCommit(params)
     expect(row.reverse_charge_kind).toBeNull()
   })

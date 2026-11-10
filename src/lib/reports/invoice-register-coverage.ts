@@ -27,7 +27,8 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
  * flag cash sales (webshop orders, kassa) that were never register material.
  *
  * One read answers it: get_invoice_register_coverage
- * (supabase/migrations/20261023094000_invoice_register_coverage_rpc.sql). The
+ * (supabase/migrations/20261023094000_invoice_register_coverage_rpc.sql, an
+ * empty register probed since 20261110100000_invoice_register_coverage_empty_register.sql). The
  * boundary walk stops at the first complete invoice instead of embedding
  * every invoice's lines, and the probe is driven from journal_entries
  * (company-indexed) with the line condition as an EXISTS, never from
@@ -43,9 +44,10 @@ export interface InvoiceRegisterCoverage {
    * So are invoices registered from the books (isRegisteredFromBooks): the
    * open items of an older reskontra, not the start of a complete history;
    * a register holding only those is complete from no date yet, so the
-   * boundary is today. Null when the register is empty (the empty state
-   * already routes the user to migration) OR when the lookup failed: null
-   * always means "unknown", never "complete".
+   * boundary is today. So is an empty register's: after an SIE migration the
+   * invoices live only as verifikat, and an empty list read as "no invoices"
+   * (crm#1759). Null when the lookup failed: null always means "unknown",
+   * never "complete".
    */
   covers_from: string | null
   /**
@@ -127,9 +129,9 @@ export async function fetchInvoiceRegisterCoverage(
   options: { today?: string } = {},
 ): Promise<InvoiceRegisterCoverage> {
   const coverage = await readCoverage(supabase, companyId, options.today ?? todayIsoStockholm())
-  // Null covers_from is the empty register (the empty state already routes
-  // the user to migration); a failed read is unknown. Neither asserts
-  // completeness.
+  // A failed read is unknown, never "complete". So is a null covers_from: the
+  // function before 20261110100000 answered an empty register that way
+  // without probing the books.
   if (!coverage?.covers_from) return NO_INVOICE_REGISTER_COVERAGE
   return {
     covers_from: coverage.covers_from,
