@@ -74,8 +74,15 @@ function makeChainMock(lines: unknown[], count: number) {
  * Fixtures stay embed-shaped (a line with its `journal_entries` parent); the
  * mock splits them into the two row sets the helper actually fetches, so the
  * value the tool sees is byte-identical to the old embed result.
+ *
+ * `periods` are the company's fiscal_periods rows, read by the totals_note
+ * check when the match set holds an opening_balance verifikat;
+ * `periodError` makes that read fail.
  */
-function makeEntryLinesMock(rows: Array<Record<string, unknown>>) {
+function makeEntryLinesMock(
+  rows: Array<Record<string, unknown>>,
+  opts: { periods?: Array<{ period_start: string }>; periodError?: boolean } = {},
+) {
   const tables: string[] = []
   const entries = [
     ...new Map(
@@ -105,9 +112,24 @@ function makeEntryLinesMock(rows: Array<Record<string, unknown>>) {
       },
     )
 
+  const failing = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: null, error: { message: 'boom' }, count: null })
+          }
+          return () => failing()
+        },
+      },
+    )
+
   const supabase = {
     from: vi.fn().mockImplementation((table: string) => {
       tables.push(table)
+      if (table === 'fiscal_periods') return opts.periodError ? failing() : chain(opts.periods ?? [])
       return chain(table === 'journal_entries' ? entries : bareLines)
     }),
   } as never
@@ -1245,6 +1267,7 @@ describe('gnubok_query_journal: date arguments', () => {
 // the result saying so.
 describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat', () => {
   const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+  const PERIODS = [{ period_start: '2025-01-01' }, { period_start: '2026-01-01' }]
 
   function row(opts: {
     id: string
@@ -1255,6 +1278,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
     date: string
     sourceType: string
     voucherNumber: number
+    series?: string
     status?: string
   }) {
     return {
@@ -1262,7 +1286,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
       debit_amount: opts.debit, credit_amount: opts.credit,
       currency: 'SEK', line_description: null, project: null, cost_center: null, sort_order: 0,
       journal_entries: {
-        id: opts.entryId, voucher_number: opts.voucherNumber, voucher_series: 'A',
+        id: opts.entryId, voucher_number: opts.voucherNumber, voucher_series: opts.series ?? 'A',
         entry_date: opts.date, description: 'x', notes: null,
         source_type: opts.sourceType, status: opts.status ?? 'posted',
       },
@@ -1277,7 +1301,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
       row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
       row({ id: 'l3', entryId: 'e-ib', account: '2081', debit: 0, credit: 1000, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
     ]
-    const { supabase } = makeEntryLinesMock(rows)
+    const { supabase, tables } = makeEntryLinesMock(rows, { periods: PERIODS })
 
     const result = (await tool().execute(
       { accounts: ['1930'], date_from: '2025-01-01', date_to: '2026-12-31' },
@@ -1290,6 +1314,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
     expect(result.totals_note).toMatch(/account 1930\b/)
     expect(result.totals_note).toMatch(/gnubok_get_balance_sheet/)
     expect(result.totals_note).toMatch(/2026-01-01/)
+    expect(tables).toContain('fiscal_periods')
   })
 
   it('stays silent when the range starts at the IB (nothing before it is summed)', async () => {
@@ -1297,7 +1322,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
       row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
       row({ id: 'l4', entryId: 'e-2026', account: '1930', debit: 0, credit: 300, date: '2026-02-01', sourceType: 'manual', voucherNumber: 2 }),
     ]
-    const { supabase } = makeEntryLinesMock(rows)
+    const { supabase } = makeEntryLinesMock(rows, { periods: PERIODS })
 
     const result = (await tool().execute(
       { accounts: ['1930'], date_from: '2026-01-01' },
@@ -1313,13 +1338,110 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
       row({ id: 'l1', entryId: 'e-2025', account: '3001', debit: 0, credit: 500, date: '2025-06-01', sourceType: 'manual', voucherNumber: 12 }),
       row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
     ]
-    const { supabase } = makeEntryLinesMock(rows)
+    const { supabase } = makeEntryLinesMock(rows, { periods: PERIODS })
 
     const result = (await tool().execute(
       { date_from: '2025-01-01' },
       'company-1', 'user-1', supabase,
     )) as { totals_note?: string }
 
+    expect(result.totals_note).toBeUndefined()
+  })
+
+  // crm#1731: an ordinary mid-year verifikat tagged opening_balance (the old
+  // "Märk som IB" door) was read as the fiscal year's IB, so the note told
+  // the agent the year started on its date and that everything before it on
+  // the account was counted twice.
+  it('does not read a tagged verifikat off a fiscal year start as the IB, and says it is ordinary movement', async () => {
+    const rows = [
+      row({ id: 'l1', entryId: 'e-ib', account: '1930', debit: 5000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+      row({ id: 'l2', entryId: 'e-feb', account: '1930', debit: 0, credit: 200, date: '2026-02-15', sourceType: 'bank_transaction', voucherNumber: 7 }),
+      row({ id: 'l3', entryId: 'e-c9', account: '1930', debit: 0, credit: 300, date: '2026-05-20', sourceType: 'opening_balance', voucherNumber: 9, series: 'C' }),
+      row({ id: 'l4', entryId: 'e-jul', account: '1930', debit: 1000, credit: 0, date: '2026-07-01', sourceType: 'bank_transaction', voucherNumber: 20 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows, { periods: PERIODS })
+
+    const result = (await tool().execute(
+      { accounts: ['1930'], date_from: '2026-01-01', date_to: '2026-12-31' },
+      'company-1', 'user-1', supabase,
+    )) as { totals: { net: number }; totals_note?: string }
+
+    expect(result.totals.net).toBe(5500)
+    expect(result.totals_note).toBeDefined()
+    expect(result.totals_note).not.toMatch(/counted twice/)
+    expect(result.totals_note).not.toMatch(/fiscal year start \(2026-05-20\)/)
+    expect(result.totals_note).toMatch(/The totals include C9 \(2026-05-20\), tagged opening_balance but not dated on the first day of a fiscal year/)
+    expect(result.totals_note).toMatch(/It is not an opening balance \(IB\)/)
+    expect(result.totals_note).toMatch(/ordinary movement/)
+    expect(result.totals_note).toMatch(/gnubok_list_fiscal_periods/)
+  })
+
+  it('measures a real crossing from the year-start IB, not from a later tagged verifikat', async () => {
+    const rows = [
+      row({ id: 'l1', entryId: 'e-2025', account: '1930', debit: 1000, credit: 0, date: '2025-06-01', sourceType: 'manual', voucherNumber: 12 }),
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+      row({ id: 'l3', entryId: 'e-c9', account: '1930', debit: 0, credit: 300, date: '2026-05-20', sourceType: 'opening_balance', voucherNumber: 9, series: 'C' }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows, { periods: PERIODS })
+
+    const result = (await tool().execute(
+      { accounts: ['1930'], date_from: '2025-01-01', date_to: '2026-12-31' },
+      'company-1', 'user-1', supabase,
+    )) as { totals_note?: string }
+
+    expect(result.totals_note).toMatch(/opening-balance \(IB\) verifikat \(A1\) on account 1930/)
+    expect(result.totals_note).toMatch(/fiscal year start \(2026-01-01\)/)
+    expect(result.totals_note).not.toMatch(/fiscal year start \(2026-05-20\)/)
+    expect(result.totals_note).toMatch(/The totals include C9 \(2026-05-20\)/)
+  })
+
+  it('reads a tagged verifikat on a mid-year first fiscal year start as that year\'s IB', async () => {
+    const rows = [
+      row({ id: 'l1', entryId: 'e-pre', account: '1930', debit: 800, credit: 0, date: '2026-05-01', sourceType: 'import', voucherNumber: 3 }),
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 800, credit: 0, date: '2026-05-20', sourceType: 'opening_balance', voucherNumber: 1 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows, { periods: [{ period_start: '2026-05-20' }] })
+
+    const result = (await tool().execute(
+      { accounts: ['1930'] },
+      'company-1', 'user-1', supabase,
+    )) as { totals_note?: string }
+
+    expect(result.totals_note).toMatch(/fiscal year start \(2026-05-20\)/)
+    expect(result.totals_note).not.toMatch(/The totals include/)
+  })
+
+  it('names at most ten off-start verifikat, oldest first, and counts the rest', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const day = String(i + 2).padStart(2, '0')
+      return row({ id: `l${i}`, entryId: `e${i}`, account: '1930', debit: 10, credit: 0, date: `2026-03-${day}`, sourceType: 'opening_balance', voucherNumber: i + 1, series: 'C' })
+    }).reverse()
+    const { supabase } = makeEntryLinesMock(rows, { periods: PERIODS })
+
+    const result = (await tool().execute(
+      { accounts: ['1930'] },
+      'company-1', 'user-1', supabase,
+    )) as { totals_note?: string }
+
+    expect(result.totals_note).toMatch(/The totals include C1 \(2026-03-02\), C2 \(2026-03-03\),/)
+    expect(result.totals_note).toMatch(/C10 \(2026-03-11\) and 2 more, tagged opening_balance/)
+    expect(result.totals_note).not.toMatch(/C11/)
+    expect(result.totals_note).toMatch(/They are not an opening balance \(IB\)/)
+  })
+
+  it('drops the note, not the query, when the fiscal periods cannot be read', async () => {
+    const rows = [
+      row({ id: 'l1', entryId: 'e-2025', account: '1930', debit: 1000, credit: 0, date: '2025-06-01', sourceType: 'manual', voucherNumber: 12 }),
+      row({ id: 'l2', entryId: 'e-ib', account: '1930', debit: 1000, credit: 0, date: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows, { periodError: true })
+
+    const result = (await tool().execute(
+      { accounts: ['1930'] },
+      'company-1', 'user-1', supabase,
+    )) as { totals: { debit: number }; totals_note?: string }
+
+    expect(result.totals.debit).toBe(2000)
     expect(result.totals_note).toBeUndefined()
   })
 })

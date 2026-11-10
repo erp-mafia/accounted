@@ -14700,17 +14700,65 @@ export const tools: McpTool[] = [
       // A range that crosses a posted IB verifikat counts prior years twice
       // on any account that also has lines dated before it: the IB restates
       // everything booked before it (agent feedback seq 897234). Detected
-      // over the same match set the totals use, so no extra query; the sums
-      // are not changed, only explained.
-      const ibDateByAccount = new Map<string, string>()
-      const ibLabels = new Map<string, string>()
+      // over the same match set the totals use; the sums are not changed,
+      // only explained.
+      //
+      // An IB verifikat is tagged opening_balance AND dated on a fiscal
+      // year's first day (fiscal_periods.period_start), the rule
+      // account_ib_floor and prior_opening_balance_lines read. Until
+      // 20261006121003, "Märk som IB" could tag an ordinary mid-year
+      // verifikat opening_balance; every report counts that one as movement
+      // in its year, so the note says so instead of offering its date as the
+      // fiscal year start (crm#1731). The periods are read only when the
+      // match set holds a tagged verifikat, and a failed read drops the note
+      // (it is advisory) rather than guessing which tag is an IB.
+      const taggedIb = new Map<string, LineRow['journal_entries']>()
       for (const r of fullFiltered) {
         const e = r.journal_entries
-        if (e.source_type !== 'opening_balance' || e.status !== 'posted') continue
-        const seen = ibDateByAccount.get(r.account_number)
-        if (!seen || e.entry_date > seen) ibDateByAccount.set(r.account_number, e.entry_date)
-        ibLabels.set(e.id, formatVoucher(e))
+        if (e.source_type === 'opening_balance' && e.status === 'posted') taggedIb.set(e.id, e)
       }
+      let yearStarts: Set<string> | null = null
+      if (taggedIb.size > 0) {
+        const { data: periodRows, error: periodError } = await supabase
+          .from('fiscal_periods')
+          .select('period_start')
+          .eq('company_id', companyId)
+        if (periodError) {
+          log.warn('query_journal fiscal period read failed', {
+            companyId,
+            userId,
+            error: periodError.message,
+          })
+        } else {
+          yearStarts = new Set(
+            ((periodRows ?? []) as Array<{ period_start: string }>).map((p) => p.period_start),
+          )
+        }
+      }
+      const ibDateByAccount = new Map<string, string>()
+      const ibLabels = new Map<string, string>()
+      // Tagged opening_balance off a fiscal year's first day: ordinary
+      // movement, listed oldest first.
+      const offYearStartEntries: Array<LineRow['journal_entries']> = []
+      if (yearStarts) {
+        for (const r of fullFiltered) {
+          const e = r.journal_entries
+          if (!taggedIb.has(e.id) || !yearStarts.has(e.entry_date)) continue
+          const seen = ibDateByAccount.get(r.account_number)
+          if (!seen || e.entry_date > seen) ibDateByAccount.set(r.account_number, e.entry_date)
+          ibLabels.set(e.id, formatVoucher(e))
+        }
+        for (const e of taggedIb.values()) {
+          if (!yearStarts.has(e.entry_date)) offYearStartEntries.push(e)
+        }
+      }
+      const offYearStart = offYearStartEntries
+        .sort((a, b) =>
+          a.entry_date !== b.entry_date
+            ? (a.entry_date < b.entry_date ? -1 : 1)
+            : formatVoucher(a).localeCompare(formatVoucher(b)),
+        )
+        .map((e) => `${formatVoucher(e)} (${e.entry_date})`)
       const crossedAccounts = new Set<string>()
       let crossedIbDate: string | undefined
       if (ibDateByAccount.size > 0) {
@@ -14721,13 +14769,29 @@ export const tools: McpTool[] = [
           if (!crossedIbDate || ibDate > crossedIbDate) crossedIbDate = ibDate
         }
       }
-      const totalsNote = crossedIbDate
-        ? `The totals cross an opening-balance (IB) verifikat (${[...new Set(ibLabels.values())].join(', ')}) on ` +
-          `account${crossedAccounts.size === 1 ? '' : 's'} ${[...crossedAccounts].sort().join(', ')}, which also ` +
-          'have lines dated before it. An IB restates everything booked before it, so those earlier amounts are ' +
-          'counted twice. For balances use gnubok_get_balance_sheet or gnubok_get_trial_balance, or set date_from ' +
-          `to the fiscal year start (${crossedIbDate}).`
-        : undefined
+      const noteParts: string[] = []
+      if (crossedIbDate) {
+        noteParts.push(
+          `The totals cross an opening-balance (IB) verifikat (${[...new Set(ibLabels.values())].join(', ')}) on ` +
+            `account${crossedAccounts.size === 1 ? '' : 's'} ${[...crossedAccounts].sort().join(', ')}, which also ` +
+            'have lines dated before it. An IB restates everything booked before it, so those earlier amounts are ' +
+            'counted twice. For balances use gnubok_get_balance_sheet or gnubok_get_trial_balance, or set date_from ' +
+            `to the fiscal year start (${crossedIbDate}).`,
+        )
+      }
+      if (offYearStart.length > 0) {
+        const one = offYearStart.length === 1
+        const shown =
+          offYearStart.slice(0, 10).join(', ') +
+          (offYearStart.length > 10 ? ` and ${offYearStart.length - 10} more` : '')
+        noteParts.push(
+          `The totals include ${shown}, tagged opening_balance but not dated on the first day of a fiscal year. ` +
+            `${one ? 'It is' : 'They are'} not an opening balance (IB): the trial balance and balance sheet count ` +
+            `${one ? 'it' : 'them'} as ordinary movement in ${one ? 'its' : 'their'} year, and so do these totals. ` +
+            `${one ? 'Its date is' : 'Their dates are'} not the fiscal year start: gnubok_list_fiscal_periods has it.`,
+        )
+      }
+      const totalsNote = noteParts.length > 0 ? noteParts.join(' ') : undefined
 
       const lines = filtered.map((r) => {
         return {
