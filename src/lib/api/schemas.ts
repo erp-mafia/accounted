@@ -1069,6 +1069,8 @@ export const InvoicePreviewSchema = z.object({
   your_reference: z.string().max(500).nullish(),
   our_reference: z.string().max(500).nullish(),
   invoice_marking: z.string().max(200).nullish(),
+  // The write path's shape: half-filled parts are fine, '' is not set.
+  delivery_address: InvoiceDeliveryAddressSchema.nullish(),
   notes: z.string().max(10000).nullish(),
   // Printed only when it is an https address, the shape the write path accepts.
   payment_link_url: z.string().max(2048).nullish(),

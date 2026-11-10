@@ -131,6 +131,13 @@ import {
 } from '@/lib/cash-accounts/invoice-payee-rules'
 import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
+import {
+  DELIVERY_ADDRESS_MAX_LENGTH,
+  EMPTY_DELIVERY_ADDRESS_FORM,
+  deliveryAddressFormValues,
+  normalizeDeliveryAddress,
+} from '@/lib/invoices/delivery-address'
+import { getCountryOptions } from '@/lib/vat/country-codes'
 import { isInvoiceLinePostingAccount } from '@/lib/invoices/posting-account'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import {
@@ -341,6 +348,9 @@ const NOTE_INPUT_CLASS =
 // Sentinel for "the company default" in the payee select: an empty option
 // value renders as the placeholder in Radix Select.
 const PAYEE_DEFAULT = '__default__'
+// The Land picker's "Kundens land": the delivery address states no country of
+// its own ('' in the form, null stored).
+const DELIVERY_COUNTRY_CUSTOMER = '__customer__'
 
 // The intents that go through the confirm dialog: a send, a create without
 // sending, or a kontantfaktura issued already paid (all lock a number).
@@ -563,6 +573,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       invoice_marking: z.string().optional(),
+      // Leveransadress (crm#1547): sent as the fields are; the server reads
+      // '' as not set and an address with nothing in it as none.
+      delivery_address: z
+        .object({
+          name: z.string(),
+          address_line1: z.string(),
+          address_line2: z.string(),
+          postal_code: z.string(),
+          city: z.string(),
+          country: z.string(),
+        })
+        .optional(),
       notes: z.string().optional(),
       // Optional online payment link (pasted from e.g. the Stripe dashboard).
       // https-only: mirrors the server-side CreateInvoiceSchema gate.
@@ -780,8 +802,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Detaljer opened by hand (a chip click); it also opens by itself for an
   // unusual value (lib/invoices/editor/details.ts).
   const [detailsOpen, setDetailsOpen] = useState(false)
-  // "+ Märkning" and "+ Leveransdatum": the field shows once asked for.
+  // "+ Märkning", "+ Leveransadress" and "+ Leveransdatum": the field shows
+  // once asked for.
   const [markingOpen, setMarkingOpen] = useState(false)
+  const [deliveryAddressOpen, setDeliveryAddressOpen] = useState(false)
   const [deliveryOpen, setDeliveryOpen] = useState(false)
   // "+ Omvänd betalningsskyldighet": the checkbox shows once asked for, and
   // stays open after any toggle so it never vanishes under the pointer.
@@ -887,6 +911,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
           invoice_marking: initial.invoice_marking ?? '',
+          delivery_address: deliveryAddressFormValues(initial.delivery_address),
           notes: initial.notes ?? '',
           payment_link_url: initial.payment_link_url ?? '',
           payment_link_auto: initial.payment_link_auto ?? true,
@@ -932,6 +957,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             your_reference: '',
             our_reference: copyInitial.our_reference,
             invoice_marking: '',
+            delivery_address: { ...EMPTY_DELIVERY_ADDRESS_FORM },
             notes: copyInitial.notes,
             payment_link_url: '',
             payment_link_auto: true,
@@ -951,6 +977,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           payment_cash_account_id: '',
           qr_mode: null,
           document_type: createDocumentType,
+          delivery_address: { ...EMPTY_DELIVERY_ADDRESS_FORM },
           payment_link_url: '',
           payment_link_auto: true,
           external_invoice_number: '',
@@ -3210,6 +3237,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         : tForm('vies_valid', { number: selectedCustomer.vat_number })
       : null
   const watchInvoiceMarking = watch('invoice_marking')
+  const markingShown = markingOpen || !!watchInvoiceMarking
+  const deliveryAddressShown = deliveryAddressOpen || normalizeDeliveryAddress(watch('delivery_address')) !== null
+  const deliveryCountryOptions = useMemo(() => getCountryOptions(locale === 'en' ? 'en' : 'sv'), [locale])
 
   // Skattereduktion: the rows that claim one, and what the section says.
   const deductionRowIndexes = (watchItems ?? [])
@@ -3984,7 +4014,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 {/* Fakturamärkning: one buyer-required marking string
                     (kostnadsställe/projekt/PO), separate from Er referens.
                     Plain input, never comma-split. */}
-                {markingOpen || watchInvoiceMarking ? (
+                {markingShown && (
                   <div className="mt-4 space-y-2">
                     <Label htmlFor="invoice_marking" className={FIELD_LABEL_CLASS}>
                       {t('invoice_marking_label')}
@@ -3997,17 +4027,139 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       {...register('invoice_marking')}
                     />
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    className={cn(ADD_ROW_LINK_CLASS, 'mt-3')}
-                    onClick={() => {
-                      setMarkingOpen(true)
-                      window.setTimeout(() => setFocus('invoice_marking'), 0)
-                    }}
-                  >
-                    + {t('invoice_marking_label')}
-                  </button>
+                )}
+                {/* Leveransadress (crm#1547): where the goods go when that is
+                    not the customer's address. Printed under the buyer on the
+                    PDF and carried to Peppol; most invoices have none, so it
+                    waits behind an add-link like Märkning. */}
+                {deliveryAddressShown && (
+                  <div role="group" aria-labelledby="delivery-address-title" className="mt-4" data-ph-mask="">
+                    <p id="delivery-address-title" className="mb-2 text-[12.5px] text-muted-foreground">
+                      {tForm('delivery_address_label')}
+                    </p>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="delivery_address_name" className={FIELD_LABEL_CLASS}>
+                          {tForm('delivery_address_name')}
+                        </Label>
+                        <Input
+                          id="delivery_address_name"
+                          maxLength={DELIVERY_ADDRESS_MAX_LENGTH.name}
+                          className="text-[13px]"
+                          {...register('delivery_address.name')}
+                        />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_line1" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_line1')}
+                          </Label>
+                          <Input
+                            id="delivery_address_line1"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.address_line1}
+                            className="text-[13px]"
+                            {...register('delivery_address.address_line1')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_line2" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_line2')}
+                          </Label>
+                          <Input
+                            id="delivery_address_line2"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.address_line2}
+                            className="text-[13px]"
+                            {...register('delivery_address.address_line2')}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_postal_code" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_postal_code')}
+                          </Label>
+                          <Input
+                            id="delivery_address_postal_code"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.postal_code}
+                            className="text-[13px] tabular-nums"
+                            {...register('delivery_address.postal_code')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_city" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_city')}
+                          </Label>
+                          <Input
+                            id="delivery_address_city"
+                            maxLength={DELIVERY_ADDRESS_MAX_LENGTH.city}
+                            className="text-[13px]"
+                            {...register('delivery_address.city')}
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-2">
+                          <Label htmlFor="delivery_address_country" className={FIELD_LABEL_CLASS}>
+                            {tForm('delivery_address_country')}
+                          </Label>
+                          <Controller
+                            name="delivery_address.country"
+                            control={control}
+                            render={({ field }) => (
+                              <Select
+                                value={field.value || DELIVERY_COUNTRY_CUSTOMER}
+                                onValueChange={(value) => field.onChange(value === DELIVERY_COUNTRY_CUSTOMER ? '' : value)}
+                              >
+                                <SelectTrigger id="delivery_address_country" className="text-[13px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={DELIVERY_COUNTRY_CUSTOMER}>
+                                    {tForm('delivery_address_country_customer')}
+                                  </SelectItem>
+                                  {/* A code the API stored that the picker does not list. */}
+                                  {field.value && !deliveryCountryOptions.some((option) => option.code === field.value) && (
+                                    <SelectItem value={field.value}>{field.value}</SelectItem>
+                                  )}
+                                  {deliveryCountryOptions.map((option) => (
+                                    <SelectItem key={option.code} value={option.code}>
+                                      {locale === 'en' ? option.nameEn : option.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {(!markingShown || !deliveryAddressShown) && (
+                  <div className="mt-3 flex flex-wrap gap-4">
+                    {!markingShown && (
+                      <button
+                        type="button"
+                        className={ADD_ROW_LINK_CLASS}
+                        onClick={() => {
+                          setMarkingOpen(true)
+                          window.setTimeout(() => setFocus('invoice_marking'), 0)
+                        }}
+                      >
+                        + {t('invoice_marking_label')}
+                      </button>
+                    )}
+                    {!deliveryAddressShown && (
+                      <button
+                        type="button"
+                        className={ADD_ROW_LINK_CLASS}
+                        onClick={() => {
+                          setDeliveryAddressOpen(true)
+                          window.setTimeout(() => setFocus('delivery_address.name'), 0)
+                        }}
+                      >
+                        + {tForm('delivery_address_label')}
+                      </button>
+                    )}
+                  </div>
                 )}
               </>
             )}

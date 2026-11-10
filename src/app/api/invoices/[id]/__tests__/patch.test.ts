@@ -331,6 +331,71 @@ describe('PATCH /api/invoices/[id]', () => {
     expect(findCall('invoices', 'update')).toBeUndefined()
   })
 
+  describe('the delivery address from the editor (crm#1547)', () => {
+    // The editor sends every part as a string, '' for one left empty. Made-up address.
+    const FIELDS = {
+      name: 'Exempelbutiken Centrum',
+      address_line1: 'Provgatan 12',
+      address_line2: 'Lastkaj 3',
+      postal_code: '111 22',
+      city: 'Exempelstad',
+      country: '',
+    }
+
+    function enqueueDraftEdit() {
+      enqueue({
+        data: { id: 'inv-1', status: 'draft', invoice_number: null, journal_entry_id: null, is_self_billed: false },
+        error: null,
+      }) // existing
+      enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null }) // customer
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings.vat_registered
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // update ... select('id')
+      enqueue({ data: [], error: null }) // snapshot existing invoice_items
+      enqueue({ data: [], error: null }) // delete invoice_items
+      enqueue({ data: null, error: null }) // insert invoice_items
+      enqueue({ data: makeInvoice({ id: 'inv-1', status: 'draft' }), error: null }) // re-select
+    }
+
+    it('saves the address on the draft, "Kundens land" as no country', async () => {
+      enqueueDraftEdit()
+
+      const { status } = await parseJsonResponse(await patch('inv-1', { ...VALID_BODY, delivery_address: FIELDS }))
+
+      expect(status).toBe(200)
+      expect(findCall('invoices', 'update')?.[0]).toMatchObject({
+        delivery_address: { ...FIELDS, country: null },
+      })
+    })
+
+    it('clears the address when the fields are emptied', async () => {
+      enqueueDraftEdit()
+      const empty = Object.fromEntries(Object.keys(FIELDS).map((key) => [key, '']))
+
+      const { status } = await parseJsonResponse(await patch('inv-1', { ...VALID_BODY, delivery_address: empty }))
+
+      expect(status).toBe(200)
+      expect(findCall('invoices', 'update')?.[0]).toMatchObject({ delivery_address: null })
+    })
+
+    it('leaves the address alone when the body does not carry it', async () => {
+      enqueueDraftEdit()
+
+      const { status } = await parseJsonResponse(await patch('inv-1'))
+
+      expect(status).toBe(200)
+      expect(findCall('invoices', 'update')?.[0]).not.toHaveProperty('delivery_address')
+    })
+
+    it('returns 400 for a country that is not an ISO code, before reading the draft', async () => {
+      const { status } = await parseJsonResponse(
+        await patch('inv-1', { ...VALID_BODY, delivery_address: { ...FIELDS, country: 'Norge' } }),
+      )
+
+      expect(status).toBe(400)
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns 409 when the draft is sent/finalized concurrently (0-row update)', async () => {
     enqueue({
       data: { id: 'inv-1', status: 'draft', invoice_number: null, journal_entry_id: null, is_self_billed: false },
