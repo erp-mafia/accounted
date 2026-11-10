@@ -78,6 +78,39 @@
           "voucher_series": "A",
           "voucher_number": 1,
           "entry_date": "2026-01-01",
+          "description": "Återföring omvärdering utländsk valuta 2025-12-31",
+          "source_type": "currency_revaluation",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Återföring: Omvärdering kundfordringar: orealiserad kursvinst",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3960",
+              "line_description": "Återföring: Orealiserade valutakursvinster",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
           "description": "Ingående balans 2026",
           "source_type": "opening_balance",
           "status": "posted",
@@ -594,7 +627,7 @@
         "locked": false,
         "continuity_verified": true,
         "closing_voucher": null,
-        "opening_voucher": "A1"
+        "opening_voucher": "A2"
       },
       {
         "company": "enskild firma",

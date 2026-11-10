@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { fxDifferenceLine } from '@/lib/bookkeeping/ore-rounding'
-import { postingEvidence } from '@/lib/core/bookkeeping/year-end-business-events'
+import { postingEvidence, yearEndStornoBusinessEvent } from '@/lib/core/bookkeeping/year-end-business-events'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { mappingVersion } from '@/lib/posting/mapping-version'
@@ -27,6 +27,7 @@ import type {
   CurrencyRevaluationPreview,
   CurrencyRevaluationResult,
   CreateJournalEntryLineInput,
+  JournalEntry,
 } from '@/types'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -620,7 +621,9 @@ export async function executeCurrencyRevaluation(
   fiscalPeriodId: string,
   userId?: string
 ): Promise<CurrencyRevaluationResultWithExclusions | null> {
-  // Idempotency check: prevent double revaluation
+  // Idempotency check: prevent double revaluation. The återföring of the
+  // previous year's revaluation (source_id set, see
+  // syncCurrencyRevaluationReversals) sits in this year too and is not one.
   const { count, error: checkError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
@@ -628,6 +631,7 @@ export async function executeCurrencyRevaluation(
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('source_type', 'currency_revaluation')
     .eq('status', 'posted')
+    .is('source_id', null)
 
   if (checkError) {
     throw new BookkeepingDatabaseError('check_existing_revaluation', checkError.message)
@@ -676,4 +680,174 @@ export async function executeCurrencyRevaluation(
   })
 
   return { entry, preview }
+}
+
+/** A revaluation's lines as the återföring reads them back from the ledger. */
+export interface PostedRevaluationLine {
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  line_description?: string | null
+}
+
+/**
+ * The lines of a revaluation's återföring: every line of the posted
+ * revaluation on the opposite side, öre-rounded. Pure.
+ */
+export function revaluationReversalLines(lines: PostedRevaluationLine[]): CreateJournalEntryLineInput[] {
+  return lines.map((line) => ({
+    account_number: line.account_number,
+    debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+    credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
+    line_description: `Återföring: ${line.line_description ?? ''}`.trim(),
+  }))
+}
+
+/** What the lines do to the result (credit less debit on classes 3-8), öre-rounded. Pure. */
+function resultEffect(lines: CreateJournalEntryLineInput[]): number {
+  let net = 0
+  for (const line of lines) {
+    const accountClass = line.account_number.charAt(0)
+    if (accountClass >= '3' && accountClass <= '8') net += line.credit_amount - line.debit_amount
+  }
+  return Math.round(net * 100) / 100
+}
+
+export interface CurrencyRevaluationReversals {
+  /** Återföringar posted now: one per revaluation that stood without one. */
+  posted: JournalEntry[]
+  /** Återföringar stornoed now, because the revaluation they turned back was stornoed since. */
+  stornoed: string[]
+}
+
+interface RevaluationRow {
+  id: string
+  entry_date: string
+  status: string
+  lines: PostedRevaluationLine[] | null
+}
+
+/**
+ * Turn the year's revaluations back on the first day of the next year
+ * (återföring, accounted#58).
+ *
+ * Every revaluation here is measured from the ORIGINAL booking rate, and every
+ * payment door clears 1510 / 2440 at that rate. A balansdag revaluation left
+ * standing into the next year was therefore counted twice on 3960 / 7960: by
+ * the payment's realised difference, which runs from the original rate again,
+ * and by the next revaluation, measured from the original rate once more. With
+ * the återföring the ledger is back on the original rate from the next year's
+ * first day, the convention the monthly revaluation already follows
+ * (docs/decisions/2026-10/2026-10-26-monthly-fx-revaluation-reversed.md): the
+ * closed year keeps its balansdag valuation (ÅRL 4 kap. 13 §), and the next
+ * year books only the difference that arises in it.
+ *
+ * Not a storno: the valuation was right on balansdagen, and a storno stays in
+ * its original's year (BFL 5 kap 5 §). The återföring is an ordinary verifikat
+ * in the next year, dated its first day, source_type currency_revaluation,
+ * naming the revaluation it turns back in source_id (which is how the
+ * idempotency check of executeCurrencyRevaluation tells the two apart), with
+ * every line on the opposite side. Through the posting port and the engine.
+ *
+ * Idempotent, and it keeps the pair in step: a revaluation that already has
+ * its återföring gets none again, and the återföring of a revaluation that has
+ * been stornoed since (a reopened year, a storno by hand after a failed close)
+ * is stornoed, so the next year never turns back a valuation the closed year
+ * no longer holds. `nextPeriod` is resolved only when there is something to
+ * post or storno, so a year without a revaluation reads one query and creates
+ * nothing.
+ */
+export async function syncCurrencyRevaluationReversals(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  closedPeriodId: string,
+  nextPeriod: () => Promise<{ id: string; period_start: string }>,
+  options: { linkBasis?: LinkBasisColumns } = {},
+): Promise<CurrencyRevaluationReversals> {
+  const { data: revaluationData, error: revaluationError } = await supabase
+    .from('journal_entries')
+    .select('id, entry_date, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', closedPeriodId)
+    .eq('source_type', 'currency_revaluation')
+    .is('source_id', null)
+    .in('status', ['posted', 'reversed'])
+  if (revaluationError) {
+    throw new BookkeepingDatabaseError('check_existing_revaluation', revaluationError.message, revaluationError.code)
+  }
+  const revaluations = (revaluationData ?? []) as RevaluationRow[]
+  if (revaluations.length === 0) return { posted: [], stornoed: [] }
+
+  const next = await nextPeriod()
+
+  const { data: reversalData, error: reversalError } = await supabase
+    .from('journal_entries')
+    .select('id, source_id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', next.id)
+    .eq('source_type', 'currency_revaluation')
+    .eq('status', 'posted')
+    .in('source_id', revaluations.map((r) => r.id))
+  if (reversalError) {
+    throw new BookkeepingDatabaseError('check_existing_revaluation', reversalError.message, reversalError.code)
+  }
+  const reversalsOf = new Map<string, string[]>()
+  for (const row of (reversalData ?? []) as Array<{ id: string; source_id: string }>) {
+    reversalsOf.set(row.source_id, [...(reversalsOf.get(row.source_id) ?? []), row.id])
+  }
+
+  const linkBasis = options.linkBasis ?? linkBasisColumns('user_created')
+  const result: CurrencyRevaluationReversals = { posted: [], stornoed: [] }
+
+  for (const revaluation of revaluations) {
+    const reversals = reversalsOf.get(revaluation.id) ?? []
+
+    if (revaluation.status !== 'posted') {
+      for (const entryId of reversals) {
+        await postingPort.reverseJournalEntry({
+          supabase,
+          companyId,
+          userId,
+          entryId,
+          event: () =>
+            yearEndStornoBusinessEvent({ fiscalPeriodId: next.id, occurredOn: todayIsoStockholm(), linkBasis }),
+          role: 'reversal',
+        })
+        result.stornoed.push(entryId)
+      }
+      continue
+    }
+
+    if (reversals.length > 0) continue
+    const lines = revaluationReversalLines(revaluation.lines ?? [])
+    if (lines.length === 0) continue
+
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        currencyRevaluationBusinessEvent({
+          fiscalPeriodId: next.id,
+          closingDate: next.period_start,
+          netEffect: resultEffect(lines),
+          linkBasis,
+        }),
+      input: {
+        fiscal_period_id: next.id,
+        entry_date: next.period_start,
+        description: `Återföring omvärdering utländsk valuta ${revaluation.entry_date}`,
+        source_type: 'currency_revaluation',
+        source_id: revaluation.id,
+        // No voucher_series: the engine takes the company's series for
+        // currency_revaluation from its map, as new year-end vouchers do
+        // (docs/decisions/2026-11/2026-11-01-year-end-series-from-map.md).
+        lines,
+      },
+    })
+    result.posted.push(entry)
+  }
+
+  return result
 }

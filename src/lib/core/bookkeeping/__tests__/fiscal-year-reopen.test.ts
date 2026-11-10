@@ -184,6 +184,38 @@ describe('reopenClosedFiscalYear', () => {
     expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'period.unlocked' }))
   })
 
+  it("reverses the revaluation's återföring in the next year, and leaves the previous year's standing (accounted#58)", async () => {
+    const revaluation: FiscalYearReopenEntry = { id: 'je-reval', kind: 'currency_revaluation', voucher_series: 'A', voucher_number: 42, entry_date: '2026-04-30', fiscal_period_id: 'fp-2025' }
+    // The återföring the previous year's close posted into this year.
+    const previous: FiscalYearReopenEntry = { id: 'je-prev-return', kind: 'currency_revaluation', voucher_series: 'A', voucher_number: 1, entry_date: '2025-05-01', fiscal_period_id: 'fp-2025' }
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: eligible() }) // gate
+    mock.enqueue({
+      data: {
+        ok: true,
+        period_name: '2025/2026',
+        resumed: false,
+        closing_entry_id: 'je-closing',
+        entries: [...ENTRIES, previous, revaluation],
+        next_period_id: 'fp-2026',
+        superseded_version_ids: [],
+      },
+    })
+    mock.enqueue({ data: [{ id: 'je-prev-return', source_id: 'je-prev-reval' }, { id: 'je-reval', source_id: null }] })
+    mock.enqueue({ data: [{ id: 'je-return', voucher_series: 'A', voucher_number: 10, entry_date: '2026-05-01', fiscal_period_id: 'fp-2026' }] })
+    mock.enqueue({ data: null }) // detach closing_entry_id
+    mock.enqueue({ data: { id: 'fp-2025', name: '2025/2026', is_closed: false, closing_entry_id: null } })
+
+    const result = await reopenClosedFiscalYear(mock.supabase as never, 'company-1', 'fp-2025', 'owner-1', CONFIRM, DEPS)
+
+    expect(result).toMatchObject({ ok: true })
+    expect(reverseEntryMock.mock.calls.map((c) => c[3])).toEqual(['je-omforing', 'je-ib', 'je-return', 'je-closing', 'je-reval'])
+    expect(mock.findCalls('journal_entries', 'in')).toEqual([
+      ['id', ['je-prev-return', 'je-reval']],
+      ['source_id', ['je-reval']],
+    ])
+  })
+
   it('refuses a form without an årsredovisning before touching the database', async () => {
     const { supabase } = createQueuedMockSupabase()
     resolveEntityTypeMock.mockResolvedValue('enskild_firma')

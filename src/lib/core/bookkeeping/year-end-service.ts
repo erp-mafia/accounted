@@ -30,6 +30,7 @@ import { generateResultAppropriation, previewResultAppropriation } from './resul
 import {
   previewCurrencyRevaluation,
   executeCurrencyRevaluation,
+  syncCurrencyRevaluationReversals,
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import {
@@ -886,6 +887,7 @@ export async function previewYearEndClosing(
  *
  * 1. Validate readiness
  * 2. Run currency revaluation (FX gains/losses to 3960/7960)
+ * 2a. Turn it back (återföring) on the next year's first day
  * 3. Generate closing preview and check öre balance
  * 4. Create closing entry (zeros class 3-8 accounts)
  * 5. Set closing_entry_id on the period
@@ -947,6 +949,32 @@ export async function executeYearEndClosing(
     fiscalPeriodId,
     userId
   )
+
+  // 2a. Turn the revaluation back on the next year's first day (accounted#58).
+  //     It is measured from the original rate, and so are the payments that
+  //     clear 1510/2440 next year and the next revaluation: left standing it
+  //     reached 3960/7960 a second time. The next period is resolved (reused
+  //     or created) only when there is a revaluation to turn back; step 6
+  //     then finds it. Before the closing entry, so a refusal (a lock date
+  //     over the next year's first day) stops the close while this year is
+  //     still open and the revaluation just posted can be stornoed in it.
+  try {
+    await syncCurrencyRevaluationReversals(
+      supabase,
+      companyId,
+      userId,
+      fiscalPeriodId,
+      async () =>
+        (await findNextPeriod(supabase, companyId, fiscalPeriodId)) ??
+        (await createNextPeriod(supabase, companyId, userId, fiscalPeriodId)),
+      { linkBasis: posting?.().linkBasis },
+    )
+  } catch (err) {
+    if (revaluationResult?.entry) {
+      await safeReverse(supabase, companyId, userId, revaluationResult.entry.id, 'currency revaluation', fiscalPeriodId, posting)
+    }
+    throw err
+  }
 
   // 3. Get closing preview (now includes revaluation effects in trial balance).
   //    Without the omföring disclosure: step 11 books it from the real IB, and

@@ -27,9 +27,10 @@ const log = createLogger('fiscal-year-reopen')
  *      under a row lock, supersedes an unsigned årsredovisning, opens and
  *      unlocks the year and writes the owner's confirmation to audit_log.
  *   2. Here, through the bookkeeping engine: a storno of the next year's
- *      omföring and IB, of the closing entry and of the year-end's currency
- *      revaluation, then closing_entry_id is detached. Nothing is edited or
- *      deleted (BFL 5 kap 5 §).
+ *      omföring and IB, of the revaluation's återföring in the next year, of
+ *      the closing entry and of the year-end's currency revaluation, then
+ *      closing_entry_id is detached. Nothing is edited or deleted (BFL 5 kap
+ *      5 §).
  *
  * The year can then take the missing booking, and the owner runs the bokslut
  * again. A run that stops between the halves leaves the year open with its
@@ -220,7 +221,72 @@ export async function getFiscalYearReopenEligibility(
     eligibility.blockers = [...eligibility.blockers, form]
     eligibility.eligible = false
   }
+  const entries = await withRevaluationReversals(supabase, companyId, periodId, eligibility.entries)
+  if (!entries) return { ok: false, code: 'FISCAL_YEAR_REOPEN_FAILED' }
+  eligibility.entries = entries
   return { ok: true, eligibility }
+}
+
+/**
+ * The verifikat the reopen reverses, with the currency revaluation's
+ * återföring in step (accounted#58). The close turns its revaluation back on
+ * the next year's first day with a currency_revaluation verifikat that names
+ * the revaluation in source_id. The database snapshot lists every
+ * currency_revaluation of the year reopened and none of the next year's, so
+ * here: the återföring of this year's revaluation, in the next year, is
+ * reversed with it (before the closing entry), and an återföring this year
+ * holds is left standing, since it turns back the previous year's
+ * revaluation, which that year still holds. Reads only when the snapshot
+ * lists a revaluation; null when a read fails, so the caller fails closed.
+ */
+async function withRevaluationReversals(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string,
+  entries: FiscalYearReopenEntry[],
+): Promise<FiscalYearReopenEntry[] | null> {
+  const listed = entries.filter((e) => e.kind === 'currency_revaluation' && e.fiscal_period_id === periodId)
+  if (listed.length === 0) return entries
+
+  const { data: sources, error: sourceError } = await supabase
+    .from('journal_entries')
+    .select('id, source_id')
+    .eq('company_id', companyId)
+    .in('id', listed.map((e) => e.id))
+  if (sourceError) {
+    log.error('reopen could not read the revaluations it reverses', sourceError, { companyId, periodId })
+    return null
+  }
+  const previousYears = new Set(
+    ((sources ?? []) as Array<{ id: string; source_id: string | null }>)
+      .filter((row) => row.source_id != null)
+      .map((row) => row.id),
+  )
+  const own = listed.filter((e) => !previousYears.has(e.id))
+
+  let reversals: FiscalYearReopenEntry[] = []
+  if (own.length > 0) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, voucher_series, voucher_number, entry_date, fiscal_period_id')
+      .eq('company_id', companyId)
+      .eq('source_type', 'currency_revaluation')
+      .eq('status', 'posted')
+      .in('source_id', own.map((e) => e.id))
+    if (error) {
+      log.error('reopen could not read the revaluation återföring', error, { companyId, periodId })
+      return null
+    }
+    reversals = ((data ?? []) as Array<Omit<FiscalYearReopenEntry, 'kind'>>).map((row) => ({
+      ...row,
+      kind: 'currency_revaluation' as const,
+    }))
+  }
+
+  const kept = entries.filter((e) => !previousYears.has(e.id))
+  const nextYear = kept.filter((e) => e.kind === 'result_appropriation' || e.kind === 'opening_balance')
+  const rest = kept.filter((e) => e.kind !== 'result_appropriation' && e.kind !== 'opening_balance')
+  return [...nextYear, ...reversals, ...rest]
 }
 
 /**
@@ -295,8 +361,10 @@ export async function reopenClosedFiscalYear(
   }
 
   // The engine's half. Each step is idempotent, so a stop anywhere resumes.
+  const entries = await withRevaluationReversals(supabase, companyId, periodId, result.entries ?? [])
+  if (!entries) return { ok: false, code: 'FISCAL_YEAR_REOPEN_INCOMPLETE', stoppedAt: 'currency_revaluation' }
   const reversed: FiscalYearReopenEntry[] = []
-  for (const entry of result.entries ?? []) {
+  for (const entry of entries) {
     try {
       if (await reverseIfPosted(supabase, companyId, userId, entry, periodId, deps)) reversed.push(entry)
     } catch (err) {
