@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { mappingPatternNamesCounterparty } from '@/lib/bookkeeping/counterparty-templates'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -272,6 +273,9 @@ export async function buildLedgerContext(
   }
 
   const explicitRules: ExplicitRule[] = (rulesRes.data ?? [])
+    // A rule on a text that names no one ("INSÄTTNING") is never applied
+    // (mapping-engine matchesRule), so it is no instruction to the agent.
+    .filter((r) => !r.merchant_pattern || mappingPatternNamesCounterparty(r.merchant_pattern))
     .map((r) => ({
       rule_name: r.rule_name,
       match: r.merchant_pattern ?? r.description_pattern ?? '',

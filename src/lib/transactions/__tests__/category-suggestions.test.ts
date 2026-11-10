@@ -3,6 +3,7 @@ import {
   buildMerchantHistory,
   getSuggestedCategories,
   getSuggestedTemplates,
+  mappingRuleMatches,
   merchantHistoryFor,
   rowProposal,
   type SuggestedTemplate,
@@ -247,5 +248,38 @@ describe('getSuggestedTemplates: rules that matched vs templates used lately', (
     // The row never wears it: without a match the chip says Välj kategori.
     expect(rowProposal(out)?.source).not.toBe('recent')
     expect(rowProposal([recent!])).toBeUndefined()
+  })
+})
+
+describe('mapping rules learned from a generic bank text (crm#1707)', () => {
+  const rule = (merchant_pattern: string, over: Record<string, unknown> = {}) =>
+    ({
+      id: 'rule-g', user_id: null, company_id: 'co-1', rule_name: `Learned: ${merchant_pattern}`, rule_type: 'merchant_name', priority: 10,
+      mcc_codes: null, merchant_pattern, description_pattern: null, amount_min: null, amount_max: null,
+      debit_account: '1930', credit_account: '2081', vat_treatment: null, vat_debit_account: null, vat_credit_account: null,
+      risk_level: 'NONE', default_private: false, requires_review: false, confidence_score: 0.95,
+      capitalization_threshold: null, capitalized_debit_account: null, source: 'auto',
+      user_description: null, template_id: null, is_active: true, created_at: '', updated_at: '',
+      ...over,
+    }) as never
+
+  it.each(['INSÄTTNING', 'KORTKÖP', 'ÖVERFÖRING', 'BG-BETALNING'])('a rule on %j matches no row', (text) => {
+    expect(mappingRuleMatches(rule(text), tx({ merchant_name: text, description: `${text} 4455`, amount: 14000 }))).toBe(false)
+  })
+
+  it('a rule on a real merchant or a mixed text still matches', () => {
+    expect(mappingRuleMatches(rule('Telia'), tx({ merchant_name: 'Telia' }))).toBe(true)
+    expect(mappingRuleMatches(rule('KORTKÖP ICA MAXI'), tx({ merchant_name: 'KORTKÖP ICA MAXI' }))).toBe(true)
+    expect(mappingRuleMatches(rule('Test \\(Pty\\) Ltd\\.'), tx({ merchant_name: 'Test (Pty) Ltd.' }))).toBe(true)
+  })
+
+  it('the generic rule is offered neither as the row proposal nor as a suggested category', async () => {
+    const deposit = tx({ merchant_name: 'INSÄTTNING', description: 'STRIPE Shopi', amount: 14000 })
+    const generic = rule('INSÄTTNING', { template_id: 'share_capital_deposit' })
+
+    const templates = await getSuggestedTemplates(deposit, 'aktiebolag', [generic])
+    expect(templates.some((s: SuggestedTemplate) => s.source === 'rule')).toBe(false)
+    expect(rowProposal(templates)?.template_id).not.toBe('share_capital_deposit')
+    expect(getSuggestedCategories(deposit, [generic], {}).some((s) => s.source === 'mapping_rule')).toBe(false)
   })
 })

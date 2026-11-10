@@ -9,6 +9,7 @@ import {
 import {
   normalizeCounterpartyName,
   namesCounterparty,
+  mappingPatternNamesCounterparty,
   calculateConfidence,
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
@@ -574,6 +575,22 @@ describe('counterparty-templates', () => {
         ['Telia Sverige AB', true],
       ])('namesCounterparty(%j) is %s', (text, expected) => {
         expect(namesCounterparty(text)).toBe(expected)
+      })
+
+      // A mapping rule's merchant pattern is the escaped merchant text
+      // (saveUserMappingRule); read back as text it names someone or no one
+      // (crm#1707).
+      it.each([
+        ['INSÄTTNING', false],
+        ['KORTKÖP', false],
+        ['ÖVERFÖRING', false],
+        ['BG-BETALNING', false],
+        ['Insättning 4455-1234', false],
+        ['INSÄTTNING STRIPE', true],
+        ['KORTKÖP 260612 ICA MAXI', true],
+        ['Test \\(Pty\\) Ltd\\.', true],
+      ])('mappingPatternNamesCounterparty(%j) is %s', (pattern, expected) => {
+        expect(mappingPatternNamesCounterparty(pattern)).toBe(expected)
       })
     })
   })

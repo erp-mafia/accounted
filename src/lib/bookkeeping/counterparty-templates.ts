@@ -187,6 +187,19 @@ export function namesCounterparty(raw: string): boolean {
 }
 
 /**
+ * Whether a mapping rule's merchant pattern names a counterparty
+ * (namesCounterparty). A learned rule (saveUserMappingRule) stores the row's
+ * merchant text as an escaped regex literal, so the pattern is read back as
+ * text first. A rule learned from a text that only says how the money moved
+ * ("INSÄTTNING", "KORTKÖP", "BG-BETALNING") is about no one: it booked every
+ * later row with that text on the first row's accounts, a share capital
+ * deposit and a card payout alike (crm#1707).
+ */
+export function mappingPatternNamesCounterparty(pattern: string): boolean {
+  return namesCounterparty(pattern.replace(/\\(.)/g, '$1'))
+}
+
+/**
  * Full normalized token set of a descriptor WITHOUT the card-core reduction:
  * the product segment of a card descriptor ("CLAUDE SUB") often carries the
  * very token an existing template is named by ("claude", learned from manual
