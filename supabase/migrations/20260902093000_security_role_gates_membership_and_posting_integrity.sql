@@ -766,10 +766,10 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.validate_version_chain(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.validate_version_chain(uuid) TO authenticated, service_role;
 
-REVOKE EXECUTE ON FUNCTION public.match_documents(vector, integer, double precision) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.match_documents(vector, integer, double precision) TO authenticated, service_role;
-REVOKE EXECUTE ON FUNCTION public.match_booking_templates(vector, integer, double precision) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.match_booking_templates(vector, integer, double precision) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.match_documents(extensions.vector, integer, double precision) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.match_documents(extensions.vector, integer, double precision) TO authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.match_booking_templates(extensions.vector, integer, double precision) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.match_booking_templates(extensions.vector, integer, double precision) TO authenticated, service_role;
 
 REVOKE EXECUTE ON FUNCTION public.update_overdue_supplier_invoices() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.update_overdue_supplier_invoices() TO service_role;
