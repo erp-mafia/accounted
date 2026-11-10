@@ -1,0 +1,1 @@
+[2026-11-11] The dashboard bank ledger change refuses a member up front, preview included, only when the move would carry the invoice payee details (BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY): any writer keeps the plain ledger change, and the carry stays owner/admin as decided on 2026-11-02 (crm#1683).

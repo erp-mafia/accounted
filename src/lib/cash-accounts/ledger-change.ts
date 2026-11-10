@@ -26,6 +26,9 @@
  *     and yields it when a synced account asks for it, as in the picker;
  *   - a ledger account held elsewhere (another connection, another physical
  *     account) is refused by the database with a sentence naming that account;
+ *   - a move that carries the account's invoice payee details to the row
+ *     already on the new ledger account is owner/admin only, as every payee
+ *     write is: a member is refused up front, on the preview too (crm#1683);
  *   - rows that end up on one account twice, once per channel (statement
  *     files on the new ledger account, the feed of the moved account), are
  *     folded to one per movement, as the import would have: planned before
@@ -45,8 +48,9 @@ import {
   saveBankAccountSelection,
   type BankAccountSelection,
 } from '@/lib/cash-accounts/configuration'
-import { physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
-import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
+import { currencyKey, physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
+import { bankAccountLabel, ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
+import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
 import type { LedgerMoveTwinsPlan } from '@/lib/cash-accounts/move-twins'
 import { LEDGER_MOVE_TWINS } from '@/lib/composition/ledger-move-twins'
 
@@ -236,6 +240,23 @@ export async function changeBankAccountLedgers(
   } catch (error) {
     return saveFailure(error)
   }
+
+  // A move onto a ledger account another row keeps carries the account's
+  // invoice payee details to that row (crm#1445), and where customers are
+  // told to pay is owner/admin only (cash_accounts_payee_admin_only). A member
+  // is told so here, on the preview too and before anything is written,
+  // instead of the database's generic refusal at the save (crm#1683).
+  let payeeMove: LedgerChangeMove | null
+  try {
+    payeeMove = await moveCarryingPayee(ctx, connection.id, moves, cashRows, byUid)
+  } catch (error) {
+    return saveFailure(error)
+  }
+  if (payeeMove) {
+    const denied = await requireCompanyAdmin(ctx, payeeAdminMessage(payeeMove, connection.bank_name))
+    if (denied) return { ...denied, code: 'BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY' }
+  }
+
   const view: LedgerChangeView = { connection_id: connection.id, moves }
   if (options.dryRun) return { ok: true, dryRun: true, preview: { ...view } }
   if (moves.length === 0) return { ok: true, data: view }
@@ -351,6 +372,64 @@ async function applyMoveTwins(ctx: OperationContext, connectionId: string, plans
       })
     }
   }
+}
+
+const PAYEE_DEPENDENCIES = ['invoice-configuration', 'invoice-default']
+
+async function retirementDependencies(ctx: OperationContext, cashAccountId: string): Promise<string[]> {
+  const { data, error } = await ctx.supabase.rpc('cash_account_retirement_dependencies', {
+    p_company_id: ctx.companyId,
+    p_cash_account_id: cashAccountId,
+  })
+  if (error) throw error
+  return Array.isArray(data) ? data.filter((d): d is string => typeof d === 'string') : []
+}
+
+/**
+ * The first move whose save would carry the account's invoice payee details
+ * and payee default onto the row already on its new ledger account, or null.
+ * The conditions of that carry in promote_psd2_cash_account (20261102173000)
+ * other than the role: the account's own row has payee details or the
+ * default, the new ledger may be printed as payee (BAS 1920-1999) and the row
+ * kept has none of its own. The row kept is the same physical account already
+ * on that ledger, or a row with no bank connection and no IBAN (statement
+ * files or typed in, crm#1445). A row of this connection trades places
+ * instead, and a move the database refuses for everyone (another bank
+ * account on the ledger, invoices naming the row, underlag on a
+ * reconciliation, two sets of payee details) is left to that refusal.
+ */
+async function moveCarryingPayee(
+  ctx: OperationContext,
+  connectionId: string,
+  moves: LedgerChangeMove[],
+  cashRows: CashRow[],
+  byUid: Map<string, StoredAccount>,
+): Promise<LedgerChangeMove | null> {
+  for (const move of moves) {
+    if (!move.cash_account_id || !isBankCashAccount({ ledger_account: move.to_ledger })) continue
+    const currency = currencyKey(byUid.get(move.uid)?.currency)
+    const physical = physicalAccountKey({ iban: byUid.get(move.uid)?.iban, currency })
+    const keeper = cashRows.find((r) =>
+      r.ledger_account === move.to_ledger && r.id !== move.cash_account_id && r.bank_connection_id !== connectionId
+      && ((physical !== null && physicalAccountKey(r) === physical)
+        || (r.bank_connection_id === null && physicalAccountKey(r) === null && currencyKey(r.currency) === currency)))
+    if (!keeper) continue
+    const own = await retirementDependencies(ctx, move.cash_account_id)
+    if (!own.some((d) => PAYEE_DEPENDENCIES.includes(d))) continue
+    if (own.some((d) => d !== 'reconciliation' && !PAYEE_DEPENDENCIES.includes(d))) continue
+    const kept = await retirementDependencies(ctx, keeper.id)
+    if (kept.some((d) => PAYEE_DEPENDENCIES.includes(d))) continue
+    return move
+  }
+  return null
+}
+
+/** The member's answer for that move: which account, from where to where, and who can make it. */
+function payeeAdminMessage(move: LedgerChangeMove, bankName: string | null): string {
+  const label = bankAccountLabel({ name: move.name, bank_name: bankName, iban_last4: move.iban_last4 })
+  const account = label === 'ett annat bankkonto' ? 'bankkontot' : label
+  return `Bytet av ${account} från ${move.from_ledger} till ${move.to_ledger} flyttar också betalningsuppgifterna för fakturor, `
+    + 'och dem kan bara företagets ägare eller en administratör ändra. Inget sparades. Be en ägare eller administratör att göra bytet.'
 }
 
 export interface CashAccountLedgerRequest {
