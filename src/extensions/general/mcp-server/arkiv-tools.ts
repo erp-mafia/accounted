@@ -21,6 +21,9 @@ import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { getDecisionReceipts, toCompactDecision } from '@/lib/suggestion-log/receipts'
 import { createLogger } from '@/lib/logger'
 import { getVoucherLinks, toCompactLinks } from '@/lib/links/voucher-links'
+import { readLinksPart } from '@/lib/documents/read/document-detail'
+import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
+import { documentLedgerLinks, invoiceLinks, readSkattekontoRow, supplierInvoiceLinks, transactionLinks, verifikatBookedRecords, type RecordLink } from '@/lib/links/record-links'
 
 const receiptLog = createLogger('mcp-get-record')
 
@@ -38,18 +41,37 @@ const receiptLog = createLogger('mcp-get-record')
  */
 export type RecordKind = 'document' | 'agreement' | 'party' | 'journal_entry' | 'fact'
 
+/**
+ * The ledger records gnubok_get_record also opens, for every company: a bank
+ * row, a customer invoice, a supplier invoice and a skattekonto row, each
+ * with its links (src/lib/links/record-links.ts). Only by an explicit
+ * `<kind>:<uuid>`: the key scope each needs (transactions:read, invoices:read,
+ * suppliers:read, reconciliation:read) is checked at the wire from the
+ * prefix (argumentScopeFor), which a bare uuid does not carry.
+ */
+export const LEDGER_RECORD_KINDS = ['transaction', 'invoice', 'supplier_invoice', 'skattekonto_transaction'] as const
+export type LedgerRecordKind = (typeof LEDGER_RECORD_KINDS)[number]
+type GetRecordKind = RecordKind | LedgerRecordKind
+
+const SHELF_KINDS: readonly RecordKind[] = ['document', 'agreement', 'party', 'journal_entry', 'fact']
+const GET_RECORD_KINDS: readonly GetRecordKind[] = [...SHELF_KINDS, ...LEDGER_RECORD_KINDS]
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function parseRecordRef(ref: unknown): { kind: RecordKind; id: string } {
-  if (typeof ref !== 'string') throw invalid('record_ref must be a string like document:<uuid>')
-  const [kind, id] = ref.split(':')
-  if (!['document', 'agreement', 'party', 'journal_entry', 'fact'].includes(kind) || !UUID.test(id ?? '')) {
-    throw invalid('record_ref must be <document|agreement|party|journal_entry|fact>:<uuid>')
-  }
-  return { kind: kind as RecordKind, id }
+  return parseRefOf(ref, SHELF_KINDS)
 }
 
-const recordRef = (kind: RecordKind, id: string) => `${kind}:${id}`
+function parseRefOf<K extends string>(ref: unknown, kinds: readonly K[]): { kind: K; id: string } {
+  if (typeof ref !== 'string') throw invalid('record_ref must be a string like document:<uuid>')
+  const [kind, id] = ref.split(':')
+  if (!(kinds as readonly string[]).includes(kind) || !UUID.test(id ?? '')) {
+    throw invalid(`record_ref must be <${kinds.join('|')}>:<uuid>`)
+  }
+  return { kind: kind as K, id }
+}
+
+const recordRef = (kind: GetRecordKind, id: string) => `${kind}:${id}`
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -109,9 +131,9 @@ async function resolveRecordRef(
   supabase: SupabaseClient,
   companyId: string,
   ref: unknown,
-): Promise<{ kind: RecordKind; id: string }> {
+): Promise<{ kind: GetRecordKind; id: string }> {
   const id = typeof ref === 'string' ? ref.trim() : ''
-  if (!UUID.test(id)) return parseRecordRef(ref)
+  if (!UUID.test(id)) return parseRefOf(ref, GET_RECORD_KINDS)
   const found = await Promise.all([
     supabase.from('document_attachments').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
     supabase.from('agreements').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
@@ -126,7 +148,10 @@ async function resolveRecordRef(
   }
   if (kinds.length === 1) return { kind: kinds[0], id }
   if (kinds.length === 0) {
-    throw notFound(`No document, agreement, party, journal_entry or fact with id ${id} in this company.`)
+    throw notFound(
+      `No document, agreement, party, journal_entry or fact with id ${id} in this company. ` +
+        'A bank row, invoice, supplier invoice or skattekonto row is opened by its kind: transaction:<id>, invoice:<id>, supplier_invoice:<id> or skattekonto_transaction:<id>.',
+    )
   }
   throw invalid(
     `${id} is the id of more than one kind of record (${kinds.join(', ')}): send record_ref as ` +
@@ -165,6 +190,19 @@ interface Deps {
     previewData: Record<string, unknown>,
     actor?: ActorContext,
   ) => Promise<Record<string, unknown>>
+  /**
+   * The single-record read tools gnubok_get_record serves an invoice and a
+   * supplier invoice from, so the record and gnubok_get_invoice /
+   * gnubok_get_supplier_invoice return the same fields and cannot drift
+   * apart (no second column list).
+   */
+  readRecord?: (
+    tool: 'gnubok_get_invoice' | 'gnubok_get_supplier_invoice',
+    args: Record<string, unknown>,
+    companyId: string,
+    userId: string,
+    supabase: SupabaseClient,
+  ) => Promise<unknown>
 }
 
 const FACT_SHAPE = {
@@ -217,25 +255,34 @@ interface DocumentRow {
   admission_state: string
   page_count: number | null
   journal_entry_id: string | null
+  journal_entry_line_id: string | null
   extracted_data: Record<string, unknown> | null
 }
 
 /**
  * Outside the brain a document record is raw: what the file is, its type, its
  * dates and pages, the verifikat it sits on. Nothing read out of it by a model
- * (extracted fields, the inbox reading, agreements, links) is served: an agent
- * answers from the page text, never from our interpretation of it (prod
- * 2026-09-24: an extraction filed a round's total as one investor's amount,
- * and an agent repeated it).
+ * (extracted fields, the inbox reading, agreements, the parties and
+ * agreements the brain tied it to) is served: an agent answers from the page
+ * text, never from our interpretation of it (prod 2026-09-24: an extraction
+ * filed a round's total as one investor's amount, and an agent repeated it).
+ *
+ * The ledger links are served to everyone (withLedgerLinks): the verifikat,
+ * bank rows, supplier invoice, customer invoices, utlägg and inbox item that
+ * hold the document are what the books say, not a reading of the file. Until
+ * 2026-11-09 a document came back with links only inside the brain, and those
+ * were only the brain's own (13 rows in prod, one company). A document nested
+ * in a journal_entry record skips them: it supports that verifikat, and the
+ * extra reads per document would multiply on a samlingsverifikat.
  */
-async function documentRecord(supabase: SupabaseClient, companyId: string, documentId: string) {
+async function documentRecord(supabase: SupabaseClient, companyId: string, documentId: string, opts: { withLedgerLinks?: boolean } = {}) {
   const brain = isArkivBrainEnabled(companyId)
   const none = Promise.resolve({ data: null, error: null })
   const noneList = Promise.resolve({ data: [], error: null })
   const [doc, extraction, links, agreement] = await Promise.all([
     supabase
       .from('document_attachments')
-      .select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id, extracted_data')
+      .select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id, journal_entry_line_id, extracted_data')
       .eq('id', documentId)
       .eq('company_id', companyId)
       .maybeSingle(),
@@ -253,6 +300,9 @@ async function documentRecord(supabase: SupabaseClient, companyId: string, docum
   for (const r of [doc, extraction, links, agreement]) if (r.error) throw dbError(r.error)
   if (!doc.data) return null
   const d = doc.data as DocumentRow
+  const ledgerLinks = opts.withLedgerLinks
+    ? await documentLedgerLinks(supabase, companyId, d.id, await readLinksPart(supabase, companyId, d))
+    : []
   const ext = extraction.data as {
     id: string
     schema_type: string
@@ -300,13 +350,18 @@ async function documentRecord(supabase: SupabaseClient, companyId: string, docum
           review_fields: ext.review_fields,
         }
       : null,
-    links: ((links.data ?? []) as Array<{ id: string; target_kind: RecordKind; target_id: string; basis: string; method: string; confidence: number }>).map((l) => ({
-      link_id: l.id,
-      record_ref: recordRef(l.target_kind, l.target_id),
-      basis: l.basis,
-      method: l.method,
-      confidence: Number(l.confidence),
-    })),
+    // The brain's links (basis proven or guessed, from a reading of the file) first, then the ledger's (basis as recorded by the writer).
+    links: [
+      ...((links.data ?? []) as Array<{ id: string; target_kind: RecordKind; target_id: string; basis: string; method: string; confidence: number }>).map((l) => ({
+        link_id: l.id,
+        relation: l.target_kind === 'party' ? 'counterparty' : l.target_kind === 'agreement' ? 'establishes' : 'concerns',
+        record_ref: recordRef(l.target_kind, l.target_id),
+        basis: l.basis,
+        method: l.method,
+        confidence: Number(l.confidence),
+      })),
+      ...ledgerLinks,
+    ],
     agreement_ref: agreement.data ? recordRef('agreement', (agreement.data as { id: string }).id) : null,
     // The Underlag reader's structured read of a receipt or invoice, in the brain only: outside it the text is the answer.
     underlag_extraction: brain ? (d.extracted_data ?? null) : null,
@@ -450,8 +505,12 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
   // link was made). Same contract as the decision: a failed lookup says so
   // with links_unavailable instead of failing the read or passing for none.
   let links: ReturnType<typeof toCompactLinks> | null = null
+  // The invoice, supplier invoice or skattekonto rows the verifikat books, as record_refs to open next.
+  let books: RecordLink[] = []
   try {
-    links = toCompactLinks(await getVoucherLinks(supabase, companyId, journalEntryId))
+    const [voucherLinks, booked] = await Promise.all([getVoucherLinks(supabase, companyId, journalEntryId), verifikatBookedRecords(supabase, companyId, journalEntryId)])
+    links = toCompactLinks(voucherLinks)
+    books = booked
   } catch (err) {
     receiptLog.warn('voucher link lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
   }
@@ -466,7 +525,7 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     documents,
     ...(decision ? { decision } : {}),
     ...(decisionUnavailable ? { decision_unavailable: true } : {}),
-    ...(links ? { links } : { links_unavailable: true }),
+    ...(links ? { links, books } : { links_unavailable: true }),
   }
 }
 
@@ -540,24 +599,28 @@ export function createArkivTools(deps: Deps): McpTool[] {
     },
     {
       name: 'gnubok_get_record',
-      keywords: ['arkiv', 'dokument', 'avtal', 'verifikat underlag', 'läs avtal'],
+      keywords: ['arkiv', 'dokument', 'avtal', 'verifikat underlag', 'läs avtal', 'kopplingar', 'banktransaktion', 'kundfaktura', 'leverantörsfaktura', 'skattekonto', 'kreditfaktura'],
       title: 'Get Record',
       description:
-        'The structured record behind a record_ref: a document with its extracted fields (each with page and quote), an agreement with its payments, dates and facts, a party, or a journal_entry with every attached document as a record. as_of picks the facts valid on a date.',
+        'A record and its links, each with basis and the record_ref to open next: document, journal_entry, transaction (bank row), invoice, supplier_invoice, skattekonto_transaction; agreement, party, fact with the brain. as_of picks the facts valid on a date.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          record_ref: { type: 'string', description: 'document:<uuid>, agreement:<uuid>, party:<uuid>, journal_entry:<uuid> or fact:<uuid>.' },
+          record_ref: { type: 'string', description: '<kind>:<uuid>. A bare uuid finds document, journal_entry, agreement, party or fact.' },
           as_of: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Facts valid on this date. Default: today.' },
         },
         required: ['record_ref'],
       },
+      // Open at the top level (see the file header): the ledger kinds answer
+      // under transaction, invoice, supplier_invoice and skattekonto_transaction,
+      // undeclared so tools/list pays nothing for them; kind carries no enum
+      // for the same reason.
       outputSchema: {
         type: 'object',
         properties: {
           record_ref: { type: 'string' },
-          kind: { type: 'string', enum: ['document', 'agreement', 'party', 'journal_entry', 'fact'] },
+          kind: { type: 'string' },
           document: { type: ['object', 'null'] },
           agreement: { type: ['object', 'null'] },
           party: { type: ['object', 'null'] },
@@ -567,16 +630,42 @@ export function createArkivTools(deps: Deps): McpTool[] {
         required: ['record_ref', 'kind'],
       },
       annotations: deps.readOnly,
-      async execute(args, companyId, _userId, supabase) {
+      async execute(args, companyId, userId, supabase) {
         const ref = await resolveRecordRef(supabase, companyId, args.record_ref)
         const asOf = typeof args.as_of === 'string' ? args.as_of : null
         const base = { record_ref: recordRef(ref.kind, ref.id), kind: ref.kind }
         if (ref.kind === 'agreement' || ref.kind === 'party' || ref.kind === 'fact') assertBrain(companyId)
+        // The invoice reads are the tools' own (gnubok_get_invoice, gnubok_get_supplier_invoice): same fields, same refusals.
+        const readTool = async (tool: 'gnubok_get_invoice' | 'gnubok_get_supplier_invoice', toolArgs: Record<string, unknown>) => {
+          if (!deps.readRecord) throw coded('INTERNAL_ERROR', `${tool} is not wired into gnubok_get_record`)
+          return (await deps.readRecord(tool, toolArgs, companyId, userId, supabase)) as Record<string, unknown>
+        }
         switch (ref.kind) {
           case 'document': {
-            const document = await documentRecord(supabase, companyId, ref.id)
+            const document = await documentRecord(supabase, companyId, ref.id, { withLedgerLinks: true })
             if (!document) throw notFound('Record not found')
             return { ...base, document }
+          }
+          case 'transaction': {
+            const transaction = await readTransactionWithVouchers(supabase, companyId, ref.id)
+            if (!transaction) throw notFound('Record not found: no bank transaction with this id in the company')
+            return { ...base, transaction: { ...transaction, links: await transactionLinks(supabase, companyId, transaction) } }
+          }
+          case 'invoice': {
+            const [invoice, links] = await Promise.all([readTool('gnubok_get_invoice', { invoice_id: ref.id }), invoiceLinks(supabase, companyId, ref.id)])
+            return { ...base, invoice: { ...invoice, links } }
+          }
+          case 'supplier_invoice': {
+            const [supplierInvoice, links] = await Promise.all([
+              readTool('gnubok_get_supplier_invoice', { supplier_invoice_id: ref.id }),
+              supplierInvoiceLinks(supabase, companyId, ref.id),
+            ])
+            return { ...base, supplier_invoice: { ...supplierInvoice, links } }
+          }
+          case 'skattekonto_transaction': {
+            const row = await readSkattekontoRow(supabase, companyId, ref.id)
+            if (!row) throw notFound('Record not found: no skattekonto row with this id in the company')
+            return { ...base, skattekonto_transaction: row }
           }
           case 'agreement': {
             const agreement = await agreementRecord(supabase, companyId, ref.id, asOf)

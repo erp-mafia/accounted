@@ -46,8 +46,8 @@ describe('TRANSACTION_DETAIL_COLUMNS', () => {
     notes: 'not decided yet (2026-11-09)',
     bank_transaction_code: 'not decided yet (2026-11-09): ISO 20022 bank transaction code',
     proprietary_bank_transaction_code: 'not decided yet (2026-11-09)',
-    link_basis: 'not decided yet (2026-11-09): why a link was made, read through the voucher',
-    link_evidence: 'not decided yet (2026-11-09)',
+    link_basis: "the verifikat link's basis: served on that link in gnubok_get_record (lib/links/record-links.ts), not as a row field",
+    link_evidence: 'served with link_basis on the verifikat link in gnubok_get_record',
   }
 
   it('returns every transactions column, or names it as left out with a reason', () => {

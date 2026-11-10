@@ -29237,7 +29237,18 @@ export const tools: McpTool[] = [
     },
   },
 
-  ...createArkivTools({ readOnly: ANNOTATIONS_READ_ONLY, stagedWrite: ANNOTATIONS_STAGED_WRITE, stagedSchema: STAGED_OPERATION_SCHEMA, stagePendingOperation }),
+  ...createArkivTools({
+    readOnly: ANNOTATIONS_READ_ONLY,
+    stagedWrite: ANNOTATIONS_STAGED_WRITE,
+    stagedSchema: STAGED_OPERATION_SCHEMA,
+    stagePendingOperation,
+    // gnubok_get_record serves an invoice and a supplier invoice from these tools' own reads.
+    readRecord: (name, args, companyId, userId, supabase) => {
+      const tool = tools.find((t) => t.name === name)
+      if (!tool) throw new Error(`${name} is not registered`)
+      return tool.execute(args, companyId, userId, supabase)
+    },
+  }),
   // Operations defined once in src/lib/operations: the same contract and
   // rules as their v1 endpoints (operation-tools.ts).
   ...createOperationTools(OPERATIONS, {
