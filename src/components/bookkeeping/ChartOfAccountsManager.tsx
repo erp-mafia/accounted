@@ -291,6 +291,19 @@ export default function ChartOfAccountsManager() {
     }
   }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded, companySettings])
 
+  // Restored views bypass the tab click handler. Try once per activation so
+  // loading-state changes cannot create a retry loop after a failed request.
+  const referenceActivation = useRef(false)
+  useEffect(() => {
+    if (view !== 'bas-catalog') {
+      referenceActivation.current = false
+      return
+    }
+    if (referenceActivation.current) return
+    referenceActivation.current = true
+    void ensureReferenceLoaded()
+  }, [view, ensureReferenceLoaded])
+
   const refreshAll = useCallback(async () => {
     await Promise.all([
       fetchAccounts(),
@@ -590,7 +603,6 @@ export default function ChartOfAccountsManager() {
     setSelectedNumbers(new Set())
     setCollapsedMyClasses(new Set())
     setExpandedCatalogClasses(new Set())
-    if (next === 'bas-catalog') void ensureReferenceLoaded()
   }
 
   // Concept band row (Klass N: label), clickable to fold the class away.
