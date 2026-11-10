@@ -43,6 +43,7 @@ import {
 } from '@/lib/invoices/pdf/styles'
 import {
   DESCRIPTION_COLUMN_PT,
+  FINE_PRINT_KEEP_TOGETHER_LINES,
   FULL_WIDTH_BOX_PT,
   HEADING_MIN_PRESENCE_AHEAD,
   MAX_KEEP_TOGETHER_LINES,
@@ -424,16 +425,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   )
 
   // Fine print: the company's payment terms (Betalningsvillkor, Dröjsmålsränta).
-  // It travels with the payment area, or with the totals when there is none,
-  // so it can never be stranded alone on a page (crm#242). Payment terms, so
-  // only on a document that asks for a payment: never on a quote, a
-  // kreditfaktura or a följesedel. In the invoice's language: the English
-  // texts on an English invoice, each falling back to the Swedish one
-  // (crm#1735).
+  // A short one travels with the payment area, or with the totals when there
+  // is none, so it can never be stranded alone on a page (crm#242); a long one
+  // follows the totals as ordinary text and may break across pages
+  // (FINE_PRINT_KEEP_TOGETHER_LINES, crm#1787). Payment terms, so only on a
+  // document that asks for a payment: never on a quote, a kreditfaktura or a
+  // följesedel. In the invoice's language: the English texts on an English
+  // invoice, each falling back to the Swedish one (crm#1735).
   const { lateFee, creditTerms } = invoiceFinePrint(company, lang)
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
     : [lateFee, creditTerms].filter((t): t is string => t !== null)
+  const finePrintTravelsWhole = fitsOnOnePage(finePrint.join('\n'), FULL_WIDTH_BOX_PT, FINE_PRINT_KEEP_TOGETHER_LINES)
   const finePrintBlock = finePrint.length > 0 ? (
     <View style={styles.finePrint}>
       {finePrint.map((text, index) => (
@@ -831,7 +834,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             (agent feedback seq 1080289: it used to follow the payment area's
             reservation to the next page and leave page 1 half empty). The
             fine print and a spacer as tall as the payment area follow it and
-            may move to the next page on their own; the page the spacer lands
+            may move to the next page on their own (a long fine print is its
+            own unit and may break, crm#1787); the page the spacer lands
             on is the last one, where the payment area, which states the
             amount again, is drawn over it. A ROT/RUT breakdown too long to
             keep whole comes first instead and may split. */}
@@ -942,16 +946,21 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               </View>
             )}
 
-            {/* No payment area (proforma): the fine print stays with the totals. */}
-            {!hasPaymentArea && finePrintBlock}
+            {/* No payment area (proforma): a short fine print stays with the totals. */}
+            {!hasPaymentArea && finePrintTravelsWhole && finePrintBlock}
           </View>
 
-          {/* Fine print and the payment area's reservation, kept together so
-              the last page always has room for the payment area and the
-              fine print is never stranded without it. */}
+          {/* A long fine print follows the summary as ordinary text and may
+              break across pages, so it never drags a unit kept whole to a
+              fresh page and leaves the page above mostly empty (crm#1787). */}
+          {!finePrintTravelsWhole && finePrintBlock}
+
+          {/* The payment area's reservation, one unit so the last page always
+              has room for the payment area. A short fine print travels with
+              it, so it is never stranded without it. */}
           {hasPaymentArea && (
             <View wrap={false}>
-              {finePrintBlock}
+              {finePrintTravelsWhole && finePrintBlock}
               <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
             </View>
           )}

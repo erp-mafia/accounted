@@ -8,7 +8,9 @@
  *   D  totals block             the summary (totals, deduction underlag, one
  *                                notice slot), then the fine print and a
  *                                spacer as tall as zone E; two units, each
- *                                kept whole
+ *                                kept whole, or three when the fine print is
+ *                                long: it then sits between them as text
+ *                                that may break across pages
  *   E  payment area             fixed height, bottom of the LAST page only
  *   F  footer                   every page, fixed at the bottom
  *   overlays                    UTKAST watermark, BETALD / MAKULERAD /
@@ -20,8 +22,9 @@
  * invoice's status or the company's settings, so a paid re-render paginates
  * exactly like the original. The summary stays on the page where the rows
  * end when it fits there; when the payment area's reservation does not fit
- * under it, the fine print and the payment area move to the next page
- * together.
+ * under it, a short fine print and the payment area move to the next page
+ * together, and a long one stays under the summary as far as it fits
+ * (FINE_PRINT_KEEP_TOGETHER_LINES, crm#1787).
  */
 
 export const A4_WIDTH_PT = 595.28
