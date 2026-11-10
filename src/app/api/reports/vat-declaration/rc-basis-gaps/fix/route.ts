@@ -17,6 +17,7 @@ import { postingPort } from '@/lib/posting/port'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import {
+  RC_BASIS_SKIPPED_SOURCE_TYPE,
   RC_BASIS_TOLERANCE,
   isRcBasisGap,
   missingRcBasis,
@@ -45,7 +46,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * purchase twice (crm#1096). Each momssats is classified on its own (EU goods
  * at 12 % and an EU service at 25 % land in different rutor). Refused, with
  * nothing written, when nothing is missing (an already corrected verifikat
- * included), when the verifikat reports its basis at another momssats than
+ * and a momsredovisning included), when the verifikat reports its basis at another momssats than
  * its fiktiv moms, when it books on an account the declaration counts in
  * ruta 20-24 at no momssats (a momskod for omvänd skattskyldighet without
  * Standard moms 25, 12 or 6 %), or when the kontoplan reads the basis
@@ -123,7 +124,7 @@ export const POST = withRouteContext(
     // Fetch the entry + its lines (RLS + explicit company filter)
     const { data: entry, error: fetchErr } = await supabase
       .from('journal_entries')
-      .select('id, status, lines:journal_entry_lines(*)')
+      .select('id, status, source_type, lines:journal_entry_lines(*)')
       .eq('id', entryId)
       .eq('company_id', companyId)
       .single()
@@ -152,6 +153,22 @@ export const POST = withRouteContext(
       return errorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', log, {
         requestId,
         details: { entryId, reason: `entry is ${entry.status}, expected posted` },
+      })
+    }
+
+    // The momsredovisning clears the fiktiv moms and has no basis of its own,
+    // so the scan never lists it (crm#1766); a row from before that still
+    // must not storno a correct settlement into a purchase.
+    if (entry.source_type === RC_BASIS_SKIPPED_SOURCE_TYPE) {
+      return errorResponseFromCode('VAT_RC_BASIS_NOTHING_MISSING', log, {
+        requestId,
+        messageSv:
+          'Verifikationen är en momsredovisning. Den nollställer momskontona och ska inte ha något basbelopp, ' +
+          'så det finns inget att korrigera. Ladda om sidan så uppdateras listan.',
+        messageEn:
+          'The voucher is a VAT settlement. It clears the VAT accounts and has no basis of its own, ' +
+          'so there is nothing to correct. Reload the page to refresh the list.',
+        details: { entryId, reason: 'vat_settlement' },
       })
     }
 

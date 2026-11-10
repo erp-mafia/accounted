@@ -77,7 +77,11 @@ function verifikatLines(rcLines: ReturnType<typeof rcLine>[], otherLines: Return
  * The same verifikat as get_entries_with_account_lines returns them: each
  * with every line, the verifikat ordered by id.
  */
-function mockVerifikatRpc(rcLines: ReturnType<typeof rcLine>[], otherLines: ReturnType<typeof line>[] = []) {
+function mockVerifikatRpc(
+  rcLines: ReturnType<typeof rcLine>[],
+  otherLines: ReturnType<typeof line>[] = [],
+  sourceTypes: Record<string, string> = {},
+) {
   const lines = verifikatLines(rcLines, otherLines)
   const entries = new Map(rcLines.map((l) => [l.journal_entry_id, l.journal_entries]))
   fetchEntriesWithAccountLinesMock.mockResolvedValue(
@@ -86,7 +90,7 @@ function mockVerifikatRpc(rcLines: ReturnType<typeof rcLine>[], otherLines: Retu
       .map((entry) => ({
         ...entry,
         status: 'posted',
-        source_type: 'manual',
+        source_type: sourceTypes[entry.id] ?? 'manual',
         source_id: null,
         reverses_id: null,
         correction_of_id: null,
@@ -283,6 +287,89 @@ describe('findRcBasisGaps through get_entries_with_account_lines', () => {
       expect(rpc).toEqual(paged)
       expect(paged.length).toBeGreaterThan(0)
     }
+  })
+})
+
+// crm#1766: the momsredovisning clears 2614 into 2650 and is no purchase. A
+// period whose reverse-charge credit notes outweigh its purchases leaves 2614
+// in debit, so the settlement credits it, and that credit has no basis by
+// design. The declaration leaves the settlement out of the rutor; so must the
+// scan, on both of its reads.
+describe('findRcBasisGaps leaves the momsredovisning out', () => {
+  // A reverse-charge credit note with its basis: 2614 in debit.
+  const creditNote = { ...rcLine('entry-credit', 5, 0), debit_amount: 500 }
+  const creditNoteLines = [line('entry-credit', '4535', 0, 2000), line('entry-credit', '2645', 0, 500), line('entry-credit', '2440', 2000)]
+  // An EU service bought on an ordinary cost account: fiktiv moms, no basis.
+  const purchase = rcLine('entry-buy', 6, 250)
+  const purchaseLines = [line('entry-buy', '6540', 1000), line('entry-buy', '2645', 250), line('entry-buy', '2440', 0, 1000)]
+  // The period's settlement: 2614 net debit 250 and 2645 net credit 250 cleared, the sale's 2611 into 2650.
+  const settlement = rcLine('entry-settle', 7, 250)
+  const settlementLines = [line('entry-settle', '2611', 1000), line('entry-settle', '2645', 250), line('entry-settle', '2650', 0, 1000)]
+  const sourceTypes = { 'entry-settle': 'vat_settlement' }
+
+  /**
+   * The paged read against a fake table: filterEntries is applied to the
+   * verifikat's source_type the way PostgREST would (eq/neq), so a filter the
+   * scan does not send leaves the settlement in.
+   */
+  function mockPagedTable(rcLines: ReturnType<typeof rcLine>[], otherLines: ReturnType<typeof line>[]) {
+    fetchEntriesWithAccountLinesMock.mockResolvedValue(null)
+    fetchEntryLinesMock.mockImplementation(async ({ filterEntries }: { filterEntries: (q: unknown) => unknown }) => {
+      const calls: Array<[string, string, unknown]> = []
+      const q: unknown = new Proxy({}, {
+        get: (_t, method: string) => (column: string, value: unknown) => {
+          calls.push([method, column, value])
+          return q
+        },
+      })
+      filterEntries(q)
+      return rcLines.filter((l) => {
+        const sourceType = sourceTypes[l.journal_entry_id as keyof typeof sourceTypes] ?? 'manual'
+        return calls.every(([method, column, value]) =>
+          column !== 'source_type' ||
+          (method === 'neq' ? sourceType !== value : method === 'eq' ? sourceType === value : true))
+      })
+    })
+    const all = verifikatLines(rcLines, otherLines)
+    fetchLinesByEntryIdsMock.mockImplementation(async (_db: unknown, ids: string[]) =>
+      all.filter((l) => ids.includes(l.journal_entry_id)))
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resolvePeriodDatesMock.mockResolvedValue({ start: '2026-10-01', end: '2026-10-31' })
+    fetchDynamicVatAccountsMock.mockResolvedValue({
+      explicitAccounts: new Set(),
+      mappingByAccount: new Map(),
+      rcBasisRateByAccount: new Map(),
+    })
+  })
+
+  it('flags no gap in a period whose only fiktiv moms without basis is the settlement', async () => {
+    // Without the exclusion the settlement's 250 credit on 2614 reads as a 1000 basis missing.
+    const rcLines = [creditNote, settlement]
+    const otherLines = [...creditNoteLines, ...settlementLines]
+
+    mockVerifikatRpc(rcLines, otherLines, sourceTypes)
+    await expect(findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 10)).resolves.toEqual([])
+
+    mockPagedTable(rcLines, otherLines)
+    await expect(findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 10)).resolves.toEqual([])
+  })
+
+  it('still flags a purchase whose basis is missing beside the settlement, on both reads alike', async () => {
+    const rcLines = [creditNote, purchase, settlement]
+    const otherLines = [...creditNoteLines, ...purchaseLines, ...settlementLines]
+
+    mockVerifikatRpc(rcLines, otherLines, sourceTypes)
+    const rpc = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 10)
+    mockPagedTable(rcLines, otherLines)
+    const paged = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 10)
+
+    expect(rpc).toEqual([
+      expect.objectContaining({ entryId: 'entry-buy', rcOutputAccount: '2614', missingBasisAmount: 1000 }),
+    ])
+    expect(paged).toEqual(rpc)
   })
 })
 
