@@ -53,7 +53,11 @@ export interface TransactionDocument {
 export interface TransactionWithVouchers {
   transaction_id: string
   date: string | null
+  /** The bank's value date (valutadag); null when the feed sends none. */
+  value_date: string | null
   description: string | null
+  /** The bank's verbatim text: description is the working title, which a person may have renamed. */
+  original_description: string | null
   amount: number | null
   currency: string | null
   amount_sek: number | null
@@ -73,13 +77,29 @@ export interface TransactionWithVouchers {
   is_ignored: boolean
   /** The row's id at its source: a Stripe balance transaction (stripe_<account>_<txn>, _fee for its fee row), a bank feed or a file import. */
   external_id: string | null
+  /** The bank's own id for the row (Open Payments, Enable Banking); external_id of a feed row is content-derived. */
+  provider_transaction_id: string | null
+  /** The payer's end-to-end reference (ISO 20022), when the bank passes it on. */
+  end_to_end_id: string | null
   import_source: string | null
   reconciliation_method: string | null
   cash_account_id: string | null
   invoice_id: string | null
   supplier_invoice_id: string | null
   potential_invoice_id: string | null
+  /** The supplier invoice the matcher suggests this row pays (the transactions page shows it). */
+  potential_supplier_invoice_id: string | null
+  /** The posted verifikat the bank matcher suggests this row is (potential_match_method says how). */
+  potential_journal_entry_id: string | null
+  potential_match_confidence: number | null
   potential_match_method: string | null
+  /** The Riksbank SEK rate of a foreign-currency row, and its date. */
+  exchange_rate: number | null
+  exchange_rate_date: string | null
+  /** The payment rail: card, transfer, fee, ... (null when unclassified). */
+  transaction_method: string | null
+  /** When a person renamed the title (description); original_description keeps the bank's text. */
+  title_edited_at: string | null
   journal_entry_id: string | null
   document_id: string | null
   receipt_id: string | null
@@ -236,14 +256,16 @@ export async function readTransactionWithVouchers(
 
   // Every selected column passes through; only the id is renamed and the
   // numerics and the default category normalised.
-  const { id, amount, amount_sek, instructed_amount, balance_after, category, is_ignored, is_booked, ...fields } = tx
+  const { id, amount, amount_sek, instructed_amount, balance_after, exchange_rate, potential_match_confidence, category, is_ignored, is_booked, ...fields } = tx
   return {
     transaction_id: id,
-    ...(fields as Omit<TransactionWithVouchers, 'transaction_id' | 'amount' | 'amount_sek' | 'instructed_amount' | 'balance_after' | 'category' | 'is_ignored' | 'booked' | 'verifikat' | 'documents'>),
+    ...(fields as Omit<TransactionWithVouchers, 'transaction_id' | 'amount' | 'amount_sek' | 'instructed_amount' | 'balance_after' | 'exchange_rate' | 'potential_match_confidence' | 'category' | 'is_ignored' | 'booked' | 'verifikat' | 'documents'>),
     amount: num(amount),
     amount_sek: num(amount_sek),
     instructed_amount: num(instructed_amount),
     balance_after: num(balance_after),
+    exchange_rate: num(exchange_rate),
+    potential_match_confidence: num(potential_match_confidence),
     category: category === 'uncategorized' ? null : category,
     is_ignored: is_ignored === true,
     booked: is_booked === true,

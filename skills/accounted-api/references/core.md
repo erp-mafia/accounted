@@ -1278,7 +1278,7 @@ Example response `200`:
 **Read the company settings.**
 `scope:companies:read · risk:low · idempotent`
 
-Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number). contact_person is the default "Vår referens" on new invoices.
+Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number) and the document inbox address (inbox_address). contact_person is the default "Vår referens" on new invoices.
 
 **Use when:** Before creating invoices (payment details must exist), before any settings change, or to learn how the books are kept (accounting_method: accrual = faktureringsmetoden, cash = kontantmetoden; moms_period).
 **Do not use for:** Payroll settings (GET /salary/settings) or fiscal periods and their locks (GET /fiscal-periods).
@@ -1404,7 +1404,8 @@ Response `200`:
     invoice_email_bcc_addresses?: unknown,
     reminder_text_overrides?: unknown,
     default_voucher_series_per_source_type?: unknown,
-    voucher_series_labels?: unknown
+    voucher_series_labels?: unknown,
+    inbox_address: string | null
   },
   meta: {
     request_id: string,

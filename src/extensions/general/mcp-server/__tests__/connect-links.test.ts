@@ -451,6 +451,55 @@ describe('gnubok_connect_migration', () => {
       expect(result.underlag).toEqual({ status: 'unknown' })
     })
   })
+
+  // Agents had no read of the import itself: a job stopped on records to
+  // review looked the same as one still running.
+  describe('job', () => {
+    const JOB = { id: 'job-1', state: 'needs_attention', phase: 'completed', error_code: null, updated_at: '2026-11-08T10:00:00Z', review_accepted_at: null }
+
+    it('reports the latest job of the provider with its records per resource, read for this company only', async () => {
+      const { supabase, findCalls } = createTableMockSupabase({
+        migration_jobs: { data: JOB },
+        'rpc:provider_migration_counts': {
+          data: [{ resource: 'supplierInvoices', total: '12', imported: '10', completed: '10', skipped: '0', needs_attention: '2', pending: '0' }],
+        },
+      })
+      const result = (await migrationTool.execute({ provider: 'fortnox' }, COMPANY_ID, 'user-1', supabase as never)) as Record<string, unknown>
+
+      expect(result.job).toEqual({
+        status: 'needs_attention', phase: 'completed', error_code: null, updated_at: '2026-11-08T10:00:00Z', accepted_at: null,
+        resources: [{ resource: 'supplierInvoices', total: 12, imported: 10, needs_attention: 2, pending: 0, skipped: 0 }],
+      })
+      expect(findCalls('migration_jobs', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY_ID], ['provider', 'fortnox']]))
+      expect(findCalls('rpc:provider_migration_counts', 'rpc')).toEqual([[{ p_job_id: 'job-1' }]])
+      expect(result.instructions).toContain('job.status')
+    })
+
+    it('says no job has started, for a file provider too', async () => {
+      const { supabase } = createTableMockSupabase({ migration_jobs: { data: null } })
+      const result = (await migrationTool.execute({ provider: 'bokio' }, COMPANY_ID, 'user-1', supabase as never)) as Record<string, unknown>
+
+      expect(result.job).toEqual({ status: 'not_started' })
+    })
+
+    it('marks counts it could not read as null, never as an empty import', async () => {
+      const { supabase } = createTableMockSupabase({
+        migration_jobs: { data: { ...JOB, state: 'running', phase: 'import' } },
+        'rpc:provider_migration_counts': { error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+      })
+      const result = (await migrationTool.execute({ provider: 'fortnox' }, COMPANY_ID, 'user-1', supabase as never)) as { job: Record<string, unknown> }
+
+      expect(result.job).toMatchObject({ status: 'running', phase: 'import', resources: null })
+    })
+
+    it('keeps the connect card when the job cannot be read', async () => {
+      const { supabase } = createTableMockSupabase({ migration_jobs: { error: { code: '42501', message: 'permission denied' } } })
+      const result = (await migrationTool.execute({ provider: 'fortnox' }, COMPANY_ID, 'user-1', supabase as never)) as Record<string, unknown>
+
+      expect(result.connect_url).toBe('https://app.example.test/import?mode=migration&provider=fortnox')
+      expect(result.job).toEqual({ status: 'unknown' })
+    })
+  })
 })
 
 /**

@@ -207,6 +207,32 @@ describe('GET /api/v1/companies/:companyId/settings', () => {
     expect(String(selects[1].args[0])).not.toContain('nordea_agreement_id')
   })
 
+  it('carries the document inbox address, and null when the company has none or it cannot be read', async () => {
+    vi.stubEnv('RESEND_INBOUND_DOMAIN', 'inbox.example.test')
+    try {
+      const client = makeClient({ company_members: OWNER, company_settings: { data: STORED }, company_inboxes: { data: { local_part: 'acme-ab-7k2q' } } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await getSettings(request(BASE), params)
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.inbox_address).toBe('acme-ab-7k2q@inbox.example.test')
+      expect(client.calls.filter((c) => c.table === 'company_inboxes' && c.method === 'eq').map((c) => c.args)).toEqual(
+        expect.arrayContaining([['company_id', COMPANY_ID], ['status', 'active']]),
+      )
+
+      mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER, company_settings: { data: STORED }, company_inboxes: { data: null } }))
+      expect((await (await getSettings(request(BASE), params)).json()).data.inbox_address).toBeNull()
+
+      mockServiceClient.mockReturnValue(
+        makeClient({ company_members: OWNER, company_settings: { data: STORED }, company_inboxes: { data: null, error: { code: '42501', message: 'denied' } } }),
+      )
+      const failed = await getSettings(request(BASE), params)
+      expect(failed.status).toBe(200)
+      expect((await failed.json()).data.inbox_address).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('a viewer may read', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'viewer' } }, company_settings: { data: STORED } }),

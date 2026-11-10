@@ -36,13 +36,24 @@ const TX_ROW = {
   category: 'uncategorized',
   is_ignored: false,
   external_id: 'eb_8f2c1a',
+  provider_transaction_id: null,
+  end_to_end_id: null,
+  original_description: null,
+  value_date: null,
   import_source: 'bank_feed',
   reconciliation_method: null,
   cash_account_id: null,
   invoice_id: null,
   supplier_invoice_id: null,
   potential_invoice_id: null,
+  potential_supplier_invoice_id: null,
+  potential_journal_entry_id: null,
+  potential_match_confidence: null,
   potential_match_method: null,
+  exchange_rate: null,
+  exchange_rate_date: null,
+  transaction_method: null,
+  title_edited_at: null,
   journal_entry_id: jeId,
   document_id: pinnedDocId,
   receipt_id: null,
@@ -151,6 +162,45 @@ describe('gnubok_get_transaction', () => {
     const select = calls.find((c) => c.table === 'transactions' && c.method === 'select')
     expect(String(select?.args[0]).split(',').map((c) => c.trim())).toContain('counterparty_iban')
     expect(result).toMatchObject({ counterparty_iban: 'NO9386011117947', instructed_amount: -4800, instructed_currency: 'NOK' })
+  })
+
+  it("returns the bank's own text and ids beside the working title, which a person may have renamed", async () => {
+    const { client, calls } = db({
+      transactions: {
+        data: { ...TX_ROW, description: 'Hyra kontor', original_description: 'BG 5555-5555 HYRESVARDEN', provider_transaction_id: 'bank-tx-1', end_to_end_id: 'E2E-1', value_date: '2026-10-04' },
+      },
+    })
+    const result = await call({ transaction_id: txId }, client)
+
+    const select = String(calls.find((c) => c.table === 'transactions' && c.method === 'select')?.args[0]).split(',').map((c) => c.trim())
+    for (const column of ['original_description', 'provider_transaction_id', 'end_to_end_id', 'value_date']) expect(select).toContain(column)
+    expect(result).toMatchObject({
+      description: 'Hyra kontor',
+      original_description: 'BG 5555-5555 HYRESVARDEN',
+      provider_transaction_id: 'bank-tx-1',
+      end_to_end_id: 'E2E-1',
+      value_date: '2026-10-04',
+      external_id: 'eb_8f2c1a',
+    })
+  })
+
+  it('returns the match the transactions page suggests, the rate and the rail, as a person sees them on the row', async () => {
+    const siId = '6b0c2f6e-1d4e-4a8a-9f5e-2c3d4e5f6a7b'
+    const { client } = db({
+      transactions: {
+        data: { ...TX_ROW, potential_supplier_invoice_id: siId, potential_match_confidence: '0.95', potential_match_method: 'auto_date_range', exchange_rate: '11.2345', exchange_rate_date: '2026-10-03', transaction_method: 'card', title_edited_at: '2026-10-04T08:00:00Z' },
+      },
+    })
+    const result = await call({ transaction_id: txId }, client)
+    expect(result).toMatchObject({
+      potential_supplier_invoice_id: siId,
+      potential_journal_entry_id: null,
+      potential_match_confidence: 0.95,
+      exchange_rate: 11.2345,
+      exchange_rate_date: '2026-10-03',
+      transaction_method: 'card',
+      title_edited_at: '2026-10-04T08:00:00Z',
+    })
   })
 
   it('answers null for a row the bank sent no IBAN or other currency for', async () => {

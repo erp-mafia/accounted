@@ -474,6 +474,7 @@ import type { DocumentReading } from '@/lib/documents/reading/types'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { migrationUnderlagStatus } from './migration-underlag-status'
+import { migrationJobStatus } from './migration-job-status'
 import { documentHeldElsewhereReasonEn } from '@/lib/documents/link-holder'
 import { checkDocumentLink } from '@/lib/documents/link-document'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
@@ -7158,6 +7159,9 @@ export const tools: McpTool[] = [
       const underlag = supportsUnderlagImport(provider)
         ? await migrationUnderlagStatus(supabase, companyId, provider)
         : null
+      // The import itself, as the import page shows it: the latest job's
+      // state and its records per resource. Undeclared like underlag.
+      const job = await migrationJobStatus(supabase, companyId, provider)
       const underlagStep = underlag
         ? ` Underlag are a separate step on the same page, after the bookkeeping import: the user clicks "Hämta underlag" on the ${info.name} row${provider === 'fortnox' ? ' and approves Fortnox file access once' : ''}; files already there are skipped. underlag.status says where that step stands (not_fetched, incomplete, needs_reconnect or complete); call this tool again to check.`
         : ` ${info.name} underlag are not fetched: the user uploads them ("Ladda upp underlag").`
@@ -7168,7 +7172,9 @@ export const tools: McpTool[] = [
         connect_url: connectUrl,
         instructions: (info.api
           ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches the three latest fiscal years by default (older years can be ticked in the wizard; they take longer) and imports bookkeeping PLUS invoices, customers and suppliers. The user comes back here when the wizard reports done.`
-          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`) + underlagStep,
+          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`) + underlagStep +
+          ' job.status says where the import stands (not_started, queued, running, retry_wait, needs_attention: records for the user to review on the import page, completed).',
+        job,
         ...(underlag ? { underlag } : {}),
       }
     },
@@ -8723,8 +8729,10 @@ export const tools: McpTool[] = [
       // anchor, so one query gives the page and an exact total_count.
       // The enrichment columns (organisationsnummer, the counterparty's IBAN,
       // the instructed amount of a foreign purchase, the balance after, the
-      // enriched flag) and external_id (the row's id at its source, e.g. the
-      // Stripe balance transaction, crm#1347) ride the rows undeclared: the
+      // enriched flag), external_id (the row's id at its source, e.g. the
+      // Stripe balance transaction, crm#1347) and provider_transaction_id (the
+      // bank's own id: a feed row's external_id is derived from its content,
+      // so a resent row is told apart by this one) ride the rows undeclared: the
       // tools/list catalog sits at its token ceiling
       // (payload-size.bench.test.ts), and output schemas are open. The IBAN
       // is often the only thing a foreign payment names its payee by (PH 196).
@@ -8733,7 +8741,7 @@ export const tools: McpTool[] = [
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
           'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
-          'counterparty_account, counterparty_iban, original_description, external_id, ' + SUGGESTION_POINTER_COLUMNS,
+          'counterparty_account, counterparty_iban, original_description, external_id, provider_transaction_id, ' + SUGGESTION_POINTER_COLUMNS,
           { count: 'exact' },
         )
         .eq('company_id', companyId)
