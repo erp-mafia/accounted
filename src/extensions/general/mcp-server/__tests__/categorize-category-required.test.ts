@@ -117,6 +117,7 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
   it('happy path: a valid category stages with the category intact', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // core: company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings

@@ -219,7 +219,9 @@ function enqueueHappyPath(opts: {
     error: null,
   })
   // 3. transaction_voucher_links: the booked-row gate (accounted#58); no
-  // pointer and no links, so no journal_entries read follows.
+  // pointer and no links, so the gate asks for posted verifikat booked from
+  // the row instead (#203): none.
+  enqueue({ data: [], error: null })
   enqueue({ data: [], error: null })
   // 4. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
@@ -494,6 +496,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     // Stale sticky setting from an earlier private-funds payment: must be
     // ignored now that the route no longer selects it.
     enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '2893' }, error: null })
     enqueue({ data: { ledger_account: '1930' }, error: null }) // cash_accounts lookup
     enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
@@ -538,6 +541,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       error: null,
     })
     enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
     enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
@@ -598,6 +602,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       error: null,
     })
     enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
 
@@ -833,6 +838,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
       error: null,
     })
     enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -1504,6 +1510,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a bank row that is
 
   it('with storno_existing reverses the row\'s own categorization, then books the payment on the row', async () => {
     enqueueBookedRow()
+    enqueue({ data: [OWN_ENTRY] }) // posted verifikat booked from the row: the pointer's only (#203)
     enqueue({ data: { accounting_method: 'accrual' } }) // company_settings
     enqueue({ data: [] }) // cash_accounts listing: 1930
     enqueue({ data: [{ account_number: '1930' }] }) // chart check before the storno
@@ -1573,6 +1580,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a verifikat alread
       },
     })
     enqueue({ data: [] }) // transaction_voucher_links: the booked-row gate
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
   }
 
   function expectNothingBooked() {

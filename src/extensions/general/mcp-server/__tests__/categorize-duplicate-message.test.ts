@@ -99,6 +99,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
   it('states the foreign amount, never "null kr", for a rateless foreign sibling', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow(), error: null }) // core: transactions
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // core: settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -124,6 +125,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
   it('prints the verified candidate SEK figure as a magnitude with sv-SE formatting', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -1616, currency: 'SEK' }), error: null })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -140,6 +142,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
   it('attributes the missing rate to the TARGET transaction in the unverified ledger branch', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -8570.87 }), error: null })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -168,6 +171,7 @@ describe('gnubok_categorize_transaction on a foreign row without a SEK value', (
   it('refuses with TX_MISSING_SEK_VALUE after the duplicate guard found nothing', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -200, currency: 'CAD' }), error: null })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockDetectDup.mockResolvedValue(null)
@@ -182,6 +186,7 @@ describe('gnubok_categorize_transaction on a foreign row without a SEK value', (
   it('names a way out an MCP agent can take: the v1 rate refresh has no MCP tool', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -200, currency: 'CAD' }), error: null })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null })
     mockDetectDup.mockResolvedValue(null)

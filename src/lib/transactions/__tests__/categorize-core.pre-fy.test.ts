@@ -160,6 +160,7 @@ describe('categorizeMatchedTransaction: pre-FY transaction gets a journal entry'
   it('books via the clamp: journal_entry_id set, entry on the first day of the first period', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // settings
     enqueue({ data: [] }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }] }) // ensureFiscalPeriod: earliest

@@ -110,6 +110,7 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     enqueue({ data: txRow([{ journal_entry_id: 'je-reversed', role: 'bank_line' }]) })
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries status
     enqueue({ data: null }) // standing_correction: no correction books the money
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period
@@ -129,6 +130,7 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
   it('lets a row carrying only a residual "other" row past the guard', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow([{ journal_entry_id: 'je-residual', role: 'other' }]) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period

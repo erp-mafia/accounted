@@ -718,7 +718,8 @@ describe('POST /transactions/bulk-book', () => {
         data: { ok: true, mode: 'create_new', journal_entry_id: JE_ID, voucher_series: 'A', voucher_number: 57, linked_tx_count: 2, tx_sum: 300, docs_linked: 0 },
         error: null,
       },
-      journal_entries: { data: posted, error: null },
+      // The gate: no posted verifikat booked from the rows (#203); then the posted samlingsverifikat.
+      journal_entries: [{ data: [], error: null }, { data: posted, error: null }],
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post(manual)

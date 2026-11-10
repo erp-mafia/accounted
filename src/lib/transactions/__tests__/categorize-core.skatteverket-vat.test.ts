@@ -81,6 +81,7 @@ describe('categorizeMatchedTransaction: no moms on a payment to Skatteverket', (
   it('refuses the travel category with 25 % moms on a Skatteverket payment', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
@@ -97,6 +98,7 @@ describe('categorizeMatchedTransaction: no moms on a payment to Skatteverket', (
   it('books the same line on the skattekonto without moms', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount fallback -> 1930
     enqueue({ data: { account_number: '1630', account_class: 1, is_active: true } }) // override chart hit
@@ -115,6 +117,7 @@ describe('categorizeMatchedTransaction: no moms on a payment to Skatteverket', (
   it('still books moms on an ordinary purchase', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ description: 'SJ AB', original_description: 'SJ AB', amount: -1250, amount_sek: -1250 }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow })
     enqueue({ data: [] })
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod

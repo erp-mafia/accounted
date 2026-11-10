@@ -498,6 +498,7 @@ describe('POST /items/:id/book-direct', () => {
     })
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] })
     enqueue({ data: null }) // standing_correction: no correction stands
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -523,6 +524,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({
       data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] },
     })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [] }) // transaction link: CAS matched no row
 
@@ -555,6 +557,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({
       data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] },
     })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ error: { message: 'connection reset', code: '08006' } }) // transaction link
 
@@ -879,6 +882,7 @@ describe('POST /items/:id/book-direct', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] })  // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -933,6 +937,7 @@ describe('POST /items/:id/book-direct', () => {
       },
     })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -1058,6 +1063,7 @@ describe('POST /items/:id/book-direct', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -1150 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
 
     const res = await route.handler(
       bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK, transaction_id: TX_UUID }),
@@ -1120,6 +1126,7 @@ describe('POST /items/:id/book-direct', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -1150 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -1144,6 +1151,7 @@ describe('POST /items/:id/book-direct', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -100 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -1176,6 +1184,7 @@ describe('POST /items/:id/book-direct', () => {
         transaction_voucher_links: [],
       },
     })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
 
     const res = await route.handler(
       bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK, transaction_id: TX_UUID }),
@@ -1198,6 +1207,7 @@ describe('POST /items/:id/book-direct', () => {
         transaction_voucher_links: [],
       },
     })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1931' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
@@ -1251,6 +1261,7 @@ describe('POST /items/:id/book-direct', () => {
       data: makeInvoiceInboxItem({ document_id: 'doc-1', matched_transaction_id: TX_UUID }),
     })
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
     enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)

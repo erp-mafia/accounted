@@ -183,6 +183,7 @@ describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () =
     })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [ROW], error: null }) // transactions fetch
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
 
     const err = await bulkBook
       .execute({ tx_ids: [TX_1], ...NEW_ENTRY }, 'company-1', 'user-1', supabase as never)
@@ -270,6 +271,7 @@ describe('gnubok_bulk_book_transactions: bank net and accounts at stage (crm#150
   it('refuses a transfer between own cash accounts, naming categorize + link, and stages nothing', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [OUT], error: null }) // transactions fetch
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '1931', is_active: true }], error: null }) // chart
     enqueue({ data: [], error: null }) // account_dimension_rules
     enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // the row's cash account
@@ -300,6 +302,7 @@ describe('gnubok_bulk_book_transactions: bank net and accounts at stage (crm#150
   it('names the account and both amounts for a plain mismatch', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [OUT], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '6570', is_active: true }], error: null })
     enqueue({ data: [], error: null })
     enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
@@ -326,6 +329,7 @@ describe('gnubok_bulk_book_transactions: bank net and accounts at stage (crm#150
   it('names the accounts not active in the chart and the tool that activates them', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [OUT], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930', is_active: true }], error: null }) // 2645 not in the chart
 
     const err = await bulkBook

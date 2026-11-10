@@ -144,10 +144,11 @@ function casRaceSupabase() {
       // ensureFiscalPeriod: an open period covers the date
       { data: [{ id: 'period-1' }], error: null },
     ],
-    journal_entries: {
-      data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
-      error: null,
-    },
+    journal_entries: [
+      // The gate: no posted verifikat booked from the row (#203).
+      { data: [], error: null },
+      { data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 }, error: null },
+    ],
     voucher_gap_explanations: { data: null, error: null },
   })
 }

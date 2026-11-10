@@ -634,7 +634,12 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
       supplier_invoice_payments: { data: { id: 'pay-1' }, error: null },
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: { ...TRANSACTION, ...transaction }, error: null },
-      journal_entries: { data: [categorization], error: null },
+      // The categorization exists, and names the row as booked from it, only
+      // when the row was categorized: the gate's booked-from read (#203).
+      journal_entries: (chainCalls) =>
+        chainCalls.some((c) => c.method === 'in' && c.args[0] === 'source_id') && !transaction.journal_entry_id
+          ? { data: [], error: null }
+          : { data: [categorization], error: null },
       supplier_invoices: [
         { data: REGISTERED_INVOICE, error: null },
         { data: [{ id: SI_ID }], error: null },

@@ -51,6 +51,7 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
   it('stages a template booking on the summed amount, named on the approval card', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: rows, error: null }) // transactions
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({
       data: {
         id: TEMPLATE,

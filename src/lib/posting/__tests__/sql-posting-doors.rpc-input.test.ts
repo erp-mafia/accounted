@@ -199,7 +199,8 @@ const SCENARIOS: Scenario[] = [
       'rpc:bulk_book_transactions': {
         data: { ok: true, mode: 'create_new', journal_entry_id: 'je-bulk', voucher_series: 'A', voucher_number: 7, linked_tx_count: 2, tx_sum: -500, docs_linked: 0 },
       },
-      journal_entries: { data: POSTED },
+      // The gate's read (#203): no posted verifikat booked from the rows.
+      journal_entries: (chain: Chain) => ({ data: chain.some((c) => c.method === 'in' && c.args[0] === 'source_id') ? [] : POSTED }),
     },
     run: (supabase) =>
       bulkBookTransactions(ctx(supabase), {
@@ -234,7 +235,8 @@ const SCENARIOS: Scenario[] = [
       'rpc:match_batch_allocate': {
         data: { ok: true, tx_id: TX_1, journal_entry_id: 'je-batch', voucher_series: 'A', voucher_number: 12, allocations: [], total_allocated: 1750, leftover: 0 },
       },
-      journal_entries: { data: POSTED },
+      // The gate's read (#203): no posted verifikat booked from the row.
+      journal_entries: (chain: Chain) => ({ data: chain.some((c) => c.method === 'in' && c.args[0] === 'source_id') ? [] : POSTED }),
     },
     run: (supabase) =>
       matchTransactionBatch(ctx(supabase), TX_1, {

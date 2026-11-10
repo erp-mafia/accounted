@@ -102,6 +102,7 @@ describe('commitPendingOperation(bulk_book_transactions): dimension policy at ap
     enqueueMany([
       { data: { id: 'op-bulk-dims' }, error: null }, // atomic claim pending -> committing
       { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
       { data: [], error: null }, // account_dimension_rules
       { data: { dimensions_enabled: true }, error: null },
@@ -123,6 +124,7 @@ describe('commitPendingOperation(bulk_book_transactions): dimension policy at ap
     enqueueMany([
       { data: { id: 'op-bulk-dims' }, error: null },
       { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
       { data: [ruleRow({ rule_type: 'required', dimension_values: null })], error: null },
       { data: null, error: null }, // dispatcher: rejected update
@@ -141,6 +143,7 @@ describe('commitPendingOperation(bulk_book_transactions): dimension policy at ap
     enqueueMany([
       { data: { id: 'op-bulk-dims' }, error: null },
       { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
       { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
       { data: [ruleRow()], error: null }, // account_dimension_rules
       { data: { dimensions_enabled: false }, error: null }, // registry validation: free text

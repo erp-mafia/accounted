@@ -87,6 +87,7 @@ import { loadActiveBookingReviewRules } from '@/lib/booking-review/rules'
 import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { isBankMovementEntry } from '@/lib/transactions/bank-link'
+import { readNamedBankRows } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import {
   detectBookingDuplicate,
@@ -214,6 +215,29 @@ export async function bulkBookTransactions(
   // in the RPC, and several were booked through their links, still ignored.
   const ignored = txTyped.find((t) => t.is_ignored)
   if (ignored) return { ok: false, code: 'BANK_ROW_IGNORED', details: { tx_id: ignored.id } }
+
+  // A new samlingsverifikat on a row a posted verifikat already books, though
+  // no pointer or link says so (its claim never landed): the gate's answer
+  // (lib/transactions/is-booked.ts). A link to an existing verifikat books
+  // nothing new, and a pointer or link is the RPC's own refusal.
+  if (!body.existing_journal_entry_id) {
+    // In the caller's order, like the RPC's first offender; ids as stored.
+    const rows = new Map(txTyped.map((t) => [t.id.toLowerCase(), t]))
+    const open = [...new Set(body.tx_ids.map((id) => rows.get(id.toLowerCase())))]
+      .filter((row) => row && !row.journal_entry_id && (row.transaction_voucher_links?.length ?? 0) === 0)
+      .map((row) => row!.id)
+    const named = await readNamedBankRows(supabase, companyId, open)
+    if (named === 'read_error') return { ok: false, code: 'BANK_ROW_READ_FAILED' }
+    const first = open.find((id) => named.has(id.toLowerCase()))
+    if (first) {
+      const booking = named.get(first.toLowerCase())!
+      return {
+        ok: false,
+        code: 'BULK_BOOK_TX_ALREADY_BOOKED',
+        details: { tx_id: first, via: 'named', journal_entry_id: booking.journalEntryId, voucher: booking.voucher },
+      }
+    }
+  }
 
   // The RPC's own refusals the rows already show, answered on the dry run so
   // a staged booking never waits for an approval that cannot post. The RPC

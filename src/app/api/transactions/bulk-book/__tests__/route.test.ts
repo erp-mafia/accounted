@@ -129,6 +129,7 @@ describe('POST /api/transactions/bulk-book', () => {
         ],
         error: null,
       })
+      enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
       enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
       enqueue({ data: [], error: null })
       const response = await POST(
@@ -290,6 +291,7 @@ describe('POST /api/transactions/bulk-book', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     // Template fetch.
     enqueue({
       data: {
@@ -377,6 +379,7 @@ describe('POST /api/transactions/bulk-book', () => {
       data: [{ id: TX1, amount: -3000, currency: 'SEK', description: 'Skatteverket', date: '2026-06-05' }],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({
       data: {
         id: TPL,
@@ -601,6 +604,7 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     // chart_of_accounts allowlist.
     enqueue({
       data: [{ account_number: '1930' }, { account_number: '3001' }],
@@ -648,6 +652,7 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
       data: [{ id: TX1, amount: -1000, currency: 'SEK', description: 'Leverantör', date: '2026-06-05' }],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     // chart_of_accounts allowlist.
     enqueue({
       data: [{ account_number: '1930' }, { account_number: '4548' }, { account_number: '2645' }, { account_number: '2615' }],
@@ -686,6 +691,7 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
     enqueue({ data: [], error: null })
     enqueue({
@@ -943,6 +949,7 @@ describe('POST /api/transactions/bulk-book: dimension policy', () => {
 
   it('refuses an archived dimension value with 400 before the RPC', async () => {
     enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }) // chart allowlist
     enqueue({ data: [], error: null }) // account_dimension_rules
     enqueue({ data: { dimensions_enabled: true }, error: null })
@@ -962,6 +969,7 @@ describe('POST /api/transactions/bulk-book: dimension policy', () => {
 
   it('books when the tagged value is registered and active', async () => {
     enqueue({ data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
     enqueue({ data: [], error: null })
     enqueue({ data: { dimensions_enabled: true }, error: null })
@@ -1029,6 +1037,7 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({
       data: {
         id: TPL,
@@ -1084,6 +1093,7 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
 
   it('manual path: the bank line and the moms line stay untagged', async () => {
     enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Swish', date: '2026-06-05', cash_account_id: null }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }, { account_number: '2611' }], error: null })
     enqueue({ data: [], error: null }) // cash_accounts: no enabled SEK account, so the row settles on 1930
     enqueueCommit()
@@ -1115,6 +1125,7 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
 
   it('manual path: a row settling on a ledger outside 19xx (Stripe on 1686) keeps that bank line untagged, and a line\'s own bag is kept', async () => {
     enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Stripe', date: '2026-06-05', cash_account_id: 'ca-stripe' }], error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
     enqueue({ data: [{ account_number: '1686' }, { account_number: '3004' }, { account_number: '1930' }], error: null })
     enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null }) // the row's cash account
     enqueueCommit()

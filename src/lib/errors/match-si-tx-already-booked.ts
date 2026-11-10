@@ -49,8 +49,44 @@ export function matchInvoiceTxAlreadyBookedMessages(details: unknown): { message
   }
 }
 
-/** The sentences a refused match of a booked bank row answers with, on every door that carries its code. */
+/**
+ * The codes a booking door answers the bank-row gate's "already booked" with
+ * (lib/transactions/is-booked.ts), on the doors that pass the gate's `via`
+ * along in details.
+ */
+const BANK_ROW_BOOKED_CODES = new Set([
+  'TRANSACTION_ALREADY_CATEGORIZED',
+  'MATCH_INVOICE_TX_ALREADY_BOOKED',
+  'MATCH_SI_TX_ALREADY_BOOKED',
+  'BATCH_TX_ALREADY_BOOKED',
+  'BULK_BOOK_TX_ALREADY_BOOKED',
+])
+
+/**
+ * A row only a posted verifikat names (details.via 'named', #203): the
+ * verifikat was booked from the row, but the write that links the two never
+ * landed, so the row still reads as unbooked. The sentence names what books
+ * it and both ways on: link the two, or reverse the verifikat and book again.
+ */
+function namedBankRowMessages(details: unknown): { message_sv: string; message_en: string } | null {
+  const d = details as { via?: unknown; voucher?: unknown; journal_entry_id?: unknown } | null | undefined
+  if (d?.via !== 'named') return null
+  const voucher = typeof d.voucher === 'string' && d.voucher ? d.voucher : null
+  const id = typeof d.journal_entry_id === 'string' ? d.journal_entry_id : null
+  const sv = voucher ? `verifikat ${voucher}` : 'ett verifikat'
+  const en = voucher ? `verifikat ${voucher}` : id ? `verifikat ${id}` : 'a posted verifikat'
+  return {
+    message_sv: `Banktransaktionen är redan bokförd på ${sv}, som bokfördes från den men aldrig kopplades till den, så den skulle bokföras två gånger. Är verifikatet rätt bokföring: koppla det till transaktionen under Avstämning, Matcha manuellt. Annars: återför verifikatet (storno) och bokför transaktionen igen.`,
+    message_en: `The bank transaction is already booked on ${en}, which was booked from it but never linked to it, so booking it again would count it twice. If that verifikat is this transaction's booking, link the two (gnubok_link_transaction_to_journal_entry, or POST /transactions/{id}/link-journal-entry). Otherwise reverse it (gnubok_reverse_journal_entry) and book the transaction again.`,
+  }
+}
+
+/** The sentences a refused booking of a booked bank row answers with, on every door that carries its code. */
 export function bankRowAlreadyBookedMessages(code: string, details: unknown): { message_sv: string; message_en: string } | null {
+  if (BANK_ROW_BOOKED_CODES.has(code)) {
+    const named = namedBankRowMessages(details)
+    if (named) return named
+  }
   if (code === 'MATCH_SI_TX_ALREADY_BOOKED') return matchSiTxAlreadyBookedMessages(details)
   if (code === 'MATCH_INVOICE_TX_ALREADY_BOOKED') return matchInvoiceTxAlreadyBookedMessages(details)
   return null

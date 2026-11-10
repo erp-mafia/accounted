@@ -125,6 +125,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('refuses the agent door with the skattekonto candidate and says to book on 1630', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueueKontering(enqueue, '2650')
     enqueueMonth(enqueue, true)
 
@@ -144,6 +145,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('books when no skattekonto verifikat of the month clears the tax', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueueKontering(enqueue, '2650')
     enqueueMonth(enqueue, false)
     enqueueBooking(enqueue)
@@ -161,6 +163,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('books on the skattekonto account without reading the month at all', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueueKontering(enqueue, '1630')
     enqueueBooking(enqueue)
 
@@ -178,6 +181,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('books over it on allow_duplicate and records the dismissal', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueueKontering(enqueue, '2650')
     enqueueMonth(enqueue, true)
     enqueueBooking(enqueue)
@@ -200,6 +204,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('books on force bound to the reviewed candidate (deferred past the bank-line halves)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     // The first guard call: no bank-line candidate, so the forced id is checked as a skattekonto candidate.
     enqueue({
       data: {
@@ -238,6 +243,7 @@ describe('categorize: a tax account booked straight from the bank after the skat
   it('refuses a force whose skattekonto candidate is gone once the kontering is known', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({
       data: {
         ...MOMS_ENTRY,

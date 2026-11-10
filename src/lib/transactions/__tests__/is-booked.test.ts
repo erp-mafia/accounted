@@ -8,6 +8,7 @@ import {
   decideBankRowRebooking,
   decideBankRowRebookingById,
   bankRowRefusalCode,
+  readNamedBankRows,
   type BankRowRefusal,
 } from '../is-booked'
 
@@ -92,15 +93,131 @@ describe('embeddedVoucherLabel', () => {
 describe('assertTransactionBookable', () => {
   const TX = { id: 'tx-1', journal_entry_id: null as string | null }
 
-  it('lets an unanchored row through after one links read (no pointer, no links)', async () => {
+  it('lets an unanchored row through after the links read and the booked-from read', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
     expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
     expect(findCalls('transaction_voucher_links', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['transaction_id', 'tx-1'],
     ])
-    expect(findCalls('journal_entries', 'select')).toEqual([])
+    // Nothing anchors it, so the posted verifikat booked from it are asked, on
+    // their own index (journal_entries_posted_bank_source_idx).
+    expect(findCalls('journal_entries', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['source_type', 'bank_transaction'],
+    ])
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', ['tx-1']], ['status', ['posted', 'reversed']]])
+  })
+
+  // #203: the claim after the posting never landed (the busy bank-account
+  // lock refused it and the compensating storno alike), so the verifikat
+  // stood beside a row its pointer and links read as open, and the row was
+  // booked a second time 21 s to 11 min later.
+  it('refuses a row no anchor names that a posted verifikat was booked from, naming it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({
+      data: [
+        { id: 'je-second', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 40 },
+        { id: 'je-first', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 31 },
+      ],
+    })
+    // The lowest voucher number first: the verifikat that booked the row first.
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      journalEntryId: 'je-first',
+      via: 'named',
+      voucher: 'A31',
+    })
+  })
+
+  it('matches the row however the door spelled its id', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-first', status: 'posted', source_type: 'bank_transaction', source_id: 'aa11bb22-0000-4000-8000-000000000001', voucher_series: 'A', voucher_number: 31 }] })
+    const verdict = await assertTransactionBookable(supabase as never, 'company-1', { id: 'AA11BB22-0000-4000-8000-000000000001', journal_entry_id: null })
+    expect(verdict).toMatchObject({ ok: false, via: 'named', journalEntryId: 'je-first' })
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', ['AA11BB22-0000-4000-8000-000000000001']], ['status', ['posted', 'reversed']]])
+  })
+
+  it('asks nothing more about a row its pointer or a link already books', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-1', status: 'posted' }] })
+    await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-1' })
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', ['je-1']]])
+  })
+
+  it('lets a row through after a storno of what booked it: only posted verifikat booked from the row count', async () => {
+    // The read asks for status 'posted' and source_type 'bank_transaction': the
+    // reversed original and its storno ('storno') are neither
+    // (tests/pg/named-bank-row-gate.pg.test.ts runs it on real Postgres).
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: null }) // standing_correction: none stands
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
+    expect(await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-old' }))
+      .toEqual({ ok: true })
+    expect(findCalls('journal_entries', 'in')).toEqual([['id', ['je-old']], ['source_id', ['tx-1']], ['status', ['posted', 'reversed']]])
+  })
+
+  it('opens a row whose booked-from verifikat was reversed by a storno: nothing books its money on', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({
+      data: [
+        { id: 'je-old', status: 'reversed', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 3 },
+        // Not booked from the row, whatever an answer carries: a storno is 'storno'.
+        { id: 'je-storno', status: 'posted', source_type: 'storno', source_id: 'tx-1', voucher_series: 'A', voucher_number: 4 },
+      ],
+    })
+    enqueue({ data: null }) // standing_correction of je-old: a storno is no correction
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
+    expect(supabase.rpc).toHaveBeenCalledWith('standing_correction', { p_entry_id: 'je-old' })
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', ['tx-1']], ['status', ['posted', 'reversed']]])
+  })
+
+  it('refuses a row whose booked-from verifikat was corrected, naming the correction that books its money', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-first', status: 'reversed', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 31 }] })
+    enqueue({ data: 'je-corr' }) // standing_correction: the rättelse books on a bank account
+    enqueue({ data: { id: 'je-corr', source_type: 'correction', source_id: null, voucher_series: 'A', voucher_number: 40 } })
+    expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      journalEntryId: 'je-corr',
+      via: 'named',
+      voucher: 'A40',
+    })
+  })
+
+  it('asks no second time about a stale pointer readPostedAnchors already asked about', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: 'je-old', status: 'reversed' }] })
+    enqueue({ data: null }) // standing_correction of the pointer: none
+    enqueue({ data: [{ id: 'je-old', status: 'reversed', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 3 }] })
+    expect(await assertTransactionBookable(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: 'je-old' })).toEqual({ ok: true })
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed when the booked-from read fails or answers no list', async () => {
+    for (const answer of [{ error: { message: 'timeout' } }, { data: { id: 'je-1' } }]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [] })
+      enqueue(answer)
+      expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({
+        ok: false,
+        code: 'TRANSACTION_ALREADY_CATEGORIZED',
+        journalEntryId: null,
+        via: 'read_error',
+      })
+    }
   })
 
   it('refuses a row anchored only by a bank_line link to a posted verifikat (bulk-book N>1, split)', async () => {
@@ -201,8 +318,9 @@ describe('assertTransactionBookable', () => {
   it('ignores supplementary roles and never reads their verifikat', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ journal_entry_id: 'je-residual', role: 'other' }, { journal_entry_id: 'je-c', role: 'clearing' }] })
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
     expect(await assertTransactionBookable(supabase as never, 'company-1', TX)).toEqual({ ok: true })
-    expect(findCalls('journal_entries', 'select')).toEqual([])
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', ['tx-1']], ['status', ['posted', 'reversed']]])
   })
 
   it('uses embedded links instead of re-reading them', async () => {
@@ -390,6 +508,61 @@ describe('decideBankRowRebooking', () => {
     })
   })
 
+  it('refuses a row only a posted verifikat names, naming it, and opens it by its storno', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ ...OWN, id: 'je-first', voucher_number: 31 }] }) // booked from the row, never claimed
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null }, { replace: true })).toEqual({
+      outcome: 'refuse',
+      via: 'named',
+      journalEntryId: 'je-first',
+      voucher: 'A31',
+      replaceable: false,
+      undo: 'reverse_voucher',
+    })
+  })
+
+  it("never replaces the row's own categorization while another posted verifikat names the row", async () => {
+    // The #203 pairs as they stand: the second booking holds the pointer, the
+    // first still names the row. A storno of the pointer's would leave the first.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [OWN] })
+    enqueue({ data: [OWN, { ...OWN, id: 'je-first', voucher_number: 31 }] }) // booked from the row: both
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true })).toEqual({
+      outcome: 'refuse',
+      via: 'named',
+      journalEntryId: 'je-first',
+      voucher: 'A31',
+      replaceable: false,
+      undo: 'reverse_voucher',
+    })
+  })
+
+  it("replaces the row's own categorization when it is the only verifikat that names the row", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [OWN] })
+    enqueue({ data: [OWN] }) // booked from the row: the pointer's only
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true }))
+      .toEqual({ outcome: 'replace', journalEntryId: 'je-own' })
+  })
+
+  it('fails closed when the booked-from read fails', async () => {
+    const open = createQueuedMockSupabase()
+    open.enqueue({ data: [] })
+    open.enqueue({ error: { message: 'timeout' } })
+    expect(await decideBankRowRebooking(open.supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null }, { replace: false }))
+      .toEqual({ outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false, undo: null })
+
+    const own = createQueuedMockSupabase()
+    own.enqueue({ data: [] })
+    own.enqueue({ data: [OWN] })
+    own.enqueue({ error: { message: 'timeout' } })
+    expect(await decideBankRowRebooking(own.supabase as never, 'company-1', BOOKED, { replace: true }))
+      .toMatchObject({ outcome: 'refuse', via: 'read_error', replaceable: false })
+  })
+
   it('fails closed on a read error, and never offers a storno then', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ error: { message: 'timeout' } })
@@ -446,7 +619,7 @@ describe('bankRowRefusalCode', () => {
     undo: null,
   })
 
-  it.each(['pointer', 'link', 'reconciliation'] as const)('answers the door\'s own code for a row booked by %s', (via) => {
+  it.each(['pointer', 'link', 'reconciliation', 'named'] as const)('answers the door\'s own code for a row booked by %s', (via) => {
     expect(bankRowRefusalCode(refusal(via), 'DOOR_ALREADY_BOOKED')).toBe('DOOR_ALREADY_BOOKED')
   })
 
@@ -456,5 +629,31 @@ describe('bankRowRefusalCode', () => {
 
   it('never calls a failed read booked: the row may be free, and the answer is a retry', () => {
     expect(bankRowRefusalCode(refusal('read_error'), 'DOOR_ALREADY_BOOKED')).toBe('BANK_ROW_READ_FAILED')
+  })
+})
+
+describe('readNamedBankRows', () => {
+  it('names the first posted verifikat booked from each row, in one read, and leaves the rest out', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'je-a2', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-a', voucher_series: 'A', voucher_number: 9 },
+        { id: 'je-a', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-a', voucher_series: 'A', voucher_number: 5 },
+      ],
+    })
+    const named = await readNamedBankRows(supabase as never, 'company-1', ['tx-a', 'tx-b', 'tx-a'])
+    expect(named).toEqual(new Map([['tx-a', { journalEntryId: 'je-a', voucher: 'A5' }]]))
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(findCalls('journal_entries', 'in')).toEqual([['source_id', ['tx-a', 'tx-b']], ['status', ['posted', 'reversed']]])
+  })
+
+  it('reads nothing for no rows, and fails closed when the read fails', async () => {
+    const none = createQueuedMockSupabase()
+    expect(await readNamedBankRows(none.supabase as never, 'company-1', [])).toEqual(new Map())
+    expect(none.supabase.from).not.toHaveBeenCalled()
+
+    const down = createQueuedMockSupabase()
+    down.enqueue({ error: { message: 'timeout' } })
+    expect(await readNamedBankRows(down.supabase as never, 'company-1', ['tx-a'])).toBe('read_error')
   })
 })

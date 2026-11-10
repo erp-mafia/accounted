@@ -12,6 +12,7 @@ import { eventBus } from '@/lib/events'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { CASH_ACCOUNT_BUSY_RETRY } from '@/lib/bookkeeping/cash-account-busy'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -243,12 +244,40 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(findCalls('transactions', 'update')).toEqual([])
   })
 
+  // #203: the first booking of the row posted, but its claim and the
+  // compensating storno both failed, so the row read open and was booked again.
+  it('returns 409 and books nothing for a row no anchor names that a posted verifikat was booked from', async () => {
+    await useRealGuard()
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [{ id: 'je-first', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 31 }] }) // booked from the row
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-first', via: 'named', voucher: 'A31' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toEqual([])
+    // The page names the verifikat and both ways on: link the two, or reverse it.
+    expect(getErrorMessage(body)).toContain('verifikat A31')
+    expect(getErrorMessage(body)).toContain('Matcha manuellt')
+    expect(getErrorMessage(body)).toContain('återför verifikatet')
+  })
+
   it('books a row whose pointer names a reversed verifikat, locking the UPDATE on that stale pointer', async () => {
     await useRealGuard()
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: 'je-reversed' }), error: null })
     enqueue({ data: [] }) // transaction_voucher_links
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries
     enqueue({ data: null }) // standing_correction: none stands
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // transactions update
 
@@ -825,6 +854,54 @@ describe('POST /api/transactions/[id]/book', () => {
       expect.any(String),
       expect.any(Function), // the storno's business event, read by the posting port only while POSTING_EVENTS is on
     )
+  })
+
+  it('tries the link again while the bank-account lock is busy, and keeps the verifikat once it lands', async () => {
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    try {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
+      mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+      const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+      enqueue({ data: null, error: busy }) // another booking of the company is being numbered
+      enqueue({ data: null, error: busy })
+      enqueue({ data: [makeTransaction({ id: 'tx-1', journal_entry_id: 'je-new' })], error: null })
+
+      const response = await POST(
+        createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(findCalls('transactions', 'update')).toHaveLength(3)
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    } finally {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    }
+  })
+
+  it('gives the verifikat up only when the lock stays busy, answering the retryable 409', async () => {
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    try {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
+      mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+      const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+      for (let i = 0; i < 5; i++) enqueue({ data: null, error: busy })
+
+      const response = await POST(
+        createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_OPERATION_BUSY')
+      expect(findCalls('transactions', 'update')).toHaveLength(5)
+      expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledTimes(1)
+    } finally {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    }
   })
 
   it('stornos the posted orphan when another booking wins the transaction-link race', async () => {

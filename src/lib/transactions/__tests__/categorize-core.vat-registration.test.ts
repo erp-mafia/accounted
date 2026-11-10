@@ -91,6 +91,7 @@ describe('categorizeMatchedTransaction: VAT registration', () => {
     async ({ vat_registered, vatLines }) => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: txRow() }) // transactions select
+      enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
       enqueue({ data: { entity_type: 'ideell_forening', fiscal_year_start_month: 1, vat_registered } })
       enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
       enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod: open period exists

@@ -192,7 +192,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
         data: { ok: true, batch_id: BATCH_ID, journal_entry_id: JE_ID, voucher_number: 12, total_sek: 1596, claim_count: 2 },
         error: null,
       },
-      journal_entries: { data: posted, error: null },
+      // The gate: no posted verifikat booked from the row (#203); then the posted payout.
+      journal_entries: [{ data: [], error: null }, { data: posted, error: null }],
     })
     mockServiceClient.mockReturnValue(client)
     const res = await matchPayout(request(), params)
