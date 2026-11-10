@@ -11,6 +11,7 @@ import {
   executeBatches,
   mergeExecuteResults,
   reviewRowsToRender,
+  stoppedImportParams,
   MERGED_ERRORS_SHOWN,
 } from '../register-import-flow'
 import type { DetectedCustomerColumns } from '../customers/types'
@@ -310,6 +311,28 @@ describe('mergeExecuteResults', () => {
     const merged = mergeExecuteResults([result({ failed: 300, errors }), result({ failed: 1, errors: [errors[0]] })])
     expect(merged.failed).toBe(301)
     expect(merged.errors).toHaveLength(MERGED_ERRORS_SHOWN)
+  })
+})
+
+describe('stoppedImportParams (#187)', () => {
+  const ok = (failed = 0) => ({ success: failed === 0, created: 10 - failed, updated: 0, skipped: 0, failed, errors: [] })
+
+  it('names the file line the import stopped at and the earlier batches\' own failures', () => {
+    const stoppedBatch = [{ row_index: 20_003, name: 'Skruv' }, { row_index: 20_004, name: 'Mutter' }]
+    expect(stoppedImportParams([ok(), ok(2)], stoppedBatch, 20_000, 165_000)).toEqual({
+      row: 20_003,
+      done: 20_000,
+      total: 165_000,
+      failed: 2,
+    })
+  })
+
+  it('reports no earlier failures when every earlier row went in', () => {
+    expect(stoppedImportParams([ok()], [{ row_index: 12 }], 10, 30).failed).toBe(0)
+  })
+
+  it('falls back to the position when a row carries no file line', () => {
+    expect(stoppedImportParams([ok()], [{ name: 'X' }], 10, 30).row).toBe(12)
   })
 })
 

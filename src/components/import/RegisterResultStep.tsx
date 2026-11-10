@@ -9,6 +9,7 @@ import {
   XCircleIcon,
 } from '@/components/icons'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { resolveNotices, type ImportNotice } from '@/lib/import/notices'
 
@@ -57,6 +58,7 @@ export default function RegisterResultStep({
   result,
   onNewImport,
 }: RegisterResultStepProps) {
+  const t = useTranslations('import.register_flow')
   const copy = ENTITY_COPY[entity]
   const totalProcessed = result.created + result.updated + result.skipped + result.failed
   const isPartial = result.failed > 0 && result.created + result.updated > 0
@@ -108,6 +110,13 @@ export default function RegisterResultStep({
                 ))}
               </ul>
             </div>
+            {/* A batched import keeps the first rows of a long list
+                (MERGED_ERRORS_SHOWN): say so, never let it read as all. */}
+            {result.failed > result.errors.length && (
+              <p className="text-xs text-muted-foreground">
+                {t('errors_shown', { shown: result.errors.length, failed: result.failed })}
+              </p>
+            )}
           </div>
         )}
 

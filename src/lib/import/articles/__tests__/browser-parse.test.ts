@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseArticleFileInBrowser, ARTICLE_BROWSER_MAX_FILE_BYTES } from '../browser-parse'
-import { ARTICLE_MATCH_MAX_ROWS } from '../types'
+import { ARTICLE_MATCH_MAX_BYTES, ARTICLE_MATCH_MAX_ROWS } from '../types'
 
 function xlsxFile(rows: (string | number)[][], name = 'prislista.xlsx'): File {
   const ws = XLSX.utils.aoa_to_sheet(rows)
@@ -61,6 +61,46 @@ describe('parseArticleFileInBrowser (crm#1383)', () => {
     expect(outcome.ok && outcome.result.rows.length).toBe(ARTICLE_MATCH_MAX_ROWS + 5)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
+
+  it('re-importing a price list with long names keeps every match call and answer under the hosted limit (#187)', async () => {
+    // Every row matches an existing article, so every answer carries a full
+    // match with the article's name: the largest answer the route gives.
+    const name = (i: number) => `Kopplingsdosa infälld för gips, vit, med lock och skruvar, förpackning om 25 st, artikel nummer ${i} `.padEnd(130, 'ö')
+    const rows: (string | number)[][] = [['Artikelnummer', 'Benämning']]
+    for (let i = 0; i < ARTICLE_MATCH_MAX_ROWS; i++) rows.push([`EL-${1_000_000 + i}`, name(i)])
+    const encoder = new TextEncoder()
+    const requestBytes: number[] = []
+    const answerBytes: number[] = []
+    let seen = 0
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = String(init.body)
+      requestBytes.push(encoder.encode(body).length)
+      const keys = (JSON.parse(body) as { rows: { name: string }[] }).rows
+      const matches = keys.map((k, j) => ({
+        article_id: `00000000-0000-4000-8000-${String(seen + j).padStart(12, '0')}`,
+        matched_by: 'article_number',
+        existing_name: k.name,
+      }))
+      seen += keys.length
+      const answer = JSON.stringify({ data: { matches, duplicate_count: matches.length } })
+      answerBytes.push(encoder.encode(answer).length)
+      return new Response(answer, { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    const outcome = await parseArticleFileInBrowser(xlsxFile(rows), undefined, fetchImpl as unknown as typeof fetch)
+
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    // One call by count alone would answer about 4.8 MB, past the 4.5 MB the host carries.
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1)
+    for (const b of requestBytes) expect(b).toBeLessThanOrEqual(ARTICLE_MATCH_MAX_BYTES + 16)
+    for (const b of answerBytes) expect(b).toBeLessThan(4_500_000)
+    // The answers line up with the rows across the calls.
+    expect(outcome.result.duplicate_count).toBe(ARTICLE_MATCH_MAX_ROWS)
+    const last = outcome.result.rows[ARTICLE_MATCH_MAX_ROWS - 1]
+    expect(last.article_number).toBe(`EL-${1_000_000 + ARTICLE_MATCH_MAX_ROWS - 1}`)
+    expect(last.duplicate_match?.article_id).toBe(`00000000-0000-4000-8000-${String(ARTICLE_MATCH_MAX_ROWS - 1).padStart(12, '0')}`)
+  }, 30_000)
 
   it('refuses a file over the browser ceiling without reading it', async () => {
     const big = { size: ARTICLE_BROWSER_MAX_FILE_BYTES + 1, name: 'x.csv' } as File
