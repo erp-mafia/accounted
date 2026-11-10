@@ -849,7 +849,24 @@ export function argumentScopeFor(toolName: string, args: Record<string, unknown>
     const given = (key: string) => typeof args[key] === 'string' && (args[key] as string).trim() !== ''
     return given('supplier_id') || given('party_id') ? 'suppliers:read' : null
   }
+  if (toolName === 'gnubok_get_record') {
+    const kind = typeof args.record_ref === 'string' ? args.record_ref.trim().split(':')[0] : ''
+    return RECORD_KIND_SCOPES[kind] ?? null
+  }
   return null
+}
+
+/**
+ * gnubok_get_record opens a ledger record only under the scope of the tool
+ * that reads it on its own: a documents:read key must not read a bank row or
+ * an invoice through the archive. The kind is the record_ref prefix, which
+ * these kinds require (a bare uuid resolves the archive kinds only).
+ */
+const RECORD_KIND_SCOPES: Record<string, ApiKeyScope> = {
+  transaction: 'transactions:read',
+  invoice: 'invoices:read',
+  supplier_invoice: 'suppliers:read',
+  skattekonto_transaction: 'reconciliation:read',
 }
 
 /**

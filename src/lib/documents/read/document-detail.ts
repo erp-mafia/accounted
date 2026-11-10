@@ -397,10 +397,11 @@ function rowsOf<T>(result: { data: unknown; error: unknown }): T[] {
 
 const numberOrNull = (value: unknown): number | null => (value === null || value === undefined ? null : Number(value))
 
-async function readLinksPart(
+/** The links part alone, for a reader that holds only the document's id and verifikat link (MCP gnubok_get_record). */
+export async function readLinksPart(
   supabase: SupabaseClient,
   companyId: string,
-  doc: DocumentDetailRow,
+  doc: Pick<DocumentDetailRow, 'id' | 'journal_entry_id' | 'journal_entry_line_id'>,
 ): Promise<DocumentLinksPart> {
   const brain = isArkivBrainEnabled(companyId)
   const none = Promise.resolve({ data: null, error: null })

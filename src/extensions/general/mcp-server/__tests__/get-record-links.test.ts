@@ -66,6 +66,18 @@ describe('gnubok_get_record journal_entry links', () => {
       { kind: 'document', document_id: DOC, basis: null },
     ])
     expect(out.journal_entry).not.toHaveProperty('links_unavailable')
+    // Nothing booked by it in this mock: an empty list is an answer.
+    expect(out.journal_entry.books).toEqual([])
+  })
+
+  it('names the invoice the verifikat books, as a record_ref to open next', async () => {
+    mockLinks.mockResolvedValue([])
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 8, entry_date: '2026-10-16', description: 'Faktura 1001' } })
+    mock.enqueue({ data: [] }) // no documents
+    mock.enqueue({ data: [{ id: TX }] }) // invoices booked by it
+    const out = (await getRecord.execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', mock.supabase as unknown as SupabaseClient)) as { journal_entry: Record<string, unknown> }
+    expect(out.journal_entry.books).toEqual([{ relation: 'books', record_ref: `invoice:${TX}`, basis: null }])
   })
 
   it('a failed link lookup keeps the record and says links_unavailable, never an empty list', async () => {

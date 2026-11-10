@@ -90,6 +90,18 @@ describe('MCP tool scope coverage', () => {
     expect(argumentScopeFor('gnubok_get_party', { party_id: SUPPLIER_ID })).toBe('suppliers:read')
     expect(argumentScopeFor('gnubok_list_customers', { supplier_id: SUPPLIER_ID })).toBeNull()
   })
+
+  it('gates a ledger record on gnubok_get_record by the scope of the tool that reads it alone', () => {
+    expect(TOOL_SCOPE_MAP.gnubok_get_record).toBe('documents:read')
+    expect(argumentScopeFor('gnubok_get_record', { record_ref: `transaction:${CUSTOMER_ID}` })).toBe('transactions:read')
+    expect(argumentScopeFor('gnubok_get_record', { record_ref: ` invoice:${CUSTOMER_ID}` })).toBe('invoices:read')
+    expect(argumentScopeFor('gnubok_get_record', { record_ref: `supplier_invoice:${CUSTOMER_ID}` })).toBe('suppliers:read')
+    expect(argumentScopeFor('gnubok_get_record', { record_ref: `skattekonto_transaction:${CUSTOMER_ID}` })).toBe('reconciliation:read')
+    // The archive kinds and a bare uuid (which resolves the archive kinds only) need documents:read alone.
+    for (const record_ref of [`document:${CUSTOMER_ID}`, `journal_entry:${CUSTOMER_ID}`, CUSTOMER_ID, 42]) {
+      expect(argumentScopeFor('gnubok_get_record', { record_ref })).toBeNull()
+    }
+  })
 })
 
 describe('MCP dispatcher scope gate', () => {
@@ -121,6 +133,14 @@ describe('MCP dispatcher scope gate', () => {
     const result = await callTool('gnubok_get_party', { customer_id: CUSTOMER_ID })
     expect(result.isError).toBe(false)
     expect(result.text).toContain('"found": false')
+  })
+
+  it('refuses an invoice through gnubok_get_record to a key with documents:read only', async () => {
+    useKey(['documents:read'])
+    const result = await callTool('gnubok_get_record', { record_ref: `invoice:${CUSTOMER_ID}` })
+    expect(result.isError).toBe(true)
+    expect(result.text).toContain('INSUFFICIENT_SCOPE')
+    expect(result.text).toContain('invoices:read')
   })
 
   it('lets a key with both read scopes read a party through a supplier', async () => {
