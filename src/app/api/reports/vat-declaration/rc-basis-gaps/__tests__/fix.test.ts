@@ -136,6 +136,35 @@ describe('POST /api/reports/vat-declaration/rc-basis-gaps/fix', () => {
     expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
   })
 
+  // crm#1766: the scan no longer lists the momsredovisning; a row from before
+  // that must not storno a correct settlement into a purchase.
+  it('refuses a momsredovisning verifikat with nothing written', async () => {
+    enqueue({
+      data: {
+        id: ENTRY_ID,
+        status: 'posted',
+        source_type: 'vat_settlement',
+        lines: [
+          { account_number: '2611', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+          { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+          { account_number: '2650', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+
+    const response = await POST(fixRequest(validBody), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details?: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VAT_RC_BASIS_NOTHING_MISSING')
+    expect(body.error.message).toMatch(/^Verifikationen är en momsredovisning/)
+    expect(body.error.details).toMatchObject({ entryId: ENTRY_ID, reason: 'vat_settlement' })
+    expect(correctEntryMock).not.toHaveBeenCalled()
+  })
+
   it('corrects a posted entry with missing basis lines (happy path)', async () => {
     enqueue({
       data: {

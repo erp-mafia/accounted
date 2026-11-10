@@ -54,6 +54,17 @@ const RATE_BY_OUTPUT: Record<RcOutputAccount, number> = {
 export const RC_BASIS_TOLERANCE = 0.5
 
 /**
+ * The source_type of the app's momsredovisning verifikat (the reviewed
+ * settlement proposal, VAT booking templates). It clears 2614/2624/2634 into
+ * 2650 and is no purchase, so it has no basis of its own, and the declaration
+ * leaves it out of the rutor (fetchVatAccountTotals). The scan and the
+ * Korrigera route leave it out too: a period whose reverse-charge credit notes
+ * outweigh its purchases leaves 2614 in debit, the settlement credits it, and
+ * that credit read as fiktiv moms without basis (crm#1766).
+ */
+export const RC_BASIS_SKIPPED_SOURCE_TYPE = 'vat_settlement'
+
+/**
  * The declaration's account resolution as the basis is read with it
  * (fetchDynamicVatAccounts): the accounts with a configured momskod, the box
  * each one feeds, and the momssats the filing gate buckets its basis at.
@@ -217,9 +228,10 @@ interface SiblingLineRow {
 }
 
 /**
- * The posted verifikat of the period with a line on 2614/2624/2634: their
- * fiktiv moms lines with the verifikat attached (rcLines) and every line of
- * them (siblingLines), each sorted by line id.
+ * The posted verifikat of the period with a line on 2614/2624/2634, the
+ * momsredovisning (RC_BASIS_SKIPPED_SOURCE_TYPE) left out: their fiktiv moms
+ * lines with the verifikat attached (rcLines) and every line of them
+ * (siblingLines), each sorted by line id.
  *
  * One get_entries_with_account_lines call, which reads only the days the
  * output accounts moved. The two-step read below (every posted entry of the
@@ -233,14 +245,15 @@ async function fetchRcVerifikat(
   start: string,
   end: string,
 ): Promise<{ rcLines: RcLineRow[]; siblingLines: SiblingLineRow[] }> {
-  const rows = await fetchEntriesWithAccountLines(supabase, companyId, {
+  const allRows = await fetchEntriesWithAccountLines(supabase, companyId, {
     start,
     end,
     accounts: RC_OUTPUT_ACCOUNTS,
     statuses: ['posted'],
     allLines: true,
   })
-  if (rows) {
+  if (allRows) {
+    const rows = allRows.filter((row) => row.source_type !== RC_BASIS_SKIPPED_SOURCE_TYPE)
     const entryById = new Map(rows.map((row) => [row.id, {
       id: row.id,
       voucher_number: row.voucher_number,
@@ -275,6 +288,8 @@ async function fetchRcVerifikat(
       q
         .eq('company_id', companyId)
         .eq('status', 'posted')
+        // source_type is NOT NULL, so neq drops only the momsredovisning.
+        .neq('source_type', RC_BASIS_SKIPPED_SOURCE_TYPE)
         .gte('entry_date', start)
         .lte('entry_date', end),
     filterLines: (q: EntryLinesQuery) =>
