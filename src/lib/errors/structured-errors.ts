@@ -3099,6 +3099,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The recurring schedule update failed and the compensating rollback did not fully apply: the schedule may be left in a partial state (header fields and items out of sync). Inspect the schedule fields and items before retrying.',
   },
+  // "Skapa faktura nu" lost the run claim to another run of the same schedule
+  // (another tab, or the hourly cron): nothing was created by this request.
+  RECURRING_RUN_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv:
+      'En faktura skapas redan från det här schemat. Ingen ny faktura skapades. Ladda om sidan och se om fakturan finns innan du försöker igen.',
+    message_en:
+      'An invoice is already being created from this schedule. No new invoice was created. Reload and check for the invoice before trying again.',
+  },
   // Kundorder (sales orders): lib/sales-orders/*, app/api/sales-orders/*
   SALES_ORDER_NOT_FOUND: {
     httpStatus: 404,

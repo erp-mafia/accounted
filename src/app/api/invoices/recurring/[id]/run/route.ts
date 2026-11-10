@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { executeRecurringSchedule } from '@/lib/invoices/recurring-schedule-service'
 import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
+import { claimRecurringScheduleRun, releaseRecurringScheduleRun } from '@/lib/invoices/recurring-schedule-claim'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
 
@@ -19,6 +20,11 @@ import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/t
  *
  * It deliberately does NOT touch next_run_date: a manual send is out-of-band
  * and must not disturb the monthly cadence.
+ *
+ * It claims the run like the cron does (claimRecurringScheduleRun): a second
+ * click from another tab, or the hourly cron reaching the schedule while this
+ * runs, gets 409 RECURRING_RUN_IN_PROGRESS instead of a second invoice
+ * (accounted#58). A failed run gives the claim back.
  */
 export const POST = withRouteContext(
   'recurring_invoice.run_now',
@@ -53,52 +59,67 @@ export const POST = withRouteContext(
       ? await isSandboxCompany(supabase, companyId)
       : false
 
+    const claimTs = new Date().toISOString()
+    let claimed: boolean
     try {
-      const result = await executeRecurringSchedule(supabase, typed, new Date(), { suppressAutoSend })
-
-      // Record the run for the list view (generated count, last invoice,
-      // warning) but leave next_run_date untouched: the monthly cadence runs
-      // independently of this manual send.
-      const { error: updateError } = await supabase
-        .from('recurring_invoice_schedules')
-        .update({
-          last_run_at: new Date().toISOString(),
-          last_invoice_id: result.invoiceId,
-          last_run_warning: result.warning,
-          generated_count: typed.generated_count + 1,
-          // Unlike next_run_date, the period DOES advance: the invoice just
-          // created covers it, and the cron must bill the next one. A draft
-          // removed before it is issued gives the period back
-          // (lib/invoices/recurring-draft-period.ts).
-          ...(typed.period_start
-            ? { period_start: advancePeriodStart(typed.period_start, typed.interval_months ?? 1) }
-            : {}),
-        })
-        .eq('id', id)
-        .eq('company_id', companyId)
-
-      if (updateError) {
-        // The invoice exists; the tracking update failing is non-fatal. Log
-        // loudly and still return the created invoice.
-        log.error(
-          'invoice created but failed to update schedule after run-now',
-          updateError,
-          { scheduleId: id, invoiceId: result.invoiceId },
-        )
-      }
-
-      return NextResponse.json({
-        data: {
-          invoiceId: result.invoiceId,
-          invoiceNumber: result.invoiceNumber,
-          autoSent: result.autoSent,
-          warning: result.warning,
-        },
-      })
+      claimed = await claimRecurringScheduleRun(supabase, typed, claimTs)
     } catch (err) {
+      log.error('run-now could not claim the schedule', err as Error, { scheduleId: id })
+      return errorResponse(err, log, { requestId })
+    }
+    if (!claimed) {
+      log.info('run-now lost the claim to a concurrent run', { scheduleId: id })
+      return errorResponseFromCode('RECURRING_RUN_IN_PROGRESS', log, { requestId })
+    }
+
+    let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
+    try {
+      result = await executeRecurringSchedule(supabase, typed, new Date(), { suppressAutoSend })
+    } catch (err) {
+      await releaseRecurringScheduleRun(supabase, typed, claimTs)
       log.error('run-now failed to generate invoice', err as Error, { scheduleId: id })
       return errorResponse(err, log, { requestId })
     }
+
+    // Record the run for the list view (generated count, last invoice,
+    // warning) but leave next_run_date untouched: the monthly cadence runs
+    // independently of this manual send.
+    const { error: updateError } = await supabase
+      .from('recurring_invoice_schedules')
+      .update({
+        last_run_at: new Date().toISOString(),
+        last_invoice_id: result.invoiceId,
+        last_run_warning: result.warning,
+        generated_count: typed.generated_count + 1,
+        // Unlike next_run_date, the period DOES advance: the invoice just
+        // created covers it, and the cron must bill the next one. A draft
+        // removed before it is issued gives the period back
+        // (lib/invoices/recurring-draft-period.ts).
+        ...(typed.period_start
+          ? { period_start: advancePeriodStart(typed.period_start, typed.interval_months ?? 1) }
+          : {}),
+      })
+      .eq('id', id)
+      .eq('company_id', companyId)
+
+    if (updateError) {
+      // The invoice exists; the tracking update failing is non-fatal. Log
+      // loudly and still return the created invoice.
+      log.error(
+        'invoice created but failed to update schedule after run-now',
+        updateError,
+        { scheduleId: id, invoiceId: result.invoiceId },
+      )
+    }
+
+    return NextResponse.json({
+      data: {
+        invoiceId: result.invoiceId,
+        invoiceNumber: result.invoiceNumber,
+        autoSent: result.autoSent,
+        warning: result.warning,
+      },
+    })
   },
   { requireWrite: true },
 )

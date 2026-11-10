@@ -2450,6 +2450,12 @@ export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend
     })
     .default('manual'),
   acknowledged_warnings: AcknowledgedWarningsSchema,
+  // The VAT period a reviewed momsredovisning settles (the Moms page's "Bokför
+  // momsrapport" dialog sends it): the route then refuses a period that is
+  // already booked and keys the verifikat on it, like the v1 and MCP booking
+  // (lib/reports/vat-settlement-booking.ts, accounted#58). Lazy because the
+  // period shape is declared further down this module.
+  vat_settlement_period: z.lazy(() => VatSettlementPeriodSchema).optional(),
 })
 
 /** Body of the dashboard's draft commit: only the confirmed warnings. */
@@ -4225,6 +4231,14 @@ function refineVatFilingPeriod(
 }
 
 export const VatFilingPeriodSchema = z.object(vatFilingPeriodShape).superRefine(refineVatFilingPeriod)
+
+/** The period of a reviewed momsredovisning on the dashboard voucher door (CreateDashboardJournalEntrySchema). */
+export const VatSettlementPeriodSchema = z
+  .object({
+    ...vatFilingPeriodShape,
+    fiscal_period_id: uuid.optional(),
+  })
+  .superRefine(refineVatFilingPeriod)
 
 export const MarkVatFilingSchema = z
   .object({

@@ -8,6 +8,7 @@ import {
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
+import { claimRecurringScheduleRun, releaseRecurringScheduleRun } from '@/lib/invoices/recurring-schedule-claim'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
   RecurringInvoiceSchedule,
@@ -161,20 +162,9 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     //    flips the row and gets it back; the loser matches zero rows and skips.
     //    Cheaper than a Postgres advisory lock, and it closes the window for the
     //    whole batch execution, not just a single row.
+    //    "Skapa faktura nu" claims through the same function.
     const claimTs = now.toISOString()
-    const claimBase = supabase
-      .from('recurring_invoice_schedules')
-      .update({ last_run_at: claimTs })
-      .eq('id', schedule.id)
-      .eq('company_id', schedule.company_id)
-    const claimGated = schedule.last_run_at
-      ? claimBase.eq('last_run_at', schedule.last_run_at)
-      : claimBase.is('last_run_at', null)
-    const { data: claimed, error: claimError } = await claimGated.select('id')
-    if (claimError) {
-      throw new Error(`failed to claim schedule for today: ${claimError.message}`)
-    }
-    if (!claimed || (claimed as unknown[]).length === 0) {
+    if (!(await claimRecurringScheduleRun(supabase, schedule, claimTs))) {
       itemCtx.log.info('schedule claimed by a concurrent cron run; skipping')
       results.push({
         scheduleId: schedule.id,
@@ -207,15 +197,9 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       // A sentence written for the user (the invoice series refusal) ends in a
       // full stop of its own; the template adds one.
       const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300).replace(/\.$/, '')
-      await supabase
-        .from('recurring_invoice_schedules')
-        .update({
-          last_run_at: schedule.last_run_at,
-          last_run_warning: `Körningen ${todayStockholm} misslyckades: ${reason}. Nytt försök görs automatiskt varje timme idag.`,
-        })
-        .eq('id', schedule.id)
-        .eq('company_id', schedule.company_id)
-        .eq('last_run_at', claimTs)
+      await releaseRecurringScheduleRun(supabase, schedule, claimTs, {
+        last_run_warning: `Körningen ${todayStockholm} misslyckades: ${reason}. Nytt försök görs automatiskt varje timme idag.`,
+      })
       throw err
     }
 
