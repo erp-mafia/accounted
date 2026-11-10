@@ -160,6 +160,25 @@ export function keepTogetherLineCap(fontFamily: string, fontSizePt: number, chro
  */
 export const MAX_KEEP_TOGETHER_LINES = 12
 
+/**
+ * How long the fine print (the payment terms, 8pt across the page) may be and
+ * still travel as one unit with the payment area's reservation, or with the
+ * summary when there is none, so it is never stranded alone on a page
+ * (crm#242). Past this it is ordinary text that follows the summary and may
+ * break across pages, while the reservation stays one unit of its own
+ * (crm#1787): a long text, such as the statutory information an electricity
+ * invoice must carry, otherwise dragged the whole unit to a fresh page and
+ * left the page above it mostly empty.
+ *
+ * Counted with estimateLines at FULL_WIDTH_BOX_PT, which overstates 8pt text
+ * across the full content width (a printed line holds some 130 characters,
+ * an estimated one about 80): 4 estimated lines come to two or three printed
+ * ones, a sentence or two for each of the two texts, what nearly every
+ * company sets. Either side of the line is safe: a short unit always fits on
+ * a page, and text that may break is never lost past the page edge.
+ */
+export const FINE_PRINT_KEEP_TOGETHER_LINES = 4
+
 export function estimateLines(text: string, budgetPt: number): number {
   let lines = 0
   for (const line of text.split('\n')) {
