@@ -1,0 +1,1 @@
+[2026-11-10] A cancel the bank refuses with an error (neither unreachable nor in doubt) reads the payment once: closed unpaid follows the bank, unsigned with no signature here is PAYMENT_CANCEL_UNSIGNED_REFUSED with releasable, else PAYMENT_CANCEL_NOT_CONFIRMED; no new code (crm#1757).

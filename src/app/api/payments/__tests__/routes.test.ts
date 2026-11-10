@@ -433,6 +433,69 @@ describe('cancelling an order the bank may hold', () => {
     expect(findCall('payment_orders', 'update')).toBeUndefined()
   })
 
+  // crm#1757: the bank refused the cancel with an error, not an answer.
+  describe('a bank that refuses the cancel with an error', () => {
+    const refusing = (state: { providerStatus: string; status: string }) => {
+      const cancelPayment = vi.fn().mockRejectedValue(new PaymentProviderError('refused', 'PAYMENT_REFUSED', false, 400))
+      const getPaymentState = vi.fn().mockResolvedValue({ ...state, messages: [] })
+      registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment, getPaymentState } as unknown as PaymentInitiationProvider)
+      return { cancelPayment, getPaymentState }
+    }
+    const unsigned = () => atBank({ status: 'submitted', submitted_at: '2026-10-19T07:15:48Z' })
+
+    it('says an unsigned payment is unsigned and may be released, not that the bank did not accept it', async () => {
+      const { getPaymentState } = refusing({ providerStatus: 'RCVD', status: 'submitted' })
+      enqueue({ data: [unsigned()] })
+      enqueue({ data: { org_number: '5566778899' } })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: Record<string, unknown> } }>(
+        await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, {}), params(ORDER)),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('PAYMENT_CANCEL_UNSIGNED_REFUSED')
+      expect(body.error.details).toMatchObject({ releasable: true, provider_status: 'RCVD' })
+      expect(body.error.message).toContain('inte signerad')
+      expect(body.error.message).not.toContain('tog inte emot betalningen')
+      expect(getPaymentState).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+      expect(findCall('payment_orders', 'update')).toBeUndefined()
+    })
+
+    it('releases it on release_unsigned', async () => {
+      refusing({ providerStatus: 'RCVD', status: 'submitted' })
+      enqueue({ data: [unsigned()] })
+      enqueue({ data: { org_number: '5566778899' } })
+      enqueue({ data: null }) // bankid_identities
+      enqueue({ data: null }) // payment_signers
+      enqueue({ data: null }) // cancel_requested
+      enqueue({ data: null }) // the refusal's error event
+      enqueue({ data: [{ id: ORDER }] })
+
+      const { status, body } = await parseJsonResponse<{ data: { cancelled: boolean; status: string; released_unsigned: boolean } }>(
+        await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, { release_unsigned: true }), params(ORDER)),
+      )
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({ cancelled: true, status: 'cancelled', released_unsigned: true })
+      expect(findCall('payment_orders', 'update')?.[0]).toMatchObject({ status: 'cancelled', cancelled_by: 'user-1', provider_status: 'RCVD' })
+    })
+
+    it('leaves a signed payment as it is and points to the online bank, whatever the body asks', async () => {
+      refusing({ providerStatus: 'ACSP', status: 'accepted' })
+      enqueue({ data: [atBank()] })
+      enqueue({ data: { org_number: '5566778899' } })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+        await cancelOrder(post(`/api/payments/orders/${ORDER}/cancel`, { release_unsigned: true }), params(ORDER)),
+      )
+
+      expect(status).toBe(502)
+      expect(body.error.code).toBe('PAYMENT_CANCEL_NOT_CONFIRMED')
+      expect(body.error.message).toContain('internetbanken')
+      expect(findCall('payment_orders', 'update')).toBeUndefined()
+    })
+  })
+
   it('cancels it once the bank confirms', async () => {
     const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' })
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment } as unknown as PaymentInitiationProvider)
