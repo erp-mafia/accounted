@@ -150,10 +150,25 @@ export function EditorPreviewPane({
             )}
             aria-busy={pdf.loading}
           >
-            {visible && drawsInPage ? (
+            {visible && drawsInPage && pdf.blob ? (
               // Draws the newest render and keeps the last drawing until it
-              // is done, so it needs no second buffer.
-              <PdfCanvasPreview url={target ?? visible} fit={zoom} title={t('preview_title')} className={PDF_BOX.width} />
+              // is done, so it needs no second buffer. It is handed the Blob,
+              // not the blob: URL (accounted#178); when pdf.js cannot draw the
+              // file it says so and links the PDF instead of a blank box.
+              <PdfCanvasPreview
+                file={pdf.blob}
+                fit={zoom}
+                title={t('preview_title')}
+                className={PDF_BOX.width}
+                fallback={
+                  <p className="p-4 text-sm text-muted-foreground">
+                    {t('preview_not_drawn')}{' '}
+                    <a href={target ?? visible} target="_blank" rel="noreferrer" className="underline">
+                      {t('preview_open')}
+                    </a>
+                  </p>
+                }
+              />
             ) : visible ? (
               // <object type="application/pdf">, not an <iframe>: Chrome's
               // frame pipeline intermittently blocked the PDF (see

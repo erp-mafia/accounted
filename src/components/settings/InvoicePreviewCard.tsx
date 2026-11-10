@@ -28,6 +28,9 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   const { company } = useCompany()
   const [open, setOpen] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  // The same PDF's bytes for PdfCanvasPreview, which cannot fetch the blob:
+  // URL back under the app's connect-src (accounted#178).
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // The preview renders without payment details (X-Invoice-Missing: payee)
@@ -125,6 +128,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current)
         currentUrlRef.current = url
         setBlobUrl(url)
+        setPdfBlob(blob)
         setIsLoading(false)
       } catch (err) {
         if (cancelled) return
@@ -185,9 +189,9 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           <p className="text-xs text-muted-foreground">{payeeNotice}</p>
         )}
 
-        {!isLoading && !error && blobUrl && drawsInPage && (
+        {!isLoading && !error && blobUrl && pdfBlob && drawsInPage && (
           <PdfCanvasPreview
-            url={blobUrl}
+            file={pdfBlob}
             fit="width"
             title={t('iframe_title')}
             className="h-[70vh] w-full"

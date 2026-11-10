@@ -1,0 +1,1 @@
+[2026-11-11] The in-page invoice PDF preview is handed the rendered Blob instead of fetching its blob: URL back (accounted#178), not given blob: in connect-src: the page policy stays as narrow as it is, and the drawing no longer depends on how a browser matches blob: against the CSP.

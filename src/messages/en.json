@@ -6365,6 +6365,7 @@
     "preview_title": "PDF preview",
     "preview_open": "Open in a new tab",
     "preview_loading": "Loading the preview",
+    "preview_not_drawn": "The preview could not be shown here.",
     "status_seller_vat_missing": "The company's VAT number is missing and must be on the invoice.",
     "status_seller_vat_add": "Add it",
     "status_seller_vat_ask_admin": "Ask an administrator to add it.",

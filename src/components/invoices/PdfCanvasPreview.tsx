@@ -28,8 +28,13 @@ export function useDrawsPdfInPage(): boolean {
 }
 
 interface PdfCanvasPreviewProps {
-  /** The PDF (a blob: URL from the preview route); a #fragment of viewer options is ignored. */
-  url: string
+  /**
+   * The PDF the preview route answered with, as the Blob itself. Never its
+   * blob: URL: reading that back is a fetch, and the app's connect-src has no
+   * blob:, so Safari and Chrome refuse it and the preview stayed blank
+   * (accounted#178).
+   */
+  file: Blob
   /** 'page': each page fitted inside the box. 'width': each page as wide as the box, scrolling down. */
   fit: 'page' | 'width'
   /** The accessible name of the preview. */
@@ -49,27 +54,25 @@ interface PdfCanvasPreviewProps {
  * a preview mounts here.
  *
  * Every render draws all pages into fresh canvases and swaps them in when
- * they are done, so an edit (a new blob URL) or a resize never blanks the
- * page: the previous drawing stays until the next one is ready.
+ * they are done, so an edit (a new Blob) or a resize never blanks the page:
+ * the previous drawing stays until the next one is ready.
  */
-export function PdfCanvasPreview({ url, fit, title, className, fallback }: PdfCanvasPreviewProps) {
+export function PdfCanvasPreview({ file, fit, title, className, fallback }: PdfCanvasPreviewProps) {
   const box = useRef<HTMLDivElement>(null)
   const sheet = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<{ pdf: PDFDocumentProxy; sizes: PageSize[] } | null>(null)
   const [failed, setFailed] = useState(false)
   const [drawn, setDrawn] = useState(false)
   const [area, setArea] = useState<PageSize>({ width: 0, height: 0 })
-  const source = url.split('#')[0]
 
-  // Fetch the bytes and open them with pdf.js; read every page's size up front.
+  // Read the bytes and open them with pdf.js; read every page's size up front.
   useEffect(() => {
     let cancelled = false
     let task: PDFDocumentLoadingTask | null = null
     void (async () => {
       try {
-        const [response, pdfjs] = await Promise.all([fetch(source), import('unpdf/pdfjs')])
-        if (!response.ok) throw new Error(`preview answered ${response.status}`)
-        const data = new Uint8Array(await response.arrayBuffer())
+        const [bytes, pdfjs] = await Promise.all([file.arrayBuffer(), import('unpdf/pdfjs')])
+        const data = new Uint8Array(bytes)
         if (cancelled) return
         task = pdfjs.getDocument({ data, useSystemFonts: true, verbosity: pdfjs.VerbosityLevel.ERRORS })
         const pdf = await task.promise
@@ -91,7 +94,7 @@ export function PdfCanvasPreview({ url, fit, title, className, fallback }: PdfCa
       // the canvases already drawn from it stay on screen.
       void task?.destroy()
     }
-  }, [source])
+  }, [file])
 
   // The box's size; a resize settles before the pages are drawn again.
   useEffect(() => {
