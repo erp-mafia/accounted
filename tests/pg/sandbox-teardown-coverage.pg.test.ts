@@ -119,6 +119,8 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
     'refuses a DELETE only while the company row exists; the teardown removes grants through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
   booking_review_rules_immutable:
     'refuses a DELETE only while the company row exists; the teardown removes the rules through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
+  guard_voucher_sequence_writer:
+    'refuses only a direct write by anon, authenticated or service_role (current_user); cleanup_sandbox_user is SECURITY DEFINER and foreign key cascades run as the table owner, so a teardown never trips it (#199)',
 }
 
 type Statement = { kind: 'delete' | 'update'; table: string; cols: string[]; pos: number }
