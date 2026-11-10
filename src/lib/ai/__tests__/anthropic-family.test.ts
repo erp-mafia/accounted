@@ -234,6 +234,19 @@ describe('generateText / generateStructured', () => {
     expect(result.value).toEqual({ paired: true })
   })
 
+  it('generateStructured marks the tool strict only when the caller asks, so every other request stays byte-identical', async () => {
+    const schema = { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['a', 'b'] } }, required: ['kind'] }
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 't1', name: 'pick', input: { kind: 'a' } }], usage: {} })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await svc.generateStructured({ tier: 'cheap', prompt: 'Pick', maxTokens: 50, schema: { name: 'pick', jsonSchema: schema, strict: true } })
+    expect(mockCreate.mock.calls[0][0].tools).toEqual([{ name: 'pick', input_schema: schema, strict: true }])
+    expect(mockCreate.mock.calls[0][0].tool_choice).toEqual({ type: 'tool', name: 'pick' })
+
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 't2', name: 'pick', input: { kind: 'a' } }], usage: {} })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'Pick', maxTokens: 50, schema: { name: 'pick', jsonSchema: schema, strict: false } })
+    expect(mockCreate.mock.calls[1][0].tools).toEqual([{ name: 'pick', input_schema: schema }])
+  })
+
   it('generateStructured throws when the model ignored the forced tool', async () => {
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'nope' }], usage: {} })
     const svc = createAnthropicFamilyService(readAiConfig())
