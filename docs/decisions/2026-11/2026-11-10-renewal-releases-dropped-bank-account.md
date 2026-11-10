@@ -1,0 +1,1 @@
+[2026-11-10] An in-place bank renewal whose consent no longer lists an account releases that account's cash row in finalize_bank_callback, as disconnect does (binding cleared, row and history kept), rather than keeping it bound: no feed can read it again and it could not be turned off (crm#1711).
