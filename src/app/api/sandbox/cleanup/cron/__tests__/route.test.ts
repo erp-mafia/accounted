@@ -5,7 +5,8 @@
  * the RPC reports (20260927220000; before it, ten failing users at the head
  * of the queue stopped every run after one batch), stops when the backlog is
  * empty, aggregates totals across batches, accepts the older return shapes,
- * and logs failures at error level: the failure mode this route chain fixes
+ * and logs failures at error level, one line per failed user with the reason
+ * the RPC reports (20261109185036): the failure mode this route chain fixes
  * was months of silently swallowed cleanup errors.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -127,6 +128,81 @@ describe('GET /api/sandbox/cleanup/cron', () => {
     expect(h.logError).toHaveBeenCalledWith(
       'sandbox cleanup completed with failures',
       expect.objectContaining({ failed: 11 }),
+    )
+  })
+
+  it('logs every failed user with the reason the RPC reports, and keeps the reasons out of the body', async () => {
+    const refused = {
+      user_id: '00000000-0000-4000-8000-000000000001',
+      kind: 'sandbox',
+      sqlstate: 'P0001',
+      message: 'User 00000000-0000-4000-8000-000000000001 has data in a company that is not a sandbox',
+      context: 'PL/pgSQL function cleanup_sandbox_user(uuid) line 30 at RAISE',
+    }
+    const blocked = {
+      user_id: '00000000-0000-4000-8000-000000000002',
+      kind: 'sandbox',
+      sqlstate: '23503',
+      message:
+        'update or delete on table "companies" violates foreign key constraint "skatteverket_api_audit_log_company_id_fkey" on table "skatteverket_api_audit_log"',
+      table: 'public.skatteverket_api_audit_log',
+      constraint: 'skatteverket_api_audit_log_company_id_fkey',
+    }
+    h.rpc
+      .mockResolvedValueOnce({
+        data: {
+          cleaned: 1,
+          failed: 2,
+          orphans_removed: 0,
+          attempted: 3,
+          next_offset: 2,
+          // Unknown keys and non-string values never reach the log.
+          failures: [refused, { ...blocked, context: 42, detail: 'Failing row contains (...)' }, 'not-an-object'],
+        },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 0, attempted: 0, next_offset: 2, failures: [] },
+        error: null,
+      })
+
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
+    const body = await res.json()
+
+    expect(body).toEqual({ success: true, cleaned: 1, failed: 2, orphans_removed: 0, batches: 2 })
+    expect(h.logError).toHaveBeenCalledWith('sandbox teardown failed', { failure: refused })
+    expect(h.logError).toHaveBeenCalledWith('sandbox teardown failed', { failure: blocked })
+    expect(h.logError).toHaveBeenCalledWith(
+      'sandbox cleanup completed with failures',
+      expect.objectContaining({ failed: 2, failures_logged: 2, failures_omitted: 0 }),
+    )
+    expect(h.logError).toHaveBeenCalledTimes(3)
+  })
+
+  it('logs at most twenty failed users per run and counts the rest', async () => {
+    const failures = Array.from({ length: 25 }, (_, i) => ({
+      user_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      kind: 'sandbox',
+      sqlstate: '23503',
+      message: 'violates foreign key constraint',
+    }))
+    h.rpc
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 25, orphans_removed: 0, attempted: 25, next_offset: 25, failures },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 0, attempted: 0, next_offset: 25, failures: [] },
+        error: null,
+      })
+
+    await GET(createCronRequest('/api/sandbox/cleanup/cron'))
+
+    const perUser = h.logError.mock.calls.filter(([msg]) => msg === 'sandbox teardown failed')
+    expect(perUser).toHaveLength(20)
+    expect(h.logError).toHaveBeenCalledWith(
+      'sandbox cleanup completed with failures',
+      expect.objectContaining({ failed: 25, failures_logged: 20, failures_omitted: 5 }),
     )
   })
 

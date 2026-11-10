@@ -1,0 +1,1 @@
+[2026-11-09] Nightly sandbox cleanup failures: the RPC now returns each failure's SQLSTATE, message, table, constraint and context and the cron logs it, but cleanup_sandbox_user is not extended: the suspected K3 asset rows already go with the assets delete, and no post-10-23 table reaches it.
