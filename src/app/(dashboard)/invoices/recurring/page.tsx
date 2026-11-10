@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatDate } from '@/lib/utils'
 import {
   ArrowPathRoundedSquareIcon,
@@ -42,6 +43,7 @@ export default function RecurringInvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('invoice_recurring')
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
 
   // The "Nytt schema" modal is driven by the URL (?new=1) so every entry
   // point (the header button and the empty state) opens the same dialog, and
@@ -142,7 +144,14 @@ export default function RecurringInvoicesPage() {
         })
         fetchSchedules()
       } else {
-        toast({ title: t('run_now_failed_title'), variant: 'destructive' })
+        // The server's sentence when it gave one: a run already in progress
+        // (another tab, the hourly cron) created nothing, and says so.
+        const json = await res.json().catch(() => null)
+        toast({
+          title: t('run_now_failed_title'),
+          description: json?.error ? getErrorMessage(json, { locale }) : undefined,
+          variant: 'destructive',
+        })
       }
     } finally {
       setRunningId(null)

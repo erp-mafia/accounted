@@ -227,6 +227,26 @@ async function alreadyBookedByKey(ctx: OperationContext, sourceId: string): Prom
   }
 }
 
+/**
+ * The period already has a posted settlement, tagged or recognised by shape:
+ * the proposal re-clears the FULL period, so a second one would clear the
+ * 26xx accounts twice. Every door refuses on this one reading.
+ */
+function alreadyPostedRefusal(proposal: VatSettlementProposal): Failure | null {
+  const posted = findPostedVatSettlement(proposal.existing_entries)
+  if (!posted) return null
+  return {
+    ok: false,
+    code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+    details: {
+      journal_entry_id: posted.id,
+      voucher_series: posted.voucher_series,
+      voucher_number: posted.voucher_number,
+      entry_date: posted.entry_date,
+    },
+  }
+}
+
 export async function bookVatSettlement(
   ctx: OperationContext,
   input: BookVatSettlementInput,
@@ -238,19 +258,8 @@ export async function bookVatSettlement(
   if (!loaded.ok) return loaded
   const proposal = loaded.proposal
 
-  const posted = findPostedVatSettlement(proposal.existing_entries)
-  if (posted) {
-    return {
-      ok: false,
-      code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
-      details: {
-        journal_entry_id: posted.id,
-        voucher_series: posted.voucher_series,
-        voucher_number: posted.voucher_number,
-        entry_date: posted.entry_date,
-      },
-    }
-  }
+  const alreadyPosted = alreadyPostedRefusal(proposal)
+  if (alreadyPosted) return alreadyPosted
   if (proposal.is_empty) return { ok: false, code: 'VAT_SETTLEMENT_EMPTY' }
 
   const fingerprint = proposalFingerprint(proposal)
@@ -343,4 +352,40 @@ export async function bookVatSettlement(
     },
     ...(draft ? { warnings: [DRAFT_EXISTS] } : {}),
   }
+}
+
+/**
+ * The dashboard door of the momsredovisning: the journal entry form's
+ * POST /api/bookkeeping/journal-entries with source_type 'vat_settlement',
+ * which books the proposal's lines as the person reviewed and perhaps edited
+ * them. That door had no server-side gate (only the page's banner and its
+ * disabled button), so an approved gnubok_book_vat_settlement and a click in
+ * a dialog opened before it, or two tabs, each cleared the period's 26xx
+ * accounts (accounted#58). This gives it the same two gates as
+ * bookVatSettlement: a settlement already posted in the period refuses, and
+ * the verifikat carries the period's source_id, so a booking racing another
+ * for the period from either door fails at the draft insert on
+ * journal_entries_vat_settlement_live_unique. The lines stay the caller's.
+ */
+export async function gateReviewedVatSettlement(
+  ctx: OperationContext,
+  input: VatPeriodInput,
+): Promise<{ ok: true; sourceId: string } | Failure> {
+  const loaded = await loadProposal(ctx, input)
+  if (!loaded.ok) return loaded
+  const alreadyPosted = alreadyPostedRefusal(loaded.proposal)
+  if (alreadyPosted) return alreadyPosted
+  return { ok: true, sourceId: vatSettlementSourceId(ctx.companyId, loaded.proposal.period) }
+}
+
+/**
+ * A reviewed settlement that lost the race on the live-unique index, answered
+ * as bookVatSettlement answers it; null for any other failure.
+ */
+export async function reviewedVatSettlementRaceLost(
+  ctx: OperationContext,
+  err: unknown,
+  sourceId: string,
+): Promise<Failure | null> {
+  return isVatSettlementLiveUniqueError(err) ? alreadyBookedByKey(ctx, sourceId) : null
 }

@@ -20,6 +20,7 @@ import {
 } from '@/lib/bookkeeping/missing-underlag'
 import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
 import { countUnderlagForJournalEntries } from '@/lib/core/documents/underlag-counts'
+import { gateReviewedVatSettlement, reviewedVatSettlementRaceLost } from '@/lib/reports/vat-settlement-booking'
 
 // Query params are hand-parsed with per-param clamping/regex validation (see
 // each param's comment) rather than a Zod schema; response shapes are legacy
@@ -377,10 +378,31 @@ export const POST = withRouteContext(
   // (CreateDashboardJournalEntrySchema).
   const validation = await validateBody(request, CreateDashboardJournalEntrySchema)
   if (!validation.success) return validation.response
-  const { acknowledged_warnings: acknowledgedWarnings, ...body } = validation.data
+  const {
+    acknowledged_warnings: acknowledgedWarnings,
+    vat_settlement_period: vatSettlementPeriod,
+    ...validBody
+  } = validation.data
+  let body = validBody
 
   const { searchParams } = new URL(request.url)
   const asDraft = searchParams.get('as_draft') === 'true'
+
+  // A reviewed momsredovisning (the Moms page sends its period) passes the
+  // same gates as the v1 and MCP booking: a period already settled refuses,
+  // and the verifikat is keyed on the period, so a second settlement racing
+  // this one from any door fails at the draft insert (accounted#58). A VAT
+  // template applied in the plain form names no period and books as before.
+  const settlementCtx = { supabase, companyId, userId: user.id, log }
+  let settlementSourceId: string | null = null
+  if (body.source_type === 'vat_settlement' && vatSettlementPeriod) {
+    const gate = await gateReviewedVatSettlement(settlementCtx, vatSettlementPeriod)
+    if (!gate.ok) {
+      return errorResponseFromCode(gate.code, log, { details: gate.details, requestId: ctx.requestId })
+    }
+    settlementSourceId = gate.sourceId
+    body = { ...body, source_id: gate.sourceId }
+  }
 
   // Booking-time warnings on typed lines: a draft is checked when it is
   // committed, a posting now (lib/bookkeeping/voucher-warnings-guard.ts).
@@ -415,6 +437,12 @@ export const POST = withRouteContext(
     }
     return NextResponse.json({ data: entry })
   } catch (err) {
+    if (settlementSourceId) {
+      const raceLost = await reviewedVatSettlementRaceLost(settlementCtx, err, settlementSourceId)
+      if (raceLost) {
+        return errorResponseFromCode(raceLost.code, log, { details: raceLost.details, requestId: ctx.requestId })
+      }
+    }
     const typed = bookkeepingErrorResponse(err)
     if (typed) return typed
     // Untyped errors map to Swedish via getErrorMessage: the raw message is

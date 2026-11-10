@@ -71,9 +71,11 @@ export function invoiceNumberingFailure(
  * Concurrency is handled inside the generate_invoice_number RPC via row lock.
  * Two callers racing on the same draft both return the same final number; the
  * counter advances by exactly one. A proforma takes the next number of its own
- * PF- series; everything else the next one of the company's invoice_prefix
- * series. Throws InvoiceNumberSeriesBehindError when the series already has a
- * higher number than the next one.
+ * PF- series, a följesedel the next one of its FS- series; an invoice the
+ * next one of the company's invoice_prefix series. Throws
+ * InvoiceNumberSeriesBehindError when the series already has a higher number
+ * than the next one. A quote is never numbered here: it takes its OF- number
+ * at insert.
  */
 export async function ensureInvoiceNumber(
   supabase: SupabaseClient,
@@ -82,6 +84,19 @@ export async function ensureInvoiceNumber(
 ): Promise<string> {
   if (invoice.invoice_number) {
     return invoice.invoice_number
+  }
+
+  // generate_invoice_number puts every type but a proforma in the invoice
+  // series, while the series' position counts invoices only: an F number on a
+  // följesedel or an offert was a hole in the invoice series for good (ML 17
+  // kap 24 § p. 2, accounted#58). The v1 bulk-create and MCP doors create a
+  // följesedel without a number, so it is numbered from its own series when it
+  // is issued; a quote without its OF- number is refused.
+  if (invoice.document_type === 'delivery_note') {
+    return ensureDeliveryNoteNumber(supabase, companyId, invoice)
+  }
+  if (invoice.document_type === 'quote') {
+    throw new Error('Failed to assign invoice number: a quote takes its OF- number at insert, never one from the invoice series')
   }
 
   // Self-billing invoices we received carry the COUNTERPARTY's number; we must
@@ -105,6 +120,55 @@ export async function ensureInvoiceNumber(
     const behind = rpcError ? seriesBehindFrom(rpcError) : null
     if (behind) throw new InvoiceNumberSeriesBehindError(behind)
     throw new Error(`Failed to assign invoice number: ${rpcError?.message ?? 'no value returned'}`)
+  }
+
+  invoice.invoice_number = assigned
+  return assigned
+}
+
+/**
+ * A följesedel's number from its FS- series (generate_delivery_note_number,
+ * the number the dashboard and v1 create give one at insert), written only
+ * while the row still has none. A caller that lost that race reads the number
+ * the winner wrote; the FS number it drew stays unused, a gap in the följesedel
+ * series only, never in the invoice series.
+ */
+async function ensureDeliveryNoteNumber(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: InvoiceShape,
+): Promise<string> {
+  const { data: drawn, error: rpcError } = await supabase.rpc('generate_delivery_note_number', {
+    p_company_id: companyId,
+  })
+  if (rpcError || typeof drawn !== 'string' || !drawn) {
+    throw new Error(`Failed to assign delivery note number: ${rpcError?.message ?? 'no value returned'}`)
+  }
+
+  const { data: written, error: writeError } = await supabase
+    .from('invoices')
+    .update({ invoice_number: drawn })
+    .eq('id', invoice.id)
+    .eq('company_id', companyId)
+    .is('invoice_number', null)
+    .select('invoice_number')
+  if (writeError) {
+    throw new Error(`Failed to assign delivery note number: ${writeError.message}`)
+  }
+
+  let assigned = (written as Array<{ invoice_number: string | null }> | null)?.[0]?.invoice_number ?? null
+  if (!assigned) {
+    const { data: current, error: readError } = await supabase
+      .from('invoices')
+      .select('invoice_number')
+      .eq('id', invoice.id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (readError) throw new Error(`Failed to assign delivery note number: ${readError.message}`)
+    assigned = (current as { invoice_number: string | null } | null)?.invoice_number ?? null
+  }
+  if (!assigned) {
+    throw new Error('Failed to assign delivery note number: the delivery note was not found')
   }
 
   invoice.invoice_number = assigned

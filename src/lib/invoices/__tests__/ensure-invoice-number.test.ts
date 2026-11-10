@@ -167,3 +167,104 @@ describe('ensureInvoiceNumber', () => {
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 })
+
+// accounted#58: generate_invoice_number puts every type but a proforma in the
+// invoice series, and the series' position counts invoices only, so an
+// unnumbered följesedel issued through it left a permanent hole in the F series.
+describe('ensureInvoiceNumber: a följesedel and an offert never take an invoice number', () => {
+  /** An update chain (.update().eq().eq().is().select()) and a read chain (.select().eq().eq().maybeSingle()). */
+  function invoicesTable(opts: {
+    written: Array<{ invoice_number: string | null }> | null
+    writeError?: { message: string } | null
+    current?: { invoice_number: string | null } | null
+  }) {
+    const calls: Array<{ method: string; args: unknown[] }> = []
+    const chain: Record<string, unknown> = {}
+    for (const method of ['update', 'select', 'eq', 'is']) {
+      chain[method] = vi.fn((...args: unknown[]) => {
+        calls.push({ method, args })
+        return chain
+      })
+    }
+    // The update chain ends in select('invoice_number') and is awaited.
+    chain.then = (resolve: (v: unknown) => unknown) => resolve({ data: opts.written, error: opts.writeError ?? null })
+    chain.maybeSingle = vi.fn(async () => ({ data: opts.current ?? null, error: null }))
+    return { chain, calls }
+  }
+
+  it('draws the number from the FS- series and writes it only while the row has none', async () => {
+    const table = invoicesTable({ written: [{ invoice_number: 'FS-2026004' }] })
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 'FS-2026004', error: null }),
+      from: vi.fn(() => table.chain),
+    }
+    const invoice = { id: 'dn-1', invoice_number: null as string | null, document_type: 'delivery_note' as const }
+
+    const result = await ensureInvoiceNumber(supabase as never, 'company-1', invoice)
+
+    expect(result).toBe('FS-2026004')
+    expect(invoice.invoice_number).toBe('FS-2026004')
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('generate_delivery_note_number', { p_company_id: 'company-1' })
+    expect(supabase.from).toHaveBeenCalledWith('invoices')
+    expect(table.calls).toContainEqual({ method: 'update', args: [{ invoice_number: 'FS-2026004' }] })
+    expect(table.calls).toContainEqual({ method: 'eq', args: ['id', 'dn-1'] })
+    expect(table.calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
+    expect(table.calls).toContainEqual({ method: 'is', args: ['invoice_number', null] })
+  })
+
+  it('returns the number a concurrent issue wrote when it lost the write', async () => {
+    const table = invoicesTable({ written: [], current: { invoice_number: 'FS-2026003' } })
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 'FS-2026004', error: null }),
+      from: vi.fn(() => table.chain),
+    }
+    const invoice = { id: 'dn-1', invoice_number: null as string | null, document_type: 'delivery_note' as const }
+
+    await expect(ensureInvoiceNumber(supabase as never, 'company-1', invoice)).resolves.toBe('FS-2026003')
+    expect(invoice.invoice_number).toBe('FS-2026003')
+  })
+
+  it('throws when the FS- number cannot be drawn, and writes nothing', async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'Company settings not found' } }),
+      from: vi.fn(),
+    }
+    const invoice = { id: 'dn-1', invoice_number: null as string | null, document_type: 'delivery_note' as const }
+
+    await expect(ensureInvoiceNumber(supabase as never, 'company-1', invoice)).rejects.toThrow(
+      'Failed to assign delivery note number',
+    )
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(invoice.invoice_number).toBeNull()
+  })
+
+  it('throws when the write fails', async () => {
+    const table = invoicesTable({ written: null, writeError: { message: 'permission denied' } })
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 'FS-2026004', error: null }),
+      from: vi.fn(() => table.chain),
+    }
+    const invoice = { id: 'dn-1', invoice_number: null as string | null, document_type: 'delivery_note' as const }
+
+    await expect(ensureInvoiceNumber(supabase as never, 'company-1', invoice)).rejects.toThrow('permission denied')
+    expect(invoice.invoice_number).toBeNull()
+  })
+
+  it('keeps a numbered följesedel as it is', async () => {
+    const supabase = { rpc: vi.fn(), from: vi.fn() }
+    const invoice = { id: 'dn-1', invoice_number: 'FS-2026001', document_type: 'delivery_note' as const }
+
+    await expect(ensureInvoiceNumber(supabase as never, 'company-1', invoice)).resolves.toBe('FS-2026001')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses an offert without its OF- number instead of drawing from the invoice series', async () => {
+    const supabase = { rpc: vi.fn(), from: vi.fn() }
+    const invoice = { id: 'q-1', invoice_number: null as string | null, document_type: 'quote' as const }
+
+    await expect(ensureInvoiceNumber(supabase as never, 'company-1', invoice)).rejects.toThrow('Failed to assign invoice number')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(invoice.invoice_number).toBeNull()
+  })
+})

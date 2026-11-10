@@ -1,0 +1,1 @@
+[2026-11-10] Skapa faktura nu claims the schedule run on last_run_at through the cron's own compare-and-set (claimRecurringScheduleRun) and answers a lost claim 409 RECURRING_RUN_IN_PROGRESS, instead of only the page's in-flight flag: another tab or the cron made a second invoice (accounted#58).

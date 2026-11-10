@@ -202,6 +202,7 @@ function VatBookingCard({
   booked,
   draft,
   onRetry,
+  fiscalPeriodId,
 }: {
   /**
    * True when the local pre-flight checks found ERRORs. Booking stays
@@ -216,6 +217,8 @@ function VatBookingCard({
   booked?: VatSettlementExistingEntry
   draft?: VatSettlementExistingEntry
   onRetry: () => void
+  /** Helårsmoms: the räkenskapsår the proposal was built for. */
+  fiscalPeriodId?: string
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -339,6 +342,17 @@ function VatBookingCard({
                 <JournalEntryForm
                   bare
                   sourceType="vat_settlement"
+                  // The period this settles: the route refuses it when the
+                  // period is already booked (another tab, an approved agent
+                  // proposal) and keys the verifikat on it (accounted#58).
+                  extraBody={{
+                    vat_settlement_period: {
+                      period_type: proposal.period.type,
+                      year: proposal.period.year,
+                      period: proposal.period.period,
+                      ...(fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {}),
+                    },
+                  }}
                   initialDate={proposal.entry_date}
                   initialDescription={proposal.description}
                   initialLines={initialLines}
@@ -1543,6 +1557,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               booked={settlement.booked}
               draft={settlement.draft}
               onRetry={() => setSettlementRefreshKey((k) => k + 1)}
+              fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
             />
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>
