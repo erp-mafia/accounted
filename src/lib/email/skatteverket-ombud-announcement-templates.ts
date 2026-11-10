@@ -37,7 +37,7 @@ export const SKV_OMBUD_ANNOUNCEMENT_SUBJECT = 'Nu slipper du logga in med BankID
 
 /** The settings button as the page labels it (settings_skatteverket_connect.system_deeplink). */
 export function ombudButtonLabel(appName: string): string {
-  return `Utse ${appName} som ombud för företaget`
+  return `Utse ${appName} som ombud`
 }
 
 const SERIF = `Georgia, 'Times New Roman', serif`
