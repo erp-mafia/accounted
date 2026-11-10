@@ -5281,6 +5281,15 @@ const BANK_SELECTION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankkopplingen är inte aktiv, så bokföringskontot kan inte bytas nu. Välj konton eller förnya kopplingen under Inställningar > Kopplingar och byt sedan. Inget sparades.',
     message_en: 'The bank connection is not active, so the ledger account cannot be changed now. Choose the accounts or renew the connection under Settings > Connections, then change it. Nothing was saved.',
   },
+  // The change would carry the bank account's invoice payee details to the
+  // row on its new ledger account (crm#1445), and those are owner/admin only
+  // (cash_accounts_payee_admin_only). Refused before anything is written
+  // (crm#1683); the service names the account and ledgers in its own sentence.
+  BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY: {
+    httpStatus: 403,
+    message_sv: 'Bytet av bokföringskonto flyttar också betalningsuppgifterna för fakturor, och dem kan bara företagets ägare eller en administratör ändra. Inget sparades. Be en ägare eller administratör att göra bytet.',
+    message_en: 'The ledger account change also moves the invoice payment details, which only the company owner or an administrator can change. Nothing was saved. Ask an owner or administrator to make the change.',
+  },
 }
 
 const BANK_SYNC: Record<string, StructuredErrorEntry> = {

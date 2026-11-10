@@ -20,6 +20,7 @@ vi.mock('@/lib/composition/ledger-move-twins', () => ({
 }))
 
 import { changeBankAccountLedgers, changeCashAccountLedgers } from '../ledger-change'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const COMPANY = 'company-1'
 const CONNECTION = 'conn-1'
@@ -51,6 +52,9 @@ function setup(options: {
   unbooked?: number
   readError?: { code: string; message: string }
   saveError?: { code: string; message: string; details?: string }
+  /** cash_account_retirement_dependencies() per cash account id. */
+  dependencies?: Record<string, string[]>
+  dependenciesError?: { code: string; message: string }
 }) {
   const mock = createTableMockSupabase({
     'rpc:read_bank_configuration': options.readError
@@ -74,6 +78,12 @@ function setup(options: {
     'rpc:save_bank_account_selection': options.saveError
       ? { error: options.saveError }
       : { data: { status: 'active', accounts: options.accounts } },
+  })
+  // Answered per row: the service asks one row at a time.
+  mock.setTable('rpc:cash_account_retirement_dependencies', () => {
+    if (options.dependenciesError) return { error: options.dependenciesError }
+    const args = mock.findCalls('rpc:cash_account_retirement_dependencies', 'rpc').at(-1)?.[0] as { p_cash_account_id: string }
+    return { data: options.dependencies?.[args.p_cash_account_id] ?? [] }
   })
   const ctx = { supabase: mock.supabase as unknown as SupabaseClient, companyId: COMPANY, userId: 'user-1', log }
   const saved = () => mock.findCall('rpc:save_bank_account_selection', 'rpc')?.[0] as { p_selections: unknown[] } | undefined
@@ -357,6 +367,121 @@ describe('changeBankAccountLedgers', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'CASH_ACCOUNT_LEDGER_CLAIMED' })
     expect(!outcome.ok && (outcome.error as Error).message).toContain('Sparkonto')
     expect(emit).not.toHaveBeenCalled()
+  })
+
+  // crm#1683: the account's own row is the invoice payee, and the move lands
+  // on the statement account already on 1930, so the save carries the payee
+  // details there (crm#1445). That part is owner/admin only: a member got
+  // the database's generic "kontakta supporten" refusal at the save.
+  describe('a move that carries the invoice payee details', () => {
+    const PAYEE = ['invoice-configuration', 'invoice-default']
+    const accounts = [account('1111')]
+    const cash = [cashRow('cash-a', '1111', '1935'), cashRow('cash-file', null, '1930')]
+    const ask = { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1930' }] }
+
+    function asMember() {
+      requireCompanyAdmin.mockImplementation(async (_ctx: unknown, messageSv: string) => ({
+        ok: false, code: 'FORBIDDEN', messageSv, details: { required_roles: ['owner', 'admin'] },
+      }))
+    }
+
+    it('tells a member on the preview that an owner or admin makes it, naming the account and ledger accounts', async () => {
+      asMember()
+      const { ctx, saved } = setup({ accounts, cash, dependencies: { 'cash-a': PAYEE } })
+
+      const outcome = await changeBankAccountLedgers(ctx, ask, { dryRun: true })
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY',
+        details: { required_roles: ['owner', 'admin'] },
+      })
+      expect(!outcome.ok && outcome.messageSv).toBe(
+        'Bytet av bankkontot Konto 1111 (Testbanken ••1111) från 1935 till 1930 flyttar också betalningsuppgifterna för fakturor, '
+          + 'och dem kan bara företagets ägare eller en administratör ändra. Inget sparades. Be en ägare eller administratör att göra bytet.',
+      )
+      expect(saved()).toBeUndefined()
+    })
+
+    it('refuses a member before anything is written', async () => {
+      asMember()
+      const { ctx, saved } = setup({ accounts, cash, dependencies: { 'cash-a': ['invoice-configuration', 'reconciliation'] } })
+
+      const outcome = await changeBankAccountLedgers(ctx, ask)
+
+      expect(outcome).toMatchObject({ ok: false, code: 'BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY' })
+      expect(saved()).toBeUndefined()
+      expect(prepareTwins).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalled()
+    })
+
+    it('lets an owner or admin make it', async () => {
+      const { ctx, saved } = setup({ accounts, cash, dependencies: { 'cash-a': PAYEE } })
+
+      const outcome = await changeBankAccountLedgers(ctx, ask)
+
+      expect(outcome.ok).toBe(true)
+      expect(requireCompanyAdmin).toHaveBeenCalledTimes(1)
+      expect(saved()).toBeDefined()
+    })
+
+    it('carries the payee to the row of the same physical account on the ledger too', async () => {
+      asMember()
+      const { ctx } = setup({
+        accounts,
+        cash: [cashRow('cash-a', '1111', '1935'), cashRow('old-1930', '1111', '1930', { bank_connection_id: 'conn-revoked' })],
+        dependencies: { 'cash-a': ['invoice-default'] },
+      })
+
+      expect(await changeBankAccountLedgers(ctx, ask, { dryRun: true }))
+        .toMatchObject({ ok: false, code: 'BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY' })
+    })
+
+    it('reports a failed read of the payee ties instead of guessing, saving nothing', async () => {
+      const { ctx, saved } = setup({ accounts, cash, dependenciesError: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+      const outcome = await changeBankAccountLedgers(ctx, ask)
+
+      expect(outcome).toMatchObject({ ok: false, code: 'INTERNAL_ERROR' })
+      expect(saved()).toBeUndefined()
+    })
+
+    // Not the role's question: the payee stays on its row, or the database
+    // refuses the move for everyone with its own sentence.
+    it.each([
+      ['the account has no payee details', { accounts, cash, dependencies: { 'cash-a': ['reconciliation'] } }, ask],
+      ['the row on the ledger has payee details of its own', {
+        accounts, cash, dependencies: { 'cash-a': PAYEE, 'cash-file': ['invoice-configuration'] },
+      }, ask],
+      ['issued invoices name the account', { accounts, cash, dependencies: { 'cash-a': [...PAYEE, 'invoice-reference'] } }, ask],
+      ['the new ledger account can never be printed as payee', {
+        accounts, cash: [cashRow('cash-a', '1111', '1935'), cashRow('kassa', null, '1910')], dependencies: { 'cash-a': PAYEE },
+      }, { connectionId: CONNECTION, accounts: [{ uid: '1111', ledger_account: '1910' }] }],
+      ['the account trades places with another account of the connection', {
+        accounts: [account('1111'), account('2222')],
+        cash: [cashRow('cash-a', '1111', '1935'), cashRow('cash-b', '2222', '1930')],
+        dependencies: { 'cash-a': PAYEE },
+      }, ask],
+      ['the row on the ledger is another bank account', {
+        accounts, cash: [cashRow('cash-a', '1111', '1935'), cashRow('cash-other', null, '1930', { iban: 'SE4550000000058398257466' })],
+        dependencies: { 'cash-a': PAYEE },
+      }, ask],
+      ['nothing is on the ledger account yet', {
+        accounts, cash: [cashRow('cash-a', '1111', '1935')], dependencies: { 'cash-a': PAYEE },
+      }, ask],
+    ])('asks no role when %s', async (_case, options, request) => {
+      asMember()
+      const { ctx } = setup(options)
+
+      const outcome = await changeBankAccountLedgers(ctx, request, { dryRun: true })
+
+      expect(outcome.ok).toBe(true)
+      expect(requireCompanyAdmin).not.toHaveBeenCalled()
+    })
+
+    it('is a registered 403', () => {
+      expect(getErrorEntry('BANK_LEDGER_CHANGE_PAYEE_ADMIN_ONLY')).toMatchObject({ httpStatus: 403 })
+    })
   })
 })
 
