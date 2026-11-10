@@ -83,18 +83,6 @@ export async function resolveMemberEmail(
  * Best-effort: a failed read logs and resolves to no recipients.
  */
 export async function resolveCompanyAdminEmails(supabase: SupabaseClient, companyId: string): Promise<string[]> {
-  return [...new Set((await resolveCompanyAdminRecipients(supabase, companyId)).map((r) => r.email))]
-}
-
-/**
- * resolveCompanyAdminEmails with the person behind each address, for a sender
- * that logs who got a mail (the one-time announcements). One entry per
- * person, the email trimmed and lower-cased.
- */
-export async function resolveCompanyAdminRecipients(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<Array<{ userId: string; email: string }>> {
   const { data: members, error: memberError } = await supabase
     .from('company_members')
     .select('user_id, role')
@@ -115,13 +103,13 @@ export async function resolveCompanyAdminRecipients(
     log.warn('could not read profile emails for notification recipients', { companyId, error: profileError.message })
     return []
   }
-  const recipients: Array<{ userId: string; email: string }> = []
+  const emails = new Set<string>()
   for (const profile of (profiles ?? []) as Array<{ id: string; email: string | null; deleted_at: string | null }>) {
     if (profile.deleted_at) continue
     const email = profile.email?.trim().toLowerCase()
-    if (email) recipients.push({ userId: profile.id, email })
+    if (email) emails.add(email)
   }
-  return recipients
+  return [...emails]
 }
 
 /**

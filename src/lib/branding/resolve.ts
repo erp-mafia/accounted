@@ -181,27 +181,14 @@ export async function resolveBrandResultByHost(
 /**
  * Look up the brand a company's outbound artifacts should carry:
  * companies.team_id -> brands.team_id. Null when the company does not exist,
- * has no team, or its team has no brand, and also when the lookup failed.
+ * has no team, or its team has no brand.
  */
 export async function resolveBrandForCompany(companyId: string): Promise<Brand | null> {
-  return (await resolveBrandResultForCompany(companyId)).brand
-}
-
-/**
- * resolveBrandForCompany that tells "no brand" from "the lookup failed", as
- * resolveBrandResultByHost does for hosts. A caller whose mail cannot be
- * taken back (a one-time announcement, logged as sent) must not send a
- * white-label company the platform's mail on a failed read; it waits for a
- * read that answers instead. A failure is not cached.
- */
-export async function resolveBrandResultForCompany(
-  companyId: string,
-): Promise<{ brand: Brand | null; lookupFailed: boolean }> {
-  if (!companyId) return { brand: null, lookupFailed: false }
+  if (!companyId) return null
 
   const key = `company:${companyId}`
   const hit = readCache(key)
-  if (hit) return { brand: hit.value, lookupFailed: false }
+  if (hit) return hit.value
 
   const supabase = createServiceClientNoCookies()
   const { data: company, error: companyError } = await supabase
@@ -210,12 +197,12 @@ export async function resolveBrandResultForCompany(
     .eq('id', companyId)
     .maybeSingle()
 
-  if (companyError) return { brand: null, lookupFailed: true }
+  if (companyError) return null
 
   const teamId = (company as { team_id: string | null } | null)?.team_id ?? null
   if (!teamId) {
     writeCache(key, null)
-    return { brand: null, lookupFailed: false }
+    return null
   }
 
   const { data, error } = await supabase
@@ -224,11 +211,11 @@ export async function resolveBrandResultForCompany(
     .eq('team_id', teamId)
     .maybeSingle()
 
-  if (error) return { brand: null, lookupFailed: true }
+  if (error) return null
 
   const brand = data ? mapRow(data as BrandRow) : null
   writeCache(key, brand)
-  return { brand, lookupFailed: false }
+  return brand
 }
 
 /**

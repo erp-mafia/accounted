@@ -1686,7 +1686,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'in-flight browser OAuth flow state (migration 20260907120000): state, origin, encrypted PKCE verifier and handoff; consumed by the callback, not räkenskapsinformation',
   notification_log: 'notification dedup log',
   bank_switch_notifications: 'send log of the bank switch campaign mails (announcement, reminders, byrå nudge), not räkenskapsinformation',
-  company_announcement_mails: 'send log of one-time announcement mails (who got which announcement about which company), not räkenskapsinformation',
   operations: 'staged-operation workflow state',
   payment_match_log: 'derived matching log',
   pending_operations: 'staged-operation workflow state',
