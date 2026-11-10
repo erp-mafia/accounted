@@ -4415,9 +4415,12 @@ async function commitCreditSupplierInvoice(
   // The same service as the dashboard and v1 routes (issue #2980): the MCP
   // copy of this flow never stopped periodisering schedules or carried the
   // reverse-charge rate and SLP flag onto the credit note. Only the inputs
-  // gnubok_credit_supplier_invoice stages are passed on.
+  // gnubok_credit_supplier_invoice stages are passed on: the inbox item and
+  // the credit note's date (crm#1733), so the approval books on the date the
+  // staged preview showed.
   const parsed = CreditSupplierInvoiceInputSchema.safeParse({
     ...(typeof params.inbox_item_id === 'string' ? { inbox_item_id: params.inbox_item_id } : {}),
+    ...(typeof params.credit_date === 'string' ? { credit_date: params.credit_date } : {}),
   })
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Invalid params', errorCode: 'VALIDATION_ERROR', status: 400 }

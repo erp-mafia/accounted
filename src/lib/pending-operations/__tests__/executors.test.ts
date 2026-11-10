@@ -1309,6 +1309,72 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
     )
   })
 
+  it('books the credit on the staged credit_date (crm#1733)', async () => {
+    const original = {
+      ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered', subtotal: 1000, vat_amount: 250, total: 1250 }),
+      supplier: { name: 'Office Depot AB', supplier_type: 'swedish_business' },
+      items: [
+        {
+          sort_order: 0,
+          description: 'Office supplies',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 1000,
+          line_total: 1000,
+          account_number: '5410',
+          vat_code: null,
+          vat_rate: 25,
+          vat_amount: 250,
+          dimensions: {},
+        },
+      ],
+    }
+    const creditNote = makeSupplierInvoice({ id: 'supplier-credit-1', is_credit_note: true, credited_invoice_id: original.id })
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-1' }, error: null }, // CAS claim
+      { data: original, error: null },
+      { data: { bookkeeping_locked_through: null }, error: null }, // lock date
+      { data: null, error: null }, // fiscal period: none covering, not locked
+      { data: { accounting_method: 'accrual' }, error: null },
+      { data: 2, error: null }, // arrival number
+      { data: creditNote, error: null }, // credit note insert
+      { data: null, error: null }, // items insert
+      { data: null, error: null }, // link the verifikat
+      { data: { id: original.id }, error: null }, // flip the original
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ])
+    vi.mocked(createSupplierCreditNoteEntry).mockResolvedValueOnce({ id: 'je-1' } as never)
+
+    const op = makePendingOp({
+      operation_type: 'credit_supplier_invoice',
+      params: { supplier_invoice_id: original.id, credit_date: '2024-09-12' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const inserted = findCall('supplier_invoices', 'insert')?.[0] as { invoice_date: string; due_date: string }
+    expect(inserted).toMatchObject({ invoice_date: '2024-09-12', due_date: '2024-09-12' })
+  })
+
+  it('refuses a malformed staged credit_date at commit and writes nothing', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: { id: 'op-1' }, error: null }])
+
+    const op = makePendingOp({
+      operation_type: 'credit_supplier_invoice',
+      params: { supplier_invoice_id: 'supplier-invoice-1', credit_date: '12/09/2024' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createSupplierCreditNoteEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses a partial inbox credit note at commit and writes nothing', async () => {
     const original = {
       ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered', total: 1250 }),
