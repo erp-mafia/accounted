@@ -43,6 +43,7 @@ import {
 } from './sie-object-balances'
 import { carriesObjectBalances, fetchAccumulatingDimensions } from '@/lib/bookkeeping/dimension-carry'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 // Re-export from the parser (moved there to avoid an import cycle:
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
@@ -140,13 +141,13 @@ export async function checkDuplicateImport(
 ): Promise<SIEImport | null> {
   const fileHash = await calculateFileHash(fileContent)
 
-  const { data } = await supabase
-    .from('sie_imports')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('file_hash', fileHash)
-    .eq('status', 'completed')
-    .single()
+  const { data } = await whereSieImportInPlace(
+    supabase
+      .from('sie_imports')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('file_hash', fileHash),
+  ).single()
 
   return data as SIEImport | null
 }
@@ -178,11 +179,12 @@ export async function findOverlappingPeriodImports(
   // keeps the pagination order total.
   const rows = await fetchAllRows<SIEImport>(
     ({ from, to }) =>
-      supabase
-        .from('sie_imports')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('status', 'completed')
+      whereSieImportInPlace(
+        supabase
+          .from('sie_imports')
+          .select('*')
+          .eq('company_id', companyId),
+      )
         .lte('fiscal_year_start', fiscalYearEnd)
         .gte('fiscal_year_end', fiscalYearStart)
         .order('imported_at', { ascending: false, nullsFirst: false })

@@ -131,7 +131,7 @@ function makeClient(state: ClientState) {
       }
 
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range', 'is']
+      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range', 'is', 'or']
       for (const method of passthrough) chain[method] = vi.fn(() => chain)
       chain.in = vi.fn((col: string, values: unknown[]) => {
         if (col === 'id') idIn = values

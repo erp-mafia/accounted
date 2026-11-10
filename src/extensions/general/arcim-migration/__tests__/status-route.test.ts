@@ -54,6 +54,7 @@ import { arcimMigrationExtension } from '../index'
 import { listConsents } from '../lib/provider-client'
 import { readProviderKeyUseFacts } from '../lib/key-use'
 import { createServiceClient } from '@/lib/supabase/server'
+import { SIE_IMPORT_IN_PLACE_JOB_FILTER } from '@/lib/bookkeeping/sie-import-in-place'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
   (r) => r.method === 'GET' && r.path === '/status',
@@ -90,6 +91,10 @@ function buildSupabase(opts: { history: Row[]; latestCompleted: Row | null; user
     chain.select = vi.fn(() => chain)
     chain.eq = vi.fn((column: string, value: unknown) => {
       q.filters.push([column, value])
+      return chain
+    })
+    chain.or = vi.fn((filters: string) => {
+      q.filters.push(['or', filters])
       return chain
     })
     chain.order = vi.fn(() => chain)
@@ -153,6 +158,12 @@ function buildService(tables: Record<string, Row[]>) {
       rows = rows.filter((r) => String(r[column]) > value)
       return chain
     })
+    // The one or() the route asks: the job half of whereSieImportInPlace.
+    chain.or = vi.fn((filters: string) => {
+      if (filters !== SIE_IMPORT_IN_PLACE_JOB_FILTER) throw new Error(`unexpected or(${filters})`)
+      rows = rows.filter((r) => r.job_state == null || (r.job_state === 'completed' && (r.job_kind ?? 'import') === 'import'))
+      return chain
+    })
     chain.order = vi.fn((column: string, opts?: { ascending?: boolean }) => {
       const dir = opts?.ascending === false ? -1 : 1
       rows.sort((a, b) => (String(a[column]) < String(b[column]) ? -dir : dir))
@@ -199,6 +210,8 @@ describe('GET /status: completed SIE import', () => {
     )
     expect(completedQuery).toBeDefined()
     expect(completedQuery!.filters).toContainEqual(['company_id', 'company-1'])
+    // In place: not an import being undone, not a duplicate repair row.
+    expect(completedQuery!.filters).toContainEqual(['or', 'job_state.is.null,and(job_state.eq.completed,job_kind.eq.import)'])
     expect(completedQuery!.limit).toBe(1)
     expect(completedQuery!.single).toBe(true)
   })
@@ -283,6 +296,20 @@ describe('GET /status: unfinished connect', () => {
 
     expect(res.status).toBe(200)
     expect(body.unfinishedConnect).toBeNull()
+  })
+
+  it('still reports the attempt when the SIE import after it is being undone', async () => {
+    // request_sie_import_undo leaves status 'completed': the job is the state.
+    const { res } = await statusWith({
+      provider_consents: [attempt()],
+      sie_imports: [{
+        id: 'sie-new', company_id: 'company-1', status: 'completed', job_state: 'undoing', job_kind: 'import', created_at: minutesAgo(60),
+      }],
+    })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toMatchObject({ provider: 'fortnox' })
   })
 
   it('answers null for an attempt younger than 30 minutes', async () => {

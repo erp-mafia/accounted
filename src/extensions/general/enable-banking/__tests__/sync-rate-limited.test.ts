@@ -62,7 +62,7 @@ if (!syncRoute) {
 function makeContext(connection: Record<string, unknown>, updateSpy: Mock): ExtensionContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {}
-  for (const m of ['select', 'eq', 'gte', 'lt', 'limit', 'order']) chain[m] = vi.fn(() => chain)
+  for (const m of ['select', 'eq', 'or', 'gte', 'lt', 'limit', 'order']) chain[m] = vi.fn(() => chain)
   chain.single = vi.fn().mockResolvedValue({ data: connection, error: null })
   chain.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
   chain.update = vi.fn((payload: unknown) => {

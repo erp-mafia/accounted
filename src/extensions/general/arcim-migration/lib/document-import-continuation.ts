@@ -54,6 +54,7 @@ import {
   type DocumentImportRunFacts,
   type DocumentImportRunSummary,
 } from './document-import-run'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 const log = createLogger('extensions/arcim-migration/document-import-continuation')
 
@@ -153,11 +154,12 @@ async function driverContext(
       .select('id, provider, created_at')
       .eq('company_id', row.company_id)
       .eq('status', 1),
-    supabase
-      .from('sie_imports')
-      .select('imported_at, created_at')
-      .eq('company_id', row.company_id)
-      .eq('status', 'completed')
+    whereSieImportInPlace(
+      supabase
+        .from('sie_imports')
+        .select('imported_at, created_at')
+        .eq('company_id', row.company_id),
+    )
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),

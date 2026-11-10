@@ -35,6 +35,7 @@ import { chunk } from '@/lib/utils'
 import type { Transaction } from '@/types'
 import { syncAccountTransactions, type IngestFn, type SyncOptions, type SyncResult } from './sync'
 import type { StoredAccount } from '../types'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 const errorLog = createLogger('enable-banking/run-connection-sync')
 
@@ -113,11 +114,12 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
   const { supabase, companyId, userId, connection, accounts, fromDate, toDate, log } = input
   const rawInsertOnly = input.rawInsertOnly === true
 
-  const { data: sieImport, error: sieOverlapError } = await supabase
-    .from('sie_imports')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
+  const { data: sieImport, error: sieOverlapError } = await whereSieImportInPlace(
+    supabase
+      .from('sie_imports')
+      .select('id')
+      .eq('company_id', companyId),
+  )
     .gte('fiscal_year_end', fromDate)
     .limit(1)
     .maybeSingle()

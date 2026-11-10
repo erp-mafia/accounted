@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderName } from './types'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /**
  * A connect attempt younger than this may still be in progress: the customer
@@ -71,11 +72,12 @@ export async function findUnfinishedConnect(
       .select('provider, created_at')
       .eq('company_id', companyId)
       .eq('status', 1),
-    service
-      .from('sie_imports')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('status', 'completed')
+    whereSieImportInPlace(
+      service
+        .from('sie_imports')
+        .select('id')
+        .eq('company_id', companyId),
+    )
       .gt('created_at', attempt.created_at)
       .limit(1),
   ])

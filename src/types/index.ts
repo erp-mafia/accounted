@@ -147,6 +147,7 @@ export type FiscalYearResetBlockerCode =
   | 'cross_year_reference'
   | 'retained_import_history'
   | 'unfinished_import'
+  | 'sie_import_in_place'
 
 export interface FiscalYearResetBlocker {
   code: FiscalYearResetBlockerCode

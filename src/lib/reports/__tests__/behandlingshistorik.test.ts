@@ -22,6 +22,7 @@ import {
   formatVerifiedLabel,
   generateBehandlingshistorik,
   rattelseEvent,
+  sieImportEvents,
   sortEvents,
   type RawBehandlingshistorikEvent,
 } from '../behandlingshistorik'
@@ -1195,6 +1196,235 @@ describe('generateBehandlingshistorik', () => {
         code: '57014',
       })
     }
+  })
+})
+
+// ============================================================
+// SIE imports: the job is the lifecycle (#200)
+// ============================================================
+
+type SieRow = Parameters<typeof sieImportEvents>[0]
+
+function sieRow(overrides: Partial<SieRow> = {}): SieRow {
+  return {
+    id: 's1',
+    user_id: 'user-3',
+    filename: 'bokio.se',
+    sie_type: 4,
+    fiscal_year_start: '2025-01-01',
+    fiscal_year_end: '2025-12-31',
+    accounts_count: 120,
+    transactions_count: 900,
+    status: 'completed',
+    error_message: null,
+    imported_at: '2026-01-05T10:00:00.000Z',
+    created_at: '2026-01-05T09:55:00.000Z',
+    replaced_at: null,
+    ...overrides,
+  }
+}
+
+/** A durable import job as complete_sie_import_job leaves it. */
+const completedJob: Partial<SieRow> = { job_state: 'completed', job_kind: 'import', job_phase: 'finalize', undone_at: null }
+/** The same job after undo_sie_import_chunk took its last chunk: status 'replaced', replaced_at never set. */
+const undoneJob: Partial<SieRow> = {
+  job_state: 'undone',
+  job_kind: 'import',
+  job_phase: 'undo',
+  status: 'replaced',
+  replaced_at: null,
+  undone_at: '2026-02-10T08:30:00.000Z',
+  execution_actor_id: 'user-4',
+  undo_actor_type: 'api_key',
+  undo_actor_label: 'SIE undo: Byrånyckel',
+}
+
+const summary = (events: RawBehandlingshistorikEvent[]) =>
+  events.map((e) => ({ id: e.id, occurred_at: e.occurred_at, code: e.code, event: e.event }))
+
+describe('sieImportEvents', () => {
+  it('reads a completed durable import as imported, at imported_at', () => {
+    const events = sieImportEvents(sieRow(completedJob))
+    expect(summary(events)).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T10:00:00.000Z', code: 'sie_import.completed', event: 'SIE-fil importerad' },
+    ])
+    expect(events[0].details).toEqual(['Filtyp: SIE4', 'Räkenskapsår: 2025-01-01 till 2025-12-31', '120 konton, 900 transaktioner'])
+  })
+
+  it('reads an undone durable import as imported, then undone by storno at undone_at, by who asked', () => {
+    const events = sieImportEvents(sieRow(undoneJob))
+    expect(summary(events)).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T10:00:00.000Z', code: 'sie_import.completed', event: 'SIE-fil importerad' },
+      {
+        id: 'sie:s1:undone',
+        occurred_at: '2026-02-10T08:30:00.000Z',
+        code: 'sie_import.undone',
+        event: 'SIE-import ångrad (importerade verifikationer makulerade med vändningsverifikationer (storno))',
+      },
+    ])
+    expect(events[1].actor).toEqual({ type: 'api_key', user_id: 'user-4', actor_label: 'SIE undo: Byrånyckel' })
+    // The import itself stays the importer's; the undo never says "raderade".
+    expect(events[0].actor).toEqual({ type: 'user', user_id: 'user-3', actor_label: null })
+    expect(events.map((e) => e.event).join(' ')).not.toContain('raderade')
+  })
+
+  it('names the user when the undo recorded no credential', () => {
+    const [, undo] = sieImportEvents(sieRow({ ...undoneJob, undo_actor_type: null, undo_actor_label: null }))
+    expect(undo.actor).toEqual({ type: 'user', user_id: 'user-4', actor_label: null })
+  })
+
+  it('says an undo before the time was recorded happened, without inventing a time', () => {
+    const events = sieImportEvents(sieRow({ ...undoneJob, undone_at: null }))
+    expect(summary(events)).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T10:00:00.000Z', code: 'sie_import.completed', event: 'SIE-fil importerad' },
+    ])
+    expect(events[0].details.at(-1)).toBe(
+      'Senare ångrad: importerade verifikationer makulerade med vändningsverifikationer (storno). Tidpunkten för ångringen finns inte registrerad.',
+    )
+  })
+
+  it('reads an undo in progress as the import with the undo pending, while status still says completed', () => {
+    for (const job_state of ['undoing', 'reconciling', 'paused']) {
+      const events = sieImportEvents(sieRow({ ...completedJob, job_state, job_phase: 'undo', status: 'completed' }))
+      expect(events.map((e) => e.code)).toEqual(['sie_import.completed'])
+      expect(events[0].details.at(-1)).toBe('Ångring pågår: importerade verifikationer makuleras med vändningsverifikationer (storno)')
+    }
+  })
+
+  it('reads an import undone before it completed as started, then undone', () => {
+    const events = sieImportEvents(sieRow({ ...undoneJob, imported_at: null }))
+    expect(summary(events)).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T09:55:00.000Z', code: 'sie_import.started', event: 'SIE-import påbörjad' },
+      expect.objectContaining({ code: 'sie_import.undone', occurred_at: '2026-02-10T08:30:00.000Z' }),
+    ])
+  })
+
+  it('reads a running import as started and a failed one as failed, with the error', () => {
+    expect(summary(sieImportEvents(sieRow({ job_state: 'running', job_kind: 'import', job_phase: 'vouchers', status: 'pending', imported_at: null })))).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T09:55:00.000Z', code: 'sie_import.started', event: 'SIE-import påbörjad' },
+    ])
+    const [failed] = sieImportEvents(sieRow({ job_state: 'failed', job_kind: 'import', job_phase: 'prepare', status: 'failed', imported_at: null, error_message: 'Obalanserad verifikation' }))
+    expect(failed).toMatchObject({ code: 'sie_import.failed', event: 'SIE-import misslyckades', occurred_at: '2026-01-05T09:55:00.000Z' })
+    expect(failed.details.at(-1)).toBe('Fel: Obalanserad verifikation')
+  })
+
+  it('reads a completed job as completed whatever status a fiscal-year reset wrote', () => {
+    const events = sieImportEvents(sieRow({ ...completedJob, status: 'undone', replaced_at: '2026-03-01T12:00:00.000Z' }))
+    expect(events.map((e) => e.code)).toEqual(['sie_import.completed'])
+  })
+
+  it('keeps a legacy import on status and replaced_at: its undo deleted the verifikationer', () => {
+    const events = sieImportEvents(sieRow({ status: 'undone', replaced_at: '2026-03-01T12:00:00.000Z' }))
+    expect(summary(events)).toEqual([
+      { id: 'sie:s1', occurred_at: '2026-01-05T10:00:00.000Z', code: 'sie_import.completed', event: 'SIE-fil importerad' },
+      { id: 'sie:s1:replaced', occurred_at: '2026-03-01T12:00:00.000Z', code: 'sie_import.undone', event: 'SIE-import ångrad (importerade verifikationer raderade)' },
+    ])
+  })
+
+  describe('a reviewed duplicate repair', () => {
+    const repair: Partial<SieRow> = {
+      filename: 'Granskad rättelse av dubbla SIE-verifikationer',
+      job_kind: 'duplicate_repair',
+      job_phase: 'undo',
+      accounts_count: 0,
+      transactions_count: 3,
+      imported_at: null,
+    }
+
+    it('reads as a repair, done at undone_at, never as an import', () => {
+      const events = sieImportEvents(sieRow({ ...repair, job_state: 'undone', status: 'replaced', undone_at: '2026-02-10T08:30:00.000Z' }))
+      expect(summary(events)).toEqual([
+        { id: 'sie:s1', occurred_at: '2026-01-05T09:55:00.000Z', code: 'sie_import.repair_started', event: 'Granskad rättelse av dubbla SIE-verifikationer påbörjad' },
+        {
+          id: 'sie:s1:repaired',
+          occurred_at: '2026-02-10T08:30:00.000Z',
+          code: 'sie_import.repair_completed',
+          event: 'Granskad rättelse av dubbla SIE-verifikationer slutförd (dubbletterna makulerade med vändningsverifikationer)',
+        },
+      ])
+      expect(events[0].details).toEqual(['Räkenskapsår: 2025-01-01 till 2025-12-31', 'Dubbla verifikationer att makulera: 3'])
+    })
+
+    it('reads a stopped repair as stopped at its stop time, though its status says completed', () => {
+      const events = sieImportEvents(sieRow({
+        ...repair, job_state: 'completed', status: 'completed', repair_outcome: 'stopped', repair_stopped_at: '2026-02-09T16:00:00.123456+00:00',
+      }))
+      expect(summary(events)).toEqual([
+        expect.objectContaining({ code: 'sie_import.repair_started' }),
+        { id: 'sie:s1:stopped', occurred_at: '2026-02-09T16:00:00.123Z', code: 'sie_import.repair_stopped', event: 'Granskad rättelse av dubbla SIE-verifikationer avbruten' },
+      ])
+    })
+
+    it('reads a repair in progress as started only', () => {
+      expect(sieImportEvents(sieRow({ ...repair, job_state: 'undoing', status: 'pending' })).map((e) => e.code)).toEqual(['sie_import.repair_started'])
+    })
+  })
+})
+
+describe('generateBehandlingshistorik: SIE imports', () => {
+  const base = () => ({
+    fiscal_periods: [{ data: period }],
+    company_settings: [{ data: { company_name: 'T', org_number: null } }],
+    company_migration_resets: [{ data: [] }, { data: [] }],
+    app_releases: [{ data: [] }],
+    bank_file_imports: [{ data: [] }],
+  })
+
+  it('shows an undone durable import as undone, at undone_at', async () => {
+    mockResults = { ...base(), sie_imports: [{ data: [sieRow({ ...undoneJob, imported_at: '2026-01-05T10:00:00.000Z' })] }] }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+    expect(report!.events.filter((e) => e.source === 'sie_import').map((e) => e.code)).toEqual(['sie_import.completed', 'sie_import.undone'])
+    const select = client.from.mock.results[client.from.mock.calls.findIndex(([t]: [string]) => t === 'sie_imports')].value.select
+    expect(select.mock.calls[0][0]).toContain('job_state')
+    expect(select.mock.calls[0][0]).toContain('undone_at')
+  })
+
+  it('reads the imports without undone_at until its migration has run', async () => {
+    mockResults = {
+      ...base(),
+      sie_imports: [
+        { data: null, error: { code: '42703', message: 'column sie_imports.undone_at does not exist' } },
+        { data: [sieRow({ ...undoneJob, undone_at: undefined })] },
+      ],
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+    const sie = report!.events.filter((e) => e.source === 'sie_import')
+    expect(sie.map((e) => e.code)).toEqual(['sie_import.completed'])
+    expect(sie[0].details.at(-1)).toContain('Senare ångrad')
+    const selects = client.from.mock.calls
+      .map(([t]: [string], i: number) => (t === 'sie_imports' ? client.from.mock.results[i].value.select.mock.calls[0][0] : null))
+      .filter(Boolean)
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('undone_at')
+  })
+
+  it('reads a stopped repair from job_result in code, with no JSON-path select', async () => {
+    mockResults = {
+      ...base(),
+      sie_imports: [{
+        data: [{
+          ...sieRow({
+            filename: 'Granskad rättelse av dubbla SIE-verifikationer', job_kind: 'duplicate_repair', job_phase: 'undo',
+            accounts_count: 0, transactions_count: 3, imported_at: null, created_at: '2026-01-05T09:55:00.000Z',
+            job_state: 'completed', status: 'completed',
+          }),
+          job_result: { repairOutcome: 'stopped', stoppedAt: '2026-02-09T16:00:00.000Z' },
+        }],
+      }],
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+    expect(report!.events.filter((e) => e.source === 'sie_import').map((e) => e.code)).toContain('sie_import.repair_stopped')
+    const select = client.from.mock.results[client.from.mock.calls.findIndex(([t]: [string]) => t === 'sie_imports')].value.select
+    expect(select.mock.calls[0][0]).toContain('job_result')
+    expect(select.mock.calls[0][0]).not.toContain('->>')
+  })
+
+  it('fails on any other read error', async () => {
+    mockResults = { ...base(), sie_imports: [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }] }
+    await expect(generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })).rejects.toMatchObject({ code: '57014' })
   })
 })
 

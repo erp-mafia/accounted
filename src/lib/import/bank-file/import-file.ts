@@ -38,6 +38,7 @@ import { recordBankFileArrival } from './arrival'
 import { dominantCurrency } from './currency-summary'
 import { toRawTransaction } from './parser'
 import type { BankFileAccountIdentity, BankFileFormatId, BankFileParseIssue, ParsedBankTransaction } from './types'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 export interface BankFileRefusal {
   ok: false
@@ -240,11 +241,12 @@ export async function importBankFile(
 
     let sieOverlap: { id: string } | null = null
     if (dateFrom) {
-      const { data } = await supabase
-        .from('sie_imports')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('status', 'completed')
+      const { data } = await whereSieImportInPlace(
+        supabase
+          .from('sie_imports')
+          .select('id')
+          .eq('company_id', companyId),
+      )
         .gte('fiscal_year_end', dateFrom)
         .limit(1)
         .maybeSingle()

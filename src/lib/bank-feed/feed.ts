@@ -47,6 +47,7 @@ import { consentFailureText, isPermanentConsentFailure } from './failure-text'
 import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
 import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } from './sync'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /** Shown on a connection whose consent is over; the bank notices surface it. */
 export const CONSENT_EXPIRED_MESSAGE = 'Samtycket till banken har löpt ut. Koppla banken igen med BankID för att fortsätta synka.'
@@ -402,11 +403,12 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     window = incrementalWindow(connection, now, limits.maxDays)
   }
   const lookbackDays = Math.max(1, Math.round((new Date(`${window.toDate}T00:00:00Z`).getTime() - new Date(`${window.fromDate}T00:00:00Z`).getTime()) / DAY_MS))
-  const { data: sieImport, error: sieOverlapError } = await supabase
-    .from('sie_imports')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
+  const { data: sieImport, error: sieOverlapError } = await whereSieImportInPlace(
+    supabase
+      .from('sie_imports')
+      .select('id')
+      .eq('company_id', companyId),
+  )
     .gte('fiscal_year_end', window.fromDate)
     .limit(1)
     .maybeSingle()

@@ -17,6 +17,7 @@ import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './pro
 import { companyMismatchMessages } from './company-mismatch-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 const CreateSchema = z.object({
   consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4),
@@ -224,8 +225,8 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
         .eq('id', body.data.consentId).eq('company_id', ctx.companyId).in('status', [0, 1]).maybeSingle()
       if (consentError) return error('MIGRATION_LOOKUP_FAILED', 500)
       if (!consent) return error('PROVIDER_CONSENT_NOT_FOUND', 404)
-      const { data: imports, error: importsError } = await ctx.supabase.from('sie_imports')
-        .select('fiscal_year_start,fiscal_year_end').eq('company_id', ctx.companyId).eq('status', 'completed')
+      const { data: imports, error: importsError } = await whereSieImportInPlace(ctx.supabase.from('sie_imports')
+        .select('fiscal_year_start,fiscal_year_end').eq('company_id', ctx.companyId))
       if (importsError) return error('MIGRATION_LOOKUP_FAILED', 500)
       if (!imports?.length) return error('PROVIDER_SIE_IMPORT_REQUIRED', 400)
       const refusal = await sourceIdentityRefusal(ctx, body.data.consentId)

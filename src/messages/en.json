@@ -3016,6 +3016,7 @@
     "fy_reset_blocker_other": "The fiscal year is in a state that cannot be reset.",
     "fy_reset_blocker_retained_import": "This year contains imported accounting records that must be retained with their corrections and supporting documents. The company owner can archive the whole company and start in a new workspace. This covers every fiscal year in the company.",
     "fy_reset_blocker_unfinished_import": "An import or undo is unfinished. Complete or undo the import first.",
+    "fy_reset_blocker_sie_import_in_place": "This year has an SIE import that is still in place. Undo the import first, then the year can be reset.",
     "fy_reset_archive_action": "View archive and restart",
     "fy_reset_retained_description": "Imported accounting records and corrections are retained with their supporting documents. A restart creates a new workspace.",
     "ib_review_action": "Review opening balance",
