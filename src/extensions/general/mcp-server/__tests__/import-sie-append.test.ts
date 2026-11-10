@@ -101,3 +101,57 @@ describe('gnubok_import_sie on_existing_year', () => {
     expect(planSIEAppend).not.toHaveBeenCalled()
   })
 })
+
+// crm#1751: voucher_series was dropped from an append, so a voucher the file
+// gives no series was previewed and booked in B whatever the agent asked for,
+// and the tool had no series_map although the dashboard and v1 do.
+describe('gnubok_import_sie: the series of an append (crm#1751)', () => {
+  // A card provider's SIE 4I export: the voucher has no series and no number.
+  const SIE_4I = SIE.replace('#VER A 7 20261215 "Faktura 7"', '#VER "" "" 20261215 "Kortköp"')
+  const MAPPED_PLAN = { ...PLAN,
+    vouchers: [{ ...PLAN.vouchers[0], sourceId: '#1', series: 'A' }],
+    series: [{ source: 'N', target: 'A', exists: false, vouchers: 1 }] }
+  const paramsOf = (mock: ReturnType<typeof stage>['mock']) =>
+    (mock.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params
+
+  it('declares series_map beside voucher_series', () => {
+    const schema = importSie.inputSchema as { properties: Record<string, { type?: string }> }
+    expect(schema.properties.series_map.type).toBe('object')
+  })
+
+  it('previews the series the job books: voucher_series for a voucher without one, then the series map', async () => {
+    vi.mocked(planSIEAppend).mockResolvedValue(MAPPED_PLAN as never)
+    const { result, mock } = stage({ file_content: SIE_4I, on_existing_year: 'append', voucher_series: 'N', series_map: { N: 'A' } })
+    const staged = (await result) as { preview: { append: { series: unknown; vouchers: Array<{ series: string }> } } }
+    expect(vi.mocked(planSIEAppend).mock.calls[0][4]).toEqual({ includePossibleDuplicates: false, voucherSeries: 'N', seriesMap: { N: 'A' } })
+    expect(staged.preview.append.series).toEqual([{ source: 'N', target: 'A', exists: false, vouchers: 1 }])
+    expect(staged.preview.append.vouchers[0].series).toBe('A')
+    expect(paramsOf(mock)).toMatchObject({ on_existing_year: 'append', voucher_series: 'N', series_map: { N: 'A' } })
+  })
+
+  it('previews with voucher_series alone', async () => {
+    const { result } = stage({ file_content: SIE_4I, on_existing_year: 'append', voucher_series: 'N' })
+    await result
+    expect(vi.mocked(planSIEAppend).mock.calls[0][4]).toEqual({ includePossibleDuplicates: false, voucherSeries: 'N' })
+  })
+
+  it('previews without voucher_series when every voucher has a series of its own', async () => {
+    const { result, mock } = stage({ on_existing_year: 'append', voucher_series: 'N', series_map: { K: 'A' } })
+    await result
+    expect(vi.mocked(planSIEAppend).mock.calls[0][4]).toEqual({ includePossibleDuplicates: false, seriesMap: { K: 'A' } })
+    expect(paramsOf(mock)).toMatchObject({ series_map: { K: 'A' } })
+  })
+
+  it('refuses a series_map that is not series to series, naming the argument', async () => {
+    const { result, mock } = stage({ on_existing_year: 'append', series_map: { K: '' } })
+    await expect(result).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'series_map' }] })
+    expect(mock.findCall('pending_operations', 'insert')).toBeUndefined()
+    expect(planSIEAppend).not.toHaveBeenCalled()
+  })
+
+  it('refuses a series_map on an ordinary import instead of dropping it', async () => {
+    const { result, mock } = stage({ series_map: { K: 'A' } })
+    await expect(result).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'series_map' }] })
+    expect(mock.findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})

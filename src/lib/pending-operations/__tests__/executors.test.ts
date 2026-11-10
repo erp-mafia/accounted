@@ -1157,6 +1157,31 @@ describe('commitPendingOperation: import_sie', () => {
     expect(vi.mocked(submitSIEJob).mock.calls[0][5]).toMatchObject({ onExistingPeriod: 'append', includePossibleDuplicates: true })
   })
 
+  // crm#1751: the series the staged preview showed reach the job.
+  it('submits an append with its voucher series and series map', async () => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({ id: 'imp-2', fiscal_period_id: 'fp-1', job_state: 'queued' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1',
+      appendOp({ voucher_series: 'N', series_map: { K: 'A' } }))
+
+    expect(vi.mocked(submitSIEJob).mock.calls[0][5]).toMatchObject({ onExistingPeriod: 'append', voucherSeries: 'N', seriesMap: { K: 'A' } })
+  })
+
+  it('leaves a series map out of an ordinary import', async () => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({ id: 'imp-2', fiscal_period_id: 'fp-1', job_state: 'queued' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1',
+      appendOp({ on_existing_year: undefined, series_map: { K: 'A' } }))
+
+    expect(vi.mocked(submitSIEJob).mock.calls[0][5]).not.toHaveProperty('seriesMap')
+  })
+
   it('answers an append refusal with its code and the sentence naming the vouchers', async () => {
     const { SIEJobValidationError: RealError } = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
     const { userFacing } = await import('@/lib/errors/user-facing')

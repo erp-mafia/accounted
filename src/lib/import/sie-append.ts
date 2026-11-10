@@ -79,7 +79,7 @@ export interface SIEAppendVoucher {
 }
 
 export interface SIEAppendSeries {
-  /** The series the file's vouchers would be booked in (the file's own, or the default for series-less ones). */
+  /** The series the file's vouchers would be booked in (the file's own, or voucherSeries, default B, for series-less ones). */
   source: string
   /** The series they are booked in. */
   target: string
@@ -119,6 +119,9 @@ export interface SIEAppendPlan {
 
 export interface SIEAppendOptions {
   includePossibleDuplicates?: boolean
+  /** The series for a voucher the file gives none (default B), as in a first import (crm#1751). */
+  voucherSeries?: string
+  /** Keyed by the series a voucher would be booked in: its own, or voucherSeries. */
   seriesMap?: Record<string, string>
 }
 
@@ -347,9 +350,10 @@ export async function planSIEAppend(
   const chart = await fetchAllRows<{ id: string; account_number: string }>(({ from, to }) => supabase.from('chart_of_accounts')
     .select('id,account_number').eq('company_id', companyId).order('account_number').range(from, to))
   const accountIds = new Map(chart.map(row => [row.account_number, row.id]))
-  // A voucher without a series is booked in B, the job's fallback with no
-  // voucherSeries (an append seals none); the series map moves it.
-  const prepared = prepareSIEVouchers(parsed, accountMap, 'B', PREVIEW_IMPORT_ID, { startOrdinal: 0, accountIds })
+  // A voucher without a series is booked in voucherSeries, B without one,
+  // the job's own fallback (crm#1751); the series map moves it.
+  const prepared = prepareSIEVouchers(parsed, accountMap, options.voucherSeries ?? 'B', PREVIEW_IMPORT_ID,
+    { startOrdinal: 0, accountIds })
   const verdicts = await readSIEAppendVerdicts(supabase, companyId, period.id, parsed.header.program ?? null,
     prepared.preparedEntries)
   const selection = selectSIEAppendEntries(prepared.preparedEntries, verdicts, ordinal => parsed.vouchers[ordinal],

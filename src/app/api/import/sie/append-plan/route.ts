@@ -17,6 +17,7 @@ export const maxDuration = 300
 /** The options the plan reads; every other import option is the job's. */
 const AppendPlanOptionsSchema = SIEJobOptionsSchema.pick({
   includePossibleDuplicates: true,
+  voucherSeries: true,
   seriesMap: true,
 })
 

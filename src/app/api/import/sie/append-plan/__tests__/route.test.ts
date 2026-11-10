@@ -94,7 +94,7 @@ describe('POST /api/import/sie/append-plan', () => {
   it('returns the plan for the file, the given mappings and options', async () => {
     const response = await POST(request({
       file: new File([SIE], 'append.se'), mappings: JSON.stringify(MAPPINGS),
-      options: JSON.stringify({ includePossibleDuplicates: true, seriesMap: { K: 'A' } }),
+      options: JSON.stringify({ includePossibleDuplicates: true, voucherSeries: 'N', seriesMap: { K: 'A' } }),
     }), emptyParams)
     expect(response.status).toBe(200)
     expect((await response.json()).data).toEqual(PLAN)
@@ -102,7 +102,8 @@ describe('POST /api/import/sie/append-plan', () => {
     expect(companyId).toBe('company-1')
     expect(parsed.vouchers).toHaveLength(1)
     expect(mappings.map((m) => m.targetAccount)).toEqual(['1930', '3001'])
-    expect(options).toEqual({ includePossibleDuplicates: true, seriesMap: { K: 'A' } })
+    // The series for a voucher without one reaches the plan as it reaches the job (crm#1751).
+    expect(options).toEqual({ includePossibleDuplicates: true, voucherSeries: 'N', seriesMap: { K: 'A' } })
   })
 
   it('suggests the mappings the import would use when none are sent', async () => {

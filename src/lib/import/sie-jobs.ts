@@ -458,7 +458,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   }
   await resolveSIEFiscalYear(supabase,companyId,parsed)
   const appending = options.onExistingPeriod === 'append'
-  if (appending) options = appendJobOptions(options)
+  if (appending) options = appendJobOptions(options, parsed)
   else { delete options.includePossibleDuplicates; delete options.seriesMap }
   validateSIEJobInput(content, parsed, mappings, options)
   // Every door passes here (dashboard, onboarding, v1, MCP approval, provider
@@ -593,10 +593,15 @@ export function sieAppendRefusalError(refusal: SIEAppendRefusal): SIEJobValidati
  * file's IB and never renames the year's accounts; it books vouchers. The
  * same input for an identical retry, whatever the door sent.
  */
-export function appendJobOptions(options: SIEJobOptions): SIEJobOptions {
-  // A series-less voucher goes to B like the plan's preview; seriesMap moves it.
-  const { supersedesImportId: _replaced, voucherSeries: _series, openingBalanceSeries: _ibSeries, ...rest } = options
-  return { ...rest, onExistingPeriod: 'append', createFiscalPeriod: false, importOpeningBalances: false,
+export function appendJobOptions(options: SIEJobOptions, parsed: Pick<ParsedSIEFile, 'vouchers'>): SIEJobOptions {
+  // A voucher without a series in the file goes to voucherSeries, as in a
+  // first import, and the series map moves a series after that (crm#1751).
+  // Sealed only where it changes what is booked: B is the job's own fallback,
+  // and a file whose every voucher has a series uses none.
+  const { supersedesImportId: _replaced, voucherSeries, openingBalanceSeries: _ibSeries, ...rest } = options
+  const fallback = voucherSeries && voucherSeries !== 'B' && parsed.vouchers.some(v => !v.series?.trim())
+    ? { voucherSeries } : {}
+  return { ...rest, ...fallback, onExistingPeriod: 'append', createFiscalPeriod: false, importOpeningBalances: false,
     importTransactions: true, updateAccountNames: false }
 }
 
