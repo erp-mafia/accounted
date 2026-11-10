@@ -328,6 +328,9 @@ export type CoreEvent =
                                                     // Without it a 604-call outage looked identical to a typo in the logs:
                                                     // the agent was told exactly what was wrong, and we were not.
       requestId: string | number | null             // JSON-RPC request id (helps correlate with client-side logs)
+      traceId: string | null                        // W3C trace-id of the message (lib/observability/trace-context.ts): the
+                                                    // trace_id the rows it wrote carry (pending_operations, business_events,
+                                                    // suggestion_log). Older rows lack it.
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent

@@ -9,6 +9,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { expireStaleDailyBatches, resolveDailyBatchOwner } from '@/lib/pending-operations/daily-batch-staging'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
 import { checkReminderBank } from './bank'
@@ -231,7 +232,7 @@ export async function stageReminderBatch(
   if (!owner) return { status: 'no_owner', sent }
 
   const params: ReminderBatchParams = { batch_date: gathered.batchDate, items, excluded: gathered.excluded }
-  const { data: inserted, error: insertError } = await db
+  const { data: inserted, error: insertError } = await writeWithTraceId((traceId) => db
     .from('pending_operations')
     .insert({
       company_id: companyId,
@@ -252,10 +253,11 @@ export async function stageReminderBatch(
       actor_label: 'Daglig påminnelseomgång',
       risk_level: getRiskLevel(REMINDER_BATCH_TYPE),
       agent_metadata: { source: 'reminder_batch' },
+      ...traceIdColumn(traceId),
       created_at: now.toISOString(),
     })
     .select('id')
-    .single()
+    .single())
   if (insertError) {
     // Another run staged it first (one pending batch per company, one per day).
     if ((insertError as { code?: string }).code === '23505') return { status: 'already_staged', sent }

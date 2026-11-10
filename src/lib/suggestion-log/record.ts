@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { agentReasonColumn, isMissingColumnError, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
@@ -184,7 +185,7 @@ export async function recordDecisions(
   try {
     const actorType = getActor()?.type ?? 'user'
     const pendingOperationId = committingOperationId()
-    const rowsWith = (agentReason: string | null, withReviewShown: boolean) => decisions.map((d) => {
+    const rowsWith = (agentReason: string | null, withReviewShown: boolean, traceId: string | null) => decisions.map((d) => {
       const taken = snapshot.byTransaction.get(d.transactionId)
       const classified = classifyBankLineDecision({
         proposals: taken?.proposals ?? [],
@@ -213,14 +214,18 @@ export async function recordDecisions(
         confidence_band: classified.confidence_band,
         checks: d.checks ?? null,
         pending_operation_id: pendingOperationId,
+        // The request that recorded it (lib/observability/trace-context.ts).
+        ...traceIdColumn(traceId),
         ...agentReasonColumn(agentReason),
         ...(withReviewShown && typeof d.reviewShown === 'boolean' ? { review_shown: d.reviewShown } : {}),
       }
     })
     // The approved operation's reason, when an agent staged it with one.
     const insert = (withReviewShown: boolean) =>
-      writeWithAgentReason(committingAgentReason(), (agentReason) =>
-        supabase.from('suggestion_log').insert(rowsWith(agentReason, withReviewShown)),
+      writeWithTraceId((traceId) =>
+        writeWithAgentReason(committingAgentReason(), (agentReason) =>
+          supabase.from('suggestion_log').insert(rowsWith(agentReason, withReviewShown, traceId)),
+        ),
       )
     let { error } = await insert(true)
     // Without review_shown while the column is not there yet: the code is

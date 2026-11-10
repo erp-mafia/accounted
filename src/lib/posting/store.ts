@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isMissingTableError } from '@/lib/bookkeeping/business-event-link'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import type { BusinessEventCategory } from './categories'
 import type { BusinessEventEvidence } from './evidence'
 import type { BusinessEventKind } from './kinds'
@@ -76,7 +77,7 @@ export async function recordBusinessEvent(
   row: BusinessEventRow,
 ): Promise<RecordBusinessEventResult> {
   // Every column spelled out, so the schema guard checks each one.
-  const { error } = await supabase.from('business_events').insert({
+  const { error } = await writeWithTraceId((traceId) => supabase.from('business_events').insert({
     id: row.id,
     company_id: row.company_id,
     kind: row.kind,
@@ -98,7 +99,9 @@ export async function recordBusinessEvent(
     mapping_version: row.mapping_version,
     jurisdiction: row.jurisdiction,
     idempotency_key: row.idempotency_key,
-  })
+    // The request that recorded it (lib/observability/trace-context.ts).
+    ...traceIdColumn(traceId),
+  }))
   if (!error) return { status: 'recorded', id: row.id }
   if (isMissingTableError(error)) return { status: 'missing_table' }
   if (error.code === '23505') {

@@ -4,7 +4,10 @@
  * Every route under `app/api/v1/` is wrapped with `withApiV1('operation.name', handler)`.
  * The wrapper provides a single audit-friendly shape for the entire v1 surface:
  *
- *   1. Generates `requestId` (`req_<uuid>`) and a child logger bound to it.
+ *   1. Generates `requestId` (`req_<uuid>`) and a child logger bound to it,
+ *      and opens the request's trace scope (lib/observability/trace-context.ts):
+ *      the trace of a valid `traceparent` header, else a new one, bound to the
+ *      logger and named on the response in `X-Trace-Id`.
  *   2. Extracts and validates the `Authorization: Bearer gnubok_sk_...` header
  *      via the existing `validateApiKey()` (atomic RPC, rate-limited).
  *   3. Resolves the required scope for the route from the v1 endpoint catalogue
@@ -82,6 +85,8 @@ import {
 } from '@/lib/auth/api-keys'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { INVOICER_API_SCOPES, INVOICER_ROLE, roleAllowsScope } from '@/lib/auth/invoicer-role'
@@ -776,10 +781,10 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
   handler: V1Handler<P>,
   options: ApiV1Options = {},
 ): (request: Request, params: P) => Promise<Response> {
-  const wrapped = async function wrapped(request: Request, params: P): Promise<Response> {
+  const handle = async function handle(request: Request, params: P, traceId: string): Promise<Response> {
     const requestId = generateRequestId()
     const start = Date.now()
-    const log = createLogger(`api/v1/${operation}`, { requestId, operation })
+    const log = createLogger(`api/v1/${operation}`, { requestId, traceId, operation })
 
     const url = new URL(request.url)
     const path = url.pathname
@@ -1334,6 +1339,10 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       else log.error('op failed', err as Error, meta)
       return response
     }
+  }
+  const wrapped = async function wrapped(request: Request, params: P): Promise<Response> {
+    const traceId = traceIdFromRequest(request)
+    return runRequestInTrace(traceId, () => handle(request, params, traceId))
   }
   return Object.assign(wrapped, {
     [V1_HANDLER_CONTRACT]: {

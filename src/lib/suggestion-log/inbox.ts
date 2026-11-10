@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
@@ -187,7 +188,7 @@ export async function recordInboxDecision(
       booked,
     })
     // The approved operation's reason, when an agent staged it with one.
-    const { error } = await writeWithAgentReason(committingAgentReason(), (agentReason) =>
+    const { error } = await writeWithTraceId((traceId) => writeWithAgentReason(committingAgentReason(), (agentReason) =>
       supabase.from('suggestion_log').insert({
         company_id: snapshot.companyId,
         kind: 'inbox_item',
@@ -203,9 +204,11 @@ export async function recordInboxDecision(
         input_hash: snapshot.inputHash ?? null,
         checks: checks ?? null,
         pending_operation_id: committingOperationId(),
+        // The request that recorded it (lib/observability/trace-context.ts).
+        ...traceIdColumn(traceId),
         ...agentReasonColumn(agentReason),
       }),
-    )
+    ))
     if (error) throw new Error(error.message)
   } catch (err) {
     log.error('failed to record inbox decision (booking unaffected)', {

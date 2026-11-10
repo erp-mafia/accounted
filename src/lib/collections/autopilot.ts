@@ -5,6 +5,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { expireStaleDailyBatches, resolveDailyBatchOwner } from '@/lib/pending-operations/daily-batch-staging'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { loadCollectionsGateFacts } from './availability'
 import { runBankCheck, type BankCheckResult } from './bank-check'
 import {
@@ -396,7 +397,7 @@ export async function stageDailyBatch(db: Pick<SupabaseClient, 'from'>, input: S
   }
   const counts = { open: 0, start: 0, approve_step: 0 }
   for (const item of gathered.items) counts[item.kind] += 1
-  const { data: inserted, error: insertError } = await db
+  const { data: inserted, error: insertError } = await writeWithTraceId((traceId) => db
     .from('pending_operations')
     .insert({
       company_id: companyId,
@@ -418,10 +419,11 @@ export async function stageDailyBatch(db: Pick<SupabaseClient, 'from'>, input: S
       actor_label: 'Daglig inkassoomgång',
       risk_level: getRiskLevel(COLLECTIONS_BATCH_TYPE),
       agent_metadata: { source: 'collections_ladder' },
+      ...traceIdColumn(traceId),
       created_at: now.toISOString(),
     })
     .select('id')
-    .single()
+    .single())
   if (insertError) {
     // Another run staged it first (one pending batch per company, one per day).
     if ((insertError as { code?: string }).code === '23505') return { status: 'already_staged', expired }

@@ -14,6 +14,8 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { startPackageForKey } from '@/lib/modules/package-doors'
@@ -140,10 +142,23 @@ function matchPath(
  * - Matches method + path pattern to registered apiRoutes
  * - Extracts path params and appends them as URL search params
  * - Builds an ExtensionContext and passes it to the handler
+ * - Runs all of it in the request's trace scope (lib/observability/trace-context.ts):
+ *   the trace of a valid `traceparent` header, else a new one, named on the
+ *   response in X-Trace-Id unless the handler named its own (the MCP
+ *   dispatch reads a trace per JSON-RPC message)
  */
 async function handleRequest(
   request: Request,
-  { params }: { params: Promise<{ path: string[] }> }
+  context: { params: Promise<{ path: string[] }> }
+): Promise<Response> {
+  const traceId = traceIdFromRequest(request)
+  return runRequestInTrace(traceId, () => dispatchRequest(request, context, traceId))
+}
+
+async function dispatchRequest(
+  request: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+  traceId: string,
 ): Promise<Response> {
   const requestId = generateRequestId()
   const start = Date.now()
@@ -160,7 +175,7 @@ async function handleRequest(
   const routePath = '/' + rest.join('/')
   const method = request.method as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
 
-  const log = dispatcherLog.child({ requestId, extensionId, routePath, method })
+  const log = dispatcherLog.child({ requestId, traceId, extensionId, routePath, method })
 
   // Look up extension
   const extension = await extensionRegistry.get(extensionId)

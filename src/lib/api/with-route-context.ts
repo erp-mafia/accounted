@@ -2,6 +2,9 @@
  * Single wrapper that gives every API route the same shape:
  *
  *   - generates a request id (`req_<uuid>`) and threads it through the logger
+ *   - opens the request's trace scope (lib/observability/trace-context.ts):
+ *     the trace of a valid `traceparent` header, else a new one, bound to the
+ *     logger and named on the response in X-Trace-Id
  *   - resolves auth via requireAuth() and (by default) the active companyId
  *   - runs the handler in the commit-actor scope as the signed-in user, so
  *     every verifikat it posts records who committed it and how
@@ -42,6 +45,8 @@ import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import { startPackageForSessionRequest } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { invoicerRouteAccess, isInvoicerRole } from '@/lib/auth/invoicer-role'
@@ -136,10 +141,10 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 ): (request: Request, params: P) => Promise<Response> {
   const { requireWrite = false, requireAdmin = false } = options
 
-  return async function wrapped(request: Request, params: P): Promise<Response> {
+  async function handle(request: Request, params: P, traceId: string): Promise<Response> {
     const requestId = generateRequestId()
     const start = Date.now()
-    const log = createLogger(`api/${operation}`, { requestId, operation })
+    const log = createLogger(`api/${operation}`, { requestId, traceId, operation })
     // Upgraded as request context resolves, so an unhandled throw in the catch
     // below is logged with the richest available { userId, companyId } context
     // (audit trail / OWASP V16), not just { requestId, operation }.
@@ -337,5 +342,10 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       else errLog.error('op failed', err as Error, meta)
       return response
     }
+  }
+
+  return async function wrapped(request: Request, params: P): Promise<Response> {
+    const traceId = traceIdFromRequest(request)
+    return runRequestInTrace(traceId, () => handle(request, params, traceId))
   }
 }

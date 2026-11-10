@@ -41,7 +41,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 async function snapshot(res: Response) {
   // The per-request id and the Server-Timing durations differ per call.
   const strip = (v: string) => v.replace(/req_[0-9a-f-]{36}/g, 'req_X').replace(/dur=\d+/g, 'dur=N')
-  const headers = [...res.headers.entries()].filter(([k]) => k !== 'x-request-id').map(([k, v]) => [k, strip(v)])
+  const headers = [...res.headers.entries()].filter(([k]) => k !== 'x-request-id' && k !== 'x-trace-id').map(([k, v]) => [k, strip(v)])
   return { status: res.status, headers, body: strip(await res.text()) }
 }
 
