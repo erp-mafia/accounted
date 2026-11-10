@@ -435,10 +435,10 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return startOver(state)
 
     case 'account_toggled':
-      return { ...state, selection: toggleAccount(state.selection, action.uid), activateError: null }
+      return { ...state, selection: toggleAccount(state.accounts, state.selection, action.uid), activateError: null }
 
     case 'ledger_set':
-      return { ...state, selection: setLedger(state.selection, action.uid, action.ledger), activateError: null }
+      return { ...state, selection: setLedger(state.accounts, state.selection, action.uid, action.ledger), activateError: null }
 
     case 'activate':
       return { ...state, activating: true, activateError: null }

@@ -564,8 +564,8 @@ describe('pollBankFeedConsent', () => {
       data: {
         state: 'valid', status: 'pending_selection', consent_expires: '2027-03-29T21:59:59Z', needs_second_consent: false,
         accounts: [
-          { uid: 'ACC003', preselected: true, enabled: true, suggested_ledger_account: '1930', matches_existing: '1930', iban: 'SE8050000000052131234567' },
-          { uid: 'ACC001', preselected: false, enabled: false, suggested_ledger_account: '1931', matches_existing: null },
+          { uid: 'ACC003', preselected: true, enabled: true, suggested_ledger_account: '1930', matches_existing: '1930', ledger_kept: false, iban: 'SE8050000000052131234567' },
+          { uid: 'ACC001', preselected: false, enabled: false, suggested_ledger_account: '1931', matches_existing: null, ledger_kept: false },
         ],
       },
     })
@@ -578,7 +578,7 @@ describe('pollBankFeedConsent', () => {
     const stored = [{ uid: 'ACC003', currency: 'SEK', enabled: true, iban: 'SE8050000000052131234567', ledger_account: '1930' }]
     const picker = stub({ bank_connections: [{ data: row({ status: 'pending_selection', accounts_data: stored, consent_attempt: { selection: { listing_only: true } } }), error: null }] })
     expect(await pollBankFeedConsent({ ...ctx, supabase: picker.supabase }, { connectionId: CONNECTION })).toMatchObject({
-      ok: true, data: { state: 'valid', needs_second_consent: true, accounts: [{ uid: 'ACC003', suggested_ledger_account: '1930', matches_existing: null }] },
+      ok: true, data: { state: 'valid', needs_second_consent: true, accounts: [{ uid: 'ACC003', suggested_ledger_account: '1930', matches_existing: null, ledger_kept: true }] },
     })
     mocks.connect.mockReturnValue(fakeConnect({ pollConsentSigning: vi.fn().mockRejectedValue(new ConsentOverError('over')) }))
     const over = stub({ bank_connections: [{ data: row(), error: null }], ...orgAnswers() })

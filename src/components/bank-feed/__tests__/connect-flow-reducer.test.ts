@@ -394,6 +394,23 @@ describe('the accounts step', () => {
     expect(edited.selection.kept.ledger).toBe('1940')
   })
 
+  it('a ticked account takes 1930 from an unticked one the server dealt it to (crm#1701)', () => {
+    const soleTrader = [
+      account({ uid: 'private', usage: 'PRIV', preselected: false, enabled: false, ledger_kept: false, suggested_ledger_account: '1930' }),
+      account({ uid: 'business', usage: 'PRIV', preselected: false, enabled: false, ledger_kept: false, suggested_ledger_account: '1935' }),
+    ]
+    const listed = run(
+      openFlow('new'),
+      { type: 'bank_picked', bank: SWEDBANK },
+      { type: 'to_bankid' },
+      { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } },
+      { type: 'polled', poll: poll({ state: 'valid', accounts: soleTrader }) },
+    )
+    const ticked = run(listed, { type: 'account_toggled', uid: 'business' })
+    expect(ticked.selection.business).toEqual({ enabled: true, ledger: '1930' })
+    expect(ticked.selection.private).toEqual({ enabled: false, ledger: '1935' })
+  })
+
   it('an activation with payments on offer goes to the payments step, otherwise to Klart', () => {
     const connection = view()
     const sync = { imported: 42 }

@@ -122,6 +122,14 @@ export interface ConsentAccountView {
   suggested_ledger_account: string | null
   /** The ledger of the cash account this company already books the same IBAN + currency on; null when none. */
   matches_existing: string | null
+  /**
+   * True when suggested_ledger_account is the number the stored account
+   * already carries (a poll repeated after a selection was saved), not one
+   * handed out now. The selection screen moves a fresh suggestion to follow
+   * what the person ticks (components/bank-feed/account-selection.ts), never
+   * a kept one.
+   */
+  ledger_kept: boolean
 }
 
 export interface PollView {
@@ -997,6 +1005,7 @@ async function accountChoices(ctx: OperationContext, accounts: readonly BankFeed
   const consent = ordered.filter((a) => a.enabled !== false && !a.ledger_account)
   for (const account of ordered) {
     let suggested: string | null = account.ledger_account ?? null
+    const kept = suggested !== null
     let existing: string | null = null
     if (!suggested) {
       const resolved = await resolvePsd2LedgerAccount(ctx.supabase, ctx.companyId, ctx.userId, {
@@ -1018,6 +1027,7 @@ async function accountChoices(ctx: OperationContext, accounts: readonly BankFeed
       enabled: account.enabled !== false,
       suggested_ledger_account: suggested,
       matches_existing: existing,
+      ledger_kept: kept,
     })
   }
   return accounts.map((a) => views.get(a.uid)!)
