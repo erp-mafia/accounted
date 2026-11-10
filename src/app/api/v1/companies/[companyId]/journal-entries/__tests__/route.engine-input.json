@@ -56,7 +56,7 @@
             "entry_date": "2026-05-12",
             "description": "Order 1001",
             "source_type": "webshop_order",
-            "source_id": "shop-1001",
+            "source_id": "00000000-0000-4000-8000-000000005001",
             "lines": [
               {
                 "account_number": "6570",

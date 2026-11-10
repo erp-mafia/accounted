@@ -59,10 +59,10 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { POST } from '../route'
 import { PATCH } from '../[id]/route'
 
-const routeParams = { params: Promise.resolve({ id: 'cust-1' }) }
+const routeParams = { params: Promise.resolve({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }) }
 
 function patch(body: Record<string, unknown>) {
-  return PATCH(createMockRequest('/api/customers/cust-1', { method: 'PATCH', body }), routeParams)
+  return PATCH(createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc', { method: 'PATCH', body }), routeParams)
 }
 
 function post(body: Record<string, unknown>) {
@@ -85,7 +85,7 @@ describe('email on POST /api/customers', () => {
     eventBus.clear()
     captured.insert.length = 0
     captured.update.length = 0
-    queryResult = { data: { id: 'cust-1', name: 'Test AB' }, error: null }
+    queryResult = { data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Test AB' }, error: null }
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     requireWriteMock.mockResolvedValue({ ok: true })
   })
@@ -147,7 +147,7 @@ describe('email on PATCH /api/customers/[id]', () => {
     eventBus.clear()
     captured.update.length = 0
     queryResult = {
-      data: { id: 'cust-1', customer_type: 'swedish_business', email: 'billing@example.test' },
+      data: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', customer_type: 'swedish_business', email: 'billing@example.test' },
       error: null,
     }
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })

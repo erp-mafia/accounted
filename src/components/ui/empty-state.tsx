@@ -95,7 +95,12 @@ export function EmptyState({
 
 // Preset empty states for common pages
 
-export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
+/**
+ * The action opens the customers page's own create dialog, so it is a
+ * handler, not a link: there is no /customers/new page, and that address
+ * opened the customer card with id "new" (a 500 from /api/customers/new).
+ */
+export function EmptyCustomers({ onAction }: { onAction: () => void }) {
   const t = useTranslations('empty')
   return (
     <EmptyState
@@ -103,7 +108,6 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
       title={t('preset_customers_title')}
       description={t('preset_customers_description')}
       actionLabel={t('preset_customers_action')}
-      actionHref={onAction ? undefined : '/customers/new'}
       onAction={onAction}
     />
   )

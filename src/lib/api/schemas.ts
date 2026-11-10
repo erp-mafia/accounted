@@ -30,6 +30,7 @@ import {
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { isUuid } from '@/lib/invariants/uuid'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { CARD_LEDGER_PATTERN, CARD_LEDGER_RANGE_TEXT, CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
@@ -2329,12 +2330,30 @@ export const CreateJournalEntryLineSchema = z.object({
     .optional(),
 }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
 
+const SOURCE_ID_NOT_UUID_MESSAGE =
+  'source_id måste vara ett UUID: id:t på posten i Accounted som verifikatet bokförs från. ' +
+  'En referens från ett annat system hör hemma i description eller notes.'
+
 export const CreateJournalEntrySchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,
   description: z.string().min(1, 'Description is required'),
   source_type: JournalEntrySourceTypeSchema.default('manual'),
-  source_id: z.string().optional(),
+  // journal_entries.source_id is a uuid column: a free-form external reference
+  // ("<provider>:<date>") reached the insert and answered 500
+  // BOOKKEEPING_DATABASE_ERROR. The shape check is lib/invariants/uuid.ts
+  // (any hex layout, not RFC version strictness), so a hyphenated uuid the
+  // column took before still passes. '' stays accepted: the engine stores it
+  // as null.
+  source_id: z
+    .string({ error: SOURCE_ID_NOT_UUID_MESSAGE })
+    .refine((value) => value === '' || isUuid(value), { error: SOURCE_ID_NOT_UUID_MESSAGE })
+    .optional()
+    .describe(
+      'Id (UUID) of the Accounted record this voucher is booked from, e.g. the bank transaction for source_type ' +
+        'bank_transaction. Not an external reference: put another system\'s reference in description or notes ' +
+        '(a retried request is recognised by its Idempotency-Key).',
+    ),
   bank_booking_context: z.array(z.object({
     transaction_id: uuid,
     cash_account_id: uuid.nullable(),

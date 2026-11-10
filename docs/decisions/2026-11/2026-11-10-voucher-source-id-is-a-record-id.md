@@ -1,0 +1,1 @@
+[2026-11-10] A voucher's source_id on the create doors must be an Accounted record id (isUuid shape, '' still null), and no external reference column was added: a POS integration's "<provider>:<date>" key answered 500; its reference belongs in description or notes, retries dedupe on Idempotency-Key.
