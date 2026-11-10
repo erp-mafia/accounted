@@ -26,6 +26,8 @@ import {
   selectSIEAppendEntries, type SIEAppendVerdict, type SIEAppendVerdictRow,
 } from '../sie-append'
 import type { SIEPreparedEntry } from '../sie-job-contract'
+import { appendJobOptions } from '../sie-jobs'
+import { prepareSIEVouchers } from '../sie-import'
 import { isYearEndAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import type { AccountMapping } from '../types'
 
@@ -227,6 +229,61 @@ describe('selectSIEAppendEntries', () => {
 
   it('throws when the books gave no verdict for an entry', () => {
     expect(() => selectSIEAppendEntries([entry(0, 'A1')], new Map(), () => balanced as never, map, {})).toThrow(/no verdict/)
+  })
+})
+
+// crm#1751: an append booked a voucher the file gives no series in B, whatever
+// series the caller chose. It follows the first import's rule now: the file's
+// own series are kept, voucherSeries (B without one) fills a missing one, and
+// the series map moves a series after that.
+describe('the series of an append (crm#1751)', () => {
+  // The file's own series A and K, and a card voucher without a series ("#2").
+  const file = () => parseSIEFile(sie(A2, CARD, K1))
+  const booked = (plan: Awaited<ReturnType<typeof planSIEAppend>>) => plan.vouchers.map((v) => [v.sourceId, v.series])
+  const base = { filename: 'append.se', createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true }
+
+  it('keeps the file\'s series and books a voucher without one in voucherSeries', async () => {
+    const plan = await planSIEAppend(books(), 'company-1', file(), mappings, { voucherSeries: 'N' })
+    expect(plan.refusal).toBeNull()
+    expect(booked(plan)).toEqual([['A2', 'A'], ['#2', 'N'], ['K1', 'K']])
+    expect(plan.series.map((s) => [s.source, s.target])).toEqual([['A', 'A'], ['K', 'K'], ['N', 'N']])
+  })
+
+  it('books a voucher without a series in B when no series is chosen', async () => {
+    const plan = await planSIEAppend(books(), 'company-1', file(), mappings)
+    expect(booked(plan)).toEqual([['A2', 'A'], ['#2', 'B'], ['K1', 'K']])
+  })
+
+  it('moves a mapped series; a series the map leaves out keeps its letter, a voucher without one its fallback', async () => {
+    const plan = await planSIEAppend(books({ series: ['A', 'N'] }), 'company-1', file(), mappings,
+      { voucherSeries: 'N', seriesMap: { K: 'A' } })
+    expect(booked(plan)).toEqual([['A2', 'A'], ['#2', 'N'], ['K1', 'A']])
+    expect(plan.series.find((s) => s.source === 'N')).toEqual({ source: 'N', target: 'N', exists: true, vouchers: 1 })
+  })
+
+  it('seals the chosen series, and the job books what the plan showed', () => {
+    const parsed = file()
+    const sealed = appendJobOptions({ ...base, voucherSeries: 'N', seriesMap: { K: 'A' }, openingBalanceSeries: 'Z',
+      supersedesImportId: '00000000-0000-0000-0000-000000000001' }, parsed)
+    expect(sealed).toMatchObject({ voucherSeries: 'N', seriesMap: { K: 'A' }, onExistingPeriod: 'append',
+      createFiscalPeriod: false, importOpeningBalances: false, importTransactions: true, updateAccountNames: false })
+    expect(sealed).not.toHaveProperty('openingBalanceSeries')
+    expect(sealed).not.toHaveProperty('supersedesImportId')
+    // The job's preparation (sie-job-preparation.ts): the sealed series as
+    // the fallback, then the append's selection with the sealed options.
+    const accountMap = new Map(ACCOUNTS.map((n) => [n, n]))
+    const prepared = prepareSIEVouchers(parsed, accountMap, sealed.voucherSeries ?? 'B', 'job-1',
+      { startOrdinal: 0, accountIds: new Map(ACCOUNTS.map((n) => [n, `acc-${n}`])) })
+    const verdicts = new Map(prepared.preparedEntries.map((e) => [e.sourceOrdinal,
+      { sourceOrdinal: e.sourceOrdinal, verdict: 'new' as const, entryId: null, voucher: null }]))
+    const selected = selectSIEAppendEntries(prepared.preparedEntries, verdicts, (o) => parsed.vouchers[o], accountMap, sealed)
+    expect(selected.entries.map((e) => [e.sourceId, e.series])).toEqual([['A2', 'A'], ['#2', 'N'], ['K1', 'A']])
+  })
+
+  it('seals no series where it books nothing differently: B, or a file whose every voucher has one', () => {
+    expect(appendJobOptions({ ...base, voucherSeries: 'B' }, file())).not.toHaveProperty('voucherSeries')
+    expect(appendJobOptions({ ...base, voucherSeries: 'N' }, parseSIEFile(sie(A2, K1)))).not.toHaveProperty('voucherSeries')
+    expect(appendJobOptions(base, file())).not.toHaveProperty('voucherSeries')
   })
 })
 

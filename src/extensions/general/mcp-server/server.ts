@@ -25827,10 +25827,11 @@ export const tools: McpTool[] = [
         import_transactions: { type: 'boolean' },
         voucher_series: { type: 'string', description: 'Series for imported vouchers without one in the file; vouchers with a series keep it' },
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
-        update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
+        update_account_names: { type: 'boolean', description: 'Use the file\'s #KONTO names for created and existing accounts (default true); false keeps BAS names' },
         only_used_accounts: { type: 'boolean' },
         confirm_org_number_mismatch: { type: 'boolean' },
         on_existing_year: { enum: ['append', 'append_with_duplicates'], description: 'Imported year: add only new vouchers' },
+        series_map: { type: 'object', description: 'Append: {"K":"A"} books series K in A' },
       },
       required: ['filename', 'mappings'],
     },
@@ -25870,7 +25871,7 @@ export const tools: McpTool[] = [
       // stage Boolean(undefined), so omitting the flags imported nothing (the
       // job refused after approval) or a first year without its IB.
       const { validateSIEJobInput, resolveSIEFiscalYear, appendJobOptions } = await import('@/lib/import/sie-jobs')
-      const { SIEImportFlagsSchema, SIEJobMappingsSchema } = await import('@/lib/api/schemas')
+      const { SIEImportFlagsSchema, SIEJobMappingsSchema, SIEJobOptionsSchema } = await import('@/lib/api/schemas')
       const flagsParse = SIEImportFlagsSchema.safeParse({
         createFiscalPeriod: args.create_fiscal_period,
         importOpeningBalances: args.import_opening_balances,
@@ -25892,6 +25893,20 @@ export const tools: McpTool[] = [
         throw badArgument('on_existing_year', "on_existing_year must be 'append' or 'append_with_duplicates' when given")
       }
       const append = onExistingYear !== undefined
+      // The series, read by the schema the dashboard and v1 routes use:
+      // voucher_series for a voucher the file gives none, an append's too
+      // (crm#1751), and an append's series_map moving a series into another.
+      const seriesParse = SIEJobOptionsSchema.pick({ voucherSeries: true, seriesMap: true })
+        .safeParse({ voucherSeries: args.voucher_series, seriesMap: args.series_map })
+      if (!seriesParse.success) {
+        throw seriesParse.error.issues[0]?.path[0] === 'seriesMap'
+          ? badArgument('series_map', 'series_map maps a series to another, e.g. {"K":"A"}, each 1 to 16 characters')
+          : badArgument('voucher_series', 'voucher_series must be 1 to 16 characters')
+      }
+      const { voucherSeries, seriesMap } = seriesParse.data
+      if (seriesMap && !append) {
+        throw badArgument('series_map', "series_map is for on_existing_year='append'; voucher_series sets the series of vouchers without one")
+      }
       const mappingsParse = SIEJobMappingsSchema.safeParse(mappings)
       if (!mappingsParse.success) {
         // submitSIEJob refuses the same mappings at approval.
@@ -25914,16 +25929,20 @@ export const tools: McpTool[] = [
       // import), voucher dates inside the fiscal year, amounts and limits.
       // submitSIEJob runs it again at approval on the same content.
       await resolveSIEFiscalYear(supabase, companyId, parsed)
-      validateSIEJobInput(fileContent, parsed, mappingsParse.data,
-        append ? appendJobOptions({ filename, ...flags }) : { filename, ...flags })
+      const jobOptions = { filename, ...flags, ...(voucherSeries ? { voucherSeries } : {}) }
+      const sealedOptions = append ? appendJobOptions(jobOptions, parsed) : jobOptions
+      validateSIEJobInput(fileContent, parsed, mappingsParse.data, sealedOptions)
       // The append's verdicts, as submitSIEJob reads them at approval: a
       // refusal (a changed voucher, another IB, a lock) stops staging here.
+      // The series the preview shows are the ones the job books.
       let appendPlan: SIEAppendPlan | null = null
       if (append) {
         const { planSIEAppend } = await import('@/lib/import/sie-append')
         const { sieAppendRefusalError } = await import('@/lib/import/sie-jobs')
         appendPlan = await planSIEAppend(supabase, companyId, parsed, mappingsParse.data, {
           includePossibleDuplicates: onExistingYear === 'append_with_duplicates',
+          ...(sealedOptions.voucherSeries ? { voucherSeries: sealedOptions.voucherSeries } : {}),
+          ...(seriesMap ? { seriesMap } : {}),
         })
         if (appendPlan.refusal) throw sieAppendRefusalError(appendPlan.refusal)
       }
@@ -25976,7 +25995,7 @@ export const tools: McpTool[] = [
           create_fiscal_period: flags.createFiscalPeriod,
           import_opening_balances: flags.importOpeningBalances,
           import_transactions: flags.importTransactions,
-          voucher_series: args.voucher_series,
+          voucher_series: voucherSeries,
           // Hosts do not always enforce inputSchema: a non-string must fall
           // back to the engine default, not crash at commit time.
           opening_balance_series:
@@ -25988,7 +26007,8 @@ export const tools: McpTool[] = [
           ...(onlyUsedAccounts ? { only_used_accounts: true } : {}),
           // Confirms only the mismatch seen here; absent when there was none.
           ...(orgCheck.mismatch ? { confirm_org_number_mismatch: true } : {}),
-          ...(append ? { on_existing_year: 'append', include_possible_duplicates: onExistingYear === 'append_with_duplicates' } : {}),
+          ...(append ? { on_existing_year: 'append', include_possible_duplicates: onExistingYear === 'append_with_duplicates',
+            ...(seriesMap ? { series_map: seriesMap } : {}) } : {}),
         },
         preview: {
           filename,

@@ -4684,6 +4684,9 @@ async function commitImportSie(
   // the literal value; the job plans again and refuses what changed since.
   const append = params.on_existing_year === 'append'
   const includePossibleDuplicates = params.include_possible_duplicates === true
+  // The append's series map as staged (crm#1751); submitSIEJob checks its
+  // shape with the schema the staging tool read it by.
+  const seriesMap = append && params.series_map !== undefined ? params.series_map as Record<string, string> : undefined
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -4695,7 +4698,8 @@ async function commitImportSie(
     job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
       filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
       confirmOrgNumberMismatch,...(onlyUsedAccounts ? { onlyUsedAccounts } : {}),
-      ...(append ? { onExistingPeriod: 'append' as const, ...(includePossibleDuplicates ? { includePossibleDuplicates } : {}) } : {}),
+      ...(append ? { onExistingPeriod: 'append' as const, ...(includePossibleDuplicates ? { includePossibleDuplicates } : {}),
+        ...(seriesMap ? { seriesMap } : {}) } : {}),
     },undefined,'sie_file',{source:'sie',via:'mcp',fetchedBy:{type:'user',user_id:userId,label:'mcp-approval'}})
   } catch (err) {
     // A refusal the job RPC raised rolled back: nothing started. It answers

@@ -1243,7 +1243,10 @@ function SIEImportWizard({
       const mode: ExistingYearMode = duplicateImportId ? existingYearMode : 'block'
       formData.append('options', JSON.stringify({...options,onExistingPeriod:mode,
         supersedesImportId:mode === 'replace' ? duplicateImportId : undefined,
-        ...(mode === 'append' ? { includePossibleDuplicates, ...(Object.keys(seriesMap).length ? { seriesMap } : {}) } : {}),
+        // An append books what its plan showed: series-less vouchers under B,
+        // moved by the plan's series map, so the review step's series stays out (crm#1751).
+        ...(mode === 'append' ? { voucherSeries: undefined, includePossibleDuplicates,
+          ...(Object.keys(seriesMap).length ? { seriesMap } : {}) } : {}),
         ...(leavesOutUnused ? { onlyUsedAccounts: true } : {})}))
 
       const res = await fetch('/api/import/sie/execute', { method: 'POST', body: formData })
