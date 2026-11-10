@@ -12334,6 +12334,8 @@
     "opening_balances_title": "Opening balances (payroll system switch)",
     "opening_balances_description": "Fill in when switching to {appName} mid-year: year-to-date figures and vacation balances from the previous payroll system.",
     "opening_balances_locked_notice": "Locked: the employee has a booked salary run. Balances unlock if that run is corrected.",
+    "opening_balances_locked_none": "Can't be entered: the employee already has a booked salary run. Correct that run to unlock the balances, and enter them before the correction is booked.",
+    "opening_balances_locked_open_run": "Open the salary run",
     "opening_balances_cutover_date": "Cutover date",
     "opening_balances_cutover_hint": "First day of the first month run in {appName} (always the 1st).",
     "opening_balances_karens": "Karens deductions last 12 months",
