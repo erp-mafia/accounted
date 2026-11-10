@@ -9,6 +9,8 @@ vi.mock('@/lib/documents/read/store', () => ({ readDocumentByPlan: vi.fn() }))
 vi.mock('@/lib/documents/classify/classify', () => ({
   classifyDocument: vi.fn(),
   loadCompanyIdentity: vi.fn(async () => ({ name: 'Exempelbolaget AB', orgNumber: null })),
+  SCHEMA_MISMATCH: 'classification did not match schema',
+  SCHEMA_MISS_RESULT: 'skipped: schema_mismatch',
 }))
 vi.mock('@/lib/documents/extract/store', () => ({ extractDocument: vi.fn() }))
 vi.mock('@/lib/arkiv/agreements/store', () => ({ deriveDocument: vi.fn() }))
@@ -156,6 +158,31 @@ describe('runDocumentJobs', () => {
     await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: period_locked' })
     expect(recordArkivUsage).not.toHaveBeenCalled()
+  })
+
+  it('settles a classification that did not match the schema on its first attempt instead of asking the same prompt five times', async () => {
+    // Prod 2026-11-09: each such job spent five model calls and gave up with the document still untyped.
+    const reason = 'classification did not match schema: confidence Too big: expected number to be <=1'
+    claim(job({ kind: 'classify', attempts: 1 }))
+    mocked(classifyDocument).mockResolvedValue({ status: 'error', reason })
+    enqueue({})
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
+    expect(classifyDocument).toHaveBeenCalledTimes(1)
+    // Done, so no claim takes it again; no run_after, and the validation message kept for whoever looks.
+    expect(lastJobUpdate()).toEqual({ status: 'done', result: 'skipped: schema_mismatch', last_error: reason, locked_at: null, locked_by: null })
+    expect(recordArkivUsage).not.toHaveBeenCalled()
+    // Reported once, on the attempt that settles it, not as a retry warning.
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith('document classification did not match schema, left for a person', expect.objectContaining({ job: 'job-1', doc: 'doc-1', attempt: 1, reason }))
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('keeps retrying any other classify failure with backoff', async () => {
+    claim(job({ kind: 'classify', attempts: 1 }))
+    mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'insert failed: deadlock detected' })
+    enqueue({})
+    await expect(run()).resolves.toMatchObject({ failed: 1 })
+    expect(lastJobUpdate()).toMatchObject({ status: 'failed', last_error: 'insert failed: deadlock detected' })
   })
 
   it('reads the rest of a capped loose-history document before extracting it when it is an acting type', async () => {

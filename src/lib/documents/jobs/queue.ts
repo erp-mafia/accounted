@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivBrainRollout, isArkivBrainEnabled } from '@/lib/arkiv/flag'
-import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/lib/documents/classify/classify'
+import { classifyDocument, loadCompanyIdentity, SCHEMA_MISMATCH, SCHEMA_MISS_RESULT, type CompanyIdentity } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { deriveDocument } from '@/lib/arkiv/agreements/store'
@@ -122,9 +122,16 @@ async function runClaimed(
       await settleJob(supabase, job, { status: 'done', result: 'skipped: period_locked', last_error: reason })
       return { kind: job.kind, result: 'skipped: period_locked' }
     }
+    const fields = { job: job.id, kind: job.kind, doc: job.document_id, company: job.company_id, attempt: job.attempts, reason }
+    // The same prompt gets the same answer: four more attempts only spend calls (prod 2026-11-09). Settled at once,
+    // and reported once, since the document stays untyped until it is read again or a person types it.
+    if (job.kind === 'classify' && reason.startsWith(SCHEMA_MISMATCH)) {
+      await settleJob(supabase, job, { status: 'done', result: SCHEMA_MISS_RESULT, last_error: reason })
+      log.error('document classification did not match schema, left for a person', fields)
+      return { kind: job.kind, result: SCHEMA_MISS_RESULT }
+    }
     const waitOut = isProviderOutage(reason)
     await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts, waitOut)).toISOString() })
-    const fields = { job: job.id, kind: job.kind, doc: job.document_id, company: job.company_id, attempt: job.attempts, reason }
     // The last attempt leaves the document unread or untyped for good: that reaches error tracking, a retry does not.
     if (job.attempts >= MAX_ATTEMPTS) log.error('document job gave up', fields)
     else log.warn('document job failed', fields)

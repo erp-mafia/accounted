@@ -306,6 +306,8 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
             name: req.schema.name,
             ...(req.schema.description ? { description: req.schema.description } : {}),
             input_schema: req.schema.jsonSchema as Anthropic.Messages.Tool['input_schema'],
+            // Opt-in per caller, so every other request stays byte-identical on the wire.
+            ...(req.schema.strict ? { strict: true } : {}),
           },
         ],
         tool_choice: { type: 'tool', name: req.schema.name },

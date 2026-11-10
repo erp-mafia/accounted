@@ -15,22 +15,25 @@ import { classifyUnclassifiedDocuments } from '../classify'
  * locked period), so asking again only spends a call: prod 2026-09-24, 29
  * such documents were classified about 300 times each in one day.
  */
-function makeSupabase(untyped: string[], alreadyAsked: string[]) {
+function makeSupabase(untyped: string[], alreadyAsked: string[], schemaMissed: string[] = []) {
   const tables: string[] = []
   const nulls: string[] = []
+  const jobFilters: Record<string, unknown> = {}
   const from = (table: string) => {
     tables.push(table)
     const api: Record<string, unknown> = {}
     const chain = () => api
-    Object.assign(api, { select: chain, eq: chain, not: chain, gt: chain, order: chain })
+    Object.assign(api, { select: chain, not: chain, gt: chain, order: chain })
+    api.eq = (k: string, v: unknown) => { if (table === 'document_jobs') jobFilters[k] = v; return api }
     api.is = (k: string) => { nulls.push(k); return api }
     api.limit = (n: number) => Promise.resolve({ data: untyped.slice(0, n).map((id) => ({ id })), error: null })
-    api.in = (_k: string, ids: string[]) => Promise.resolve({ data: alreadyAsked.filter((id) => ids.includes(id)).map((document_id) => ({ document_id })), error: null })
+    // Classify jobs the queue settled as a schema miss answer the jobs read; earlier verdicts the classifications read.
+    api.in = (_k: string, ids: string[]) => Promise.resolve({ data: (table === 'document_jobs' ? schemaMissed : alreadyAsked).filter((id) => ids.includes(id)).map((document_id) => ({ document_id })), error: null })
     // Whatever else classifyDocument reads finds nothing: the document is skipped, and counted as processed.
     api.maybeSingle = () => Promise.resolve({ data: null, error: null })
     return api
   }
-  return { supabase: { from } as never, tables, nulls }
+  return { supabase: { from } as never, tables, nulls, jobFilters }
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -47,6 +50,14 @@ describe('classifyUnclassifiedDocuments', () => {
     const { supabase } = makeSupabase(['a', 'b', 'c', 'd'], ['a', 'c'])
     expect((await classifyUnclassifiedDocuments(supabase, 'co-1', 10)).processed).toBe(2)
     expect((await classifyUnclassifiedDocuments(makeSupabase(['a', 'b', 'c', 'd'], []).supabase, 'co-1', 3)).processed).toBe(3)
+  })
+
+  it('does not ask again about a document whose answer the queue settled as a schema miss', async () => {
+    // The same prompt gets the same answer: every five minutes would be 288 paid calls a day for one document.
+    const { supabase, jobFilters } = makeSupabase(['a', 'b', 'c'], ['a'], ['b'])
+    expect((await classifyUnclassifiedDocuments(supabase, 'co-1', 10)).processed).toBe(1)
+    expect(jobFilters).toEqual({ kind: 'classify', status: 'done', result: 'skipped: schema_mismatch' })
+    expect(await classifyUnclassifiedDocuments(makeSupabase(['b'], [], ['b']).supabase, 'co-1', 10)).toEqual({ processed: 0, classified: 0, held: 0, skipped: 0, errors: 0 })
   })
 
   it('never types a booked document in the background: it is typed when someone opens it', async () => {

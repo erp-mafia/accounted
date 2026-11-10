@@ -143,6 +143,16 @@ export interface GenerateStructuredRequest {
     description?: string
     /** JSON Schema (draft-07 subset) for the expected object. Hand-maintained by the caller. */
     jsonSchema: Record<string, unknown>
+    /**
+     * Grammar-constrained tool input on the Anthropic family (strict tool
+     * use): the answer follows jsonSchema, a refusal or a cut-off answer
+     * aside, though an enum value may still differ in case. The schema must
+     * then stay inside the structured-outputs subset (additionalProperties
+     * false on every object, no minimum/maximum or length constraints), or
+     * the request is refused. The OpenAI-compatible service ignores it and
+     * follows AI_STRICT_JSON.
+     */
+    strict?: boolean
   }
 }
 
