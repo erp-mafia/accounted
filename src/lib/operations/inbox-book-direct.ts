@@ -35,6 +35,7 @@ import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeepi
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
@@ -304,21 +305,34 @@ export async function bookInboxItemDirectly(
     // reversed verifikat), like the manual book route: a concurrent
     // booking that changed it wins. The losing verifikat is posted and
     // immutable, so it is reversed through the storno service.
-    const linkQuery = ctx.supabase
-      .from('transactions')
-      .update({
-        journal_entry_id: journalEntry.id,
-        is_business: true,
-        category: 'uncategorized',
-        // The verifikat was booked for this bank row from the document.
-        ...linkBasisColumns('user_created', proposalEvidence),
-      })
-      .eq('id', transaction.id)
-      .eq('company_id', ctx.companyId)
-    const { data: linkedRows, error: txUpdateError } = await (transaction.journal_entry_id
-      ? linkQuery.eq('journal_entry_id', transaction.journal_entry_id)
-      : linkQuery.is('journal_entry_id', null)
-    ).select('id')
+    const bankRow = transaction
+    const bookedEntryId = journalEntry.id
+    const claimBankRow = async () => {
+      const linkQuery = ctx.supabase
+        .from('transactions')
+        .update({
+          journal_entry_id: bookedEntryId,
+          is_business: true,
+          category: 'uncategorized',
+          // The verifikat was booked for this bank row from the document.
+          ...linkBasisColumns('user_created', proposalEvidence),
+        })
+        .eq('id', bankRow.id)
+        .eq('company_id', ctx.companyId)
+      return await (bankRow.journal_entry_id
+        ? linkQuery.eq('journal_entry_id', bankRow.journal_entry_id)
+        : linkQuery.is('journal_entry_id', null)
+      ).select('id')
+    }
+    // The claim's guard refuses with CASH_ACCOUNT_OPERATION_BUSY while another
+    // booking of the company is being numbered (cash-account-busy.ts). Nothing
+    // was written then and the verifikat is already posted, so the claim is
+    // tried again, as categorize does, before the verifikat is given up: a
+    // storno that hit the same lock left it posted beside an open row (#205).
+    const { data: linkedRows, error: txUpdateError } = await retryWhileCashAccountBusy(
+      claimBankRow,
+      (outcome) => isCashAccountBusy(outcome.error),
+    )
 
     if (txUpdateError || !linkedRows || linkedRows.length === 0) {
       await reverseOrphanedJournalEntry(
