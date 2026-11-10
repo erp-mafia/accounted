@@ -30,6 +30,8 @@ const request = vi.hoisted(() => ({
   claims: null as null | Record<string, unknown>,
   headers: {} as Record<string, string>,
   resolveCompany: vi.fn(async () => 'company-1'),
+  // The user's company_members rows (the layout's memberships read).
+  memberships: [] as { company_id: string; role: string }[],
 }))
 
 function countingClient() {
@@ -44,6 +46,11 @@ function countingClient() {
     },
     from: (table: string) => {
       tables.calls.push(table)
+      if (table === 'company_members') {
+        const members: Record<string, unknown> = { select: () => members, eq: () => members }
+        members.then = (resolve: (value: unknown) => void) => resolve({ data: request.memberships, error: null })
+        return members
+      }
       return chain
     },
   }
@@ -53,6 +60,11 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: async () => countingClie
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: () => request.resolveCompany() }))
 vi.mock('next/headers', () => ({ headers: async () => new Headers(request.headers) }))
 vi.mock('@/lib/sandbox/ensure-agent', () => ({ ensureSandboxAgentProfile: vi.fn() }))
+vi.mock('next/navigation', () => ({
+  redirect: (to: string) => {
+    throw new Error(`redirect:${to}`)
+  },
+}))
 
 async function freshRequest() {
   vi.resetModules()
@@ -168,5 +180,59 @@ describe('the active company of a page render', () => {
 
     await expect(getDashboardCompanyId()).resolves.toBe('company-1')
     expect(request.resolveCompany).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The invoicing-only role (lib/auth/invoicer-role.ts): the layout redirects it
+// off every other page, but Next renders the page beside the layout (and a
+// client navigation renders no layout), so a page with server reads of its
+// own sends the role away first, from the memberships the layout reads.
+describe('the invoicer guard of a page', () => {
+  beforeEach(() => {
+    tables.calls = []
+    request.claims = null
+    request.headers = { 'x-pathname': '/' }
+    request.resolveCompany.mockClear()
+    request.memberships = [
+      { company_id: 'company-1', role: 'invoicer' },
+      { company_id: 'company-2', role: 'owner' },
+    ]
+  })
+
+  it('reads the role in the active company from the memberships the layout reads, once', async () => {
+    const { getDashboardCompanyMemberships, getDashboardCompanyRole } = await freshRequest()
+
+    const [layoutRead, role] = await Promise.all([getDashboardCompanyMemberships(), getDashboardCompanyRole()])
+
+    expect(layoutRead.data).toEqual(request.memberships)
+    expect(role).toBe('invoicer')
+    expect(tables.calls.filter((t) => t === 'company_members')).toHaveLength(1)
+  })
+
+  it('reads no role without a membership in the active company', async () => {
+    request.memberships = [{ company_id: 'company-2', role: 'owner' }]
+    const { getDashboardCompanyRole } = await freshRequest()
+
+    await expect(getDashboardCompanyRole()).resolves.toBeNull()
+  })
+
+  it('sends an invoicer on Hem to the invoices', async () => {
+    const { redirectInvoicerOffPage } = await freshRequest()
+
+    await expect(redirectInvoicerOffPage()).rejects.toThrow('redirect:/invoices')
+  })
+
+  it('leaves an invoicer on an invoicing page where it is', async () => {
+    request.headers = { 'x-pathname': '/invoices' }
+    const { redirectInvoicerOffPage } = await freshRequest()
+
+    await expect(redirectInvoicerOffPage()).resolves.toBeUndefined()
+  })
+
+  it('leaves every other role on the page', async () => {
+    request.resolveCompany.mockResolvedValueOnce('company-2')
+    const { redirectInvoicerOffPage } = await freshRequest()
+
+    await expect(redirectInvoicerOffPage()).resolves.toBeUndefined()
   })
 })

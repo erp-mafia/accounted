@@ -2,10 +2,12 @@ import 'server-only'
 
 import { cache } from 'react'
 import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { ACTIVE_COMPANY_HEADER, verifyActiveCompany } from '@/lib/auth/active-company-verdict'
+import { invoicerPageRedirect } from '@/lib/auth/invoicer-role'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { loadOpenObligations, type ObligationCode } from '@/lib/modules/obligations'
@@ -79,6 +81,51 @@ export const getDashboardCompanyId = cache(async () => {
   if (!user) return null
   return (await proxyResolvedCompanyId(user.id, sessionId)) ?? getActiveCompanyId(supabase, user.id)
 })
+
+/**
+ * Request-local company memberships of the signed-in user, each with its
+ * company row embedded. The layout builds the company switcher and the
+ * active company's row and role from them, and getDashboardCompanyRole reads
+ * the role from the same rows, so a page asking for it costs no extra query.
+ */
+export const getDashboardCompanyMemberships = cache(async () => {
+  const { supabase, user } = await getDashboardAuthContext()
+  if (!user) return { data: null, error: null }
+
+  return supabase
+    .from('company_members')
+    .select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at)')
+    .eq('user_id', user.id)
+})
+
+/**
+ * Request-local role of the signed-in user in the active company. Null with
+ * no active company or no membership in it.
+ */
+export const getDashboardCompanyRole = cache(async (): Promise<string | null> => {
+  const [companyId, { data: memberships }] = await Promise.all([
+    getDashboardCompanyId(),
+    getDashboardCompanyMemberships(),
+  ])
+  if (!companyId) return null
+  return (memberships ?? []).find((m) => m.company_id === companyId)?.role ?? null
+})
+
+/**
+ * Sends an invoicer to the invoices before a page outside the role's pages
+ * reads anything (lib/auth/invoicer-role.ts). The layout redirects too, but
+ * Next renders a page in parallel with its layout, and a client navigation
+ * does not render the layout at all. A page whose own server reads go
+ * through the user's session (Hem's worklist RPCs, a capability check) would
+ * otherwise run them for a role the database does not count as a member, and
+ * log every refusal. Call it before the page's first read. On a full load it
+ * shares the layout's memberships read.
+ */
+export async function redirectInvoicerOffPage(): Promise<void> {
+  const [role, headerStore] = await Promise.all([getDashboardCompanyRole(), headers()])
+  const destination = invoicerPageRedirect(role, headerStore.get('x-pathname') ?? '')
+  if (destination) redirect(destination)
+}
 
 export interface DashboardTeamMembership {
   team_id: string

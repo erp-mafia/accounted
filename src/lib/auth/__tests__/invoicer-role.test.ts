@@ -9,6 +9,7 @@ import {
   invoicerRouteAccess,
   isAttestRole,
   isBookkeepingWriterRole,
+  invoicerPageRedirect,
   isInvoicerPagePath,
   roleAllowsScope,
 } from '../invoicer-role'
@@ -162,6 +163,31 @@ describe('isInvoicerPagePath', () => {
     expect(isInvoicerPagePath('/salary')).toBe(false)
     expect(isInvoicerPagePath('/bookkeeping')).toBe(false)
     expect(isInvoicerPagePath('/settings/members')).toBe(false)
+  })
+})
+
+describe('invoicerPageRedirect', () => {
+  it('sends an invoicer from any other page to the invoices', () => {
+    expect(invoicerPageRedirect('invoicer', '/')).toBe(INVOICER_HOME)
+    expect(invoicerPageRedirect('invoicer', '/inkorg')).toBe(INVOICER_HOME)
+    expect(invoicerPageRedirect('invoicer', '/settings/anpassa')).toBe(INVOICER_HOME)
+    expect(invoicerPageRedirect('invoicer', '/invoices/autogiro')).toBe(INVOICER_HOME)
+    // A lost pathname sends the role home, never further in.
+    expect(invoicerPageRedirect('invoicer', '')).toBe(INVOICER_HOME)
+  })
+
+  it('lets an invoicer stay on the invoicing pages, so the redirect cannot loop', () => {
+    expect(invoicerPageRedirect('invoicer', INVOICER_HOME)).toBeNull()
+    expect(invoicerPageRedirect('invoicer', `/invoices/${ID}/edit`)).toBeNull()
+    expect(invoicerPageRedirect('invoicer', '/customers')).toBeNull()
+    expect(invoicerPageRedirect('invoicer', '/settings/account')).toBeNull()
+  })
+
+  it('never moves any other role', () => {
+    for (const role of ['owner', 'admin', 'member', 'viewer', '', null, undefined]) {
+      expect(invoicerPageRedirect(role, '/')).toBeNull()
+      expect(invoicerPageRedirect(role, '/salary')).toBeNull()
+    }
   })
 })
 

@@ -18,6 +18,7 @@ import {
   getDashboardTeamMemberships,
   getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
+  redirectInvoicerOffPage,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
 import { PageHeader } from '@/components/ui/page-header'
@@ -68,6 +69,11 @@ export default async function DashboardPage() {
   const [cookieStore, teamMemberships] = await Promise.all([
     cookies(),
     getDashboardTeamMemberships(),
+    // An invoicer goes to the invoices before any Hem read below: the
+    // database does not count the role as a member, so each of them would be
+    // refused and logged. The layout's own redirect does not stop this page
+    // rendering beside it.
+    redirectInvoicerOffPage(),
   ])
   if (!cookieStore.has(COMPANY_PICKED_COOKIE)) {
     if (

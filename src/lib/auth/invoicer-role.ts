@@ -18,7 +18,11 @@
  *     user's own session, so RLS decides what it returns. These routes rely
  *     on these code checks, not on the database.
  *   - Pages (dashboard layout): a page outside INVOICER_PAGES redirects to
- *     INVOICER_HOME, and the menu shows only those pages.
+ *     INVOICER_HOME, and the menu shows only those pages. Next renders a page
+ *     in parallel with its layout, and a client navigation does not render
+ *     the layout at all, so a page whose own server reads go through the
+ *     user's session also redirects first (redirectInvoicerOffPage in the
+ *     dashboard's request-context.ts).
  *   - API keys and MCP: only INVOICER_API_SCOPES (with-api-v1 company gate,
  *     MCP company routing, the portfolio scope).
  *
@@ -180,4 +184,14 @@ export function invoicerRouteAccess(method: string, pathname: string): InvoicerR
 /** May an invoicer open this dashboard page? */
 export function isInvoicerPagePath(pathname: string): boolean {
   return PAGE_MATCHERS.some((regexp) => regexp.test(pathname))
+}
+
+/**
+ * Where a dashboard render sends a member with this role in the active
+ * company: INVOICER_HOME for an invoicer on a page outside INVOICER_PAGES,
+ * otherwise null (the page renders). An empty or unknown path counts as
+ * outside, so a lost pathname sends an invoicer home, never further in.
+ */
+export function invoicerPageRedirect(role: string | null | undefined, pathname: string): string | null {
+  return isInvoicerRole(role) && !isInvoicerPagePath(pathname) ? INVOICER_HOME : null
 }
