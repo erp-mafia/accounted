@@ -1,7 +1,7 @@
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
 import { switchOnRefusal } from '@/lib/operations/packages'
 import { AnpassaSettingsContent, type AnpassaPackage } from '@/components/settings/sections/AnpassaSettingsContent'
-import { getDashboardAuthContext, getDashboardCompanyId, getDashboardOpenObligations } from '../../request-context'
+import { getDashboardAuthContext, getDashboardCompanyId, getDashboardOpenObligations, redirectInvoicerOffPage } from '../../request-context'
 
 /**
  * Företag → Anpassa: every package with its status and a switch (Profiles
@@ -18,6 +18,8 @@ export default async function AnpassaSettingsPage({ searchParams }: { searchPara
     getDashboardAuthContext(),
     getDashboardCompanyId(),
     searchParams,
+    // An invoicer goes to the invoices before the capability reads below.
+    redirectInvoicerOffPage(),
   ])
   const capabilities = companyId
     ? await loadCompanyCapabilities(supabase, companyId, {

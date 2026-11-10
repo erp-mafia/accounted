@@ -56,11 +56,12 @@ import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
 import { readAcceptanceState } from '@/lib/legal/acceptance'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
-import { INVOICER_HOME, isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { invoicerPageRedirect, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
+  getDashboardCompanyMemberships,
   getDashboardFiscalPeriods,
   getDashboardSettings,
   getDashboardTeamMemberships,
@@ -150,7 +151,8 @@ export default async function DashboardLayout({
     // server-rendered so both are right on first paint, plus the
     // hide-assistant-FAB preference (Inställningar → Assistenten).
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
-    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, jurisdiction, ledger_currency, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    // Request-cached: a page's invoicer check reads the role from these rows.
+    getDashboardCompanyMemberships(),
     // Which legal documents the person still has to accept, and their
     // analytics choice: the acceptance prompt and whether PostHog may start.
     // Its own reads, so a failure never touches the ones above.
@@ -319,9 +321,12 @@ export default async function DashboardLayout({
 
   // The invoicing-only role opens only the invoicing pages
   // (lib/auth/invoicer-role.ts); every other page sends it to the invoices.
+  // Pages with server reads of their own redirect too
+  // (redirectInvoicerOffPage): this one does not stop them running.
   const isInvoicer = isInvoicerRole(memberRow?.role)
-  if (isInvoicer && !isInvoicerPagePath(pathname)) {
-    redirect(INVOICER_HOME)
+  const invoicerRedirect = invoicerPageRedirect(memberRow?.role, pathname)
+  if (invoicerRedirect) {
+    redirect(invoicerRedirect)
   }
 
   // Home-domain rule (WL-01): which brand serves this host, and which brand

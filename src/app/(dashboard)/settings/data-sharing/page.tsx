@@ -1,6 +1,6 @@
 import { readCompanyDataChoices } from '@/lib/legal/data-choices-store'
 import { DataSharingSettingsContent } from '@/components/settings/sections/DataSharingSettingsContent'
-import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { getDashboardAuthContext, getDashboardCompanyId, redirectInvoicerOffPage } from '../../request-context'
 
 /**
  * AI och kopplingar → Datadelning och AI: the company's AI switch and what it
@@ -9,7 +9,8 @@ import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-co
  * state rather than a guess.
  */
 export default async function DataSharingSettingsPage() {
-  const [{ supabase }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId()])
+  // An invoicer goes to the invoices before the data-choices read below.
+  const [{ supabase }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId(), redirectInvoicerOffPage()])
   const choices = companyId ? await readCompanyDataChoices(supabase, companyId).catch(() => null) : null
   return <DataSharingSettingsContent initialChoices={choices} />
 }

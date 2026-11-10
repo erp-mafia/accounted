@@ -1,0 +1,1 @@
+[2026-11-10] An invoicer is sent off a dashboard page by the page itself (redirectInvoicerOffPage) on pages with server reads of their own, not by the proxy: Next renders a page beside its layout, and a proxy check would add a role read to every page request for every user.

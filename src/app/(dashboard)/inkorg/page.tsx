@@ -7,7 +7,7 @@ import { inkorgCompany } from '@/lib/inkorg/startable'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
 import { InkorgPage } from '@/components/inkorg/InkorgPage'
-import { getDashboardAuthContext, getDashboardCompanyId, getDashboardSettings } from '../request-context'
+import { getDashboardAuthContext, getDashboardCompanyId, getDashboardSettings, redirectInvoicerOffPage } from '../request-context'
 
 /**
  * /inkorg: the new Inkorg, per company behind INKORG_V2_COMPANY_IDS.
@@ -25,7 +25,8 @@ import { getDashboardAuthContext, getDashboardCompanyId, getDashboardSettings } 
  * every package on, as the start gate does.
  */
 export default async function InkorgRoute() {
-  const [{ supabase, user }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId()])
+  // An invoicer goes to the invoices before the capability reads below.
+  const [{ supabase, user }, companyId] = await Promise.all([getDashboardAuthContext(), getDashboardCompanyId(), redirectInvoicerOffPage()])
   if (!user) redirect('/login')
   if (!companyId || !isInkorgV2Enabled(companyId)) redirect(LEGACY_INBOX_HREF)
   if (!getExtensionDefinition('general', 'invoice-inbox')) notFound()
