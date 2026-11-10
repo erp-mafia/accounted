@@ -25,12 +25,12 @@ describe('GET /api/customers/[id]: the invoices carry the status line columns', 
 
   it('selects what invoiceRowStatus reads', async () => {
     mock = createPagedMockSupabase({
-      customers: [{ id: 'c-1', name: 'Kund AB', customer_type: 'swedish_business', personal_number: null }],
+      customers: [{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Kund AB', customer_type: 'swedish_business', personal_number: null }],
       invoices: [{ id: 'inv-1', status: 'sent', due_date: '2026-09-01', remaining_amount: 500 }],
     })
     mock.supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } }, error: null })
 
-    const res = await GET(createMockRequest('/api/customers/c-1'), { params: Promise.resolve({ id: 'c-1' }) })
+    const res = await GET(createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc'), { params: Promise.resolve({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }) })
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -60,7 +60,7 @@ describe('GET /api/customers/[id]: the invoices carry the status line columns', 
     mock = createPagedMockSupabase({ customers: [] })
     mock.supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } }, error: null })
 
-    const res = await GET(createMockRequest('/api/customers/c-x'), { params: Promise.resolve({ id: 'c-x' }) })
+    const res = await GET(createMockRequest('/api/customers/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'), { params: Promise.resolve({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' }) })
     expect(res.status).toBe(404)
   })
 
@@ -68,7 +68,7 @@ describe('GET /api/customers/[id]: the invoices carry the status line columns', 
     mock = createPagedMockSupabase({ customers: [] })
     mock.supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
 
-    const res = await GET(createMockRequest('/api/customers/c-1'), { params: Promise.resolve({ id: 'c-1' }) })
+    const res = await GET(createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc'), { params: Promise.resolve({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }) })
     expect(res.status).toBe(401)
   })
 })

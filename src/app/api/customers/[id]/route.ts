@@ -9,6 +9,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { updateCustomer } from '@/lib/customers/customer-commands'
 import { customerFailureResponse } from '@/lib/customers/customer-failure-response'
+import { isUuid } from '@/lib/invariants/uuid'
 
 export const GET = withRouteContext(
   'customer.get',
@@ -16,6 +17,9 @@ export const GET = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ customerId: id })
+    // A non-UUID id (the browser on /customers/new) can never match a row:
+    // 404 before the query, which Postgres refused with a uuid parse error (500).
+    if (!isUuid(id)) return errorResponseFromCode('CUSTOMER_NOT_FOUND', opLog, { requestId })
 
     const { data, error } = await supabase
       .from('customers')
@@ -63,6 +67,7 @@ export const PATCH = withRouteContext(
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ customerId: id })
+    if (!isUuid(id)) return errorResponseFromCode('CUSTOMER_NOT_FOUND', opLog, { requestId })
 
     const result = await validateBody(request, UpdateCustomerSchema, {
       log: opLog,
@@ -91,6 +96,7 @@ export const DELETE = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ customerId: id })
+    if (!isUuid(id)) return errorResponseFromCode('CUSTOMER_NOT_FOUND', opLog, { requestId })
 
     // invoices, sales_orders, projects and deadlines reference customers
     // ON DELETE SET NULL, so the delete itself never refuses: it would leave

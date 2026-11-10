@@ -138,7 +138,7 @@ const SCENARIOS: Scenario[] = [
   { name: 'create: a manual draft', call: () => createPOST(v1('', entry({ notes: 'Från bankens avgiftsavi' })), params()) },
   {
     name: 'create: a draft an integration labels as its own (webshop_order)',
-    call: () => createPOST(v1('', entry({ description: 'Order 1001', source_type: 'webshop_order', source_id: 'shop-1001' })), params()),
+    call: () => createPOST(v1('', entry({ description: 'Order 1001', source_type: 'webshop_order', source_id: '00000000-0000-4000-8000-000000005001' })), params()),
   },
   { name: 'create: the engine refuses the draft', refuse: true, call: () => createPOST(v1('', entry()), params()) },
   {

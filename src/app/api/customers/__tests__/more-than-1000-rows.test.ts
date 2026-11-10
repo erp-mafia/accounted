@@ -27,12 +27,12 @@ describe('GET /api/customers/[id] past 1,000 invoices', () => {
 
   it("returns every one of the customer's invoices, newest first with id as tiebreaker", async () => {
     mock = createPagedMockSupabase({
-      customers: [{ id: 'c-1', name: 'Kund AB', customer_type: 'swedish_business', personal_number: null }],
+      customers: [{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Kund AB', customer_type: 'swedish_business', personal_number: null }],
       invoices: manyRows(1001, (i) => ({ id: `inv-${i}`, invoice_date: '2026-10-01' })),
     })
     mock.supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } }, error: null })
 
-    const res = await GET(createMockRequest('/api/customers/c-1'), { params: Promise.resolve({ id: 'c-1' }) })
+    const res = await GET(createMockRequest('/api/customers/cccccccc-cccc-4ccc-8ccc-cccccccccccc'), { params: Promise.resolve({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }) })
     const { status, body } = await parseJsonResponse<{ data: { invoices: unknown[] } }>(res)
 
     expect(status).toBe(200)
