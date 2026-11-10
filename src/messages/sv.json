@@ -19032,6 +19032,12 @@
     "submit": "Lägg till kort",
     "created_toast": "{name} har lagts till"
   },
+  "dispositions_tax_basis": {
+    "booked_result": "Resultat före skatt i bokföringen",
+    "zeroed_by": "Skatten blir 0 kr om de här föreslagna dispositionerna bokförs: {list}.",
+    "zeroed_without": "Utan dem blir skatten {amount}.",
+    "zeroed_skip": "Överavskrivning och avsättning till periodiseringsfond är frivilliga. Vill du hellre betala skatt i år, avmarkera dem (Hoppa över), så räknas skatten om på det som bokförs."
+  },
   "deferred_tax": {
     "title": "Uppskjuten skatt",
     "hint": "K3 kap. 29: uppskjuten skatt på skillnader mellan redovisade och skattemässiga värden, och på underskott som kan utnyttjas. Obeskattade reserver redovisas brutto och ingår inte (K3 29.37).",

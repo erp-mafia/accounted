@@ -17,6 +17,7 @@ import {
 import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
 import { buildDeferredTaxProposal, closingDeficitOf } from './tax-provision/deferred-tax-service'
 import { buildDevelopmentFundProposal } from './development-fund'
+import { explainZeroedTax } from './zeroed-tax'
 import type {
   BolagsskattBasis,
   CompletedDisposition,
@@ -302,20 +303,23 @@ export async function buildDispositionsProposal(
   })
   // The same computation on the ledger as it stands (nothing pending): what
   // the POST books for bolagsskatt when the user skips every proposal above.
+  const pending = pendingTaxBaseDispositions({
+    ateforing: ateforing.proposals,
+    overavskrivningar: overavskrivningar.proposal,
+    overavskrivningarResultEffect,
+    slp,
+    avsattning,
+  })
+  const taxAsBooked = bolagsskattDisposition(state, {
+    pendingResultEffect: 0,
+    schablonintaktAmount: ateforing.schablonintaktAmount,
+  }).amount
   const taxBasis: BolagsskattBasis = {
     bookedResultBeforeTax: state.result.beforeTax,
-    pending: pendingTaxBaseDispositions({
-      ateforing: ateforing.proposals,
-      overavskrivningar: overavskrivningar.proposal,
-      overavskrivningarResultEffect,
-      slp,
-      avsattning,
-    }),
+    pending,
     taxWithProposals: bolagsskatt.amount,
-    taxAsBooked: bolagsskattDisposition(state, {
-      pendingResultEffect: 0,
-      schablonintaktAmount: ateforing.schablonintaktAmount,
-    }).amount,
+    taxAsBooked,
+    zeroedBy: zeroingDispositions(pending, bolagsskatt.amount, taxAsBooked),
   }
   if (bookedTax > 0) {
     const expectedTax = bolagsskatt.amount
@@ -329,13 +333,13 @@ export async function buildDispositionsProposal(
     })
   } else if (bolagsskatt.amount > 0) {
     proposals.push(bolagsskatt)
-  } else if (taxBasis.taxAsBooked > 0 && taxBasis.pending.length > 0) {
+  } else if (taxBasis.zeroedBy.length > 0) {
     // 0 kr only because of proposals the user may still skip. Without this
     // card, skipping them left no way to book the tax in this step (the
     // preview never offered it), and booking it by hand tripped the mismatch
     // above (crm#1688). The POST recomputes it on the ledger after the
     // dispositions actually booked, and books nothing when that is 0 kr.
-    proposals.push({ ...bolagsskatt, description: zeroedByProposalsDescription(taxBasis) })
+    proposals.push({ ...bolagsskatt, description: zeroedByProposalsDescription(taxBasis) ?? bolagsskatt.description })
   }
 
   // Uppskjuten skatt last, in a K3 year: it is not part of the tax base
@@ -397,6 +401,19 @@ function pendingTaxBaseDispositions(input: {
   return pending.filter((p) => p.resultEffect !== 0)
 }
 
+/**
+ * The pending proposals that take a tax the ledger carries to 0 kr: only the
+ * ones that lower the result (an återföring raises it, and may be mandatory).
+ */
+function zeroingDispositions(
+  pending: BolagsskattBasis['pending'],
+  taxWithProposals: number,
+  taxAsBooked: number,
+): BolagsskattBasis['zeroedBy'] {
+  if (taxWithProposals !== 0 || taxAsBooked <= 0) return []
+  return pending.filter((p) => p.resultEffect < 0)
+}
+
 function kr(amount: number): string {
   return formatCurrency(amount, 'SEK', { maximumFractionDigits: 0 })
 }
@@ -424,10 +441,9 @@ export function dividendConfirmationWarning(taxAdjustments: TaxAdjustmentSnapsho
     + 'Är andelarna näringsbetingade, markera kontot under Skattemässiga justeringar så räknas bolagsskatten och periodiseringsfonden om.'
 }
 
-/** "Förändring av överavskrivningar (-10 959 kr)": each pending disposition and its result effect. */
-function pendingList(basis: BolagsskattBasis, only?: (p: BolagsskattBasis['pending'][number]) => boolean): string {
-  return basis.pending
-    .filter((p) => !only || only(p))
+/** "Förändring av överavskrivningar (-10 959 kr)": each disposition and its result effect. */
+function dispositionList(items: BolagsskattBasis['pending']): string {
+  return items
     .map((p) => `${p.label} (${p.resultEffect > 0 ? '+' : '-'}${kr(Math.abs(p.resultEffect))})`)
     .join(', ')
 }
@@ -443,16 +459,21 @@ function bookedTaxMismatchWarning(bookedTax: number, basis: BolagsskattBasis): s
   const skippable = !basis.pending.some((p) => p.kind === 'periodiseringsfond_ateforing')
   const basisText = basis.pending.length === 0
     ? `bokföringen som den ser ut nu ger ${kr(basis.taxWithProposals)}`
-    : `skatten blir ${kr(basis.taxWithProposals)} om de föreslagna dispositionerna bokförs: ${pendingList(basis)}`
+    : `skatten blir ${kr(basis.taxWithProposals)} om de föreslagna dispositionerna bokförs: ${dispositionList(basis.pending)}`
       + (skippable ? `. Utan dem blir skatten ${kr(basis.taxAsBooked)}` : '')
   return `Bokförd skatt är ${kr(bookedTax)}, men ${basisText}. `
     + 'Storna verifikationen med den bokförda skatten och bokför skatten här i stället, så räknas den på de dispositioner du väljer.'
 }
 
-/** The 0 kr bolagsskatt card: which proposals zero it and how to pay tax this year instead. */
-function zeroedByProposalsDescription(basis: BolagsskattBasis): string {
-  // Only the ones that lower the tax: an återföring raises it (and may be mandatory).
-  return `0 kr om de föreslagna dispositionerna bokförs: ${pendingList(basis, (p) => p.resultEffect < 0)}. `
-    + 'Vill du hellre betala skatt i år, avmarkera dem (Hoppa över); skatten räknas då om på det som bokförs.'
+/** The 0 kr bolagsskatt card: which proposals zero it, the tax without them, and how to pay tax this year instead. */
+function zeroedByProposalsDescription(basis: BolagsskattBasis): string | null {
+  const zeroed = explainZeroedTax(basis)
+  if (!zeroed) return null
+  return `0 kr om de föreslagna dispositionerna bokförs: ${dispositionList(zeroed.zeroedBy)}.`
+    + (zeroed.taxWithout !== null ? ` Utan dem blir skatten ${kr(zeroed.taxWithout)}.` : '')
+    + (zeroed.canSkip
+      ? ' Överavskrivning och avsättning till periodiseringsfond är frivilliga. Vill du hellre betala skatt i år, '
+        + 'avmarkera dem (Hoppa över), så räknas skatten om på det som bokförs.'
+      : '')
 }
 

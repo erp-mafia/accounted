@@ -100,8 +100,9 @@ export interface TaxAdjustmentLossRegister {
  * What the bolagsskatt preview is computed from (accounted#180): the result
  * as booked, and each proposed disposition not booked yet that moves it. The
  * card's tax assumes every one of them is booked, so a 0 kr tax can come from
- * a proposal the user may still skip; the wizard lists them under the
- * computation instead of leaving the 0 kr unexplained.
+ * a proposal the user may still skip; the wizard lists them in the
+ * computation and names the ones in `zeroedBy` on the 0 kr card instead of
+ * leaving the 0 kr unexplained.
  */
 export interface BolagsskattBasis {
   /** Resultat före skatt in the ledger now (posted dispositions in it). */
@@ -112,6 +113,13 @@ export interface BolagsskattBasis {
   taxWithProposals: number
   /** Bolagsskatt on the ledger as it stands, none of the pending proposals booked. */
   taxAsBooked: number
+  /**
+   * The pending proposals that take the tax to 0 kr: those that lower the
+   * result (signed effect, negative), in booking order. Empty unless the
+   * ledger as it stands carries tax and the preview, with every proposal
+   * booked, is 0 kr.
+   */
+  zeroedBy: Array<{ kind: DispositionKind; label: string; resultEffect: number }>
 }
 
 export interface CompletedDisposition {
