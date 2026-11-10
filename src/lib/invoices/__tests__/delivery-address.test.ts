@@ -12,7 +12,15 @@ import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/upda
 import { CreateInvoiceParamsSchema } from '@/lib/pending-operations/build-staged-invoice'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { renderDelivery } from '@/lib/invoices/peppol-bis-billing'
-import { deliveryAddressLines, InvoiceDeliveryAddressSchema, normalizeDeliveryAddress } from '../delivery-address'
+import { buildInvoiceWritePayload } from '@/lib/invoices/editor-payload'
+import {
+  DELIVERY_ADDRESS_MAX_LENGTH,
+  deliveryAddressFormValues,
+  deliveryAddressLines,
+  EMPTY_DELIVERY_ADDRESS_FORM,
+  InvoiceDeliveryAddressSchema,
+  normalizeDeliveryAddress,
+} from '../delivery-address'
 import { treeText } from './pdf-tree'
 import type { InvoiceItem } from '@/types'
 
@@ -76,6 +84,63 @@ describe('the delivery address shape', () => {
     expect(deliveryAddressLines(ADDRESS)).toEqual(['Exempelbutiken Centrum', 'Provgatan 12', 'Lastkaj 3', '111 22 Exempelstad'])
     expect(deliveryAddressLines({ ...ADDRESS, country: 'DE' }, 'SE', () => 'Tyskland')).toContain('Tyskland')
     expect(deliveryAddressLines(null)).toEqual([])
+  })
+})
+
+describe('the invoice editor fields', () => {
+  const EDITOR_BODY = {
+    customer_id: '11111111-1111-4111-8111-111111111111',
+    invoice_date: '2026-10-30',
+    due_date: '2026-11-29',
+    currency: 'SEK',
+    // deduction_type as the editor's rows carry it (the builder's item type is all-optional, a weak type).
+    items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, deduction_type: null }],
+  }
+
+  /** The body the editor sends for these fields (lib/invoices/editor-payload.ts). */
+  function editorBody(delivery_address: typeof EMPTY_DELIVERY_ADDRESS_FORM) {
+    // The editor's form carries more fields than the payload builder names; it spreads them through.
+    const form = { ...EDITOR_BODY, delivery_address }
+    return buildInvoiceWritePayload(form, { oreRounding: false, defaultDims: {} })
+  }
+
+  it('fills the fields from a stored address, every part a string', () => {
+    expect(deliveryAddressFormValues({ ...ADDRESS, address_line2: null })).toEqual({
+      name: 'Exempelbutiken Centrum',
+      address_line1: 'Provgatan 12',
+      address_line2: '',
+      postal_code: '111 22',
+      city: 'Exempelstad',
+      country: 'SE',
+    })
+  })
+
+  it('starts empty without an address, or with one that says nothing', () => {
+    expect(deliveryAddressFormValues(null)).toEqual(EMPTY_DELIVERY_ADDRESS_FORM)
+    expect(deliveryAddressFormValues(undefined)).toEqual(EMPTY_DELIVERY_ADDRESS_FORM)
+    expect(deliveryAddressFormValues({ country: 'DE' })).toEqual(EMPTY_DELIVERY_ADDRESS_FORM)
+    // A fresh copy each time: the form never writes into the shared constant.
+    expect(deliveryAddressFormValues(null)).not.toBe(EMPTY_DELIVERY_ADDRESS_FORM)
+  })
+
+  it('saves an untouched draft with the address it had, through the create and edit schemas', () => {
+    const stored = normalizeDeliveryAddress(ADDRESS)
+    const body = editorBody(deliveryAddressFormValues(stored))
+    expect(CreateInvoiceSchema.parse(body).delivery_address).toEqual(stored)
+    expect(UpdateInvoiceSchema.parse(body).delivery_address).toEqual(stored)
+  })
+
+  it('clears the address when the fields are emptied, and "Kundens land" stores no country', () => {
+    expect(UpdateInvoiceSchema.parse(editorBody({ ...EMPTY_DELIVERY_ADDRESS_FORM })).delivery_address).toBeNull()
+    const noCountry = editorBody({ ...deliveryAddressFormValues(ADDRESS), country: '' })
+    expect(UpdateInvoiceSchema.parse(noCountry).delivery_address).toMatchObject({ city: 'Exempelstad', country: null })
+  })
+
+  it('refuses a part longer than its field allows, the same limit the inputs carry', () => {
+    const tooLong = { ...deliveryAddressFormValues(ADDRESS), postal_code: '1'.repeat(DELIVERY_ADDRESS_MAX_LENGTH.postal_code + 1) }
+    expect(UpdateInvoiceSchema.safeParse(editorBody(tooLong)).success).toBe(false)
+    const atLimit = { ...tooLong, postal_code: '1'.repeat(DELIVERY_ADDRESS_MAX_LENGTH.postal_code) }
+    expect(UpdateInvoiceSchema.safeParse(editorBody(atLimit)).success).toBe(true)
   })
 })
 

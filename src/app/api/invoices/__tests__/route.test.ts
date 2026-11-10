@@ -353,6 +353,112 @@ describe('POST /api/invoices (create invoice)', () => {
     )
   })
 
+  // Leveransadress from the invoice editor (crm#1547): the form sends every
+  // part as a string, '' for one left empty. Made-up address.
+  const EDITOR_DELIVERY_ADDRESS = {
+    name: ' Exempelbutiken Centrum ',
+    address_line1: 'Provgatan 12',
+    address_line2: '',
+    postal_code: '111 22',
+    city: 'Exempelstad',
+    country: 'NO',
+  }
+
+  it('stores the delivery address the editor sends, trimmed and with empty parts unset (crm#1547)', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: createdInvoice, error: null }) // insert invoice
+    enqueue({ data: null, error: null }) // insert items
+    enqueue({ data: '2026001', error: null }) // generate_invoice_number
+    enqueue({ data: { ...createdInvoice, invoice_number: '2026001', customer, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: EDITOR_DELIVERY_ADDRESS,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, createMockRouteParams({})))
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({
+      delivery_address: {
+        name: 'Exempelbutiken Centrum',
+        address_line1: 'Provgatan 12',
+        address_line2: null,
+        postal_code: '111 22',
+        city: 'Exempelstad',
+        country: 'NO',
+      },
+    })
+  })
+
+  it('stores no delivery address when the editor sends the fields empty', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: '2026001', error: null })
+    enqueue({ data: { ...createdInvoice, invoice_number: '2026001', customer, items: [] }, error: null })
+
+    const empty = Object.fromEntries(Object.keys(EDITOR_DELIVERY_ADDRESS).map((key) => [key, '']))
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: empty,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, createMockRouteParams({})))
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({ delivery_address: null })
+  })
+
+  it.each([
+    ['a country that is not an ISO code', { ...EDITOR_DELIVERY_ADDRESS, country: 'Norge' }],
+    ['an unknown part', { ...EDITOR_DELIVERY_ADDRESS, street: 'Provgatan 12' }],
+    ['a postal code longer than 20 characters', { ...EDITOR_DELIVERY_ADDRESS, postal_code: '1'.repeat(21) }],
+  ])('returns 400 for a delivery address with %s, before reading anything', async (_label, deliveryAddress) => {
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: deliveryAddress,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ errors: Array<{ field: string }> }>(
+      await POST(request, createMockRouteParams({})),
+    )
+
+    expect(status).toBe(400)
+    expect(body.errors.some((e) => e.field.startsWith('delivery_address'))).toBe(true)
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
   it('creates the invoice with 25 % for an EU business without a validated VAT number and says why (#2749)', async () => {
     const customer = makeCustomer({
       id: VALID_UUID,

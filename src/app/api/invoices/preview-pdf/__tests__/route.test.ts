@@ -116,6 +116,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     ['an impossible date', { ...validBody, invoice_date: '2026-13-45' }],
     ['a customer id that is not a uuid', { ...validBody, customer_id: 'customer-1' }],
     ['an unknown document type', { ...validBody, document_type: 'receipt' }],
+    ['a delivery country that is not an ISO code', { ...validBody, delivery_address: { city: 'Exempelstad', country: 'Norge' } }],
   ])('returns 400 for %s, before reading or rendering anything', async (_label, body) => {
     const response = await previewRequest(body)
 
@@ -188,6 +189,30 @@ describe('POST /api/invoices/preview-pdf', () => {
     const { invoice } = lastRenderProps()
     expect(invoice.document_type).toBe('quote')
     expect(invoice.valid_until).toBe('2026-08-20')
+  })
+
+  it('prints the delivery address the editor is filling in, and none while its fields are empty (crm#1547)', async () => {
+    const fields = { name: 'Exempelbutiken Centrum', address_line1: 'Provgatan 12', address_line2: '', postal_code: '', city: '', country: '' }
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+
+    const response = await previewRequest({ ...validBody, delivery_address: fields })
+
+    expect(response.status).toBe(200)
+    expect(lastRenderProps().invoice.delivery_address).toEqual({
+      name: 'Exempelbutiken Centrum',
+      address_line1: 'Provgatan 12',
+      address_line2: null,
+      postal_code: null,
+      city: null,
+      country: null,
+    })
+
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+    const empty = Object.fromEntries(Object.keys(fields).map((key) => [key, '']))
+    expect((await previewRequest({ ...validBody, delivery_address: empty })).status).toBe(200)
+    expect(lastRenderProps().invoice.delivery_address).toBeNull()
   })
 
   it('leaves valid_until null on non-quote documents', async () => {

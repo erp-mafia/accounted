@@ -45,9 +45,9 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
  * Parity with the write path (lib/invoices/build-invoice-write.ts): the same
  * VAT decision (resolveInvoiceVatRules with the invoice's own treatment,
  * deriveInvoiceVatHeader), the same line, deduction and SEK arithmetic, the
- * same payee choice, and the per-invoice delivery date, öresavrundning and
- * QR choice. A credit preview is the kreditfaktura POST /api/invoices
- * creates for that invoice (lib/invoices/build-credit-note.ts).
+ * same payee choice, and the per-invoice delivery date, delivery address,
+ * öresavrundning and QR choice. A credit preview is the kreditfaktura POST
+ * /api/invoices creates for that invoice (lib/invoices/build-credit-note.ts).
  *
  * A live preview renders a half-filled form instead of refusing it. Each
  * gap renders with a placeholder and is reported in `missing`, so the
@@ -560,6 +560,7 @@ async function buildDraftPreview(params: {
     your_reference: optionalTrimmed(input.your_reference),
     our_reference: optionalTrimmed(input.our_reference),
     invoice_marking: optionalTrimmed(input.invoice_marking),
+    delivery_address: input.delivery_address ?? null,
     notes: input.notes || null,
     payment_link_url: previewPaymentLink(input.payment_link_url),
     payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,

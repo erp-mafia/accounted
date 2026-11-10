@@ -24,6 +24,18 @@ export interface InvoiceDeliveryAddress {
   country: string | null
 }
 
+/**
+ * The longest each text part may be. One table for the wire schema below and
+ * the invoice editor's inputs, so a field never accepts what the save refuses.
+ */
+export const DELIVERY_ADDRESS_MAX_LENGTH = {
+  name: 200,
+  address_line1: 200,
+  address_line2: 200,
+  postal_code: 20,
+  city: 100,
+} as const
+
 const text = (max: number) => z.string().trim().max(max).nullish()
 
 /**
@@ -33,11 +45,11 @@ const text = (max: number) => z.string().trim().max(max).nullish()
  */
 export const InvoiceDeliveryAddressSchema = z
   .object({
-    name: text(200),
-    address_line1: text(200),
-    address_line2: text(200),
-    postal_code: text(20),
-    city: text(100),
+    name: text(DELIVERY_ADDRESS_MAX_LENGTH.name),
+    address_line1: text(DELIVERY_ADDRESS_MAX_LENGTH.address_line1),
+    address_line2: text(DELIVERY_ADDRESS_MAX_LENGTH.address_line2),
+    postal_code: text(DELIVERY_ADDRESS_MAX_LENGTH.postal_code),
+    city: text(DELIVERY_ADDRESS_MAX_LENGTH.city),
     country: z
       .union([
         z
@@ -71,6 +83,37 @@ export function normalizeDeliveryAddress(raw: unknown): InvoiceDeliveryAddress |
   }
   const hasContent = address.name || address.address_line1 || address.address_line2 || address.postal_code || address.city
   return hasContent ? address : null
+}
+
+/** The invoice editor's delivery address fields: every part a string, '' = not set. */
+export type InvoiceDeliveryAddressFormValues = { [K in keyof InvoiceDeliveryAddress]: string }
+
+export const EMPTY_DELIVERY_ADDRESS_FORM: InvoiceDeliveryAddressFormValues = {
+  name: '',
+  address_line1: '',
+  address_line2: '',
+  postal_code: '',
+  city: '',
+  country: '',
+}
+
+/**
+ * A stored delivery address as the invoice editor's fields. The editor sends
+ * the fields back as they are: the wire schema reads '' as not set and an
+ * address with nothing in it as none, so emptied fields clear it and an
+ * untouched draft saves the address it had.
+ */
+export function deliveryAddressFormValues(raw: unknown): InvoiceDeliveryAddressFormValues {
+  const address = normalizeDeliveryAddress(raw)
+  if (!address) return { ...EMPTY_DELIVERY_ADDRESS_FORM }
+  return {
+    name: address.name ?? '',
+    address_line1: address.address_line1 ?? '',
+    address_line2: address.address_line2 ?? '',
+    postal_code: address.postal_code ?? '',
+    city: address.city ?? '',
+    country: address.country ?? '',
+  }
 }
 
 /**
