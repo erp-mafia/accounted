@@ -1040,7 +1040,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, correlation_id, created_supplier_invoice_id, extracted_data')
+          .select('id, document_id, correlation_id, created_supplier_invoice_id, extracted_data, email_subject, email_received_at')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -1108,6 +1108,8 @@ export const invoiceInboxExtension: Extension = {
             mimeType: doc.mime_type,
             fileName: doc.file_name,
             ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
+            // Read again with the mail it came with, as on arrival (crm#1749).
+            emailContext: { subject: item.email_subject ?? null, receivedAt: item.email_received_at ?? null },
           })
           // What a person decided is final: the new reading carries their
           // corrected fields and their purchase category.

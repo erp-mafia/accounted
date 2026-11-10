@@ -318,6 +318,68 @@ describe('extractInvoiceFields', () => {
     expect(system).toContain('25-11-2026, 25.11.2026 and 25/11/2026 are all 2026-11-25')
   })
 
+  describe('the email the document arrived with (crm#1749)', () => {
+    // A billing service printed "Date 11/7/26" month first; read day first
+    // with nothing to say otherwise, the invoice landed four months early.
+    const MAIL = {
+      subject: 'Payment details for your purchase on Nov 7, 2026',
+      receivedAt: '2026-11-07T07:41:00Z',
+    }
+    const systemOf = (call: { system: string | { text: string }[] }): string =>
+      typeof call.system === 'string' ? call.system : call.system.map((block) => block.text).join('\n')
+    const readWith = (invoiceDate: string, emailContext?: { subject?: string | null; receivedAt?: string | null }) => {
+      mockCreate.mockReturnValueOnce(aiResponse({ ...VALID_RESULT, invoice: { ...VALID_RESULT.invoice, invoiceDate } }))
+      return extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'invoice.pdf', emailContext })
+    }
+
+    it('gives the model the received day and the subject after the document, the system prompt unchanged', async () => {
+      await readWith('2026-11-07', MAIL)
+      await readWith('2026-11-07')
+      const [withMail, without] = mockCreate.mock.calls.map((c) => c[0])
+      const tail = withMail.messages[0].content.at(-1)
+      expect(tail.type).toBe('text')
+      expect(tail.text).toContain('The mail reached the inbox on 2026-11-07.')
+      expect(tail.text).toContain('"Payment details for your purchase on Nov 7, 2026"')
+      expect(tail.text.endsWith('Extract the fields per the schema. JSON only.')).toBe(true)
+      // Without a mail the request is the one it always was.
+      expect(without.messages[0].content.at(-1).text).toBe('Extract the fields per the schema. JSON only.')
+      // One cacheable system prompt for both, the same model and budget.
+      expect(systemOf(withMail)).toBe(systemOf(without))
+      expect(withMail.max_tokens).toBe(without.max_tokens)
+      expect(withMail.model).toBe(without.model)
+    })
+
+    it('tells the model how to settle a numeric date that reads both ways, and to fall back to day first', async () => {
+      await readWith('2026-11-07', MAIL)
+      const system = systemOf(mockCreate.mock.calls[0][0])
+      expect(system).toContain('- Ambiguous numeric dates: in a numeric date like 03/11/2026 or 11/7/26')
+      expect(system).toContain('an invoice or receipt date is never after the day the mail arrived')
+      expect(system).toContain('Only when none of these settles it, read day first as the dueDate rule says.')
+    })
+
+    it('reads an ambiguous 03/11/2026 as March when the mail arrived in March', async () => {
+      const { data } = await readWith('2026-11-03', { receivedAt: '2026-03-12T08:00:00Z' })
+      expect(data.invoice.invoiceDate).toBe('2026-03-11')
+    })
+
+    it('reads the same date as November when the mail arrived in November', async () => {
+      const { data } = await readWith('2026-11-03', { receivedAt: '2026-11-05T08:00:00Z' })
+      expect(data.invoice.invoiceDate).toBe('2026-11-03')
+    })
+
+    it('leaves a date that reads only one way as the model read it', async () => {
+      const { data } = await readWith('2026-11-25', { receivedAt: '2026-03-12T08:00:00Z' })
+      expect(data.invoice.invoiceDate).toBe('2026-11-25')
+    })
+
+    it('reads as today without an email', async () => {
+      const { data } = await readWith('2026-11-03')
+      expect(data.invoice.invoiceDate).toBe('2026-11-03')
+      const { data: noDay } = await readWith('2026-11-03', { subject: 'Invoice', receivedAt: null })
+      expect(noDay.invoice.invoiceDate).toBe('2026-11-03')
+    })
+  })
+
   it('tells the model to keep a hyphen at a line break inside an identifier', async () => {
     // Agent feedback seq 936092: an invoice number wrapped after a hyphen
     // ("...-202604-" / "0001") came back with the hyphen dropped, read as

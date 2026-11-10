@@ -2,6 +2,7 @@ import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { INBOX_UPLOAD_TYPES } from '@/lib/documents/upload-types'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import type { ExtractionEmailContext } from '@/lib/documents/inbox-extraction/email-date-context'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
 import type { ExtractionFailure } from '@/lib/documents/inbox-extraction/extraction-failure'
 import { keepStoredPersonChoices } from '@/lib/documents/person-corrections'
@@ -178,6 +179,16 @@ export interface EmailMeta {
   // Lands in its own column (not extracted_data) so re-extraction cannot
   // overwrite what the sender said.
   kindHint?: InboxKindHint | null
+}
+
+/**
+ * What the reading gets from the mail: its received day and subject settle
+ * numeric dates that read both ways (crm#1749). The inbox row stores the same
+ * two as email_received_at and email_subject, which is where a re-reading of
+ * the item takes them from.
+ */
+export function emailContextOf(emailMeta: EmailMeta | undefined): ExtractionEmailContext {
+  return { subject: emailMeta?.subject ?? null, receivedAt: emailMeta?.receivedAt ?? null }
 }
 
 // Chat-channel provenance (whatsapp-inbox extension). When present, the inbox
@@ -623,6 +634,7 @@ async function processArchivedDocumentInner(
       pageCount,
       gatedByPageCount,
       maxAutoExtractPages,
+      emailContext: emailContextOf(emailMeta),
     })
 
     return {
@@ -666,6 +678,7 @@ async function processArchivedDocumentInner(
         mimeType: file.type,
         fileName: file.name,
         ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
+        emailContext: emailContextOf(emailMeta),
       })
   const { data: extracted, rawText } = extraction
   if (!skipExtraction && slicedBuffer != null && pageCount != null) {
@@ -816,6 +829,8 @@ interface DeferredExtractionJob {
   /** Snapshot of maxPagesForAutoExtract() from the request, so the gate
    *  verdict and the slice/stamp below cannot disagree. */
   maxAutoExtractPages: number
+  /** The mail the document came with (a partner delivery's subject and received time); absent on uploads. */
+  emailContext?: ExtractionEmailContext | null
 }
 
 export interface InboxReading {
@@ -839,7 +854,7 @@ export interface InboxReading {
  */
 export async function readForInbox(
   supabase: import('@supabase/supabase-js').SupabaseClient,
-  job: Pick<DeferredExtractionJob, 'companyId' | 'file' | 'pageCount' | 'gatedByPageCount' | 'maxAutoExtractPages'>,
+  job: Pick<DeferredExtractionJob, 'companyId' | 'file' | 'pageCount' | 'gatedByPageCount' | 'maxAutoExtractPages' | 'emailContext'>,
 ): Promise<InboxReading> {
   const reading: InboxReading = {
     extracted: emptyResult(),
@@ -863,6 +878,7 @@ export async function readForInbox(
       mimeType: job.file.type,
       fileName: job.file.name,
       ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
+      emailContext: job.emailContext ?? null,
     })
     reading.extracted = result.data
     reading.rawText = result.rawText

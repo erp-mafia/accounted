@@ -221,6 +221,37 @@ describe('detected receipt MIME propagation', () => {
   })
 })
 
+describe('the mail a document came with reaches its reading (crm#1749)', () => {
+  it.each([false, true])('passes the subject and received time to the extraction (deferred=%s)', async (deferred) => {
+    const supabase = makeSupabase({})
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(uploadDocument).mockResolvedValueOnce({ id: 'doc-1', mime_type: 'image/jpeg' } as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+    const file = { name: 'invoice.jpg', buffer: receiptImage('jpeg'), type: 'image/jpeg' }
+    const mail = { from: 'billing@example.com', subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00.000Z' }
+
+    await uploadAndExtract(supabase as never, 'user-1', 'company-1', file, 'email', mail, undefined, { deferExtraction: deferred })
+
+    await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
+    expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      emailContext: { subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00.000Z' },
+    }))
+  })
+
+  it('gives an upload without a mail no email context', async () => {
+    const supabase = makeSupabase({})
+    vi.mocked(uploadDocument).mockResolvedValueOnce({ id: 'doc-1', mime_type: 'image/jpeg' } as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+    const file = { name: 'receipt.jpg', buffer: receiptImage('jpeg'), type: 'image/jpeg' }
+
+    await uploadAndExtract(supabase as never, 'user-1', 'company-1', file, 'upload')
+
+    expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      emailContext: { subject: null, receivedAt: null },
+    }))
+  })
+})
+
 describe('POST /upload: staged extraction + page-count gate (issue #553)', () => {
   it('defers long PDFs: responds processing, then slices to 8 pages (incl. the last) and flips to received', async () => {
     const captured: { row?: Record<string, unknown> } = {}

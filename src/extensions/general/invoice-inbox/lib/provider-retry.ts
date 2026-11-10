@@ -142,11 +142,13 @@ interface Candidate {
   updated_at: string
   extracted_data: Record<string, unknown> | null
   matched_supplier_id: string | null
+  email_subject: string | null
+  email_received_at: string | null
   document_attachments: CandidateDocument | CandidateDocument[] | null
 }
 
 const CANDIDATE_COLUMNS =
-  'id, company_id, document_id, correlation_id, created_at, updated_at, extracted_data, matched_supplier_id, document_attachments!inner(id, storage_path, mime_type, file_name, extraction_model, extracted_at)'
+  'id, company_id, document_id, correlation_id, created_at, updated_at, extracted_data, matched_supplier_id, email_subject, email_received_at, document_attachments!inner(id, storage_path, mime_type, file_name, extraction_model, extracted_at)'
 
 function documentOf(row: Candidate): CandidateDocument | null {
   const doc = row.document_attachments
@@ -281,6 +283,8 @@ async function retryOne(supabase: SupabaseClient, row: Candidate): Promise<Retry
     pageCount,
     gatedByPageCount: pageCount != null && pageCount > maxAutoExtractPages,
     maxAutoExtractPages,
+    // The mail it came with, as on its first reading (crm#1749).
+    emailContext: { subject: row.email_subject ?? null, receivedAt: row.email_received_at ?? null },
   })
   const outcome: ExtractionOutcome = {
     data: reading.extracted,

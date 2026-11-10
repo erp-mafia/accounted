@@ -181,6 +181,45 @@ describe('POST /items/:id/retry-extraction', () => {
     const { status, body } = await parseJsonResponse<{ data: { extracted_data: { totals: { total: number } } } }>(res)
     expect(status).toBe(200)
     expect(body.data.extracted_data.totals.total).toBe(125)
+    // An item with no mail is read with no email context, as an upload is.
+    expect(extractInvoiceFields).toHaveBeenCalledWith(
+      expect.objectContaining({ emailContext: { subject: null, receivedAt: null } }),
+    )
+  })
+
+  it('reads again with the mail the item came with, as on arrival (crm#1749)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'item-1',
+        document_id: 'doc-1',
+        correlation_id: null,
+        created_supplier_invoice_id: null,
+        email_subject: 'Your invoice of Nov 7, 2026',
+        email_received_at: '2026-11-07T07:41:00+00:00',
+      },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // supplier name lookup: no match
+    enqueue({ data: null, error: null }) // inbox update on success
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
+      error: null,
+    })
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce(EXTRACTION_SUCCESS as never)
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+    expect(res.status).toBe(200)
+    expect(extractInvoiceFields).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailContext: { subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00+00:00' },
+      }),
+    )
   })
 
   it('re-links the supplier on retry, matching a foreign supplier by VAT number', async () => {
