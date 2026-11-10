@@ -1,0 +1,1 @@
+[2026-11-10] A stalled SIE job (accounted#115) fails and frees its year only when nothing is booked; with verifikat it pauses and keeps the hold, since Ångra refuses a failed job. record_sie_job_failure's cap stays pause, as its pg test pins.

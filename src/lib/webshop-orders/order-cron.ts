@@ -17,7 +17,12 @@
  *   - rows a sync could not write (OrderSyncSummary.errors) are logged as an
  *     error per connection: the sync logs each at warn and holds its cursor
  *     below a failed write, so before this a failing connection read as
- *     synced.
+ *     synced;
+ *   - an installation that runs the extension without its credentials
+ *     (isConfigured false) answers 200 with nothing processed, as before, and
+ *     says why: an error when connections with sync on are left unsynced by
+ *     it, an info line when there are none (a self-host that never set the
+ *     extension up). Before, it answered 200 with no log at all.
  *
  * Read-only against the stores, and it never posts to the journal: rows land
  * unbooked (webshop_orders; the Stripe feed's transactions). Emits no events.
@@ -86,6 +91,40 @@ type ConnectionResult = {
   status: 'synced' | 'revoked' | 'locked' | 'error'
 }
 
+/**
+ * The run cannot sync because this installation lacks the extension's
+ * credentials. Whether that loses anything depends on the connections that
+ * expect a sync: count them, and report an error when there are any.
+ */
+async function reportNotConfigured<C extends { id: string; company_id: string }>(
+  ctx: WebshopCronContext,
+  spec: WebshopOrderCronSpec<C>,
+): Promise<void> {
+  const context = { extensionId: spec.extensionId }
+  try {
+    const { count, error } = await ctx.supabase
+      .from(spec.table)
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'active')
+      .eq('transaction_sync_enabled', true)
+    if (error) throw new Error(error.message)
+    if (count) {
+      ctx.log.error(`${spec.label} is not configured; connections with sync on are not synced`, {
+        ...context,
+        alert: true,
+        connections: count,
+      })
+    } else {
+      ctx.log.info(`${spec.label} is not configured and no connection has sync on; nothing to sync`, context)
+    }
+  } catch (err) {
+    ctx.log.error(`${spec.label} is not configured, and its connections could not be counted`, err as Error, {
+      ...context,
+      alert: true,
+    })
+  }
+}
+
 /** One nightly run. The route's wrapper has checked that the extension is enabled. */
 export async function runWebshopOrderCron<C extends { id: string; company_id: string }>(
   ctx: WebshopCronContext,
@@ -97,6 +136,7 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
   const deadlineMs = now() + TIME_BUDGET_MS
 
   if (!spec.isConfigured()) {
+    await reportNotConfigured(ctx, spec)
     return NextResponse.json({ message: `${spec.label} not configured`, processed: 0 })
   }
 

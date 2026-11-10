@@ -10,9 +10,17 @@ const logMock = vi.hoisted(() => {
   return log
 })
 
+// The head count of companies with receiving on, read only when the cron skips.
+const receiversCount = vi.hoisted(() => vi.fn())
+const accessEq = vi.hoisted(() => vi.fn())
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/api-keys', () => ({
-  createServiceClientNoCookies: () => ({ from: vi.fn() }),
+  createServiceClientNoCookies: () => ({
+    from: vi.fn((table: string) => table === 'peppol_access'
+      ? { select: () => ({ eq: (...a: unknown[]) => { accessEq(...a); return { eq: (...b: unknown[]) => { accessEq(...b); return receiversCount() } } } }) }
+      : undefined),
+  }),
 }))
 vi.mock('@/lib/logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/logger')>()),
@@ -73,6 +81,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     reprocessMock.mockResolvedValue(cleanReprocess)
     withdrawMock.mockResolvedValue({ withdrawn: [], failed: [] })
     registerGrantedMock.mockResolvedValue({ registered: [], failed: [], skipped: [] })
+    receiversCount.mockResolvedValue({ count: 0, error: null })
   })
 
   afterEach(() => {
@@ -97,13 +106,39 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_selection_required' } })
     expect(syncMock).not.toHaveBeenCalled()
     expect(reprocessMock).not.toHaveBeenCalled()
+    // No company asked to receive: said at info, nothing pages.
+    expect(accessEq.mock.calls).toEqual([['status', 'enabled'], ['receive_enabled', true]])
+    expect(logMock.info).toHaveBeenCalledWith('peppol inbound skipped; no company has receiving on', { reason: 'provider_selection_required' })
+    expect(pages()).toHaveLength(0)
+  })
+
+  it('pages when it skips while companies have receiving on (accounted#115)', async () => {
+    delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    receiversCount.mockResolvedValue({ count: 2, error: null })
+    const response = await GET(request('cron-secret'))
+    expect(response.status).toBe(200)
+    expect(pages()).toEqual([[
+      'peppol inbound skipped while companies have receiving on; their e-invoices are not fetched',
+      { alert: true, reason: 'provider_selection_required', receivers: 2 },
+    ]])
+  })
+
+  it('pages when it cannot tell whether anyone is waiting', async () => {
+    process.env.PEPPOL_TRANSPORT_PROVIDER = 'not-registered-here'
+    receiversCount.mockResolvedValue({ count: null, error: { message: 'statement timeout' } })
+    const response = await GET(request('cron-secret'))
+    expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_adapter_unavailable' } })
+    expect(logMock.error).toHaveBeenCalledWith('peppol inbound skipped, and the companies with receiving on could not be counted',
+      expect.objectContaining({ message: 'statement timeout' }), { alert: true, reason: 'provider_adapter_unavailable' })
   })
 
   it('skips a send-only transport', async () => {
     unregister = registerPeppolTransport(makeTransport({ listInboundDocuments: undefined }))
+    receiversCount.mockResolvedValue({ count: 1, error: null })
     const response = await GET(request('cron-secret'))
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'receiving_unsupported' } })
     expect(reprocessMock).not.toHaveBeenCalled()
+    expect(pages()).toEqual([[expect.any(String), { alert: true, reason: 'receiving_unsupported', receivers: 1 }]])
   })
 
   it('runs the sync, then the reprocessing pass with the same deliverer, and reports both', async () => {
