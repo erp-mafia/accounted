@@ -26,7 +26,7 @@ const syncRoute = enableBankingExtension.apiRoutes!.find((r) => r.method === 'PO
 function makeContext(connection: Record<string, unknown>, updateSpy: Mock): ExtensionContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {}
-  for (const method of ['select', 'eq', 'neq', 'gte', 'limit', 'order', 'delete', 'in', 'is']) chain[method] = vi.fn(() => chain)
+  for (const method of ['select', 'eq', 'neq', 'or', 'gte', 'limit', 'order', 'delete', 'in', 'is']) chain[method] = vi.fn(() => chain)
   chain.single = vi.fn().mockResolvedValue({ data: connection, error: null })
   chain.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
   chain.update = vi.fn((payload: unknown) => {

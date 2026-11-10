@@ -130,6 +130,8 @@ export function FiscalYearResetDialog({
         return t('fy_reset_blocker_retained_import')
       case 'unfinished_import':
         return t('fy_reset_blocker_unfinished_import')
+      case 'sie_import_in_place':
+        return t('fy_reset_blocker_sie_import_in_place')
       default:
         return t('fy_reset_blocker_other')
     }

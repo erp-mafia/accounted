@@ -50,6 +50,7 @@ import {
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { classifyInitialSyncError } from '@/lib/bank-sync/initial-sync-error'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 interface AccountPickerDialogProps {
   open: boolean
@@ -305,11 +306,12 @@ export function AccountPickerDialog({
           .order('entry_date', { ascending: false })
           .limit(1)
           .maybeSingle(),
-        supabase
-          .from('sie_imports')
-          .select('fiscal_year_start')
-          .eq('company_id', company.id)
-          .eq('status', 'completed')
+        whereSieImportInPlace(
+          supabase
+            .from('sie_imports')
+            .select('fiscal_year_start')
+            .eq('company_id', company.id),
+        )
           .not('fiscal_year_start', 'is', null)
           .order('fiscal_year_start', { ascending: true })
           .limit(1)

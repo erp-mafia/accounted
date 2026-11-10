@@ -129,6 +129,7 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock, inser
   const chain: any = {}
   chain.select = vi.fn(() => chain)
   chain.eq = vi.fn(() => chain)
+  chain.or = vi.fn(() => chain)
   // The fresh-connect existing-connection guard chains .neq('status', 'revoked')
   // and resolves via maybeSingle (null here: no established row).
   chain.neq = vi.fn(() => chain)

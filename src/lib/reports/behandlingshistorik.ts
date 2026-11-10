@@ -197,6 +197,18 @@ interface SieImportRow {
   imported_at: string | null
   created_at: string
   replaced_at: string | null
+  /** The durable job's state, NULL on a legacy import: the import's real lifecycle. */
+  job_state?: string | null
+  job_kind?: string | null
+  job_phase?: string | null
+  /** When the job reached 'undone' (20261109153200); NULL on an undo before it. */
+  undone_at?: string | null
+  execution_actor_id?: string | null
+  undo_actor_type?: string | null
+  undo_actor_label?: string | null
+  /** From job_result.repairOutcome and .stoppedAt (read in code): set on a stopped duplicate repair. */
+  repair_outcome?: string | null
+  repair_stopped_at?: string | null
 }
 
 interface BankFileImportRow {
@@ -2415,18 +2427,143 @@ function migrationResetEvent(row: MigrationResetRow, companyId: string): RawBeha
   }
 }
 
-function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
-  const events: RawBehandlingshistorikEvent[] = []
-  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+/**
+ * The events of one sie_imports row. A durable job (job_state set) is read
+ * from its job: job_state is the lifecycle, imported_at when it completed and
+ * undone_at when an undo took it back out of the ledger. On a job row status
+ * and replaced_at lag behind (an undone job reads status 'replaced' and never
+ * gets replaced_at), so they describe a legacy import only.
+ */
+export function sieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  if (!row.job_state) return legacySieImportEvents(row)
+  return row.job_kind === 'duplicate_repair' ? sieRepairJobEvents(row) : sieImportJobEvents(row)
+}
+
+function sieImportDetails(row: SieImportRow): string[] {
   const details: string[] = []
   if (row.sie_type !== null && row.sie_type !== undefined) details.push(`Filtyp: SIE${row.sie_type}`)
   if (row.fiscal_year_start && row.fiscal_year_end) details.push(`Räkenskapsår: ${row.fiscal_year_start} till ${row.fiscal_year_end}`)
   if (typeof row.accounts_count === 'number' || typeof row.transactions_count === 'number') {
     details.push(`${row.accounts_count ?? 0} konton, ${row.transactions_count ?? 0} transaktioner`)
   }
-  // undo_sie_import sets status = 'undone' + replaced_at: the import did
-  // complete, and was later reversed (the entry deletions carry their own
-  // audit rows).
+  return details
+}
+
+/**
+ * What a durable undo does to the ledger (undo_sie_import_chunk): a
+ * vändningsverifikation for each imported verifikat. Nothing is deleted; the
+ * stornos are in the report as verifikationer of their own.
+ */
+const SIE_UNDO_STORNO = 'importerade verifikationer makulerade med vändningsverifikationer (storno)'
+
+/** Who asked for the undo: request_sie_import_undo records the user and the credential. */
+function sieUndoActor(row: SieImportRow): RawActor {
+  return {
+    type: normaliseActorType(row.undo_actor_type),
+    user_id: row.execution_actor_id ?? row.user_id,
+    actor_label: row.undo_actor_type ? (row.undo_actor_label ?? null) : null,
+  }
+}
+
+function sieImportJobEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const details = sieImportDetails(row)
+  // complete_sie_import_job stamps imported_at and an undo keeps it, so an
+  // undone import that had completed still reads as imported first.
+  const completed = row.job_state === 'completed' || !!row.imported_at
+  const failed = row.job_state === 'failed'
+  const undone = row.job_state === 'undone'
+  const undoneAt = undone ? toIso(row.undone_at) : null
+  if (undone && !undoneAt) {
+    details.push(`Senare ångrad: ${SIE_UNDO_STORNO}. Tidpunkten för ångringen finns inte registrerad.`)
+  } else if (!undone && row.job_phase === 'undo') {
+    details.push('Ångring pågår: importerade verifikationer makuleras med vändningsverifikationer (storno)')
+  }
+  if (failed && row.error_message) details.push(`Fel: ${truncate(row.error_message)}`)
+  const events: RawBehandlingshistorikEvent[] = [{
+    id: `sie:${row.id}`,
+    occurred_at: toIso(completed ? (row.imported_at ?? row.created_at) : row.created_at)!,
+    category: 'import',
+    code: completed ? 'sie_import.completed' : failed ? 'sie_import.failed' : 'sie_import.started',
+    event: completed ? 'SIE-fil importerad' : failed ? 'SIE-import misslyckades' : 'SIE-import påbörjad',
+    object: row.filename,
+    actor: { type: 'user', user_id: row.user_id, actor_label: null },
+    details,
+    source: 'sie_import',
+    count: 1,
+  }]
+  if (undoneAt) {
+    events.push({
+      id: `sie:${row.id}:undone`,
+      occurred_at: undoneAt,
+      category: 'import',
+      code: 'sie_import.undone',
+      event: `SIE-import ångrad (${SIE_UNDO_STORNO})`,
+      object: row.filename,
+      actor: sieUndoActor(row),
+      details: [],
+      source: 'sie_import',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/**
+ * A reviewed duplicate repair (job_kind 'duplicate_repair') is not an import:
+ * it posts a vändningsverifikation for each approved duplicate an older import
+ * left. job_state 'undone' is the repair done; 'completed' with repairOutcome
+ * 'stopped' is the repair stopped before every pair was reversed.
+ */
+function sieRepairJobEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+  const details: string[] = []
+  if (row.fiscal_year_start && row.fiscal_year_end) details.push(`Räkenskapsår: ${row.fiscal_year_start} till ${row.fiscal_year_end}`)
+  if (typeof row.transactions_count === 'number') details.push(`Dubbla verifikationer att makulera: ${row.transactions_count}`)
+  const done = row.job_state === 'undone'
+  const stopped = row.job_state === 'completed' && row.repair_outcome === 'stopped'
+  const endedAt = done ? toIso(row.undone_at) : stopped ? toIso(row.repair_stopped_at) : null
+  if (done && !endedAt) {
+    details.push('Slutförd: dubbletterna makulerade med vändningsverifikationer (storno). Tidpunkten finns inte registrerad.')
+  }
+  const events: RawBehandlingshistorikEvent[] = [{
+    id: `sie:${row.id}`,
+    occurred_at: toIso(row.created_at)!,
+    category: 'import',
+    code: 'sie_import.repair_started',
+    event: 'Granskad rättelse av dubbla SIE-verifikationer påbörjad',
+    object: null,
+    actor,
+    details,
+    source: 'sie_import',
+    count: 1,
+  }]
+  if (endedAt) {
+    events.push({
+      id: `sie:${row.id}:${done ? 'repaired' : 'stopped'}`,
+      occurred_at: endedAt,
+      category: 'import',
+      code: done ? 'sie_import.repair_completed' : 'sie_import.repair_stopped',
+      event: done
+        ? 'Granskad rättelse av dubbla SIE-verifikationer slutförd (dubbletterna makulerade med vändningsverifikationer)'
+        : 'Granskad rättelse av dubbla SIE-verifikationer avbruten',
+      object: null,
+      actor,
+      details: [],
+      source: 'sie_import',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/** A legacy import (no durable job): status and replaced_at are its lifecycle. */
+function legacySieImportEvents(row: SieImportRow): RawBehandlingshistorikEvent[] {
+  const events: RawBehandlingshistorikEvent[] = []
+  const actor: RawActor = { type: 'user', user_id: row.user_id, actor_label: null }
+  const details = sieImportDetails(row)
+  // The legacy undo_sie_import and reset_fiscal_year set status = 'undone' +
+  // replaced_at: the import did complete, and its verifikationer were later
+  // deleted (the deletions carry their own audit rows).
   const undone = row.status === 'undone'
   const completed = row.status === 'completed' || undone
   const failed = row.status === 'failed'
@@ -3268,17 +3405,41 @@ async function fetchMigrationResets(supabase: SupabaseClient, companyId: string)
   return [...byId.values()]
 }
 
+const SIE_IMPORT_COLUMNS =
+  'id, user_id, filename, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, error_message, imported_at, created_at, replaced_at, ' +
+  'job_state, job_kind, job_phase, execution_actor_id, undo_actor_type, undo_actor_label, job_result'
+
+/** A stopped duplicate repair's outcome and stop time, read from job_result in code (not a JSON-path select). */
+function withRepairOutcome(row: SieImportRow & { job_result?: unknown }): SieImportRow {
+  const { job_result: jobResult, ...rest } = row
+  const result = jobResult && typeof jobResult === 'object' ? (jobResult as Record<string, unknown>) : null
+  const text = (value: unknown) => (typeof value === 'string' ? value : null)
+  return { ...rest, repair_outcome: text(result?.repairOutcome), repair_stopped_at: text(result?.stoppedAt) }
+}
+
 async function fetchSieImports(supabase: SupabaseClient, companyId: string): Promise<SieImportRow[]> {
-  return fetchAllRows<SieImportRow>(({ from, to }) =>
-    supabase
-      .from('sie_imports')
-      .select(
-        'id, user_id, filename, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, error_message, imported_at, created_at, replaced_at',
+  const read = async (columns: string) =>
+    (
+      await fetchAllRows<SieImportRow & { job_result?: unknown }>(({ from, to }) =>
+        supabase
+          .from('sie_imports')
+          .select(columns)
+          .eq('company_id', companyId)
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: (SieImportRow & { job_result?: unknown })[] | null
+          error: { message: string } | null
+        }>,
       )
-      .eq('company_id', companyId)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+    ).map(withRepairOutcome)
+  try {
+    return await read(`${SIE_IMPORT_COLUMNS}, undone_at`)
+  } catch (err) {
+    // undone_at arrives with 20261109153200, which applies after the merge:
+    // until then the report reads the import without it (42703 on a read).
+    if ((err as { code?: string } | null)?.code !== '42703') throw err
+    return read(SIE_IMPORT_COLUMNS)
+  }
 }
 
 async function fetchBankFileImports(supabase: SupabaseClient, companyId: string): Promise<BankFileImportRow[]> {

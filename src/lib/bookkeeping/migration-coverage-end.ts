@@ -1,4 +1,5 @@
 import type { SupabaseDataClient } from '@/lib/supabase/data-client'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /**
  * End of the company's SIE-migration data coverage: the latest entry_date
@@ -14,11 +15,12 @@ export async function fetchMigrationCoverageEnd(
   supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<string | null> {
-  const { data: completedImport } = await supabase
-    .from('sie_imports')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
+  const { data: completedImport } = await whereSieImportInPlace(
+    supabase
+      .from('sie_imports')
+      .select('id')
+      .eq('company_id', companyId),
+  )
     .limit(1)
     .maybeSingle()
   if (!completedImport) return null

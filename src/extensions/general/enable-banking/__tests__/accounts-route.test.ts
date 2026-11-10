@@ -159,6 +159,7 @@ function buildSupabase(stub: SupabaseStub) {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
+          or: vi.fn().mockReturnThis(),
           gte: vi.fn().mockReturnThis(),
           limit: vi.fn().mockReturnThis(),
           maybeSingle: vi.fn().mockResolvedValue({ data: stub.sieImportRow ?? null, error: null }),

@@ -3056,6 +3056,7 @@
     "fy_reset_blocker_other": "Räkenskapsåret är i ett läge som inte kan nollställas.",
     "fy_reset_blocker_retained_import": "Året innehåller importerad bokföring som måste bevaras tillsammans med rättelser och underlag. Företagets ägare kan arkivera hela företaget och börja om i ett nytt arbetsutrymme. Det gäller alla räkenskapsår i företaget.",
     "fy_reset_blocker_unfinished_import": "En import eller ett ångrande är oavslutat. Slutför eller ångra importen först.",
+    "fy_reset_blocker_sie_import_in_place": "Året har en SIE-import som fortfarande gäller. Ångra importen först, sedan kan året nollställas.",
     "fy_reset_archive_action": "Visa arkivering och omstart",
     "fy_reset_retained_description": "Importerad bokföring och rättelser bevaras tillsammans med underlagen. En omstart görs i ett nytt arbetsutrymme.",
     "ib_review_action": "Granska IB",

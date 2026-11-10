@@ -25,7 +25,7 @@ function createRecordingSupabase(results: Array<{ data: unknown; error: unknown 
         calls.push({ method, args })
         return chain
       }
-    for (const method of ['select', 'eq', 'neq', 'not', 'order', 'limit']) {
+    for (const method of ['select', 'eq', 'neq', 'not', 'or', 'order', 'limit']) {
       chain[method] = record(method)
     }
     chain.maybeSingle = vi.fn().mockImplementation(() => {
@@ -81,6 +81,8 @@ describe('fetchMigrationCoverageEnd', () => {
       'journal_entries',
     ])
     expect(calls).toContainEqual({ method: 'eq', args: ['status', 'completed'] })
+    // Armed only by an import in place: not one being undone, not a repair row.
+    expect(calls).toContainEqual({ method: 'or', args: ['job_state.is.null,and(job_state.eq.completed,job_kind.eq.import)'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['company_id', 'company-1'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['status', 'posted'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['source_type', 'import'] })

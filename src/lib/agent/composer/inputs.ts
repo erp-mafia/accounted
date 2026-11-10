@@ -4,6 +4,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SourceSignals } from './schemas'
 import { loadActiveEmployeeCount } from './employee-facts'
 import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 // Atom registry index row: the metadata-only shape the composer sees when
 // picking a loadout. We never send full atom bodies to the Opus call;
@@ -330,11 +331,12 @@ export async function loadSieSummary(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<SieSummary | null> {
-  const { data: imports, error: importsErr } = await supabase
-    .from('sie_imports')
-    .select('id, fiscal_year_start, fiscal_year_end')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
+  const { data: imports, error: importsErr } = await whereSieImportInPlace(
+    supabase
+      .from('sie_imports')
+      .select('id, fiscal_year_start, fiscal_year_end')
+      .eq('company_id', companyId),
+  )
     .order('created_at', { ascending: false })
     .limit(20)
   if (importsErr) return null

@@ -11,6 +11,7 @@ import { createLogger } from '@/lib/logger'
 import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 const log = createLogger('bokslut-readiness')
 
@@ -246,13 +247,13 @@ async function periodHoldsImportedHistory(
         .eq('fiscal_period_id', fiscalPeriodId)
         .eq('source_type', 'import')
         .limit(1),
-      supabase
-        .from('sie_imports')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', fiscalPeriodId)
-        .eq('status', 'completed')
-        .limit(1),
+      whereSieImportInPlace(
+        supabase
+          .from('sie_imports')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId),
+      ).limit(1),
     ])
     for (const failed of [entries.error, imports.error]) {
       if (failed) log.warn('imported history read failed', { companyId, fiscalPeriodId, error: failed.message })

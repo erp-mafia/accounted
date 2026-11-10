@@ -98,6 +98,7 @@ import { requestCspNonce } from '@/lib/security/csp'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 import { providerKeyUse, readProviderKeyUseFacts } from './lib/key-use'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 const moduleLog = createLogger('extensions/arcim-migration')
 
@@ -361,11 +362,12 @@ export const arcimMigrationExtension: Extension = {
           // completed one out of the newest-10 window, and the wizard then
           // gated Visma/Bokio behind "SIE krävs först" for a company that had
           // imported. Same predicate as the /migrate guard.
-          const { data: latestCompletedSieImport } = await supabase
-            .from('sie_imports')
-            .select(SIE_IMPORT_COLUMNS)
-            .eq('company_id', companyId)
-            .eq('status', 'completed')
+          const { data: latestCompletedSieImport } = await whereSieImportInPlace(
+            supabase
+              .from('sie_imports')
+              .select(SIE_IMPORT_COLUMNS)
+              .eq('company_id', companyId),
+          )
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle()
@@ -1187,11 +1189,12 @@ export const arcimMigrationExtension: Extension = {
           // Check if the company already has completed SIE imports (from manual upload)
           // and which fiscal years they hold: a history longer than one run
           // continues from the oldest year not imported yet (crm#1686).
-          const { data: completedImports, count: sieImportCount } = await supabase
-            .from('sie_imports')
-            .select('fiscal_year_start', { count: 'exact' })
-            .eq('company_id', companyId)
-            .eq('status', 'completed')
+          const { data: completedImports, count: sieImportCount } = await whereSieImportInPlace(
+            supabase
+              .from('sie_imports')
+              .select('fiscal_year_start', { count: 'exact' })
+              .eq('company_id', companyId),
+          )
           const importedFiscalYears = [...new Set(
             ((completedImports ?? []) as { fiscal_year_start: string | null }[])
               .map((row) => (row.fiscal_year_start ? Number(row.fiscal_year_start.slice(0, 4)) : NaN))
@@ -1762,11 +1765,12 @@ export const arcimMigrationExtension: Extension = {
           // something against an imported chart of accounts.
           const importsEntities = importAssets
           const { count: completedSieImports } = importsEntities
-            ? await supabase
-                .from('sie_imports')
-                .select('id', { count: 'exact', head: true })
-                .eq('company_id', companyId)
-                .eq('status', 'completed')
+            ? await whereSieImportInPlace(
+                supabase
+                  .from('sie_imports')
+                  .select('id', { count: 'exact', head: true })
+                  .eq('company_id', companyId),
+              )
             : { count: null }
 
           if (importsEntities && (!completedSieImports || completedSieImports < 1)) {
@@ -2130,11 +2134,12 @@ export const arcimMigrationExtension: Extension = {
           try {
             const [allConsents, ledger] = await Promise.all([
               listConsents(companyId),
-              supabase
-                .from('sie_imports')
-                .select('imported_at, created_at')
-                .eq('company_id', companyId)
-                .eq('status', 'completed')
+              whereSieImportInPlace(
+                supabase
+                  .from('sie_imports')
+                  .select('imported_at, created_at')
+                  .eq('company_id', companyId),
+              )
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .maybeSingle(),

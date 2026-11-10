@@ -59,6 +59,7 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock): Exte
   const chain: any = {}
   chain.select = vi.fn(() => chain)
   chain.eq = vi.fn(() => chain)
+  chain.or = vi.fn(() => chain)
   chain.gte = vi.fn(() => chain)
   chain.limit = vi.fn(() => chain)
   chain.order = vi.fn(() => chain)

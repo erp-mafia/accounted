@@ -41,6 +41,7 @@ const CASH_ACCOUNT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 interface MockBuilder {
   select: ReturnType<typeof vi.fn>
   eq: ReturnType<typeof vi.fn>
+  or: ReturnType<typeof vi.fn>
   limit: ReturnType<typeof vi.fn>
   single: ReturnType<typeof vi.fn>
   maybeSingle: ReturnType<typeof vi.fn>
@@ -61,12 +62,14 @@ function makeSupabase(handlers: {
     const b: MockBuilder = {
       select: vi.fn(),
       eq: vi.fn(),
+      or: vi.fn(),
       limit: vi.fn(),
       single: vi.fn(),
       maybeSingle: vi.fn(),
     }
     b.select.mockReturnValue(b)
     b.eq.mockReturnValue(b)
+    b.or.mockReturnValue(b)
     if (table === 'journal_entries') {
       b.limit.mockResolvedValue(handlers.importedEntries ?? NO_ROWS)
     } else if (table === 'sie_imports') {
@@ -568,6 +571,7 @@ describe('imported history (klarmarkera prompt)', () => {
     expect(importsBuilder.eq).toHaveBeenCalledWith('company_id', 'co-1')
     expect(importsBuilder.eq).toHaveBeenCalledWith('fiscal_period_id', 'fp-1')
     expect(importsBuilder.eq).toHaveBeenCalledWith('status', 'completed')
+    expect(importsBuilder.or).toHaveBeenCalledWith('job_state.is.null,and(job_state.eq.completed,job_kind.eq.import)')
   })
 
   it('is true when the period holds an imported verifikat', async () => {

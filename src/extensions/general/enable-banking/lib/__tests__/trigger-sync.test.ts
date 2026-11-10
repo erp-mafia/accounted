@@ -52,7 +52,7 @@ function makeClient(state: State) {
       let updatePayload: Record<string, unknown> | null = null
       let lteFilter: { column: string; value: string } | null = null
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in', 'is']
+      const passthrough = ['select', 'eq', 'or', 'gte', 'order', 'limit', 'in', 'is']
       for (const m of passthrough) chain[m] = vi.fn(() => chain)
       chain.lte = vi.fn((column: string, value: string) => {
         lteFilter = { column, value }
