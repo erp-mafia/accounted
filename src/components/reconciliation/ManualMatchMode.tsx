@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -224,7 +226,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {external.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_left')}</p>
           ) : (
-            <table className="w-full text-[13px]">
+            <ResponsiveTable><table className="w-full text-[13px]">
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
@@ -261,7 +263,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                   )
                 })}
               </tbody>
-            </table>
+            </table></ResponsiveTable>
           )}
         </section>
 
@@ -278,7 +280,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {ledger.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_right')}</p>
           ) : (
-            <table className="w-full text-[13px]">
+            <ResponsiveTable><table className="w-full text-[13px]">
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
@@ -333,7 +335,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                   )
                 })}
               </tbody>
-            </table>
+            </table></ResponsiveTable>
           )}
         </section>
       </div>

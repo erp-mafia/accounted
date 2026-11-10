@@ -87,3 +87,11 @@ export function sameWindow(
     (a.toDate ?? periodEnd) === (b.toDate ?? periodEnd)
   )
 }
+
+/** Apply explicit drill parameters once per history entry, preserving later edits on back navigation. */
+export function claimReportDrilldown(history: Pick<History, 'state' | 'replaceState'>, identity: string): boolean {
+  const state = history.state && typeof history.state === 'object' ? history.state : {}
+  if (state.__accountedReportDrill === identity) return false
+  try { history.replaceState({ ...state, __accountedReportDrill: identity }, '') } catch { /* The mount still applies explicit URL parameters. */ }
+  return true
+}

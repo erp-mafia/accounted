@@ -1,10 +1,15 @@
 'use client'
 
+import { WorkflowSteps } from '@/components/ui/workflow-steps'
+
+
 // Report view components, extracted verbatim from app/(dashboard)/reports/page.tsx.
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { usePageState } from '@/lib/hooks/use-page-state'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useDimensions, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -13,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -98,50 +103,7 @@ import type {
   VatPeriodType,
 } from '@/types'
 
-// Shared shells for the report bodies, so all views read as the same
-// instrument: Skeleton while loading, EmptyState when the period has no data,
-// a quiet destructive card on fetch errors (design.md primitives).
-function ReportLoadingCard() {
-  return (
-    <Card>
-      <CardContent className="p-6 space-y-2">
-        {[1, 2, 3, 4, 5, 6].map((i) => (
-          <Skeleton key={i} className="h-4 w-full" />
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
-
-function ReportErrorCard({ message }: { message: string }) {
-  return (
-    <Card>
-      <CardContent className="p-8 text-center text-destructive">
-        <AlertCircle className="h-6 w-6 mx-auto mb-2" />
-        {message}
-      </CardContent>
-    </Card>
-  )
-}
-
-function ReportEmptyState({ title, description }: { title: string; description: string }) {
-  return <EmptyState icon={FileText} title={title} description={description} />
-}
-
-function reportQuery(
-  periodId: string,
-  range?: DateRangeValue,
-  dimensionFilter?: DimensionFilterValue | null,
-): string {
-  const params = new URLSearchParams({ period_id: periodId })
-  if (range?.fromDate) params.set('from_date', range.fromDate)
-  if (range?.toDate) params.set('to_date', range.toDate)
-  if (dimensionFilter) {
-    params.set('dim_no', dimensionFilter.dimNo)
-    params.set('dim_code', dimensionFilter.code)
-  }
-  return params.toString()
-}
+import { ReportLoadingCard, ReportErrorCard, ReportEmptyState, reportQuery } from '../report-view-shells'
 
 export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string; onNavigateToAccount: (account: string) => void }) {
   const [data, setData] = useState<{
@@ -152,7 +114,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'simplified' | 'detailed'>('simplified')
+  const [viewMode, setViewMode] = usePageState<'simplified' | 'detailed'>('trial-balance-view', 'simplified')
 
   useEffect(() => {
     setLoading(true)
@@ -241,7 +203,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto -mx-2 px-2">
+          <ResponsiveTable>
             {viewMode === 'simplified' ? (
               <table className="w-full text-sm min-w-[500px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -310,7 +272,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
                 </tfoot>
               </table>
             )}
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
     </div>
@@ -348,7 +310,7 @@ function TrialBalanceSimplifiedRow({
     () => makeTrialBalanceFetcher(row.account_number, periodId),
     [row.account_number, periodId]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `tb-${row.account_number}`)
 
   const ob = getNetBalance(row, 'opening')
   const ch = getNetBalance(row, 'period')
@@ -356,19 +318,19 @@ function TrialBalanceSimplifiedRow({
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           {row.account_name}
         </td>
@@ -400,23 +362,23 @@ function TrialBalanceDetailedRow({
     () => makeTrialBalanceFetcher(row.account_number, periodId),
     [row.account_number, periodId]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `tb-det-${row.account_number}`)
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <AccountNumber number={row.account_number} name={row.account_name} />
         </td>
         <td
           className="py-2 cursor-pointer"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           {row.account_name}
         </td>
@@ -763,7 +725,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -795,7 +757,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                       <tr
                         key={row.account_number}
                         className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
-                        onClick={() => onNavigateToAccount(row.account_number)}
+                        onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
                       >
                         <td className="px-4 py-1.5">
                           <AccountNumber number={row.account_number} name={row.account_name} />
@@ -820,18 +782,18 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="p-6">
-          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto]">
+          <div className="grid grid-cols-1 items-baseline gap-x-6 gap-y-2 sm:grid-cols-[1fr_auto_auto]">
             <span className="text-sm font-medium">Beräknat resultat</span>
-            <span className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
+            <span className={`font-display text-xl tabular-nums w-full text-right sm:w-32 ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
               {formatAmount(data.net_result_current)} kr
             </span>
-            <span className="tabular-nums text-sm text-muted-foreground w-32 text-right">
+            <span className="tabular-nums text-sm text-muted-foreground w-full text-right sm:w-32">
               {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>
           </div>
@@ -907,7 +869,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -945,7 +907,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
@@ -1035,7 +997,7 @@ function BalansrapportSectionRows({
         <tr
           key={row.account_number}
           className="border-b cursor-pointer hover:bg-secondary/35 transition-colors"
-          onClick={() => onNavigateToAccount(row.account_number)}
+          onClick={(event) => { event.stopPropagation(); onNavigateToAccount(row.account_number) }}
         >
           <td className="px-4 py-1.5">
             <AccountNumber number={row.account_number} name={row.account_name} />
@@ -1105,7 +1067,7 @@ function ReportSectionTable({
   // Resultatrapport/Balansrapport idiom, instead of one boxed sub-table per
   // section with a repeated title line.
   return (
-    <div className="overflow-x-auto">
+    <ResponsiveTable>
       <table className="w-full text-sm min-w-[400px]">
         <tbody>
           {sections.map((section) => (
@@ -1144,7 +1106,7 @@ function ReportSectionTable({
           </tfoot>
         )}
       </table>
-    </div>
+    </ResponsiveTable>
   )
 }
 
@@ -1444,9 +1406,7 @@ function VatStepper({
   ]
 
   return (
-    <div
-      className="flex w-full items-center gap-3 overflow-x-auto px-1"
-      role="tablist"
+    <WorkflowSteps
       aria-label="Momsdeklarationens steg"
     >
       {steps.map((step, i) => (
@@ -1496,7 +1456,7 @@ function VatStepper({
           </button>
         </React.Fragment>
       ))}
-    </div>
+    </WorkflowSteps>
   )
 }
 
@@ -2603,7 +2563,7 @@ function VatRutaRow({
 
   return (
     <>
-      <tr className="border-b">
+      <tr {...(canDrill ? expansion.surfaceProps : {})} className={canDrill ? "border-b cursor-pointer" : "border-b"}>
         <td className="py-2">
           {canDrill && (
             <span className="inline-block align-middle mr-1">
@@ -2698,7 +2658,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<SupplierLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [asOfDate, setAsOfDate] = usePageState('ledger-as-of-date', formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -2792,7 +2752,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
             <CardTitle>Ålderfördelning per leverantör</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
@@ -2822,7 +2782,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
                   <td className="py-2 text-right">{formatAmount(ledger.total_outstanding)}</td>
                 </tr>
               </tfoot>
-            </table></div>
+            </table></ResponsiveTable>
           </CardContent>
         </Card>
       )}
@@ -2899,10 +2859,10 @@ function SupplierLedgerRow({
     () => makeSupplierFetcher(entry.supplier_id),
     [entry.supplier_id]
   )
-  const { Toggle, Panel } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
+  const { Toggle, Panel, surfaceProps } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
+      <tr {...surfaceProps} className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors">
         <td className="py-2"><Toggle /></td>
         <td className="py-2">{entry.supplier_name}</td>
         <td className="py-2 text-right tabular-nums">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
@@ -2917,223 +2877,7 @@ function SupplierLedgerRow({
   )
 }
 
-// --- General Ledger (Huvudbok) ---
-
-interface GeneralLedgerData {
-  accounts: {
-    account_number: string
-    account_name: string
-    opening_balance: number
-    lines: {
-      date: string
-      voucher_series: string
-      voucher_number: number
-      journal_entry_id: string
-      description: string
-      source_type: string
-      debit: number
-      credit: number
-      balance: number
-      dimensions?: Record<string, string>
-    }[]
-    closing_balance: number
-    total_debit: number
-    total_credit: number
-  }[]
-  period: { start: string; end: string }
-}
-
-// Stable default: an inline `= {}` would change identity every render and
-// re-trigger the fetch effect for callers that omit the prop.
-const EMPTY_DATE_RANGE: DateRangeValue = {}
-
-export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
-  const [data, setData] = useState<GeneralLedgerData | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [accountFrom, setAccountFrom] = useState('')
-  const [accountTo, setAccountTo] = useState('')
-  // Only the newest request may land. The window changes right after mount
-  // (the date-range control resolves its preset, or a drill-down's window),
-  // and the superseded request must not overwrite the ledger it was
-  // replaced by when it happens to finish last.
-  const requestSeq = React.useRef(0)
-
-  const fetchData = useCallback(async (fromOverride?: string, toOverride?: string) => {
-    const seq = ++requestSeq.current
-    const from = fromOverride ?? accountFrom
-    const to = toOverride ?? accountTo
-    setLoading(true)
-    setError(null)
-    try {
-      const params = new URLSearchParams({ period_id: periodId })
-      if (from) params.set('account_from', from)
-      if (to) params.set('account_to', to)
-      if (dateRange.fromDate) params.set('from_date', dateRange.fromDate)
-      if (dateRange.toDate) params.set('to_date', dateRange.toDate)
-      if (dimensionFilter) {
-        params.set('dim_no', dimensionFilter.dimNo)
-        params.set('dim_code', dimensionFilter.code)
-      }
-      const res = await fetch(`/api/reports/general-ledger?${params}`)
-      const result = await res.json()
-      if (seq !== requestSeq.current) return
-      if (result.error) {
-        // Envelope object, not a string: see the note on the other report
-        // fetches. Rendering it bare blanks the page.
-        setError(getErrorMessage(result))
-      } else {
-        setData(result.data)
-      }
-    } catch {
-      if (seq === requestSeq.current) setError('Kunde inte hämta huvudbok')
-    } finally {
-      if (seq === requestSeq.current) setLoading(false)
-    }
-  }, [periodId, accountFrom, accountTo, dimensionFilter, dateRange])
-
-  // When initialAccountFilter changes (drill-down from another report), apply it
-  useEffect(() => {
-    if (initialAccountFilter) {
-      setAccountFrom(initialAccountFilter)
-      setAccountTo(initialAccountFilter)
-      fetchData(initialAccountFilter, initialAccountFilter)
-    } else {
-      fetchData()
-    }
-  }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
-
-  if (loading) {
-    return <ReportLoadingCard />
-  }
-
-  if (error) {
-    return <ReportErrorCard message={error} />
-  }
-
-  if (!data || data.accounts.length === 0) {
-    return (
-      <ReportEmptyState
-        title="Inga verifikationer i perioden"
-        description="Det finns inga bokförda verifikationer i den valda perioden."
-      />
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
-      {/* Account range filter: flat toolbar on the panel, no box. The labels
-          are hidden (field-label) and the placeholders say what the fields are. */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
-          <Input
-            id="gl-account-from"
-            type="text"
-            value={accountFrom}
-            onChange={(e) => setAccountFrom(e.target.value)}
-            placeholder="Från konto"
-            aria-label="Konto från"
-            className="mt-1 w-32"
-          />
-        </div>
-        <div>
-          <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
-          <Input
-            id="gl-account-to"
-            type="text"
-            value={accountTo}
-            onChange={(e) => setAccountTo(e.target.value)}
-            placeholder="Till konto"
-            aria-label="Konto till"
-            className="mt-1 w-32"
-          />
-        </div>
-        <Button onClick={() => fetchData()} variant="outline">
-          Filtrera
-        </Button>
-      </div>
-
-      {data.period.start && (
-        <p className="text-sm text-muted-foreground tabular-nums">
-          Period {data.period.start} till {data.period.end} · {data.accounts.length} konton
-        </p>
-      )}
-
-      {data.accounts.map((account) => (
-        <Card key={account.account_number}>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              {/* data-ph-mask: account number and name are user chart data */}
-              <CardTitle data-ph-mask="" className="text-base">
-                <AccountNumber number={account.account_number} name={account.account_name} showName />
-              </CardTitle>
-              <span className="text-sm text-muted-foreground">
-                IB: {formatAmount(account.opening_balance)} kr
-              </span>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                <tr className="border-b text-left">
-                  <th className="py-2 w-16">Ver.nr</th>
-                  <th className="py-2 w-24">Datum</th>
-                  <th className="py-2">Beskrivning</th>
-                  <th className="py-2 w-24 text-right">Debet</th>
-                  <th className="py-2 w-24 text-right">Kredit</th>
-                  <th className="py-2 w-28 text-right">Saldo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {account.lines.map((line, i) => (
-                  <tr key={i} className="border-b last:border-0">
-                    <td className="py-1.5 font-mono text-xs">
-                      <Link
-                        href={`/bookkeeping/${line.journal_entry_id}`}
-                        className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors"
-                      >
-                        {formatVoucher(line)}
-                      </Link>
-                    </td>
-                    <td className="py-1.5">{formatDate(line.date)}</td>
-                    <td className="py-1.5 max-w-[240px]">
-                      <span className="truncate block">{line.description}</span>
-                      {line.dimensions && Object.keys(line.dimensions).length > 0 && (
-                        <span className="text-[11px] text-muted-foreground tabular-nums">
-                          {Object.entries(line.dimensions)
-                            .sort(([a], [b]) => Number(a) - Number(b))
-                            .map(([, code]) => code)
-                            .join(' · ')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-1.5 text-right tabular-nums">
-                      {line.debit > 0 ? formatAmount(line.debit) : ''}
-                    </td>
-                    <td className="py-1.5 text-right tabular-nums">
-                      {line.credit > 0 ? formatAmount(line.credit) : ''}
-                    </td>
-                    <td className="py-1.5 text-right tabular-nums">{formatAmount(line.balance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold border-t-2">
-                  <td colSpan={3} className="py-2">Summa / Utgående balans</td>
-                  <td className="py-2 text-right tabular-nums">{formatAmount(account.total_debit)}</td>
-                  <td className="py-2 text-right tabular-nums">{formatAmount(account.total_credit)}</td>
-                  <td className="py-2 text-right tabular-nums">{formatAmount(account.closing_balance)}</td>
-                </tr>
-              </tfoot>
-            </table></div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
-}
+export { default as GeneralLedgerView } from '../lazy-views/GeneralLedgerView'
 
 // --- Journal Register (Grundbok) ---
 
@@ -3164,7 +2908,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<JournalRegisterData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedEntries, setExpandedEntries] = useState<Set<number>>(new Set())
+  const [expandedEntries, setExpandedEntries] = usePageState<Set<number>>(`journal-expanded:${periodId}`, new Set())
 
   const fetchData = async () => {
     setLoading(true)
@@ -3234,7 +2978,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
           <CardTitle>Grundbok (registreringsordning)</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+          <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b text-left">
                 <th className="py-2 w-8"></th>
@@ -3304,7 +3048,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
                 <td className="py-2 text-right">{formatAmount(data.total_credit)}</td>
               </tr>
             </tfoot>
-          </table></div>
+          </table></ResponsiveTable>
         </CardContent>
       </Card>
     </div>
@@ -3457,8 +3201,8 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<ARLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
-  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
+  const [expandedCustomers, setExpandedCustomers] = usePageState<Set<string>>(`receivables-expanded:${periodId}`, new Set())
+  const [asOfDate, setAsOfDate] = usePageState('ledger-as-of-date', formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -3569,7 +3313,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             <CardTitle>Ålderfördelning per kund</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
+            <ResponsiveTable><table className="w-full text-sm min-w-[500px]">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
@@ -3628,7 +3372,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                   <td className="py-2 text-right">{formatAmount(ledger.total_outstanding)}</td>
                 </tr>
               </tfoot>
-            </table></div>
+            </table></ResponsiveTable>
           </CardContent>
         </Card>
       )}
@@ -3815,7 +3559,7 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
 
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -3867,13 +3611,13 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="p-6">
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full text-sm">
               <tbody>
                 <tr>
@@ -3890,7 +3634,7 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                 </tr>
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
         </CardContent>
       </Card>
     </div>

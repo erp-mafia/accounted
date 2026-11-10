@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 /**
  * Ingående saldon (payroll cutover) section on the employee detail page.
  *
@@ -286,7 +288,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         handleSave()
       }}
     >
-      <DetailSection
+      <DetailSection {...(open ? {} : expandableSurface(() => setExpanded(true)))} className={open ? undefined : "cursor-pointer"}
         kicker={t('opening_balances_title')}
         help={<HelpPopover>{t('opening_balances_description', { appName })}</HelpPopover>}
         aside={

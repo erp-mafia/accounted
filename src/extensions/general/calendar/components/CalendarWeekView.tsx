@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import {
   getWeekDays,
   formatWeekDayHeader,
+  formatDayViewHeader,
   formatDateISO,
   isSameDay,
   isInvoiceOverdue,
@@ -38,7 +39,33 @@ export function CalendarWeekView({
   }
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className="calendar-week min-w-0" style={{ containerType: 'inline-size', containerName: 'calendar-week' }}>
+      <div className="calendar-week-agenda space-y-3" data-calendar-week-list>
+        {weekDays.map(date => {
+          const items = getItemsForDate(date)
+          const openInvoices = items.invoices.filter(invoice => !['paid', 'cancelled', 'credited'].includes(invoice.status))
+          const openDeadlines = items.deadlines.filter(deadline => !deadline.is_completed)
+          return (
+            <button
+              key={formatDateISO(date)}
+              type="button"
+              onClick={() => onDayClick(date)}
+              className="block min-h-10 w-full rounded-lg border border-border p-4 text-left transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="block text-[13px] font-medium">{formatDayViewHeader(date)}</span>
+              {openInvoices.map(invoice => (
+                <span key={invoice.id} className="mt-2 block text-[12.5px] [overflow-wrap:anywhere]">
+                  F#{invoice.invoice_number}{invoice.customer?.name ? ` · ${invoice.customer.name}` : ''}
+                </span>
+              ))}
+              {openDeadlines.map(deadline => (
+                <span key={deadline.id} className="mt-2 block text-[12.5px] [overflow-wrap:anywhere]">{deadline.title}</span>
+              ))}
+            </button>
+          )
+        })}
+      </div>
+      <div className="calendar-week-grid overflow-hidden rounded-lg border">
       {/* Header row with day names and dates */}
       <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-muted border-b">
         <div className="p-2 border-r" /> {/* Empty corner cell */}
@@ -151,6 +178,7 @@ export function CalendarWeekView({
             })}
           </div>
         ))}
+      </div>
       </div>
     </div>
   )

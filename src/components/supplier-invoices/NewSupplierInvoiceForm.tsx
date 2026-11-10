@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -1966,7 +1968,7 @@ export default function NewSupplierInvoiceForm({
               </div>
             )}
 
-            <div className="overflow-x-auto">
+            <ResponsiveTable primaryColumn={2}>
               <table className="w-full min-w-[560px] border-collapse text-[13px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b border-border text-left">
@@ -2188,7 +2190,7 @@ export default function NewSupplierInvoiceForm({
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </ResponsiveTable>
           </section>
 
           {/* ── Förval ───────────────────────────────────────────── */}

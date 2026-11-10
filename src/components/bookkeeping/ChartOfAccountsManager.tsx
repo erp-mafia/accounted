@@ -3,7 +3,9 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { usePageState } from '@/lib/hooks/use-page-state'
 import { Badge } from '@/components/ui/badge'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -128,17 +130,17 @@ export default function ChartOfAccountsManager() {
   // rows track the classes the user has explicitly FOLDED AWAY; the BAS
   // catalog (~1300 rows) keeps the inverse default and tracks the classes
   // the user has opened.
-  const [view, setView] = useState<'my-accounts' | 'bas-catalog'>('my-accounts')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
-  const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
+  const [view, setView] = usePageState<'my-accounts' | 'bas-catalog'>('chart-view', 'my-accounts')
+  const [searchQuery, setSearchQuery] = usePageState('chart-searchQuery', '')
+  const [collapsedMyClasses, setCollapsedMyClasses] = usePageState<Set<number>>('chart-collapsed', new Set())
+  const [expandedCatalogClasses, setExpandedCatalogClasses] = usePageState<Set<number>>('chart-expanded', new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
   const { settings: companySettings } = useCompanySettings()
   // Off by default: the list endpoint's `?active=false` means "no filter", so
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
-  const [showInactive, setShowInactive] = useState(false)
-  const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
+  const [showInactive, setShowInactive] = usePageState('chart-showInactive', false)
+  const [usageFilter, setUsageFilter] = usePageState<UsageFilter>('chart-usage', 'all')
   // Row selection for the bulk inactivate (#2186), keyed by account number
   // (the PUT/deactivate routes key on it too). Cleared on view switch.
   const [selectedNumbers, setSelectedNumbers] = useState<Set<string>>(new Set())
@@ -288,6 +290,19 @@ export default function ChartOfAccountsManager() {
       setReferenceLoading(false)
     }
   }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded, companySettings])
+
+  // Restored views bypass the tab click handler. Try once per activation so
+  // loading-state changes cannot create a retry loop after a failed request.
+  const referenceActivation = useRef(false)
+  useEffect(() => {
+    if (view !== 'bas-catalog') {
+      referenceActivation.current = false
+      return
+    }
+    if (referenceActivation.current) return
+    referenceActivation.current = true
+    void ensureReferenceLoaded()
+  }, [view, ensureReferenceLoaded])
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
@@ -570,7 +585,7 @@ export default function ChartOfAccountsManager() {
           <p>{t('help_text')}</p>
         </HelpPopover>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
           {t('prune_button')}
@@ -588,7 +603,6 @@ export default function ChartOfAccountsManager() {
     setSelectedNumbers(new Set())
     setCollapsedMyClasses(new Set())
     setExpandedCatalogClasses(new Set())
-    if (next === 'bas-catalog') void ensureReferenceLoaded()
   }
 
   // Concept band row (Klass N: label), clickable to fold the class away.
@@ -698,6 +712,7 @@ export default function ChartOfAccountsManager() {
               </div>
             )}
           <div className="overflow-x-auto">
+            <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -869,6 +884,7 @@ export default function ChartOfAccountsManager() {
                   })}
               </tbody>
             </table>
+          </ResponsiveTable>
           </div>
           </div>
         )
@@ -884,6 +900,7 @@ export default function ChartOfAccountsManager() {
             <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
           ) : (
             <div className="overflow-x-auto">
+            <ResponsiveTable>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -961,7 +978,8 @@ export default function ChartOfAccountsManager() {
                     })}
                 </tbody>
               </table>
-            </div>
+            </ResponsiveTable>
+          </div>
           )}
         </div>
       )}

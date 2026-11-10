@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -68,7 +70,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
           {t('matcher_close')}
         </button>
       </div>
-      <div className="-mx-4 overflow-x-auto sm:mx-0">
+      <ResponsiveTable >
         <table className="w-full text-[13px]">
           <thead>
             <tr>
@@ -125,7 +127,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
             ))}
           </tbody>
         </table>
-      </div>
+      </ResponsiveTable>
     </div>
   )
 }

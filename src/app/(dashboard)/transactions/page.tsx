@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -4528,7 +4530,7 @@ export default function TransactionsPage() {
 
             {/* Negative margin + matching padding: the scroll container runs
                 to the panel edges while the columns keep the page padding. */}
-            <div className="overflow-x-auto -mx-4 px-4 md:-mx-6 md:px-6">
+            <ResponsiveTable primaryColumn={txColumns.has('date') ? 3 : 2} actionsColumn="last">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -4607,7 +4609,7 @@ export default function TransactionsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </ResponsiveTable>
             {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
                 is usually a migration/import whose counterpart vouchers
                 already exist, and the only match affordance here is per-row.

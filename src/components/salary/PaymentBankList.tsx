@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useState } from 'react'
 import useSWR from 'swr'
 import { useLocale, useTranslations } from 'next-intl'
@@ -58,7 +60,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
 
   return (
     <>
-      <DefRow label={t('bank_list_label')}>
+      <DefRow label={t('bank_list_label')} className="cursor-pointer" {...expandableSurface(() => setOpen(value => !value))}>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <span className="tabular-nums">
             {t('bank_list_summary', { count: data.employeeCount, total: formatCurrency(data.totalAmount) })}

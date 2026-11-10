@@ -11,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 export function ReportBodyLoading() {
   return (
     <div className="space-y-6" aria-busy>
-      <div className="flex items-center gap-6">
+      <div className="flex flex-wrap items-center gap-4">
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="flex items-center gap-2">
             <Skeleton className="h-6 w-6 rounded-full" />
@@ -22,8 +22,8 @@ export function ReportBodyLoading() {
       <div className="space-y-3">
         <Skeleton className="h-3 w-48" />
         {[0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="flex items-center justify-between border-b border-border py-2">
-            <Skeleton className="h-3.5 w-56" />
+          <div key={i} className="flex min-w-0 items-center justify-between gap-4 border-b border-border py-2">
+            <Skeleton className="h-3.5 w-56 max-w-[65%]" />
             <Skeleton className="h-3.5 w-20" />
           </div>
         ))}

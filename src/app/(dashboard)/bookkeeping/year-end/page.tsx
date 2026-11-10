@@ -1,5 +1,7 @@
 'use client'
 
+import { WorkflowSteps } from '@/components/ui/workflow-steps'
+
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -350,9 +352,8 @@ export default function YearEndPage() {
           Steps behind the current one are clickable for going back; forward
           navigation stays with each step's own continue action. */}
       {showWizard && step !== 'result' && (
-        <div
-          className="mx-auto flex w-full max-w-4xl items-center gap-3 overflow-x-auto px-1"
-          role="tablist"
+        <WorkflowSteps
+          className="mx-auto max-w-4xl"
           aria-label="Bokslutets steg"
         >
           {STEP_ORDER.map((s, i) => (
@@ -398,7 +399,7 @@ export default function YearEndPage() {
               </button>
             </React.Fragment>
           ))}
-        </div>
+        </WorkflowSteps>
       )}
 
       {showWizard && step === 'preflight' && (

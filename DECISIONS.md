@@ -1226,3 +1226,13 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-10-03] Skatteverket refusals log only status, period and SKV kod, not the response body: an EF body can echo the owner's personnummer, and the full body already reaches the user in the error response; no-console is an error in the extension.
 [2026-10-03] Bank booking doors refuse via one assertTransactionBookable (pointer or bank_line link to a posted verifikat): code-only fix approved; no DB trigger guarded this before and none is removed, a trigger backstop is deferred to its own PR; categorize fast path stays pointer-keyed, book route now rebooks a reversed pointer like the core.
 [2026-10-03] MCP create_invoice staging and commit both build through buildStagedInvoice (the shared buildInvoiceWriteData) instead of adding the 1660-on-a-VAT-line check to the hand copy: one definition, so ROT/RUT, accrual, preview VAT and the reverse-charge notice cannot drift again.
+
+[2026-11-09] Move collapsible navigation and ledger presentation into a dedicated UI PR. Reports reuse the existing catalog, and inactive means zero closing balance with no vouchers in the selected interval.
+
+[2026-11-09] Responsive report tables keep one DOM and derive narrow-screen labels from their headers. Disclosure surfaces preserve native controls and selection. Per-tab, per-company view state and delayed scroll restoration retain context after voucher navigation.
+
+[2026-11-09] Mobile tables reuse one native table DOM with bordered, spaced row cards. Infer titles and selection columns from existing headers; place final actions in a full-width footer. Expanded details share their row outline.
+
+[2026-11-09] Reuse wrapping workflow steps and labelled responsive form rows for narrow screens; preserve native controls and desktop columns. Mobile audits check the document client width and nested scroll regions, while external docs redirects stay outside the self-hosted audit.
+
+[2026-11-09] Show calendar weeks as seven day cards on phones; the time matrix clipped days at narrow widths. Both views use the same dates and event arrays and preserve the existing day-navigation callback.

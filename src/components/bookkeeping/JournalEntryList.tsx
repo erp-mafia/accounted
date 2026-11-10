@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -1532,7 +1534,7 @@ export default function JournalEntryList({
           </AttnLine>
         )}
 
-        <div className="overflow-x-auto">
+        <ResponsiveTable>
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -1766,7 +1768,7 @@ export default function JournalEntryList({
                       </td>
                     </tr>
                     {isExpanded && (
-                      <tr data-no-stagger>
+                      <tr data-no-stagger data-responsive-detail-row>
                         <td colSpan={6} className="border-b border-border p-0">
                           <RowFoldout>
                             <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
@@ -1920,7 +1922,7 @@ export default function JournalEntryList({
               })}
             </tbody>
           </table>
-        </div>
+        </ResponsiveTable>
       </div>
       )}
 

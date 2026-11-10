@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -472,7 +474,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
       </DetailSection>
 
       <DetailSection kicker={t('section_lines')}>
-        <div className="overflow-x-auto">
+        <ResponsiveTable>
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -668,7 +670,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
               })}
             </tbody>
           </table>
-        </div>
+        </ResponsiveTable>
         {errors.lines && <p className="mt-2 text-sm text-destructive">{errors.lines}</p>}
 
         <div className="mt-4 flex flex-wrap items-center gap-2">

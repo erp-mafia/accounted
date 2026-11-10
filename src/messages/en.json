@@ -71,6 +71,9 @@
     "source_code": "Source code"
   },
   "nav": {
+    "expand_section": "Expand {name}",
+    "collapse_section": "Collapse {name}",
+    "reports_overview": "All reports",
     "dashboard": "Overview",
     "home": "Home",
     "assistant": "Assistant",
@@ -6394,6 +6397,8 @@
     "uploading": "Uploading..."
   },
   "journal_attachments": {
+    "show_preview": "Show preview",
+    "hide_preview": "Hide preview",
     "loading": "Loading documents...",
     "title": "Documents",
     "add": "Add document",
@@ -8422,6 +8427,17 @@
     "rel_days": "{count} days ago"
   },
   "reports": {
+    "ledger_empty_title": "No vouchers in the period",
+    "ledger_empty_description": "There are no posted vouchers in the selected period.",
+    "ledger_period_summary": "Period {start} to {end} · {count, plural, one {# account} other {# accounts}}",
+    "ledger_hide_inactive_help": "An account is inactive when its closing balance is zero and it has no vouchers within the selected reporting interval of the fiscal year.",
+    "ledger_hide_inactive": "Hide inactive",
+    "ledger_no_active_accounts": "No active accounts in the interval",
+    "ledger_show_inactive_hint": "Clear Hide inactive to show accounts with a zero balance and no vouchers in the interval.",
+    "ledger_expand_all": "Expand all",
+    "ledger_collapse_all": "Collapse all",
+    "ledger_expand_account": "Expand account {number}",
+    "ledger_collapse_account": "Collapse account {number}",
     "title": "Reports",
     "cash_flow_tax_allocation_required": "The cash flow statement cannot reliably calculate income tax paid from this period's tax postings. Income tax must be separated from other taxes in the report working papers. No bookkeeping changes are required.",
     "cash_flow_group_contributions": "Group contributions",

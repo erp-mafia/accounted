@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
@@ -385,7 +387,7 @@ function ArticlesPageInner() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <ResponsiveTable>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -442,7 +444,7 @@ function ArticlesPageInner() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ResponsiveTable>
 
           {/* Footer count (concept pgnote) */}
           <p className="px-1 text-xs text-muted-foreground tabular-nums">

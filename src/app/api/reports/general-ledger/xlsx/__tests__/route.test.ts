@@ -123,6 +123,46 @@ describe('GET /api/reports/general-ledger/xlsx', () => {
     expect(findCalls('dimensions', 'eq')).toContainEqual(['company_id', 'company-1'])
   })
 
+  it.each([undefined, 'false', 'true'])('hides only zero-balance accounts without lines when hide_inactive=%s', async hideInactive => {
+    enqueue({ data: { company_name: 'Test AB' } })
+    enqueue({ data: PERIOD })
+    const report = ledger()
+    const original = report.accounts[0]
+    report.accounts.push({
+      ...original,
+      account_number: '1930',
+      opening_balance: 400,
+      closing_balance: 0,
+      lines: original.lines.map(line => ({ ...line, balance: 0 })),
+    }, {
+      ...original,
+      account_number: '1933',
+      opening_balance: 800,
+      closing_balance: 400,
+      lines: original.lines.map(line => ({ ...line, balance: 400 })),
+    })
+    report.accounts.push({
+      ...original,
+      account_number: '1910',
+      opening_balance: 0,
+      closing_balance: 0,
+      lines: [],
+      total_debit: 0,
+      total_credit: 0,
+    })
+    mockGenerate.mockResolvedValue(report)
+
+    const searchParams: Record<string, string> = { period_id: 'period-1' }
+    if (hideInactive !== undefined) searchParams.hide_inactive = hideInactive
+    const response = await GET(createMockRequest('/api/reports/general-ledger/xlsx', { searchParams }), noParams)
+
+    expect(response.status).toBe(200)
+    const rows = await sheetRows(response)
+    const accounts = new Set(rows.slice(1).map(row => row[0]))
+    expect(accounts).toEqual(new Set(hideInactive === 'true' ? ['3001', '1930', '1933'] : ['3001', '1910', '1930', '1933']))
+    expect(mockGenerate.mock.calls[0][5]?.includeInactive).toBe(hideInactive === 'false' ? true : undefined)
+  })
+
   it('leaves the file as it was for a ledger with no tagged line', async () => {
     enqueue({ data: { company_name: 'Test AB' } }) // company_settings
     enqueue({ data: PERIOD }) // fiscal_periods

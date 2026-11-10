@@ -1,5 +1,7 @@
 'use client'
 
+import { expandableSurface } from '@/components/ui/expandable-surface'
+
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
@@ -192,7 +194,7 @@ export function BookingTemplatesPanel() {
           <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
         </p>
         {canWrite && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
             <Button
               variant="outline"
               size="sm"
@@ -442,7 +444,7 @@ function TemplateSection({
           const isExpanded = expandedId === tt.id
           const isConvertible = convertLibraryToBookingTemplate(tt) !== null
           return (
-            <div key={tt.id} className="border-b border-border">
+            <div key={tt.id} className="border-b border-border cursor-pointer" {...expandableSurface(() => onToggle(isExpanded ? null : tt.id))}>
               <div className="flex items-center gap-3 px-1 py-3 transition-colors duration-150 hover:bg-secondary/60">
                 <button
                   type="button"

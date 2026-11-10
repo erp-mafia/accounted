@@ -38,9 +38,9 @@ interface CashRowProps {
 
 function CashRow({ label, amount }: CashRowProps) {
   return (
-    <div className="flex items-center justify-between py-1 text-sm">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-1 text-sm">
       <span className="text-foreground">{label}</span>
-      <span className="tabular-nums text-right">{formatAmount(amount)}</span>
+      <span className="ml-auto shrink-0 tabular-nums text-right">{formatAmount(amount)}</span>
     </div>
   )
 }
@@ -52,9 +52,9 @@ interface SubtotalRowProps {
 
 function SubtotalRow({ label, amount }: SubtotalRowProps) {
   return (
-    <div className="flex items-center justify-between border-t border-border pt-3 mt-2 text-sm font-medium">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3 mt-2 text-sm font-medium">
       <span>{label}</span>
-      <span className="tabular-nums text-right">{formatAmount(amount)}</span>
+      <span className="ml-auto shrink-0 tabular-nums text-right">{formatAmount(amount)}</span>
     </div>
   )
 }
@@ -171,7 +171,7 @@ export function KassaflodesanalysClient() {
           hideFuturePeriods
           onReady={() => setIsLoadingPeriods(false)}
         />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             onClick={handleDownloadPdf}
@@ -344,9 +344,9 @@ export function KassaflodesanalysClient() {
           {/* Total */}
           <Card>
             <CardContent className="p-6">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                 <span className="font-display text-lg">Årets kassaflöde</span>
-                <span className="font-display text-lg tabular-nums">
+                <span className="ml-auto shrink-0 font-display text-lg tabular-nums">
                   {formatAmount(report.total_cash_flow)}
                 </span>
               </div>
@@ -394,7 +394,7 @@ export function KassaflodesanalysClient() {
                 {!report.reconciliation.is_reconciled && (
                   <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
                     <span>Avvikelse</span>
-                    <span className="tabular-nums text-right">
+                    <span className="ml-auto shrink-0 tabular-nums text-right">
                       {formatAmount(report.reconciliation.mismatch_amount)}
                     </span>
                   </div>

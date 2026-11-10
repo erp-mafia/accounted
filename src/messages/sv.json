@@ -71,6 +71,9 @@
     "source_code": "Källkod"
   },
   "nav": {
+    "expand_section": "Expandera {name}",
+    "collapse_section": "Fäll ihop {name}",
+    "reports_overview": "Alla rapporter",
     "dashboard": "Översikt",
     "home": "Hem",
     "assistant": "Assistent",
@@ -6394,6 +6397,8 @@
     "uploading": "Laddar upp..."
   },
   "journal_attachments": {
+    "show_preview": "Visa förhandsgranskning",
+    "hide_preview": "Dölj förhandsgranskning",
     "loading": "Laddar underlag...",
     "title": "Underlag",
     "add": "Lägg till underlag",
@@ -8422,6 +8427,17 @@
     "rel_days": "för {count} dagar sedan"
   },
   "reports": {
+    "ledger_empty_title": "Inga verifikationer i perioden",
+    "ledger_empty_description": "Det finns inga bokförda verifikationer i den valda perioden.",
+    "ledger_period_summary": "Period {start} till {end} · {count, plural, one {# konto} other {# konton}}",
+    "ledger_hide_inactive_help": "Kontot räknas som inaktivt när dess utgående saldo är 0 kr och det saknar verifikat inom det valda rapportintervallet för räkenskapsåret.",
+    "ledger_hide_inactive": "Dölj inaktiva",
+    "ledger_no_active_accounts": "Inga aktiva konton i intervallet",
+    "ledger_show_inactive_hint": "Avmarkera Dölj inaktiva för att visa konton som har nollsaldo och saknar verifikat i intervallet.",
+    "ledger_expand_all": "Expandera alla",
+    "ledger_collapse_all": "Kollapsa alla",
+    "ledger_expand_account": "Expandera konto {number}",
+    "ledger_collapse_account": "Kollapsa konto {number}",
     "title": "Rapporter",
     "cash_flow_tax_allocation_required": "Kassaflödesanalysen kan inte beräkna betald inkomstskatt säkert från periodens skattebokningar. Inkomstskatt behöver skiljas från övriga skatter i rapportunderlaget. Bokföringen behöver inte ändras.",
     "cash_flow_group_contributions": "Koncernbidrag",

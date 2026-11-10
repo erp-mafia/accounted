@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
@@ -44,21 +44,6 @@ export interface PairRowProps {
 
 const NUM = 'whitespace-nowrap text-right tabular-nums'
 const DATE = 'whitespace-nowrap tabular-nums text-muted-foreground'
-
-export function PairsHead({ externalLabel }: { externalLabel: string }) {
-  const t = useTranslations('reconciliation')
-  return (
-    <tr>
-      <th className={cn(TH_CLASS, '!pl-0 w-[96px]')}>{t('col_date')}</th>
-      <th className={cn(TH_CLASS, 'w-[30%]')}>{externalLabel}</th>
-      <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
-      <th className={cn(TH_CLASS, 'w-[96px] pl-6')}>{t('col_date')}</th>
-      <th className={TH_CLASS}>{t('v2_side_ledger')}</th>
-      <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
-      <th className={cn(TH_CLASS, '!pr-0 w-[150px]')} aria-hidden="true"></th>
-    </tr>
-  )
-}
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (

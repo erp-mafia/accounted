@@ -68,8 +68,9 @@ import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitle
 import type { EntityType } from '@/types'
 import { offersPayroll } from '@/lib/company/offers-payroll'
 import { SidebarV2 } from './SidebarV2'
+import { NavTreeSection } from './NavTreeSection'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
-import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
+import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, reportNavigationGroups, type NavGateFlags, type NavV2Item } from './nav-v2'
 import { useNavRowClaim } from './nav-row-claim'
 
 void _ENABLED_EXTENSION_IDS
@@ -87,6 +88,7 @@ interface DashboardNavProps {
   // pays_salaries). Drives visibility of the payroll (Personal) section for
   // non-aktiebolag, notably an enskild firma that hires staff. See #782.
   paysSalaries?: boolean
+  hasEmployees?: boolean
   // Whether the dimensions register (company_settings.dimensions_enabled) is
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
@@ -332,7 +334,8 @@ function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: 
   return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+/** Render gated desktop and mobile navigation with independent section disclosures. */
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, hasEmployees = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const router = useRouter()
@@ -343,6 +346,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // generic Sparkles glyph.
   const { identity: agentIdentity } = useAgentSheet()
   const tNav = useTranslations('nav')
+  const tReports = useTranslations('reports')
   const tCommon = useTranslations('common')
   const tSwitcher = useTranslations('company_switcher')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -629,11 +633,28 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Nav tree: the same gates applied to sections and their sub-items.
   // In cockpit mode the lean cockpit list is the whole sidebar.
   const gateTree = (items: NavV2Item[]): NavV2Item[] =>
-    items.filter(passesGates).map((i) => ({ ...i, sub: i.sub?.filter(passesGates) }))
+    items.filter(passesGates).map(item => ({
+      ...item,
+      sub: item.sub && gateTree(item.sub),
+      groups: item.groups?.map(group => ({ ...group, items: gateTree(group.items) })).filter(group => group.items.length > 0),
+    }))
   const v2Top: NavV2Item[] = cockpitMode
     ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : gateTree(NAV_V2_TOP)
-  const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY)
+  const dedicatedNavHrefs = new Set(NAV_V2_COMPANY.flatMap(item => [
+    item.href, ...(item.sub ?? []).map(child => child.href),
+  ]))
+  const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY.map(item => item.href === '/reports'
+    ? {
+        ...item,
+        groups: reportNavigationGroups(entityType, hasEmployees, dimensionsEnabled)
+          .map(group => ({ ...group, items: group.items.filter(report => !dedicatedNavHrefs.has(report.href)) }))
+          .filter(group => group.items.length > 0),
+      }
+    : item))
+  const reportsNav = v2Company.find(item => item.href === '/reports')
+  const navTreeLabel = (key: string, namespace?: 'reports') => namespace === 'reports' ? tReports(key) : tNav(key as NavLabelKey)
+  const navToggleLabel = (name: string, expanded: boolean) => tNav(expanded ? 'collapse_section' : 'expand_section', { name })
   // Att göra carries the whole queue (unbooked rows + staged operations);
   // Transaktioner and Assistentens förslag keep their own share.
   const v2BadgeFor = (href: string): number | null => {
@@ -681,7 +702,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         top={v2Top}
         company={v2Company}
         groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
-        label={(key) => tNav(key as NavLabelKey)}
+        label={navTreeLabel}
+        toggleLabel={navToggleLabel}
         isActive={isActive}
         isEnabled={isItemEnabled}
         badgeFor={v2BadgeFor}
@@ -814,7 +836,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain",
+              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain scroll-pt-8",
               isClosing
                 ? "animate-out slide-out-to-bottom duration-150"
                 : "animate-in slide-in-from-bottom duration-300"
@@ -824,7 +846,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             aria-label={tNav('navigation_menu')}
           >
             {/* Drag handle */}
-            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
+            <div className="pointer-events-none flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
               <div className="w-8 h-1 rounded-full bg-muted-foreground/25" />
             </div>
 
@@ -934,6 +956,21 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   </div>
                   <div className="space-y-0.5">
                     {items.map((item) => {
+                      if (item.href === '/reports' && reportsNav) return (
+                        <NavTreeSection
+                          key={item.href}
+                          item={reportsNav}
+                          label={navTreeLabel}
+                          toggleLabel={navToggleLabel}
+                          isActive={isActive}
+                          isEnabled={isItemEnabled}
+                          badgeFor={v2BadgeFor}
+                          needsCompanyTitle={tNav('needs_company_tooltip')}
+                          betaLabel={tNav('badge_beta')}
+                          onNavigate={closeMobileMenu}
+                          mobile
+                        />
+                      )
                       const active = isActive(item.href)
                       const enabled = isItemEnabled(item.href) && !item.comingSoon
                       const badge = item.href === '/transactions' && uncategorizedCount > 0

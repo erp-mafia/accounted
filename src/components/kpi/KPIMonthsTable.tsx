@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -26,7 +28,7 @@ export function KPIMonthsTable({ report }: { report: KPIReport }) {
         </h2>
         <div className="h-px flex-1 bg-border/60" />
       </div>
-      <div className="overflow-x-auto">
+      <ResponsiveTable>
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -59,7 +61,7 @@ export function KPIMonthsTable({ report }: { report: KPIReport }) {
             </tr>
           </tfoot>
         </table>
-      </div>
+      </ResponsiveTable>
     </div>
   )
 }

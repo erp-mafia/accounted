@@ -1,3 +1,4 @@
+import { expandableSurface } from "@/components/ui/expandable-surface"
 import * as React from "react"
 import { cn } from "@/lib/utils"
 
@@ -65,6 +66,9 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
     ref
   ) => {
     const isInteractive = Boolean(onClick)
+    const surface = onClick && expandedContent != null && typeof expanded === 'boolean'
+      ? expandableSurface<HTMLDivElement>(onClick)
+      : null
     return (
       <div
         ref={ref}
@@ -74,6 +78,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
           className
         )}
         {...props}
+        {...surface}
       >
         <div
           className={cn(
@@ -81,7 +86,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
             isInteractive && "cursor-pointer",
             rowClassName
           )}
-          onClick={onClick}
+          onClick={surface ? undefined : onClick}
         >
           {leading != null && (
             <div className="flex shrink-0 items-center pt-0.5">{leading}</div>

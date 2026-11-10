@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react'
 import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
+import { getLibrarySections } from '@/lib/reports/catalog'
 
 /**
  * Visibility gates shared by the v1 nav items and the v2 tree. DashboardNav
@@ -43,8 +44,42 @@ export interface NavGateFlags {
  */
 export interface NavV2Item extends NavGateFlags {
   labelKey: string
+  labelNamespace?: 'reports'
   icon?: LucideIcon
   sub?: NavV2Item[]
+  groups?: NavV2Group[]
+}
+
+export interface NavV2Group {
+  id: string
+  labelKey: string
+  labelNamespace?: 'reports'
+  items: NavV2Item[]
+}
+
+/** Project visible report catalog sections into the nested navigation shape. */
+export function reportNavigationGroups(entityType?: EntityType, hasEmployees?: boolean, dimensionsEnabled?: boolean): NavV2Group[] {
+  return getLibrarySections(entityType, hasEmployees, dimensionsEnabled).map(section => ({
+    id: section.category,
+    labelKey: section.labelKey,
+    labelNamespace: 'reports',
+    items: section.items.map(report => ({
+      href: report.route ?? `/reports/${report.slug}`,
+      labelKey: report.labelKey,
+      labelNamespace: 'reports',
+    })),
+  }))
+}
+
+export interface NavExpansion {
+  open: boolean
+  pathname: string
+}
+
+/** Explicit opens survive navigation. An active branch reopens on a new route. */
+export function isNavSectionExpanded(override: NavExpansion | undefined, pathname: string, active: boolean): boolean {
+  if (!override) return active
+  return override.open || (active && override.pathname !== pathname)
 }
 
 export const NAV_V2_TOP: NavV2Item[] = [
@@ -170,8 +205,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     labelKey: 'reports',
     icon: BarChart3,
     sub: [
-      { href: '/reports', labelKey: 'reports' },
-      { href: '/kpi', labelKey: 'kpi' },
+      { href: '/reports', labelKey: 'reports_overview' },
     ],
   },
   {
@@ -205,7 +239,8 @@ export function claimedRowActive(href: string, pathname: string, claimedHref: st
  * Återkommande and not Kundfakturor as well.
  */
 export function activeSubHref(item: NavV2Item, isActive: (href: string) => boolean): string | null {
-  const matches = (item.sub ?? []).filter((s) => isActive(s.href))
+  const children = [...(item.sub ?? []), ...(item.groups ?? []).flatMap(group => group.items)]
+  const matches = children.filter((s) => isActive(s.href))
   if (matches.length === 0) return null
   return matches.reduce((best, s) => (s.href.length > best.href.length ? s : best)).href
 }

@@ -1,6 +1,9 @@
 'use client'
 
-import React, { useState, useCallback, useMemo } from 'react'
+import { usePageState } from '@/lib/hooks/use-page-state'
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+import { expandableSurface } from '@/components/ui/expandable-surface'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -79,14 +82,14 @@ export function ReportRowExpansion({
   colSpan,
   rowId,
 }: ReportRowExpansionProps) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = usePageState(`report-row:${rowId}`, false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
+  useEffect(() => { if (expanded) void load() }, [expanded, load])
 
   const toggle = useCallback(() => {
     const next = !expanded
     setExpanded(next)
-    if (next) load()
-  }, [expanded, load])
+  }, [expanded])
 
   return (
     <>
@@ -126,14 +129,14 @@ export function ReportRowExpansion({
  * colSpan={n}>` lines up with the rest of the table.
  */
 export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: string) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = usePageState(`report-row:${rowId}`, false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
+  useEffect(() => { if (expanded) void load() }, [expanded, load])
 
   const toggle = useCallback(() => {
     const next = !expanded
     setExpanded(next)
-    if (next) load()
-  }, [expanded, load])
+  }, [expanded])
 
   const Toggle = () => (
     <button
@@ -163,7 +166,7 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
       />
     ) : null
 
-  return { expanded, Toggle, Panel }
+  return { expanded, Toggle, Panel, surfaceProps: expandableSurface(toggle) }
 }
 
 /**
@@ -253,7 +256,7 @@ function ExpansionContent({
   }
 
   return (
-    <div className="px-4 py-2">
+    <ResponsiveTable className="px-4 py-2" primaryColumn={3}>
       <table className="w-full text-xs">
         <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
           <tr className="text-left">
@@ -295,7 +298,7 @@ function ExpansionContent({
           ))}
         </tbody>
       </table>
-    </div>
+    </ResponsiveTable>
   )
 }
 

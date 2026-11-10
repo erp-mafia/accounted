@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { Fragment, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -117,7 +119,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
 
   return (
     <div className="stagger-enter">
-      <div className="-mx-5 overflow-x-auto px-5 md:-mx-6 md:px-6">
+      <ResponsiveTable >
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -157,7 +159,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
             )}
           </tbody>
         </table>
-      </div>
+      </ResponsiveTable>
       {footer}
     </div>
   )

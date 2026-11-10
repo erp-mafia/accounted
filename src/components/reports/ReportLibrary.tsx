@@ -1,5 +1,7 @@
 'use client'
 
+import { ResponsiveTable } from '@/components/ui/responsive-table'
+
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Search, X } from 'lucide-react'
@@ -99,7 +101,7 @@ export function ReportLibrary({
           {t('search_no_results', { query: query.trim() })}
         </p>
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label={t('title')}>
+        <ResponsiveTable role="region" aria-label={t('title')}>
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -123,7 +125,7 @@ export function ReportLibrary({
               ))}
             </tbody>
           </table>
-        </div>
+        </ResponsiveTable>
       )}
     </div>
   )

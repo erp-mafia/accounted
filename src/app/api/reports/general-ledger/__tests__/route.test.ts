@@ -119,6 +119,18 @@ describe('GET /api/reports/general-ledger', () => {
     )
   })
 
+  it.each([undefined, 'false', 'true'])('includes inactive accounts only with include_inactive=%s', async includeInactive => {
+    enqueue({ data: PERIOD })
+    mockGenerate.mockResolvedValue(EMPTY_REPORT)
+    const searchParams: Record<string, string> = { period_id: 'period-1' }
+    if (includeInactive !== undefined) searchParams.include_inactive = includeInactive
+
+    const response = await GET(createMockRequest('/api/reports/general-ledger', { searchParams }), noParams)
+
+    expect(response.status).toBe(200)
+    expect(mockGenerate.mock.calls[0][5]?.includeInactive).toBe(includeInactive === 'true' ? true : undefined)
+  })
+
   it('omits the range when no date params are sent (full period)', async () => {
     enqueue({ data: PERIOD }) // fiscal_periods
     mockGenerate.mockResolvedValue(EMPTY_REPORT)
