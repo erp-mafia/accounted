@@ -26,6 +26,7 @@ vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchSigner: (...args: unknown
 const NO_SIGNER = { psuId: null, ipAddress: null }
 
 import { syncPaymentOrderStatuses, UNANSWERED_SIGNING_MINUTES } from '../sync'
+import { skattekontoPaymentsCovering } from '../skattekonto-underway'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
 import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, fakeProvider, holdSigning, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
 
@@ -405,6 +406,39 @@ describe('syncPaymentOrderStatuses', () => {
         expect(provider.pollSigning).not.toHaveBeenCalled()
         expect(signing.status).toBe('awaiting_signature')
         expect(orders[0]!.status).toBe('awaiting_signature')
+      })
+
+      it('never moves the signing start on a failed read, so a skattekonto payment left waiting stops counting as cover at the cutoff all the same (crm#1721)', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        try {
+          vi.setSystemTime(new Date('2026-11-10T08:00:00Z'))
+          const getPaymentState = vi.fn().mockRejectedValue(new PaymentProviderError('down', 'CONNECTOR_UNREACHABLE', true, null))
+          registerPaymentInitiationProvider(fakeProvider({ getPaymentState, pollSigning: bankId('pending') }))
+          const orders = [order('o1', { purpose: 'skattekonto', supplier_invoice_id: null, amount: 5000 })]
+          const startedAt = '2026-11-10T07:30:00Z'
+          const signing = held(orders, startedAt)
+          // What Hem and the Skattekonto page read: the order with its signing.
+          const cover = () =>
+            skattekontoPaymentsCovering(
+              orders.map((o) => ({ ...o, signing: { status: signing.status, signing_started_at: signing.signing_started_at } })),
+              null,
+            )
+
+          await run()
+          expect(cover()).toBe(5000)
+
+          // 75 minutes after the start, the reads still failing.
+          vi.setSystemTime(new Date('2026-11-10T08:45:00Z'))
+          await run()
+
+          expect(getPaymentState).toHaveBeenCalled()
+          expect(signing).toMatchObject({ status: 'awaiting_signature', signing_started_at: startedAt })
+          expect(orders[0]!.status).toBe('awaiting_signature')
+          expect(patches('payment_order_batches')).toEqual([])
+          expect(cover()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
       })
     })
   })

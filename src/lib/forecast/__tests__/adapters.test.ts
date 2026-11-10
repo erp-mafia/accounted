@@ -101,6 +101,7 @@ function order(overrides: Partial<PaymentOrderRow>): PaymentOrderRow {
     reference: '4471',
     executed_at: null,
     matched_at: null,
+    signing: null,
     ...overrides,
   }
 }
@@ -241,6 +242,23 @@ describe('payment queue and supplier invoices', () => {
     )
     expect(queue.flows.map((f) => f.ref?.id)).toEqual(['sent'])
     expect(skattekontoPaymentsInFlight(queue.skattekontoOrders, null)).toBe(700)
+  })
+
+  it('lets a skattekonto payment whose BankID nobody finished pay nothing once its signing cannot finish, as Hem counts it (crm#1721)', () => {
+    const now = Date.parse('2026-10-28T10:00:00Z')
+    const startedBefore = (minutes: number) => ({ status: 'awaiting_signature', signing_started_at: new Date(now - minutes * 60_000).toISOString() })
+    const queue = paymentOrderFlows(
+      [
+        order({ id: 'signing', purpose: 'skattekonto', status: 'awaiting_signature', supplier_invoice_id: null, amount: 700, signing: startedBefore(5) }),
+        order({ id: 'stuck', purpose: 'skattekonto', status: 'awaiting_signature', supplier_invoice_id: null, amount: 900, signing: startedBefore(8 * 24 * 60) }),
+      ],
+      WINDOW,
+      new Map(),
+      now,
+    )
+    // The stuck one neither leaves the bank nor fills the skattekonto: its charge is cash still to pay.
+    expect(queue.flows.map((f) => f.ref?.id)).toEqual(['signing'])
+    expect(skattekontoPaymentsInFlight(queue.skattekontoOrders, null, now)).toBe(700)
   })
 })
 
