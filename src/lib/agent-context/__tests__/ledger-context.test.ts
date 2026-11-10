@@ -168,6 +168,18 @@ describe('buildLedgerContext', () => {
     ])
   })
 
+  it('leaves out a rule learned from a generic bank text, which the matcher never applies (crm#1707)', async () => {
+    enqueueAll(mock, {
+      rules: [
+        { rule_name: 'Learned: INSÄTTNING', merchant_pattern: 'INSÄTTNING', description_pattern: null, debit_account: '1930', vat_treatment: null },
+        { rule_name: 'Learned: KORTKÖP ICA MAXI', merchant_pattern: 'KORTKÖP ICA MAXI', description_pattern: null, debit_account: '4010', vat_treatment: null },
+      ],
+    })
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, NOW)
+
+    expect(ctx.explicit_rules.map((r) => r.match)).toEqual(['KORTKÖP ICA MAXI'])
+  })
+
   it('derives vat profile and conventions from settings, stats, and series', async () => {
     enqueueAll(mock, {
       stats: { ...emptyStats(), vat_treatments_used: ['standard_25'], median_booking_lag_days: 2.6 },

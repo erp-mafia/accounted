@@ -3,6 +3,7 @@ import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping
 import {
   normalizeCounterpartyName,
   formatCounterpartyName,
+  mappingPatternNamesCounterparty,
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -112,11 +113,17 @@ export function merchantHistoryFor(
  * every transaction, which agents correctly read as no signal; an empty
  * result is the honest answer.
  */
-/** Whether a mapping rule's pattern (merchant, description, or MCC) hits this transaction. */
+/**
+ * Whether a mapping rule's pattern (merchant, description, or MCC) hits this
+ * transaction. A rule on a merchant text that names no one ("INSÄTTNING"),
+ * stored before saveUserMappingRule refused to learn one, hits nothing: the
+ * mapping engine's matchesRule skips it the same way (crm#1707).
+ */
 export function mappingRuleMatches(
   rule: Pick<MappingRule, 'merchant_pattern' | 'description_pattern' | 'mcc_codes'>,
   transaction: Pick<Transaction, 'merchant_name' | 'description' | 'mcc_code'>,
 ): boolean {
+  if (rule.merchant_pattern && !mappingPatternNamesCounterparty(rule.merchant_pattern)) return false
   if (rule.merchant_pattern && transaction.merchant_name) {
     if (new RegExp(rule.merchant_pattern, 'i').test(transaction.merchant_name)) return true
   }

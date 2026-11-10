@@ -11,6 +11,8 @@ import { findMatchingTemplates, buildMappingResultFromTemplate } from './booking
 import {
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
+  mappingPatternNamesCounterparty,
+  namesCounterparty,
 } from './counterparty-templates'
 import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
@@ -320,8 +322,11 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
   // also tests original_description: since the ingest boundary started
   // stripping the trailing channel phrase off the working title
   // (classifyTransactionMethod), a rule written against the bank's full text
-  // ("Överföring via internet") only matches the immutable original.
+  // ("Telia Överföring via internet") only matches the immutable original.
+  // A rule on a text that names no one ("INSÄTTNING"), stored before
+  // saveUserMappingRule refused to learn one, matches nothing.
   if (rule.merchant_pattern) {
+    if (!mappingPatternNamesCounterparty(rule.merchant_pattern)) return false
     const merchantName = transaction.merchant_name || transaction.description || ''
     const originalName = transaction.original_description || ''
     try {
@@ -614,6 +619,11 @@ export function applySettlementAccount(
  *
  * User-described rules for the same merchant replace prior user-described rules
  * (latest description wins).
+ *
+ * A merchant text that only says how the money moved ("INSÄTTNING",
+ * "KORTKÖP", "ÖVERFÖRING", "BG-BETALNING") names no one and teaches nothing:
+ * the next row with that text is someone else (crm#1707). No rule is saved
+ * then, whichever door booked the row; matchesRule ignores such a rule too.
  */
 export async function saveUserMappingRule(
   supabase: SupabaseClient,
@@ -625,6 +635,8 @@ export async function saveUserMappingRule(
   userDescription?: string,
   templateId?: string
 ): Promise<void> {
+  if (!namesCounterparty(merchantName)) return
+
   // Escape special regex characters in merchant name
   const escapedMerchant = merchantName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
