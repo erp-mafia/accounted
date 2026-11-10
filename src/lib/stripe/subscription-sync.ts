@@ -97,26 +97,39 @@ export async function applyPaymentPacks(supabase: SupabaseClient, companyId: str
 }
 
 /**
+ * A failed write throws, so the webhook answers 500 and Stripe delivers the
+ * event again. Ignored, a failed grants write left a subscription row that
+ * says paying beside no capability grants, and nothing retried it (crm#1736).
+ */
+function throwOnWriteError(table: string, result: { error: { message: string } | null }): void {
+  if (result.error) throw new Error(`${table} write failed: ${result.error.message}`)
+}
+
+/**
  * Reconcile a company's subscription state into the DB: upsert
  * company_subscriptions, then either grant or remove the stripe capability
  * grants, then mirror the bank payment packs. Idempotent: safe to run on
- * duplicate/retried events.
+ * duplicate/retried events. Throws on the first failed write; the writes
+ * before it are applied again, unchanged, when Stripe delivers the event again.
  */
 export async function applySubscriptionState(
   supabase: SupabaseClient,
   state: SubscriptionState,
 ): Promise<void> {
-  await supabase.from('company_subscriptions').upsert(
-    {
-      company_id: state.companyId,
-      stripe_customer_id: state.stripeCustomerId,
-      stripe_subscription_id: state.stripeSubscriptionId,
-      status: state.status,
-      plan: state.plan,
-      current_period_end: state.currentPeriodEnd,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'company_id' },
+  throwOnWriteError(
+    'company_subscriptions',
+    await supabase.from('company_subscriptions').upsert(
+      {
+        company_id: state.companyId,
+        stripe_customer_id: state.stripeCustomerId,
+        stripe_subscription_id: state.stripeSubscriptionId,
+        status: state.status,
+        plan: state.plan,
+        current_period_end: state.currentPeriodEnd,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'company_id' },
+    ),
   )
 
   if (statusGrantsAccess(state.status)) {
@@ -133,9 +146,12 @@ export async function applySubscriptionState(
       source: 'stripe',
       expires_at: expiresAt,
     }))
-    await supabase
-      .from('capability_grants')
-      .upsert(rows, { onConflict: 'company_id,team_id,capability_key,source' })
+    throwOnWriteError(
+      'capability_grants',
+      await supabase
+        .from('capability_grants')
+        .upsert(rows, { onConflict: 'company_id,team_id,capability_key,source' }),
+    )
   } else {
     // Freeze-and-retain: drop only the stripe grants. Trial/comp grants (if any)
     // are untouched; data and tokens are never deleted.
@@ -148,19 +164,25 @@ export async function applySubscriptionState(
     // the cancellation, and the grace cron's start-mail window picks it up.
     // Only a still-active row is expired: a re-delivered cancel event days
     // later must not slide the grace anchor (and the mail window) forward.
-    await supabase
-      .from('capability_grants')
-      .delete()
-      .eq('company_id', state.companyId)
-      .eq('source', 'stripe')
-      .neq('capability_key', CAPABILITY.multi_user)
-    await supabase
-      .from('capability_grants')
-      .update({ expires_at: new Date().toISOString() })
-      .eq('company_id', state.companyId)
-      .eq('source', 'stripe')
-      .eq('capability_key', CAPABILITY.multi_user)
-      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+    throwOnWriteError(
+      'capability_grants',
+      await supabase
+        .from('capability_grants')
+        .delete()
+        .eq('company_id', state.companyId)
+        .eq('source', 'stripe')
+        .neq('capability_key', CAPABILITY.multi_user),
+    )
+    throwOnWriteError(
+      'capability_grants',
+      await supabase
+        .from('capability_grants')
+        .update({ expires_at: new Date().toISOString() })
+        .eq('company_id', state.companyId)
+        .eq('source', 'stripe')
+        .eq('capability_key', CAPABILITY.multi_user)
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`),
+    )
   }
 
   // A lapsed plan takes its packs with it: the cap falls back to the base
@@ -238,6 +260,24 @@ async function syncIdentityBestEffort(
 }
 
 /**
+ * The subscription as Stripe holds it now, not the copy the event carried. A
+ * failed write answers 500 and Stripe delivers that event again, possibly
+ * after a later event of the same subscription has been applied: the event's
+ * own copy would then roll the state back (a "created" event still
+ * 'incomplete', delivered again after the 'active' update, would remove the
+ * new payer's grants). Re-read, every delivery applies the same, current
+ * state (crm#1736). A subscription Stripe no longer has is left with the copy.
+ */
+async function currentSubscription(stripe: Stripe, carried: Stripe.Subscription): Promise<Stripe.Subscription> {
+  try {
+    return await stripe.subscriptions.retrieve(carried.id)
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === 'resource_missing') return carried
+    throw err
+  }
+}
+
+/**
  * Route a verified Stripe event to a state reconciliation. Subscription
  * lifecycle events set access; a paid invoice is filed into the paying
  * company's Inkorg; everything else is a no-op (already ack'd 200).
@@ -263,7 +303,7 @@ export async function handleStripeEvent(
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
-      const sub = event.data.object as Stripe.Subscription
+      const sub = await currentSubscription(stripe, event.data.object as Stripe.Subscription)
       const companyId = await companyIdForSubscription(supabase, sub)
       if (!companyId) return
       const state = subscriptionToState(sub, companyId)
