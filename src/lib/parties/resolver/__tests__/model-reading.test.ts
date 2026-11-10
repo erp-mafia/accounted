@@ -59,6 +59,20 @@ describe('readCounterparts', () => {
     const failing = { generateStructured: vi.fn(async () => { throw new Error('boom') }) } as unknown as AiService
     expect((await readCounterparts([line()], failing)).size).toBe(0)
   })
+
+  it('names the lines of a failed batch, and only those, so the caller can leave them unread', async () => {
+    const lines = Array.from({ length: 25 }, (_, k) => line({ i: k + 1 }))
+    let call = 0
+    const ai = { generateStructured: vi.fn(async () => {
+      call += 1
+      if (call === 1) throw new Error('Bedrock 503')
+      return { value: { items: [{ i: 21, pick: null, counterpart: 'Fittja Matmarknad', kind: 'merchant', rail: null, country: null, what: null, confidence: 'high' }] }, model: 'haiku-test' }
+    }) } as unknown as AiService
+    const failed = new Set<number>()
+    const out = await readCounterparts(lines, ai, failed)
+    expect([...failed]).toEqual(Array.from({ length: 20 }, (_, k) => k + 1))
+    expect([...out.keys()]).toEqual([21])
+  })
 })
 
 describe('verifyCounterparts', () => {

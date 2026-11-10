@@ -51,9 +51,10 @@ export const GET = withCronContext('cron.counterparty_resolver', async (_request
       planned: acc.planned + r.planned,
       written: acc.written + r.written,
       modelLines: acc.modelLines + r.modelLines,
+      modelFailed: acc.modelFailed + r.modelFailed,
       promoted: acc.promoted + r.promoted,
     }),
-    { strings: 0, planned: 0, written: 0, modelLines: 0, promoted: 0 },
+    { strings: 0, planned: 0, written: 0, modelLines: 0, modelFailed: 0, promoted: 0 },
   )
   ctx.log.info('counterparty resolver summary', { total: summary.total, succeeded: summary.succeeded, failed: summary.failed, ...totals })
   return NextResponse.json({ success: true, total: summary.total, succeeded: summary.succeeded, failed: summary.failed, ...totals })

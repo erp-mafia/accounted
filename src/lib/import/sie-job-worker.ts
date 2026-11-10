@@ -206,14 +206,88 @@ function sieJobCommitActor(job: SIEJob): CommitActor | null {
 /**
  * Claims of one job from which it counts as looping. A finished import took
  * at most 4 claims in production (2026-11-01). A failing step is counted by
- * record_sie_job_failure and stops at 32 failures, but a run killed at the
- * route's 300 s and a step that yields without progress are counted by
- * nothing: yield_sie_import_job and a lapsed lease leave consecutive_failures
- * alone, so such a job is claimed every minute for good (accounted#115). Only
- * job_attempt, raised by every claim, shows it. Pausing the job needs an RPC
- * change; until then the claim makes it visible.
+ * record_sie_job_failure, and a run that yields or loses its lease without
+ * progress by sweep_stalled_sie_import_jobs (sweepStalledSIEJobs below); both
+ * stop the job at 32. This alert stays as the backstop for a job that keeps
+ * moving a little on every claim and still never finishes: only job_attempt,
+ * raised by every claim, shows it.
  */
 export const SIE_RECLAIM_ALERT_ATTEMPTS = 20
+
+/**
+ * Least budget left for claiming a further job in one invocation. A job
+ * claimed with no time to run yields without progress, and the stall sweep
+ * counts that as a failure of the job, though the worker caused it.
+ */
+export const SIE_MIN_CLAIM_BUDGET_MS = 30_000
+
+/** One job sweep_stalled_sie_import_jobs counted as a failure (accounted#115). */
+export interface SIEStalledJob {
+  importId: string
+  companyId: string
+  jobKind: string
+  phase: string
+  state: string
+  /** retrying: backed off like a failed step; paused or failed: stopped. */
+  outcome: 'retrying' | 'paused' | 'failed'
+  reason: 'yielded_without_progress' | 'lease_lapsed' | 'actor_not_member'
+  consecutiveFailures: number
+  attempt: number
+  /** True when the job ended as failed and gave its fiscal year back. */
+  holdReleased: boolean
+}
+
+function stalledJobMessage(job: SIEStalledJob): string {
+  if (job.reason === 'actor_not_member') return 'SIE job actor can no longer write in the company; the job is stopped'
+  return job.outcome === 'retrying'
+    ? 'SIE job run ended without progress; counted as a failure'
+    : 'SIE job kept ending without progress; the job is stopped'
+}
+
+/**
+ * Counts every job whose last run yielded or lost its lease without moving it
+ * on, and stops every job whose actor can no longer write, in the database
+ * (sweep_stalled_sie_import_jobs), then logs each as an error with its
+ * context. Runs before the cron claims: a stall is judged against the mark of
+ * the claim that started the stalled run, and the next claim replaces it.
+ * Never throws: when the sweep fails, claims run as they did before it.
+ */
+export async function sweepStalledSIEJobs(supabase: SupabaseClient, logger: Pick<typeof log, 'warn' | 'error'> = log): Promise<SIEStalledJob[]> {
+  let result: { data: unknown; error: { message: string; code?: string } | null }
+  try {
+    result = await supabase.rpc('sweep_stalled_sie_import_jobs')
+  } catch (err) {
+    logger.error('SIE stall sweep failed; stalled jobs are judged on the next run', err as Error)
+    return []
+  }
+  if (result.error) {
+    // Code deployed ahead of migration 20261109171500: no function yet.
+    if (result.error.code === 'PGRST202' || result.error.code === '42883') {
+      logger.warn('SIE stall sweep is not installed yet; stalled jobs are not counted', {code: result.error.code})
+    } else {
+      logger.error('SIE stall sweep failed; stalled jobs are judged on the next run', new Error(result.error.message),
+        {code: result.error.code})
+    }
+    return []
+  }
+  const stalled = (Array.isArray(result.data) ? result.data : []) as SIEStalledJob[]
+  for (const job of stalled) {
+    logger.error(stalledJobMessage(job), {
+      alert: true,
+      companyId: job.companyId,
+      importId: job.importId,
+      jobKind: job.jobKind,
+      outcome: job.outcome,
+      reason: job.reason,
+      state: job.state,
+      phase: job.phase,
+      consecutiveFailures: job.consecutiveFailures,
+      attempt: job.attempt,
+      holdReleased: job.holdReleased,
+    })
+  }
+  return stalled
+}
 
 /** Logs a claimed job that keeps being claimed without finishing, as an error. */
 export function reportRepeatedReclaim(job: SIEJob, logger: Pick<typeof log, 'error'> = log): void {
@@ -239,7 +313,11 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
   const worker = randomUUID()
   let jobs = 0
   let chunks = 0
+  // The cron owns recovery: it counts stalled runs before it claims. A run
+  // for one job (after() on a user's action) claims that job only.
+  if (!options.importId) await sweepStalledSIEJobs(supabase)
   while (Date.now() < deadline && runsSIEJobs()) {
+    if (jobs > 0 && deadline-Date.now() < SIE_MIN_CLAIM_BUDGET_MS) break
     const {data,error} = await supabase.rpc('claim_sie_import_job',{p_worker_id:worker,p_import_id:options.importId ?? null})
     if (error) throw new Error(error.message)
     if (!data?.id) break

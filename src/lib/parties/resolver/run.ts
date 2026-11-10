@@ -53,6 +53,8 @@ export interface RunSummary {
   byBand: Record<'link' | 'tentative' | 'nil', number>
   bySource: Record<string, number>
   modelLines: number
+  /** Strings whose model batch failed: left without an alias, so the next run reads them again. */
+  modelFailed: number
   verified: number
   promoted: number
   written: number
@@ -284,6 +286,7 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
     byBand: { link: 0, tentative: 0, nil: 0 },
     bySource: {},
     modelLines: 0,
+    modelFailed: 0,
     verified: 0,
     promoted: 0,
     written: 0,
@@ -354,10 +357,22 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
   // Rung five and six: the model, then the verify pass on the medium band.
   const readings = new Map<number, ModelReading>()
   const verdicts = new Map<number, 'yes' | 'no' | 'unsure'>()
+  // Lines whose model batch failed. Planned without a reading they would be
+  // stored as a live nil alias, and a string with a live alias is never read
+  // again: one outage would leave nobody named behind them for good.
+  const unread = new Set<number>()
   if (forModel.length && readerAvailable()) {
     summary.modelLines = forModel.length
-    const got = await readCounterparts(forModel.map((f) => f.line))
+    const got = await readCounterparts(forModel.map((f) => f.line), undefined, unread)
     for (const [k, v] of got) readings.set(k, v)
+    summary.modelFailed = unread.size
+    if (unread.size) {
+      log.error('counterpart model reading failed; the strings stay unresolved for the next run', {
+        companyId,
+        modelFailed: unread.size,
+        modelLines: forModel.length,
+      })
+    }
     const toVerify = forModel
       .map((f) => ({ f, r: readings.get(f.line.i) }))
       .filter(({ f, r }) => r && planAlias({ pre: f.group.pre, model: r, candidatesById: f.candidatesById }).needsVerify)
@@ -376,6 +391,7 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
       decisions.push(decision)
       continue
     }
+    if (unread.has(m.line.i)) continue
     const reading = readings.get(m.line.i) ?? null
     const final = planAlias({ pre: group.pre, model: reading, candidatesById: m.candidatesById, verify: verdicts.get(m.line.i) ?? null })
     if (final.partyId === null && final.displayName) final.partyId = byName.get(final.displayName.toLowerCase()) ?? null

@@ -2,15 +2,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { sweep } = vi.hoisted(() => ({ sweep: vi.fn() }))
+const { sweep, logError } = vi.hoisted(() => ({ sweep: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/reconciliation/unattended-sweep', async (load) => ({
   ...(await load<typeof import('@/lib/reconciliation/unattended-sweep')>()),
   runUnattendedReconciliationSweep: sweep,
 }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
 
 import {
   runPendingSIEBankSweeps,
+  SIE_BANK_SWEEP_MAX_ATTEMPTS,
   sweepBankRowsAfterSIEImport,
   type SIEBankSweepJob,
 } from '../sie-post-import-sweep'
@@ -149,19 +160,41 @@ describe('sweepBankRowsAfterSIEImport', () => {
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('swallows a matcher failure and leaves the claim for the cron to retry', async () => {
+  it('reports a matcher failure as an error and leaves the claim for the cron to retry', async () => {
     mock.enqueueMany([{ data: true }, { count: 4 }])
-    sweep.mockRejectedValue(new Error('Kunde inte hämta kassakonton för avstämningssvepet'))
+    const failure = new Error('Kunde inte hämta kassakonton för avstämningssvepet')
+    sweep.mockRejectedValue(failure)
 
     await expect(sweepBankRowsAfterSIEImport(supabase, job())).resolves.toBeNull()
 
     // No receipt: state stays "running", which goes stale and is retried.
     expect(mock.supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('post-import bank sweep failed; the import itself is unaffected', failure, {
+      alert: true,
+      companyId: COMPANY,
+      importId: IMPORT,
+      claimed: true,
+      attempt: 1,
+      retried: true,
+    })
+  })
+
+  it('says so when the failed attempt was the last the claim grants', async () => {
+    mock.enqueueMany([{ data: true }, { count: 4 }])
+    sweep.mockRejectedValue(new Error('statement timeout'))
+
+    await sweepBankRowsAfterSIEImport(supabase, job({ bank_sweep: { state: 'running', attempt: SIE_BANK_SWEEP_MAX_ATTEMPTS - 1 } }))
+
+    expect(logError).toHaveBeenCalledWith(expect.any(String), expect.any(Error),
+      expect.objectContaining({ claimed: true, attempt: SIE_BANK_SWEEP_MAX_ATTEMPTS, retried: false }))
   })
 
   it('swallows a failed claim, a failed count and a client that throws', async () => {
     mock.enqueue({ error: { message: 'permission denied' } })
     await expect(sweepBankRowsAfterSIEImport(supabase, job())).resolves.toBeNull()
+    // The claim itself failed: no attempt was spent, the next caller claims.
+    expect(logError).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ message: 'permission denied' }),
+      expect.objectContaining({ claimed: false, attempt: null, retried: true }))
 
     mock.reset()
     mock.enqueueMany([{ data: true }, { error: { message: 'statement timeout' } }])

@@ -47,6 +47,9 @@ const log = createLogger('sie-post-import-sweep')
 /** How far back the cron looks for a completed import with no finished receipt. */
 const PENDING_WINDOW_MS = 24 * 60 * 60 * 1000
 
+/** Claims claim_sie_import_bank_sweep grants one import (20260921230500). */
+export const SIE_BANK_SWEEP_MAX_ATTEMPTS = 5
+
 export type SIEBankSweepJob = Pick<
   SIEJob,
   'id' | 'company_id' | 'user_id' | 'execution_actor_id' | 'job_state' | 'job_kind'
@@ -55,6 +58,8 @@ export type SIEBankSweepJob = Pick<
   manifest?: SIEJob['manifest'] | null
   fiscal_year_start?: string | Date | null
   fiscal_year_end?: string | Date | null
+  /** The receipt as the caller read it, before this claim: names the attempt a failure spends. */
+  bank_sweep?: { state?: string; attempt?: number } | null
 }
 
 export interface SIEBankSweepReceipt extends SieSweepSummary {
@@ -104,6 +109,7 @@ export async function sweepBankRowsAfterSIEImport(
   job: SIEBankSweepJob,
 ): Promise<SIEBankSweepReceipt | null> {
   if (job.job_state !== 'completed' || (job.job_kind ?? 'import') !== 'import') return null
+  let claimed = false
   try {
     const claim = await supabase.rpc('claim_sie_import_bank_sweep', {
       p_company_id: job.company_id,
@@ -111,6 +117,7 @@ export async function sweepBankRowsAfterSIEImport(
     })
     if (claim.error) throw new Error(claim.error.message)
     if (claim.data !== true) return null
+    claimed = true
 
     const year = fiscalYearOf(job)
     let receipt: SIEBankSweepReceipt
@@ -166,13 +173,19 @@ export async function sweepBankRowsAfterSIEImport(
     }
     return receipt
   } catch (err) {
-    // Non-critical by construction: the import is complete and stays complete.
-    // The rows stay in Att bokfora, and the claim (if taken) goes stale so the
-    // cron retries, at most five times.
-    log.warn('post-import bank sweep failed; the import itself is unaffected', {
+    // The import is complete and stays complete, but its bank rows stay in
+    // Att bokfora unmatched: an error, not a warning. A taken claim goes
+    // stale and the cron retries it ten minutes later; its last attempt
+    // leaves the receipt "running" for good, so that one says it is final.
+    // A failure before the claim spent no attempt: the next caller claims.
+    const attempt = claimed ? (job.bank_sweep?.attempt ?? 0) + 1 : null
+    log.error('post-import bank sweep failed; the import itself is unaffected', err instanceof Error ? err : new Error(String(err)), {
+      alert: true,
       companyId: job.company_id,
       importId: job.id,
-      message: err instanceof Error ? err.message : String(err),
+      claimed,
+      attempt,
+      retried: !claimed || (attempt !== null && attempt < SIE_BANK_SWEEP_MAX_ATTEMPTS),
     })
     return null
   }

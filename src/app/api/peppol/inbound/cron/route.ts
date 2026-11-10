@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import type { Logger } from '@/lib/logger'
 import {
   reprocessInboundPeppolDocuments,
   syncInboundPeppolDocuments,
@@ -17,6 +18,37 @@ import {
 } from '@/lib/invoices/peppol-transport'
 
 export const maxDuration = 300
+
+/**
+ * The cron cannot receive in this environment. Whether that loses anything
+ * depends on the companies that have receiving switched on (the rows
+ * registerGrantedPeppolReceivers publishes): count them, and report an error
+ * when there are any (accounted#115).
+ */
+async function reportSkipped(log: Logger, reason: string): Promise<void> {
+  try {
+    const { count, error } = await createServiceClientNoCookies()
+      .from('peppol_access')
+      .select('company_id', { count: 'exact', head: true })
+      .eq('status', 'enabled')
+      .eq('receive_enabled', true)
+    if (error) throw new Error(error.message)
+    if (count) {
+      log.error('peppol inbound skipped while companies have receiving on; their e-invoices are not fetched', {
+        alert: true,
+        reason,
+        receivers: count,
+      })
+    } else {
+      log.info('peppol inbound skipped; no company has receiving on', { reason })
+    }
+  } catch (err) {
+    log.error('peppol inbound skipped, and the companies with receiving on could not be counted', err as Error, {
+      alert: true,
+      reason,
+    })
+  }
+}
 
 /**
  * GET /api/peppol/inbound/cron: every 10 minutes.
@@ -41,15 +73,20 @@ export const maxDuration = 300
  * a few per run (granting access only changes our row too). Each in its own
  * try/catch: neither may ever stop the inbound sync.
  *
- * Truthful no-op when no access point is switched on in this environment.
+ * Truthful no-op when no access point is switched on in this environment,
+ * and it says so: an error when companies have receiving switched on (their
+ * e-invoices are not being fetched), an info line when none has.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
   const availability = await getPeppolTransportAvailability()
   const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   if (!transport) {
-    return NextResponse.json({ data: { skipped: true, reason: availability.available ? 'provider_adapter_unavailable' : availability.reason } })
+    const reason = availability.available ? 'provider_adapter_unavailable' : availability.reason
+    await reportSkipped(ctx.log, reason)
+    return NextResponse.json({ data: { skipped: true, reason } })
   }
   if (!transport.listInboundDocuments) {
+    await reportSkipped(ctx.log, 'receiving_unsupported')
     return NextResponse.json({ data: { skipped: true, reason: 'receiving_unsupported' } })
   }
 

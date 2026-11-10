@@ -41,12 +41,13 @@ describe('GET /api/parties/resolver/cron', () => {
   it('runs once per company with recent transactions and sums the results', async () => {
     range.mockResolvedValueOnce({ data: [{ company_id: 'a' }, { company_id: 'a' }, { company_id: 'b' }], error: null })
     resolveCompanyCounterparts.mockImplementation(async (_s: unknown, companyId: string) => ({
-      companyId, strings: 3, alreadyResolved: 1, planned: 2, byBand: { link: 1, tentative: 0, nil: 1 }, bySource: {}, modelLines: 1, verified: 0, promoted: 0, written: 2,
+      companyId, strings: 3, alreadyResolved: 1, planned: 2, byBand: { link: 1, tentative: 0, nil: 1 }, bySource: {}, modelLines: 2, modelFailed: 1, verified: 0, promoted: 0, written: 2,
     }))
     const { status, body } = await parseJsonResponse<{ total: number; written: number; strings: number }>(await GET(createMockRequest('http://localhost/api/parties/resolver/cron')))
     expect(status).toBe(200)
     expect(resolveCompanyCounterparts).toHaveBeenCalledTimes(2)
-    expect(body).toMatchObject({ total: 2, written: 4, strings: 6 })
+    // Strings left unread by a failed model batch are counted, not hidden.
+    expect(body).toMatchObject({ total: 2, written: 4, strings: 6, modelLines: 4, modelFailed: 2 })
   })
 
   it('pages past the 1000-row cap, so a company first seen on the second page still runs', async () => {
@@ -54,7 +55,7 @@ describe('GET /api/parties/resolver/cron', () => {
       .mockResolvedValueOnce({ data: Array.from({ length: 1000 }, () => ({ company_id: 'a' })), error: null })
       .mockResolvedValueOnce({ data: [{ company_id: 'b' }], error: null })
     resolveCompanyCounterparts.mockImplementation(async (_s: unknown, companyId: string) => ({
-      companyId, strings: 0, alreadyResolved: 0, planned: 0, byBand: { link: 0, tentative: 0, nil: 0 }, bySource: {}, modelLines: 0, verified: 0, promoted: 0, written: 0,
+      companyId, strings: 0, alreadyResolved: 0, planned: 0, byBand: { link: 0, tentative: 0, nil: 0 }, bySource: {}, modelLines: 0, modelFailed: 0, verified: 0, promoted: 0, written: 0,
     }))
     const { body } = await parseJsonResponse<{ total: number }>(await GET(createMockRequest('http://localhost/api/parties/resolver/cron')))
     expect(range).toHaveBeenNthCalledWith(1, 0, 999)
