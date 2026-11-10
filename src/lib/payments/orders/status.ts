@@ -99,6 +99,16 @@ export const OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES: readonly PaymentOrderStatus[
 export const SIGNING_FINISHED_BATCH_STATUSES: ReadonlySet<string> = new Set(['signed', 'awaiting_second_signer'])
 
 /**
+ * How long the status sync keeps asking about a BankID the bank still reports
+ * open, or cannot read: far past any BankID's own life. Past it the orders go
+ * back to 'submitted', as every unfinished signing did before crm#1470, and
+ * nothing is cancelled, since the bank never said the BankID failed. A
+ * skattekonto payment unsigned this long no longer counts as on its way
+ * (skattekonto-underway.ts). Here, not in sync.ts, so the browser can read it.
+ */
+export const UNANSWERED_SIGNING_MINUTES = 60
+
+/**
  * The order's payment waits at the bank unsigned in a signing nobody is in
  * ('created'): its BankID never started (the bank refused the start), or it
  * ended before its payments were cancelled at the bank (as every BankID that

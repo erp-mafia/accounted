@@ -43,6 +43,7 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
+import { UNANSWERED_SIGNING_MINUTES } from '@/lib/payments/orders/status'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -1088,6 +1089,11 @@ describe('listSkattekontoPaymentDue', () => {
   const snapshot = (saldoSkatteverket: number) => ({
     data: { value: { saldo: { saldoSkatteverket }, fetchedAt: 1757300000000 } },
   })
+  /** The signing of a payment waiting for its BankID, started `minutes` ago (the cover reads the real clock). */
+  const signingStarted = (minutes: number) => ({
+    status: 'awaiting_signature',
+    signing_started_at: new Date(Date.now() - minutes * 60_000).toISOString(),
+  })
 
   it('returns null when Skatteverket has no upcoming charge', async () => {
     enqueue({ data: [] })
@@ -1219,12 +1225,13 @@ describe('listSkattekontoPaymentDue', () => {
     enqueue(snapshot(4000))
     enqueue({
       data: [
-        { amount: '3000.25', status: 'awaiting_signature', executed_at: null },
-        { amount: 1000, status: 'approved', executed_at: null },
+        // Its BankID started five minutes ago: the signing can still finish.
+        { amount: '3000.25', status: 'awaiting_signature', executed_at: null, signing: signingStarted(5) },
+        { amount: 1000, status: 'approved', executed_at: null, signing: null },
         // Executed after the saldo was fetched: not in the saldo yet.
-        { amount: 2000, status: 'executed', executed_at: '2025-09-08T09:00:00Z' },
+        { amount: 2000, status: 'executed', executed_at: '2025-09-08T09:00:00Z', signing: null },
         // Executed before it: the saldo already holds it.
-        { amount: 500, status: 'executed', executed_at: '2025-09-07T09:00:00Z' },
+        { amount: 500, status: 'executed', executed_at: '2025-09-07T09:00:00Z', signing: null },
       ],
     })
     enqueue({ data: company })
@@ -1236,6 +1243,22 @@ describe('listSkattekontoPaymentDue', () => {
       'status',
       ['approved', 'submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'],
     ])
+    expect(findCall('payment_orders', 'select')).toEqual([
+      'amount, status, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)',
+    ])
+  })
+
+  it('asks again for a charge whose payment waits for a BankID nobody finished once the signing is past UNANSWERED_SIGNING_MINUTES (crm#1721)', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(250))
+    // The bank could not be read for days, so the sync never let the signing go.
+    enqueue({ data: [{ amount: 750, status: 'awaiting_signature', executed_at: null, signing: signingStarted(UNANSWERED_SIGNING_MINUTES + 1) }] })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 1000, balance: 250, amount: 750 })
   })
 
   it('never asks again for a charge a bank payment on its way covers', async () => {

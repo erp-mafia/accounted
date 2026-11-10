@@ -8,7 +8,8 @@
  *     (./salary.ts);
  *   - skattekonto: the payment fills the skattekonto, so it covers the tax
  *     charges (./tax.ts), the way Hem's Betala row counts it
- *     (skattekontoPaymentsCovering: a draft nobody approved pays nothing).
+ *     (skattekontoPaymentsCovering: a draft nobody approved pays nothing, and
+ *     a signing nobody finished only for as long as it can still finish).
  *
  * An order still on its way counts on its requested date, or today when that
  * date has passed. An executed order has left the bank: it is in the opening
@@ -21,8 +22,9 @@ import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import {
-  SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES,
+  isSkattekontoPaymentUnderway,
   skattekontoPaymentsCovering,
+  type SkattekontoPaymentSigning,
 } from '@/lib/payments/orders/skattekonto-underway'
 import type { CashFlow, ForecastCaveat, ForecastWindow } from '../types'
 
@@ -43,6 +45,8 @@ export interface PaymentOrderRow {
   reference: string | null
   executed_at: string | null
   matched_at: string | null
+  /** The order's signing, for a skattekonto payment waiting for its BankID (isSkattekontoPaymentUnderway). */
+  signing: SkattekontoPaymentSigning | null
 }
 
 export interface PaymentOrderCoverage {
@@ -70,11 +74,11 @@ export function paymentOrderFlows(
   window: ForecastWindow,
   /** cash_account_id -> when the bank reported the balance in the opening. */
   balanceTimes: ReadonlyMap<string, string>,
+  nowMs: number = Date.now(),
 ): PaymentOrdersResult {
   const flows: CashFlow[] = []
   const coverage: PaymentOrderCoverage = { supplierInvoices: new Map(), salaryRuns: new Map() }
   const live = new Set<string>(LIVE_STATUSES)
-  const skattekontoUnderway = new Set<string>(SKATTEKONTO_PAYMENT_UNDERWAY_STATUSES)
   let foreign = 0
 
   for (const order of orders) {
@@ -88,8 +92,9 @@ export function paymentOrderFlows(
     }
     const amount = roundOre(Number(order.amount))
     if (!(amount > 0)) continue
-    // A skattekonto draft nobody approved pays nothing (skattekonto-underway.ts).
-    if (order.purpose === 'skattekonto' && !executed && !skattekontoUnderway.has(order.status)) continue
+    // A skattekonto draft nobody approved pays nothing, nor does a signing
+    // nobody finished once it cannot (skattekonto-underway.ts).
+    if (order.purpose === 'skattekonto' && !executed && !isSkattekontoPaymentUnderway(order, nowMs)) continue
 
     if (order.purpose === 'supplier_invoice') add(coverage.supplierInvoices, order.supplier_invoice_id, amount)
     if (order.purpose === 'salary') add(coverage.salaryRuns, order.salary_run_id, amount)
@@ -135,10 +140,15 @@ export function paymentOrderFlows(
 }
 
 /** What the skattekonto payments add to the saldo the charges are drawn from (see skattekontoPaymentsCovering). */
-export function skattekontoPaymentsInFlight(orders: readonly PaymentOrderRow[], snapshotFetchedAtMs: number | null): number {
+export function skattekontoPaymentsInFlight(
+  orders: readonly PaymentOrderRow[],
+  snapshotFetchedAtMs: number | null,
+  nowMs: number = Date.now(),
+): number {
   return skattekontoPaymentsCovering(
     orders.filter((o) => isLedgerCurrency(o.currency)),
     snapshotFetchedAtMs,
+    nowMs,
   )
 }
 
@@ -151,7 +161,7 @@ export async function loadPaymentOrders(supabase: SupabaseClient, companyId: str
     supabase
       .from('payment_orders')
       .select(
-        'id, purpose, status, amount, currency, requested_execution_date, supplier_invoice_id, salary_run_id, cash_account_id, payee_name, reference, executed_at, matched_at',
+        'id, purpose, status, amount, currency, requested_execution_date, supplier_invoice_id, salary_run_id, cash_account_id, payee_name, reference, executed_at, matched_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)',
       )
       .eq('company_id', companyId)
       .in('status', [...LIVE_STATUSES])
@@ -172,5 +182,6 @@ export async function loadPaymentOrders(supabase: SupabaseClient, companyId: str
   for (const res of [liveRes, executedRes]) {
     if (res.error) throw Object.assign(new Error(`payment orders read failed: ${res.error.message}`), { code: res.error.code })
   }
-  return [...(liveRes.data ?? []), ...(executedRes.data ?? [])] as PaymentOrderRow[]
+  // An executed order's signing is over: only an order on its way reads it.
+  return [...(liveRes.data ?? []), ...(executedRes.data ?? []).map((row) => ({ ...row, signing: null }))] as PaymentOrderRow[]
 }

@@ -1660,7 +1660,8 @@ const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 /**
  * What the company's bank payments to the skattekonto (payment_orders with
  * purpose 'skattekonto') already cover and the synced saldo cannot show yet:
- * every order on its way to the bank (approved up to accepted), and every one
+ * every order on its way to the bank (approved up to accepted, a signing
+ * nobody finished only for as long as it can still finish), and every one
  * the bank executed after the saldo was fetched. A draft nobody approved pays
  * nothing. Without a snapshot (fetchedAtMs null) only the orders on their way
  * count, since nothing tells whether an executed one already reached the
@@ -1674,7 +1675,7 @@ async function skattekontoPaymentsUnderway(
 ): Promise<number> {
   const { data, error } = await supabase
     .from('payment_orders')
-    .select('amount, status, executed_at')
+    .select('amount, status, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)')
     .eq('company_id', companyId)
     .eq('purpose', 'skattekonto')
     .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])

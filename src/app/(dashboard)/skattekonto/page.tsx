@@ -131,7 +131,8 @@ export default function SkattekontoPage() {
   )
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   // The company's bank payments to the skattekonto that the saldo may not
-  // show yet (members read payment_orders; a failed read counts nothing).
+  // show yet, each with its signing (members read payment_orders and
+  // payment_order_batches; a failed read counts nothing).
   const companyId = useCompany().company?.id ?? null
   const [skattekontoOrders, setSkattekontoOrders] = useState<SkattekontoPaymentOrderCover[]>([])
   useEffect(() => {
@@ -139,7 +140,7 @@ export default function SkattekontoPage() {
     let cancelled = false
     createClient()
       .from('payment_orders')
-      .select('amount, status, executed_at')
+      .select('amount, status, executed_at, signing:payment_order_batches!fk_payment_orders_batch(status, signing_started_at)')
       .eq('company_id', companyId)
       .eq('purpose', 'skattekonto')
       .in('status', [...SKATTEKONTO_PAYMENT_COVER_STATUSES])

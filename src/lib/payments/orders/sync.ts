@@ -63,7 +63,7 @@ import {
 } from './debit-match'
 import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, endFailedSigning, unpayableOrders } from './release'
-import type { PaymentOrderStatus } from './status'
+import { UNANSWERED_SIGNING_MINUTES, type PaymentOrderStatus } from './status'
 import { logPaymentOrderEvents, signingTargetOf, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
 
 /**
@@ -74,13 +74,8 @@ import { logPaymentOrderEvents, signingTargetOf, type PaymentOrderBatchRow, type
 export const STALE_CREATE_MINUTES = 15
 /** A BankID signing nobody finished: BankID itself gives up after a few minutes. */
 export const ABANDONED_SIGNING_MINUTES = 15
-/**
- * How long the sync keeps asking about a BankID the bank still reports open,
- * or cannot read: far past any BankID's own life. Past it the orders go back
- * to 'submitted', as every unfinished signing did before crm#1470, and
- * nothing is cancelled, since the bank never said the BankID failed.
- */
-export const UNANSWERED_SIGNING_MINUTES = 60
+/** How long the sync keeps asking about a BankID it cannot see end (defined in status.ts). */
+export { UNANSWERED_SIGNING_MINUTES }
 const BATCH_LIMIT = 200
 /** An executed order is swept for its debit this long after the bank executed it. */
 export const EXECUTED_ORDER_SWEEP_DAYS = 14
