@@ -1,0 +1,1 @@
+[2026-11-11] An uploaded invoice font's four faces share the regular face's parsed font (FontSource data set after load) and are glyph-warmed, not warm-only: pdfkit merges same-name faces into one embedded font, and warming cannot reach ligatures such as "fi" (crm#1763).
