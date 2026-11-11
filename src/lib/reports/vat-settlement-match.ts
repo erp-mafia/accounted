@@ -24,6 +24,7 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
+import { generateTrialBalance } from './trial-balance'
 import { VAT_SETTLEMENT_NET_ACCOUNTS, fetchVatAccountTotals, isMomsAccount, type VatAccountTotals } from './vat-declaration'
 
 /** Ruta 49 is filed in whole kronor (öretal faller bort): the net may differ from the öre sum by under a krona. */
@@ -154,6 +155,81 @@ export async function summarizeSettlements(
       via: e.hasNet ? ('net_account' as const) : ('tax_account' as const),
     }))
     .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || a.journal_entry_id.localeCompare(b.journal_entry_id))
+}
+
+/**
+ * What each verifikat moves on each moms account a momsredovisning clears:
+ * debit minus credit per 26xx account but 2650/1650, the lines
+ * summarizeSettlements sums into `cleared`, by verifikat id. An account a
+ * verifikat nets to nothing on is left out.
+ */
+export async function clearedByAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: readonly string[],
+): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>()
+  if (ids.length === 0) return out
+  const lines = await fetchEntryLines<{ journal_entry_id: string; account_number: string; debit_amount: number; credit_amount: number }>({
+    supabase,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) => q.eq('company_id', companyId).in('id', [...ids]),
+    attachEntriesAs: null,
+  })
+  const net = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
+  for (const line of lines) {
+    if (!isMomsAccount(line.account_number) || net.has(line.account_number)) continue
+    const accounts = out.get(line.journal_entry_id) ?? new Map<string, number>()
+    accounts.set(line.account_number, (accounts.get(line.account_number) ?? 0) + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0))
+    out.set(line.journal_entry_id, accounts)
+  }
+  for (const accounts of out.values()) {
+    for (const [account, amount] of accounts) {
+      const rounded = roundOre(amount)
+      if (rounded === 0) accounts.delete(account)
+      else accounts.set(account, rounded)
+    }
+  }
+  return out
+}
+
+/**
+ * What the books carry on each moms account into a period from before it
+ * (crm#1755): the balance on the period's first day as the balance sheet
+ * reads it (generateTrialBalance's opening columns: the räkenskapsår's
+ * ingående balans plus every verifikat of the year dated before the day),
+ * credit minus debit, the side the momsredovisning proposal clears. Null
+ * when no räkenskapsår holds the day.
+ */
+export async function vatBalancesCarriedInto(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+): Promise<Map<string, number> | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .lte('period_start', periodStart)
+    .gte('period_end', periodStart)
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`fiscal period lookup failed: ${error.message}`)
+  const year = data as { id: string } | null
+  if (!year) return null
+  const { rows } = await generateTrialBalance(supabase, companyId, year.id, {
+    closingEntry: 'include',
+    fromDate: periodStart,
+    // The chart only labels rows; the amounts never depend on it.
+    chart: [],
+  })
+  const net = new Set(VAT_SETTLEMENT_NET_ACCOUNTS)
+  const carried = new Map<string, number>()
+  for (const row of rows) {
+    if (!isMomsAccount(row.account_number) || net.has(row.account_number)) continue
+    carried.set(row.account_number, roundOre(row.opening_credit - row.opening_debit))
+  }
+  return carried
 }
 
 /**

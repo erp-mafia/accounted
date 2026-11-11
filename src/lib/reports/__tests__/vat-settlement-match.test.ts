@@ -22,6 +22,7 @@ const CHART: FakeLedgerData['chart'] = [
   { account_number: '2610', account_name: 'Utgående moms 25 %', account_class: 2 },
   { account_number: '2611', account_name: 'Utgående moms på försäljning inom Sverige, 25 %', account_class: 2 },
   { account_number: '2614', account_name: 'Utgående moms omvänd skattskyldighet, 25 %', account_class: 2 },
+  { account_number: '2631', account_name: 'Utgående moms på försäljning inom Sverige, 6 %', account_class: 2 },
   { account_number: '2641', account_name: 'Debiterad ingående moms', account_class: 2 },
   { account_number: '2645', account_name: 'Beräknad ingående moms på förvärv från utlandet', account_class: 2 },
   { account_number: '2650', account_name: 'Redovisningskonto för moms', account_class: 2 },
@@ -292,5 +293,156 @@ describe('an opening balance in a quarterly momsredovisning (crm#1333)', () => {
     const supabase = ledger({ fiscalPeriods: years, entries: [january, openingBalance('2026-02-01'), march], shaped: [] })
     const q1 = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 1)
     expect(q1.filed_net).toBe(1_610)
+  })
+})
+
+describe('a correction of an older period settled against the skattekonto inside a quarter (crm#1755)', () => {
+  // The earlier year's declaration left out 80 of output VAT 6 %: the opening
+  // balance carries it on 2631. Q1 and Q2 are settled on their last day. The
+  // corrected declaration's difference is settled straight against the
+  // skattekonto on 9 September, inside Q3 (2631 against 1630, no 2650).
+  const ib = entry('2026-01-01', [{ account_number: '1930', debit: 80 }, { account_number: '2631', credit: 80 }], { source_type: 'opening_balance', description: 'Ingående balans' })
+  const years: FakeLedgerData['fiscalPeriods'] = [
+    { id: 'fp', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null, opening_balance_entry_id: ib.id },
+  ]
+  const sale = (date: string) => entry(date, [{ account_number: '1930', debit: 1_150 }, { account_number: '2641', debit: 100 }, { account_number: '2611', credit: 1_250 }])
+  const settlement = (date: string) =>
+    entry(date, [{ account_number: '2611', debit: 1_250 }, { account_number: '2641', credit: 100 }, { account_number: '2650', credit: 1_150 }], { description: 'Momsredovisning' })
+  const q1 = [sale('2026-02-15'), settlement('2026-03-31')]
+  const q2 = [sale('2026-05-15'), settlement('2026-06-30')]
+  // Q3: 2611 2 000, 2631 300, 2641 400: ruta 49 1 900.
+  const q3Sale = entry('2026-08-15', [{ account_number: '1930', debit: 1_900 }, { account_number: '2641', debit: 400 }, { account_number: '2611', credit: 2_000 }, { account_number: '2631', credit: 300 }])
+  const correction = entry('2026-09-09', [{ account_number: '2631', debit: 80 }, { account_number: '1630', credit: 80 }], { description: 'Rättad moms tidigare period' })
+  const base = [ib, ...q1, ...q2, q3Sale]
+  const settledBefore = [q1[1], q2[1]]
+
+  it('leaves the quarter bookable: the difference clears what the books carried in, none of the quarter\'s own VAT', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, correction], shaped: [...settledBefore, correction] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries).toEqual([])
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('none')
+    // The proposal clears the quarter's own 2631, not what the correction moved.
+    expect(proposal.lines).toEqual(expect.arrayContaining([expect.objectContaining({ account_number: '2631', debit_amount: 300, credit_amount: 0 })]))
+    expect(proposal.filed_net).toBe(1_900)
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({ ok: true, dryRun: true })
+  })
+
+  it('names the quarter\'s own momsredovisning, not the difference, once it is booked', async () => {
+    const own = entry('2026-09-30', [
+      { account_number: '2611', debit: 2_000 },
+      { account_number: '2631', debit: 300 },
+      { account_number: '2641', credit: 400 },
+      { account_number: '2650', credit: 1_900 },
+    ], { description: 'Momsredovisning Q3' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, correction, own], shaped: [...settledBefore, correction, own] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([own.id])
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({
+      ok: false,
+      code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+      details: { journal_entry_id: own.id },
+    })
+  })
+
+  it('also when the previous quarter\'s momsredovisning is booked on its filing day inside the quarter', async () => {
+    // Q2 holds 60 of 2631 too and is settled on 17 August: what the books
+    // carry into Q3 on 2631 is 140, of which Q2's own settlement clears 60.
+    const q2Sale = entry('2026-05-15', [{ account_number: '1930', debit: 1_210 }, { account_number: '2641', debit: 100 }, { account_number: '2611', credit: 1_250 }, { account_number: '2631', credit: 60 }])
+    const q2Settled = entry('2026-08-17', [{ account_number: '2611', debit: 1_250 }, { account_number: '2631', debit: 60 }, { account_number: '2641', credit: 100 }, { account_number: '2650', credit: 1_210 }], { description: 'Moms Q2' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [ib, ...q1, q2Sale, q2Settled, q3Sale, correction], shaped: [q1[1], q2Settled, correction] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries).toEqual([])
+    const q2 = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 2)
+    expect(q2.existing_entries).toEqual([expect.objectContaining({ id: q2Settled.id, late_settlement: expect.objectContaining({ cleared: 1_210 }) })])
+  })
+
+  it('keeps gating when the verifikat clears neither the quarter\'s VAT nor exactly what the books carried in', async () => {
+    const partial = entry('2026-09-09', [{ account_number: '2631', debit: 50 }, { account_number: '1630', credit: 50 }])
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, partial], shaped: [...settledBefore, partial] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([partial.id])
+  })
+
+  it('keeps the quarter\'s own momsredovisning when the quarter before, with the same VAT, is still unsettled', async () => {
+    // What the books carry into Q3 on 2611 and 2641 equals Q3's own VAT: the
+    // verifikat clears Q3 in full, so it is Q3's.
+    const q3SameSale = sale('2026-08-15')
+    const own = settlement('2026-09-30')
+    const supabase = ledger({ fiscalPeriods: years, entries: [ib, ...q1, q2[0], q3SameSale, own], shaped: [q1[1], own] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([own.id])
+  })
+
+  it('still gates a momsredovisning booked straight against the skattekonto (#984)', async () => {
+    const own = entry('2026-09-30', [
+      { account_number: '2611', debit: 2_000 },
+      { account_number: '2631', debit: 300 },
+      { account_number: '2641', credit: 400 },
+      { account_number: '1630', credit: 1_900 },
+    ])
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, own], shaped: [...settledBefore, own] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([own.id])
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({
+      ok: false,
+      code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+      details: { journal_entry_id: own.id },
+    })
+  })
+
+  it('still gates one that no longer clears any account in full after a verifikat was added on every account it cleared', async () => {
+    const own = entry('2026-09-30', [
+      { account_number: '2611', debit: 2_000 },
+      { account_number: '2631', debit: 300 },
+      { account_number: '2641', credit: 400 },
+      { account_number: '1630', credit: 1_900 },
+    ])
+    const added = entry('2026-09-20', [{ account_number: '1930', debit: 480 }, { account_number: '2641', debit: 50 }, { account_number: '2611', credit: 500 }, { account_number: '2631', credit: 30 }])
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, own, added], shaped: [...settledBefore, own] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([own.id])
+  })
+
+  it('still gates a momsredovisning split in two verifikat, output and input VAT apart', async () => {
+    const output = entry('2026-09-30', [{ account_number: '2611', debit: 2_000 }, { account_number: '2631', debit: 300 }, { account_number: '1630', credit: 2_300 }], { description: 'Utgående moms Q3' })
+    const input = entry('2026-09-30', [{ account_number: '1630', debit: 400 }, { account_number: '2641', credit: 400 }], { description: 'Ingående moms Q3' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, output, input], shaped: [...settledBefore, output, input] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id).sort()).toEqual([output.id, input.id].sort())
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({
+      ok: false,
+      code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+    })
+  })
+
+  it('still gates a quarter settled month by month', async () => {
+    const month = (date: string, vat: number) => [
+      entry(date, [{ account_number: '1930', debit: vat * 5 }, { account_number: '2611', credit: vat }, { account_number: '3001', credit: vat * 4 }]),
+      entry(date.replace(/-\d\d$/, '-28'), [{ account_number: '2611', debit: vat }, { account_number: '2650', credit: vat }], { description: 'Momsredovisning månad' }),
+    ]
+    const [july, julySettled] = month('2026-07-10', 600)
+    const [august, augustSettled] = month('2026-08-10', 700)
+    const [september, septemberSettled] = month('2026-09-10', 700)
+    const supabase = ledger({
+      fiscalPeriods: years,
+      entries: [ib, ...q1, ...q2, july, julySettled, august, augustSettled, september, septemberSettled],
+      shaped: [...settledBefore, julySettled, augustSettled, septemberSettled],
+    })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id).sort()).toEqual([julySettled.id, augustSettled.id, septemberSettled.id].sort())
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+  })
+
+  it('never counts the payment of the net on 2650 as the quarter\'s momsredovisning', async () => {
+    // Q2's net paid to the skattekonto in August: 2650 against 1630 has no
+    // declaration account, so it is no momsredovisning by shape (pinned in
+    // tests/pg/vat-skattekonto-counter-entries.pg.test.ts), though it clears 2650.
+    const transfer = entry('2026-08-10', [{ account_number: '1630', debit: 1_150 }, { account_number: '1930', credit: 1_150 }])
+    const paid = entry('2026-08-12', [{ account_number: '2650', debit: 1_150 }, { account_number: '1630', credit: 1_150 }], { description: 'Moms Q2 betald' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [...base, transfer, paid], shaped: settledBefore })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries).toEqual([])
+    expect(proposal.filed_net).toBe(1_900)
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({ ok: true })
   })
 })
