@@ -28,7 +28,7 @@ import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } fro
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
-import { lacksSkatteverketSaldo, sidesAgree } from './verdict'
+import { lacksSkatteverketSaldo, sidesAgree, skatteverketNotConnected } from './verdict'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -609,8 +609,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             ? status.external_balance
             : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
         ),
-        // Bank: the gross split makes the net self-explanatory; skattekonto: when it was fetched.
-        sub: bankBreakdown ?? (fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced')),
+        // Bank: the gross split makes the net self-explanatory; skattekonto:
+        // when it was fetched, or that the company is not connected (crm#1701).
+        sub:
+          bankBreakdown ??
+          (fetchedAt
+            ? t('tile_synced', { date: formatDate(fetchedAt) })
+            : skatteverketNotConnected(status)
+              ? t('tile_skv_not_connected')
+              : t('rail_never_synced')),
       }
 
   const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn'; help?: string }> = [
@@ -741,7 +748,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       ? t('v2_verdict_no_bank_rows_synced', { date: formatDate(fetchedAt) })
       : t('v2_verdict_no_bank_rows')
     : lacksSkatteverketSaldo(status)
-      ? t('v2_verdict_no_skv_saldo')
+      ? skatteverketNotConnected(status)
+        ? t('v2_verdict_skv_not_connected')
+        : t('v2_verdict_no_skv_saldo')
       : sidesAgree(status)
         ? isSkv
           ? t('v2_verdict_ok_skv')
@@ -867,8 +876,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
 
       {/* One notice at a time: stale data first, else the rows a summarised
           verifikat already covers, with the way to link them. One line: the
-          why behind the "?". */}
-      {status.stale ? (
+          why behind the "?". A skattekonto without a saldo has nothing to be
+          stale: the verdict already says why there is none (crm#1701). */}
+      {status.stale && !lacksSkatteverketSaldo(status) ? (
         <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
       ) : isSkv && status.skattekonto?.covered ? (
         <AttnLine

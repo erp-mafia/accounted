@@ -368,7 +368,14 @@ export type ReconciliationItem = z.infer<typeof ReconciliationItemSchema>
 
 export const SkattekontoStatusBlockSchema = z.object({
   saldo_skatteverket: z.number().nullable(),
-  /** ISO timestamp of the saldo snapshot; null when never synced. */
+  /**
+   * Why saldo_skatteverket is null: 'not_connected' when the company has no
+   * Skatteverket connection (a saldo fetched before a disconnect is no
+   * reading either, crm#1701), 'not_fetched' when none was fetched yet.
+   * Null when the saldo is known.
+   */
+  saldo_missing_reason: z.enum(['not_connected', 'not_fetched']).nullable().optional(),
+  /** ISO timestamp of the saldo snapshot; null when never synced or not connected. */
   fetched_at: z.string().nullable(),
   /** Start of the comparable history: the earliest SKV-posted row we hold, or the 1630 IB date when that is later. */
   history_start: z.string().nullable(),

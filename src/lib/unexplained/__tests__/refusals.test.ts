@@ -91,6 +91,17 @@ describe('cannot_check, never ok', () => {
     expect((await results(noSaldo, 'skattekonto_vs_skatteverket')).results[0].refusal).toMatchObject({ code: 'NO_SKATTEVERKET_BALANCE' })
   })
 
+  // crm#1701: the connection removed, its last saldo (0 kr) still stored. The
+  // check compared the books with it and said "Skatteverket visade 0 kr".
+  it('the skattekonto after a disconnect: the stored saldo is no reading', async () => {
+    const ctx = ctxFor({ skvSaldo: { amount: 0, at: '2026-06-30T04:00:00.000Z' }, skvRows: [skvRow()], skvDisconnected: true })
+    const r = (await results(ctx, 'skattekonto_vs_skatteverket')).results[0]
+    expect(r.status).toBe('cannot_check')
+    expect(r.refusal).toMatchObject({ code: 'SKATTEKONTO_NOT_CONNECTED' })
+    expect(r.refusal!.message_sv).toContain('inte anslutet')
+    expect(r.sides.find((s) => s.key === 'skatteverket')?.amount).toBeNull()
+  })
+
   it('VAT: not registered, or nothing recorded as declared', async () => {
     expect((await results(ctxFor({ vatRegistered: false }), 'vat_declared_not_settled')).results[0].refusal).toMatchObject({ code: 'NOT_VAT_REGISTERED' })
     expect((await results(ctxFor({ declared: [] }), 'vat_declared_not_settled')).results[0].refusal).toMatchObject({ code: 'NO_DECLARED_PERIODS' })

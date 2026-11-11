@@ -42,6 +42,8 @@ export interface CheckFixtureOptions {
   /** Skatteverket saldo snapshot; null = never fetched. */
   skvSaldo?: { amount: number; at: string } | null
   skvRows?: Row[]
+  /** The Skatteverket connection is gone (no token row) while its saldo snapshot stays (crm#1701). */
+  skvDisconnected?: boolean
   extraEntries?: FakeEntry[]
   /** Entries the VAT totals RPC lists as momsredovisning by shape (the SQL's decision, stated). */
   vatShapedEntryIds?: string[]
@@ -246,6 +248,12 @@ export function checkFixture(options: CheckFixtureOptions = {}): FakeLedgerData 
       deadlines: deadlineRows(options.declared ?? ['2026-Q1', '2026-Q2']),
       transactions: options.transactions ?? [],
       skattekonto_transactions: options.skvRows ?? (skvConnected ? [skvRow()] : []),
+      // A member's token row: what makes the snapshot's saldo the company's
+      // reading (lib/skatteverket/connection-state.ts).
+      skatteverket_tokens:
+        skvConnected && !options.skvDisconnected
+          ? [{ id: 'skvtoken-1', company_id: CO, user_id: 'user-1', status: 'active' }]
+          : [],
       extension_data: skv
         ? [
             {
