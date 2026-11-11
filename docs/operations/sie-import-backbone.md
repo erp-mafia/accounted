@@ -59,6 +59,10 @@ Hosted recovery: `/api/import/sie/worker/cron` every minute, authenticated with
 the cron-secret guard. Recovery takes lease expiry plus actual cron delivery;
 one-minute recovery is not guaranteed. The weekly invariant endpoint is
 `/api/import/sie/invariants/cron`. Self-hosted cron entries are included.
+Each check runs on its own statement budget, the duplicate-voucher check 500
+companies per call. The endpoint answers 503 when a check found a violation
+and 500 when a check did not finish; the body names the checks that finished
+and how many companies the duplicate check reached, the run log the errors.
 
 After three consecutive failures a job pauses and emits an alert. Inspect the
 job's error and receipts, correct the cause, then resume from the job screen.
