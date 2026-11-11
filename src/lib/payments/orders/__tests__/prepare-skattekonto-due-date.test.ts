@@ -306,3 +306,33 @@ describe('a declaration paid on its own with another due the same day', () => {
     expect(lastRpcArgs()).toMatchObject({ p_amount: 30568 })
   })
 })
+
+describe('prepareSkattekontoPaymentOrder for a day whose AGI holds one run of its month (crm#1768)', () => {
+  it('refuses the day, says why, and writes nothing', async () => {
+    db.setTable(
+      'agi_declarations',
+      agiByMonth({ 10: { ...AGI_ROW, status: 'generated', salary_run_id: 'run-own' }, 9: AGI_ROW }),
+    )
+    db.setTable('salary_runs', (calls: Chain) => {
+      if (calls.find((c) => c.method === 'select')?.args[0] === 'id, corrects_run_id') return { data: { id: 'run-own', corrects_run_id: null } }
+      return {
+        data: [
+          { id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null },
+          { id: 'run-other', status: 'paid', period_year: 2026, period_month: 9, payment_date: '2026-10-05', corrects_run_id: null },
+        ],
+      }
+    })
+
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', source: DAY, today: TODAY })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'AGI_PAYMENT_PERIOD_CONFLICT',
+      details: { tax_period: '2026-10', due_date: DUE, other_salary_run_id: 'run-other' },
+    })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.messageSv).toContain('så dess belopp betalas inte från Accounted')
+    expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
+    expect(db.calls.filter((c) => ['insert', 'update', 'upsert', 'delete'].includes(c.method))).toEqual([])
+  })
+})

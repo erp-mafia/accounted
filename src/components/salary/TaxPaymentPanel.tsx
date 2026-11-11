@@ -13,7 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { postAction } from '@/lib/browser/post-action'
 import { failureDescription } from '@/lib/browser/action-failure'
-import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
@@ -60,6 +60,14 @@ interface TaxPaymentPanelProps {
    * offers Betala via banken for it where bank payments are switched on.
    */
   agiPeriod?: string | null
+  /**
+   * The refusal the payment file and the bank payment give the declaration
+   * (GET /api/skatteverket/tax-payments/{period}: period_conflict): it holds
+   * one run's totals while another live run is paid out in the month
+   * (crm#1768). Set, the panel says so instead of showing an amount to pay
+   * or offering to pay it; marking the month paid stays.
+   */
+  periodConflict?: { code: string; message: string; message_en?: string } | null
   onChange?: () => void
 }
 
@@ -81,6 +89,7 @@ export function TaxPaymentPanel({
   fileAccount,
   readOnly,
   agiPeriod,
+  periodConflict,
   onChange,
 }: TaxPaymentPanelProps) {
   const t = useTranslations('salary_payments')
@@ -176,6 +185,8 @@ export function TaxPaymentPanel({
   // PaymentFilePanel).
   const accountMissing = format === 'pain001' ? (fileAccount?.missing ?? null) : null
   const senderMissing = (format === 'bg_lb' && senderBankgiro === null) || accountMissing !== null
+  // A declaration that may not be paid shows no amount to pay and no way to pay it.
+  const payable = !periodConflict
 
   return (
     <DetailSection
@@ -197,16 +208,25 @@ export function TaxPaymentPanel({
         ) : undefined
       }
     >
+      {periodConflict && (
+        <div className="mb-3">
+          <AttnLine>{getErrorMessage(periodConflict, { locale })}</AttnLine>
+        </div>
+      )}
       <div>
-        <DefRow label={t('tax_label_tax')}>
-          <span className="tabular-nums">{formatCurrency(totalTax)}</span>
-        </DefRow>
-        <DefRow label={t('tax_label_avgifter')}>
-          <span className="tabular-nums">{formatCurrency(totalAvgifter)}</span>
-        </DefRow>
-        <DefRow label={t('tax_label_total')}>
-          <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
-        </DefRow>
+        {payable && (
+          <>
+            <DefRow label={t('tax_label_tax')}>
+              <span className="tabular-nums">{formatCurrency(totalTax)}</span>
+            </DefRow>
+            <DefRow label={t('tax_label_avgifter')}>
+              <span className="tabular-nums">{formatCurrency(totalAvgifter)}</span>
+            </DefRow>
+            <DefRow label={t('tax_label_total')}>
+              <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
+            </DefRow>
+          </>
+        )}
         <DefRow label={t('tax_recipient')}>{t('tax_recipient_value')}</DefRow>
         {paymentDueDate && (
           <DefRow label={t('tax_due_date')}>
@@ -226,7 +246,7 @@ export function TaxPaymentPanel({
             <span className="tabular-nums">{formatDateTime(taxPaidAt)}</span>
           </DefRow>
         )}
-        {!readOnly && (
+        {!readOnly && payable && (
           <DefRow label={t('format_label')}>
             <SettingsSelect
               aria-label={t('format_label')}
@@ -241,7 +261,7 @@ export function TaxPaymentPanel({
         )}
       </div>
 
-      {!readOnly && senderMissing && (
+      {!readOnly && payable && senderMissing && (
         <div className="mt-3">
           <AttnLine
             action={{
@@ -260,7 +280,7 @@ export function TaxPaymentPanel({
 
       {!readOnly && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
-          {!taxPaidAt && agiPeriod && (
+          {!taxPaidAt && agiPeriod && payable && (
             <PayDeclarationViaBankButton
               source={{ source: 'agi', year: Number(agiPeriod.slice(0, 4)), month: Number(agiPeriod.slice(5, 7)) }}
               sourceLabel={agiPeriod}
@@ -268,10 +288,12 @@ export function TaxPaymentPanel({
               onDone={onChange}
             />
           )}
-          <Button onClick={handleDownload} disabled={marking} loading={downloading}>
-            {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
-            {t('tax_download_button')}
-          </Button>
+          {payable && (
+            <Button onClick={handleDownload} disabled={marking} loading={downloading}>
+              {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
+              {t('tax_download_button')}
+            </Button>
+          )}
           {!taxPaidAt && (
             <Button
               variant="outline"

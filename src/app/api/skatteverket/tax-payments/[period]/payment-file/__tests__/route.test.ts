@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -59,6 +59,13 @@ vi.mock('@/lib/bankgiro/luhn', () => ({
   validateBankgiroNumber: vi.fn().mockReturnValue(true),
 }))
 
+// The paying-side check (crm#1768): may be paid unless a test says otherwise;
+// the crm#1768 block below runs the real one against queued reads.
+const mockReadConflict = vi.fn()
+vi.mock('@/lib/deadlines/agi-payable-declaration', () => ({
+  readAgiPaymentPeriodConflict: (...args: unknown[]) => mockReadConflict(...args),
+}))
+
 import { GET } from '../route'
 import { resolveSkattekontoOcr } from '@/lib/skatteverket/skattekonto-ocr'
 import { FilingIdentityError } from '@/lib/invariants/org-number'
@@ -71,6 +78,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     requireWriteMock.mockResolvedValue({ ok: true })
+    mockReadConflict.mockResolvedValue({ ok: true, conflict: null })
     mockGenerateBgLb.mockReturnValue({ content: 'LB-FILE', filename: 'skatt-2026-04.txt' })
     mockGeneratePain001.mockReturnValue('<Document/>')
     mockResolveBatchDebtor.mockResolvedValue({
@@ -543,5 +551,99 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(response.status).toBe(400)
     expect(mockGenerateBgLb).not.toHaveBeenCalled()
     expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+  describe('a declaration holding one run of its month (crm#1768)', () => {
+    const OWN = { id: 'run-own', status: 'booked', period_year: 2026, period_month: 4, payment_date: '2026-04-25', corrects_run_id: null }
+    const OTHER = { id: 'run-other', status: 'booked', period_year: 2026, period_month: 3, payment_date: '2026-04-05', corrects_run_id: null }
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('@/lib/deadlines/agi-payable-declaration')>(
+        '@/lib/deadlines/agi-payable-declaration',
+      )
+      mockReadConflict.mockImplementation(actual.readAgiPaymentPeriodConflict)
+    })
+
+    it('refuses with 409 naming the other run, generates no file and stamps nothing', async () => {
+      enqueue({ data: { id: 'agi-1', status: 'generated', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } }) // agi
+      enqueue({ data: { id: 'run-own', corrects_run_id: null } }) // salary_runs: the declaration's run
+      enqueue({ data: [OWN, OTHER] }) // salary_runs: live runs paid out in April
+
+      for (const format of ['bg_lb', 'pain001']) {
+        if (format === 'pain001') {
+          enqueue({ data: { id: 'agi-1', status: 'generated', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } })
+          enqueue({ data: { id: 'run-own', corrects_run_id: null } })
+          enqueue({ data: [OWN, OTHER] })
+        }
+        const response = await GET(
+          createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', { searchParams: { format } }),
+          createMockRouteParams({ period: '2026-04' }),
+        )
+        const body = await response.json()
+
+        expect(response.status).toBe(409)
+        expect(body.error.code).toBe('AGI_PAYMENT_PERIOD_CONFLICT')
+        expect(body.error.message).toBe(
+          'Lönekörningen för 2026-03 med utbetalning 2026-04-05 hör också till redovisningsperiod 2026-04. ' +
+            'Arbetsgivardeklarationen som Accounted har för 2026-04 räknar bara med en av körningarna, så dess belopp betalas inte från Accounted. ' +
+            'Lämna in deklarationen för 2026-04 med summan av körningarna i Skatteverkets e-tjänst och betala det belopp den ger.',
+        )
+        expect(body.error.message_en).toMatch(/^The salary run for 2026-03 paid out 2026-04-05 also belongs to reporting period 2026-04\./)
+        expect(body.error.details).toMatchObject({ period: '2026-04', other_salary_run_id: 'run-other' })
+      }
+      expect(mockGenerateBgLb).not.toHaveBeenCalled()
+      expect(mockGeneratePain001).not.toHaveBeenCalled()
+      expect(findCalls('agi_declarations', 'update')).toEqual([])
+      expect(findCalls('companies', 'select')).toEqual([])
+    })
+
+    it('generates the file as before for a single-run month', async () => {
+      enqueue({ data: { id: 'agi-1', status: 'generated', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } }) // agi
+      enqueue({ data: { id: 'run-own', corrects_run_id: null } }) // salary_runs: the declaration's run
+      enqueue({ data: [OWN] }) // salary_runs: live runs paid out in April
+      enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+      enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+      enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+      enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+      const response = await GET(
+        createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+        createMockRouteParams({ period: '2026-04' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 1500 })
+      expect(findCalls('agi_declarations', 'update')).toHaveLength(1)
+    })
+
+    it('generates the file as before for a filed declaration, without reading the runs', async () => {
+      enqueue({ data: { id: 'agi-1', status: 'accepted', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } }) // agi
+      enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+      enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+      enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+      enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+      const response = await GET(
+        createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+        createMockRouteParams({ period: '2026-04' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(mockGenerateBgLb).toHaveBeenCalledTimes(1)
+      expect(findCalls('salary_runs', 'select')).toEqual([])
+    })
+
+    it('refuses when the runs cannot be read, and stamps nothing', async () => {
+      enqueue({ data: { id: 'agi-1', status: 'generated', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } }) // agi
+      enqueue({ data: null, error: { message: 'connection reset', code: '08006' } }) // salary_runs: the declaration's run
+
+      const response = await GET(
+        createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+        createMockRouteParams({ period: '2026-04' }),
+      )
+
+      expect(response.status).toBeGreaterThanOrEqual(500)
+      expect(mockGenerateBgLb).not.toHaveBeenCalled()
+      expect(findCalls('agi_declarations', 'update')).toEqual([])
+    })
   })
 })

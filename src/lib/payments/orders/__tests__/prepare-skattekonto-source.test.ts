@@ -235,6 +235,56 @@ describe('prepareSkattekontoPaymentOrder from an AGI', () => {
     ).toEqual({ ok: false, code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND', details: { tax_period: '2026-11' } })
   })
 
+  it('refuses a declaration holding one run while another live run is paid out in the month, and writes nothing (crm#1768)', async () => {
+    db.setTable('agi_declarations', {
+      data: { status: 'generated', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null, salary_run_id: 'run-own' },
+    })
+    db.setTable('salary_runs', (calls: Chain) => {
+      if (calls.find((c) => c.method === 'select')?.args[0] === 'id, corrects_run_id') return { data: { id: 'run-own', corrects_run_id: null } }
+      return {
+        data: [
+          { id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null },
+          { id: 'run-other', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-05', corrects_run_id: null },
+        ],
+      }
+    })
+
+    for (const dryRun of [false, true]) {
+      const result = await prepareSkattekontoPaymentOrder(ctx, {
+        cashAccountId: 'acct-1',
+        source: { kind: 'agi', year: 2026, month: 10 },
+        // An amount entered by hand does not make the declaration payable either.
+        amount: 30568,
+        today: TODAY,
+        dryRun,
+      })
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'AGI_PAYMENT_PERIOD_CONFLICT',
+        details: { period: '2026-10', other_salary_run_id: 'run-other' },
+      })
+      if (result.ok) throw new Error('expected a refusal')
+      expect(result.messageSv).toMatch(/^Lönekörningen för 2026-09 med utbetalning 2026-10-05 hör också till redovisningsperiod 2026-10\./)
+    }
+    expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
+    expect(db.calls.filter((c) => ['insert', 'update', 'upsert', 'delete'].includes(c.method))).toEqual([])
+  })
+
+  it('pays a single-run month as before', async () => {
+    db.setTable('agi_declarations', {
+      data: { status: 'generated', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null, salary_run_id: 'run-own' },
+    })
+    db.setTable('salary_runs', (calls: Chain) => {
+      if (calls.find((c) => c.method === 'select')?.args[0] === 'id, corrects_run_id') return { data: { id: 'run-own', corrects_run_id: null } }
+      return { data: [{ id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null }] }
+    })
+
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', source: { kind: 'agi', year: 2026, month: 10 }, today: TODAY })
+
+    expect(result).toMatchObject({ ok: true, data: { source: { kind: 'agi', declared: 30568, filed: false } } })
+    expect(rpcArgs()).toMatchObject({ p_amount: 30568 })
+  })
+
   it('refuses a month already marked paid unless the person enters an amount', async () => {
     db.setTable('agi_declarations', { data: { status: 'accepted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: '2026-11-12T00:00:00Z' } })
     expect(

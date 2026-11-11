@@ -7781,6 +7781,21 @@ const SALARY: Record<string, StructuredErrorEntry> = {
         "details.other_salary_run_id (and details.other_runs) name the other runs paid out in details.period. Do not generate or submit the AGI for one of them alone: it would declare only that run, and a second declaration for the month does not add to the first (an individuppgift with the same specifikationsnummer replaces the earlier one). Tell the user to file the month in Skatteverket's e-service with the runs' combined figures.",
     },
   },
+  // The paying side of AGI_PERIOD_CONFLICT (crm#1768): an unfiled declaration
+  // stored before the generator refused its month holds one run's totals, so
+  // the tax payment file and the skattekonto payment named from it (or from
+  // its due date) refuse it (lib/deadlines/agi-payable-declaration.ts).
+  AGI_PAYMENT_PERIOD_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'En annan lönekörning har också utbetalning i samma redovisningsperiod (utbetalningsmånad), och arbetsgivardeklarationen som Accounted har för månaden räknar bara med en av körningarna. Dess belopp betalas därför inte från Accounted. Lämna in deklarationen för månaden med summan av körningarna i Skatteverkets e-tjänst och betala det belopp den ger.',
+    message_en:
+      "Another salary run is also paid out in the same reporting period (payout month), and the employer declaration Accounted holds for the month covers only one of the runs. Its amount is therefore not paid from Accounted. File the month's declaration with the sum of the runs in Skatteverket's e-service and pay the amount it gives.",
+    remediation: {
+      description:
+        "details.other_runs (first: details.other_salary_run_id) name the other live runs paid out in details.period. The stored declaration covers one run, so its total is not what the month owes: do not pay it from the tax payment file, a skattekonto payment with source agi, or source due_date for its due day (pay the momsdeklaration due that day with source vat_declaration). Tell the user to file the month in Skatteverket's e-service with the runs' combined figures; the amount that filing gives can then be paid as a skattekonto payment with an amount and no source.",
+    },
+  },
   // generateAgiDeclaration writes the period's declaration only if it still
   // holds what was read (salary run and status); two misses in a row answer
   // this instead of writing over whatever got there first (#58).
