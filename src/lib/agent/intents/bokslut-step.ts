@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { OPUS_MODEL, EFFORT_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 import type { PeriodStatusValue } from '@/lib/core/bookkeeping/period-service'
 
@@ -84,6 +84,11 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
   ],
 
   model: OPUS_MODEL,
+
+  // The deep tier, like vat.review: several year-end tool reads in one turn
+  // filled the no-thinking reply cap before any answer was written, and the
+  // turn ended with "fick slut på utrymme" (crm#1697).
+  thinking: { effort: EFFORT_DEEP },
 
   capture: async ({ step_id, fiscal_year_end }, { supabase, companyId }) => {
     // Find the latest fiscal period (the one being closed): or the one
