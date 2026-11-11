@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { bokslutStep } from '../bokslut-step'
+import { EFFORT_DEEP } from '@/lib/agent/composer/client'
 
 // fiscal_periods has no `status` column: state is is_closed + locked_at
 // (see lib/core/bookkeeping/period-service.ts and the period-lock triggers).
@@ -211,5 +212,13 @@ describe('bokslut.step prompt template', () => {
     expect(bokslutStep.tools).toContain('gnubok_list_fiscal_periods')
     expect(bokslutStep.tools).toContain('gnubok_year_end_readiness')
     expect(bokslutStep.tools).toContain('gnubok_post_kontantmetod_cutoff')
+  })
+})
+
+// crm#1697: without thinking the turn gets the reply-sized cap, and several
+// year-end tool reads filled it before any answer ("fick slut på utrymme").
+describe('bokslut.step budget', () => {
+  it('runs on the deep effort tier', () => {
+    expect(bokslutStep.thinking?.effort).toBe(EFFORT_DEEP)
   })
 })
