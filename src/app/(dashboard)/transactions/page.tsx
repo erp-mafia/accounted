@@ -84,6 +84,7 @@ import {
   matchTransactionsToExpensePayouts,
 } from '@/lib/expenses/expense-payout-candidates'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
+import type { SalaryRunPayout } from '@/lib/transactions/salary-run-payouts'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
 import {
   isSourceFilter,
@@ -501,6 +502,11 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
+  // The rows a booked salary run already pays out, with the run's verifikat,
+  // read with the proposals (crm#1685): the row is matched to it, never booked.
+  const [salaryPayouts, setSalaryPayouts] = useState<Record<string, SalaryRunPayout>>({})
+  const salaryPayoutFor = (tx: TransactionWithInvoice): SalaryRunPayout | undefined =>
+    tx.journal_entry_id ? undefined : salaryPayouts[tx.id]
   // The company's one-click switch, read with the proposals. Until it has
   // arrived no row books without its review.
   const [directBooking, setDirectBooking] = useState<DirectBookingSettings | null>(null)
@@ -818,6 +824,8 @@ export default function TransactionsPage() {
     if (tx.potential_supplier_invoice) return t('cat_hint_supplier_invoice')
     if (tx.potential_rot_rut_payout) return t('cat_hint_rot_rut')
     if (tx.potential_expense_payout) return t('cat_hint_expense')
+    const salaryPayout = salaryPayoutFor(tx)
+    if (salaryPayout) return t('cat_hint_salary_run', { period: salaryPayout.period })
     if (tx.potential_voucher) return t('cat_hint_voucher')
     return null
   }
@@ -1769,6 +1777,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
+      if (data.salary_payouts) setSalaryPayouts(data.salary_payouts as Record<string, SalaryRunPayout>)
       if (data.direct_booking) setDirectBooking(data.direct_booking as DirectBookingSettings)
       if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
@@ -4464,10 +4473,29 @@ export default function TransactionsPage() {
     onPickLibraryTemplate: handlePickLibraryTemplate,
     onSelectAccount: handlePickAccount,
   }
+  const templatePickerSalaryPayout = templatePickerTransaction ? salaryPayoutFor(templatePickerTransaction) : undefined
+  // "Matcha mot befintlig verifikation" on a row a salary run pays out opens
+  // with the run's verifikat picked, whichever door opened it.
+  const matchVoucherSalaryPayout = matchVoucherTx ? salaryPayoutFor(matchVoucherTx) : undefined
   // Alternate paths as quiet links (concept vact): the templates are the
   // main content, not three stacked buttons.
   const templatePickerLinks = (
     <>
+            {/* A booked salary run pays this row out (crm#1685): matched to
+                the run's verifikat, never booked a second time. */}
+            {templatePickerTransaction && templatePickerSalaryPayout && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  openMatchVoucherDialog(tx)
+                }}
+              >
+                {t('dialog_match_salary_run', { period: templatePickerSalaryPayout.period })}
+              </button>
+            )}
             <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
               Bokför manuellt
             </button>
@@ -4839,6 +4867,7 @@ export default function TransactionsPage() {
                         accountLogo={accountLogoFor(item.data)}
                         proposal={proposalFor(item.data)}
                         onBookProposal={bookProposal}
+                        salaryRunPeriod={salaryPayoutFor(item.data)?.period ?? null}
                         giroCounterparty={giroCounterpartyFor(item.data)}
                       />
                     ) : (
@@ -4988,6 +5017,10 @@ export default function TransactionsPage() {
           onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
           transaction={matchVoucherTx}
           onLinked={handleVoucherLinked}
+          preferredJournalEntryId={matchVoucherSalaryPayout?.journal_entry_id ?? null}
+          preferredNote={
+            matchVoucherSalaryPayout ? t('salary_run_payout_note', { period: matchVoucherSalaryPayout.period }) : null
+          }
         />
       )}
 

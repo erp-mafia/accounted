@@ -33,6 +33,14 @@ interface MatchVoucherDialogProps {
    *  verifikat; voucherLabel names every picked one, e.g. "A-42" or, for a
    *  split, "A-42, A-43". */
   onLinked: (transactionId: string, journalEntryId: string, voucherLabel: string) => void
+  /**
+   * A verifikat the caller already knows pays this row (a booked salary run's
+   * net pay, lib/transactions/salary-run-payouts.ts): picked when the list
+   * holds it unmatched, before any ranking. The person still confirms.
+   */
+  preferredJournalEntryId?: string | null
+  /** Said under the list while the preferred verifikat is the one picked. */
+  preferredNote?: string | null
 }
 
 // ±30 days around the transaction date: wide enough to catch a salary or
@@ -45,6 +53,8 @@ export function MatchVoucherDialog({
   onOpenChange,
   transaction,
   onLinked,
+  preferredJournalEntryId = null,
+  preferredNote = null,
 }: MatchVoucherDialogProps) {
   const { toast } = useToast()
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
@@ -109,9 +119,14 @@ export function MatchVoucherDialog({
         // smallest set of unmatched verifikat that sums to the row to the
         // öre (a Bankgirot day-sum against the day's inbetalningar). The
         // user still confirms; the button names how many.
+        // A verifikat the caller knows pays the row comes before the ranking.
+        const preferred = preferredJournalEntryId
+          ? lines.find((l) => l.journal_entry_id === preferredJournalEntryId && !(l.linked_transaction_count ?? 0))
+          : undefined
         const top = lines[0]
-        const strong =
-          top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
+        const strong = preferred
+          ? preferred.journal_entry_id
+          : top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
             ? top.journal_entry_id
             : null
         const proposed = strong ? null : proposeSplitSelection(lines, tx.amount, tx.date)
@@ -121,7 +136,7 @@ export function MatchVoucherDialog({
         if (!signal.cancelled) setLoading(false)
       }
     },
-    [cashAccounts],
+    [cashAccounts, preferredJournalEntryId],
   )
 
   // (Re)load whenever the dialog opens for a transaction, the range widens, or
@@ -296,6 +311,9 @@ export function MatchVoucherDialog({
                 selectedIds={selected}
                 onToggle={toggleVoucher}
               />
+              {preferredNote && selectedLine && selectedLine.journal_entry_id === preferredJournalEntryId && (
+                <p className="text-xs text-muted-foreground">{preferredNote}</p>
+              )}
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Redan matchad mot {selectedLine?.linked_transaction_count}{' '}
