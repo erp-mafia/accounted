@@ -129,7 +129,60 @@ export function toDeadlineSettings(
     fyllnadsinbetalning_enabled: settings.fyllnadsinbetalning_enabled ?? false,
     tax_assessment_notices: settings.tax_assessment_notices,
     fiscal_years: settings.fiscal_years,
+    salaried_employee_since: settings.salaried_employee_since,
   }
+}
+
+/**
+ * Every company's (or one company's) earliest employment_start among active
+ * employees with a monthly salary or hourly rate set: the employer evidence
+ * isAgiEmployer reads while neither employer flag is attested
+ * (CompanySettingsForDeadlines.salaried_employee_since). "Active" is
+ * is_active alone, as everywhere else (lib/agent/composer/employee-facts.ts):
+ * deactivation sets it false. One paginated query for every company when
+ * companyId is omitted (cron paths).
+ */
+async function fetchSalariedEmployeeSince(
+  supabase: SupabaseClient,
+  companyId?: string,
+): Promise<Map<string, string>> {
+  const rows = await fetchAllRows<{
+    company_id: string
+    employment_start: string | null
+    monthly_salary: number | string | null
+    hourly_rate: number | string | null
+  }>(({ from, to }) => {
+    let query = supabase
+      .from('employees')
+      .select('company_id, employment_start, monthly_salary, hourly_rate')
+      .eq('is_active', true)
+    if (companyId) query = query.eq('company_id', companyId)
+    return query.order('id', { ascending: true }).range(from, to)
+  })
+  const since = new Map<string, string>()
+  for (const row of rows) {
+    const salaried = Number(row.monthly_salary ?? 0) > 0 || Number(row.hourly_rate ?? 0) > 0
+    if (!salaried || !row.employment_start) continue
+    const current = since.get(row.company_id)
+    if (!current || row.employment_start < current) since.set(row.company_id, row.employment_start)
+  }
+  return since
+}
+
+/** Only an unattested company reads the employee evidence (isAgiEmployer). */
+function needsEmployeeEvidence(settings: Partial<CompanySettingsForDeadlines>): boolean {
+  return settings.employer_registered == null && !settings.pays_salaries
+}
+
+async function hydrateSalariedEmployeeSince(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const byCompany = await fetchSalariedEmployeeSince(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    salaried_employee_since: byCompany.get(settings.company_id) ?? null,
+  }))
 }
 
 /**
@@ -388,6 +441,15 @@ export async function generateTaxDeadlinesForUser(
   if (settings.fiscal_years === undefined) {
     const fiscalYears = await fetchFiscalYears(supabase, companyId)
     settings = { ...settings, fiscal_years: fiscalYears.get(companyId) ?? [] }
+  }
+
+  // An active employee with a salary makes an unattested company an employer
+  // for the AGI rows (isAgiEmployer, crm#1790). Read only when it can matter.
+  if (settings.salaried_employee_since === undefined) {
+    const since = needsEmployeeEvidence(settings)
+      ? (await fetchSalariedEmployeeSince(supabase, companyId)).get(companyId) ?? null
+      : null
+    settings = { ...settings, salaried_employee_since: since }
   }
 
   // Recurring deadlines use the current rolling window. Explicit tax notices
@@ -930,9 +992,12 @@ export async function generateNewYearDeadlines(
   supabase: SupabaseClient
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
   const newYear = stockholmYearMonth().year
-  const allSettings = await hydrateFiscalYears(
+  const allSettings = await hydrateSalariedEmployeeSince(
     supabase,
-    await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
+    await hydrateFiscalYears(
+      supabase,
+      await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
+    ),
   )
 
   let usersProcessed = 0
@@ -982,12 +1047,16 @@ export async function backfillMissingTaxDeadlines(
         .range(from, to),
     ),
   ])
-  // Fiscal years must be hydrated here exactly as the generator resolves
-  // them: if detection expected a räkenskapsår the generator refuses to
-  // create, the company would be regenerated every night.
-  const allSettings = await hydrateFiscalYears(
+  // Fiscal years and the employee evidence must be hydrated here exactly as
+  // the generator resolves them: if detection expected a räkenskapsår (or an
+  // AGI row) the generator refuses to create, or missed one it creates, the
+  // company would be regenerated every night.
+  const allSettings = await hydrateSalariedEmployeeSince(
     supabase,
-    await hydrateTaxAssessmentNotices(supabase, rawSettings),
+    await hydrateFiscalYears(
+      supabase,
+      await hydrateTaxAssessmentNotices(supabase, rawSettings),
+    ),
   )
 
   // Missing rows and rows the schedule no longer produces both need a

@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   ANNUAL_HORIZON_DAYS,
   RECURRING_HORIZON_DAYS,
+  backfillMissingTaxDeadlines,
   findSettingsMissingUpcomingDeadlines,
   findSettingsWithStaleUpcomingDeadlines,
   generateTaxDeadlinesForUser,
@@ -78,16 +79,19 @@ function makeRecordingSupabase(opts: {
   /** The AGI filing records, answered through the filters the generator applies. */
   agiKvittenser?: Array<Record<string, unknown>>
   agiDeclarations?: Array<Record<string, unknown>>
+  /** employees rows, answered through the filters the generator applies. */
+  employees?: Array<Record<string, unknown>>
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
   const filings = createRowsMockSupabase({
     agi_kvittenser: opts.agiKvittenser ?? [],
     agi_declarations: opts.agiDeclarations ?? [],
+    employees: opts.employees ?? [],
   })
 
   const from = vi.fn((table: string) => {
-    if (table === 'agi_kvittenser' || table === 'agi_declarations') {
+    if (table === 'agi_kvittenser' || table === 'agi_declarations' || table === 'employees') {
       return filings.supabase.from(table)
     }
     if (table === 'fiscal_periods') {
@@ -963,5 +967,211 @@ describe('generateTaxDeadlinesForUser: the company\'s real räkenskapsår (crm#1
   it('carries resolved fiscal years through toDeadlineSettings', () => {
     const fiscalYears = [{ start: '2026-10-12', end: '2027-12-31' }]
     expect(toDeadlineSettings({ ...SETTINGS, fiscal_years: fiscalYears }).fiscal_years).toEqual(fiscalYears)
+  })
+})
+
+describe('AGI rows for an active salaried employee before the first salary run (crm#1790)', () => {
+  // An AB that set up its first employee but has not booked a salary run, so
+  // neither employer flag was ever attested (the booked-run trigger never
+  // fired). Generated on 9 November 2026.
+  const UNATTESTED: CompanySettingsForDeadlines = {
+    ...SETTINGS,
+    moms_period: 'quarterly',
+    preliminary_tax_monthly: null,
+    pays_salaries: false,
+    employer_registered: null,
+    fiscal_years: [],
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 9, 12))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function employee(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'employee-1',
+      company_id: 'company-1',
+      is_active: true,
+      employment_start: '2026-03-01',
+      monthly_salary: 30000,
+      hourly_rate: null,
+      ...overrides,
+    }
+  }
+
+  async function agiRows(
+    employees: Array<Record<string, unknown>>,
+    settings: CompanySettingsForDeadlines = UNATTESTED,
+  ) {
+    const recording = makeRecordingSupabase({ employees })
+    await generateTaxDeadlinesForUser(recording.supabase, 'company-1', settings)
+    const rows = recording.getInsertPayload() ?? []
+    return {
+      supabase: recording.supabase,
+      agi: rows
+        .filter((row) => row.tax_deadline_type === 'arbetsgivardeklaration')
+        .map((row) => `${row.tax_period}:${row.due_date}`),
+    }
+  }
+
+  it('creates the AGI rows from an active employee with a monthly salary', async () => {
+    const { agi } = await agiRows([employee()])
+
+    expect(agi).toContain('2026-10:2026-11-12')
+    expect(agi).toContain('2026-11:2026-12-14')
+  })
+
+  it('counts an hourly employee with a rate', async () => {
+    const { agi } = await agiRows([employee({ monthly_salary: null, hourly_rate: 200 })])
+
+    expect(agi).toContain('2026-11:2026-12-14')
+  })
+
+  it('creates no AGI row from an employee who is no longer active', async () => {
+    const { agi } = await agiRows([employee({ is_active: false })])
+
+    expect(agi).toEqual([])
+  })
+
+  it('creates no AGI row from an active employee without any salary set', async () => {
+    const { agi } = await agiRows([employee({ monthly_salary: null, hourly_rate: null })])
+
+    expect(agi).toEqual([])
+  })
+
+  it('does not count another company\'s employee', async () => {
+    const { agi } = await agiRows([employee({ company_id: 'company-2' })])
+
+    expect(agi).toEqual([])
+  })
+
+  it('starts at the first employment month for an employee who has not started yet', async () => {
+    const { agi } = await agiRows([employee({ employment_start: '2027-01-15' })])
+
+    expect(agi.length).toBeGreaterThan(0)
+    expect(agi.every((key) => key >= '2027-01')).toBe(true)
+    expect(agi).toContain('2027-01:2027-02-12')
+  })
+
+  it('keeps an explicit "not a registered employer" and never reads the employees', async () => {
+    const { agi, supabase } = await agiRows([employee()], { ...UNATTESTED, employer_registered: false })
+
+    expect(agi).toEqual([])
+    expect(supabase.from).not.toHaveBeenCalledWith('employees')
+  })
+
+  it('does not read the employees when a flag already decides', async () => {
+    const { agi, supabase } = await agiRows([], { ...UNATTESTED, pays_salaries: true })
+
+    expect(agi).toContain('2026-11:2026-12-14')
+    expect(supabase.from).not.toHaveBeenCalledWith('employees')
+  })
+
+  it('carries resolved employee evidence through toDeadlineSettings', () => {
+    expect(toDeadlineSettings({ ...UNATTESTED, salaried_employee_since: '2026-03-01' }).salaried_employee_since)
+      .toBe('2026-03-01')
+  })
+
+  describe('the nightly backfill', () => {
+    /**
+     * Table-routed mock: paginated reads (.range) answer from `tables`
+     * through the eq filters applied; the generator's own deadline reads
+     * answer empty; inserts are recorded.
+     */
+    function makeSupabase(tables: Record<string, Array<Record<string, unknown>>>) {
+      const inserts: Array<Array<Record<string, unknown>>> = []
+      const from = vi.fn((table: string) => {
+        const chain: Record<string, unknown> = {}
+        const filters: Array<[string, unknown]> = []
+        let deleting = false
+        for (const method of ['is', 'gte', 'lte', 'or', 'not', 'order', 'in']) {
+          chain[method] = vi.fn(() => chain)
+        }
+        chain.eq = vi.fn((column: string, value: unknown) => {
+          filters.push([column, value])
+          return chain
+        })
+        chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
+        chain.range = vi.fn(async () => ({
+          data: (tables[table] ?? []).filter((row) => filters.every(([column, value]) => row[column] === value)),
+          error: null,
+        }))
+        chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
+          inserts.push(rows)
+          return { select: vi.fn(async () => ({ data: rows.map((_, i) => ({ id: `new-${i}` })), error: null })) }
+        })
+        chain.delete = vi.fn(() => {
+          deleting = true
+          return chain
+        })
+        chain.then = (resolve: (value: unknown) => unknown) =>
+          Promise.resolve({ data: [], error: null }).then(resolve)
+        return chain
+      })
+      return { supabase: { from } as unknown as SupabaseClient, inserts }
+    }
+
+    function storedRows(companyId: string, settings: CompanySettingsForDeadlines) {
+      return Array.from(getExpectedUpcomingDeadlineKeys(settings), (key, index) => {
+        const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
+        return {
+          id: `${companyId}-${index}`,
+          company_id: companyId,
+          source: 'system',
+          deadline_type: 'tax',
+          tax_deadline_type: taxDeadlineType,
+          tax_period: taxPeriod,
+          due_date: dueDate,
+          is_completed: false,
+          dismissed_at: null,
+        }
+      })
+    }
+
+    it('adds the AGI rows to the company missing them, once, and leaves the rest alone', async () => {
+      const { fiscal_years: _fy, tax_assessment_notices: _tan, ...raw } = UNATTESTED
+      // What every company held before the fix: no AGI rows.
+      const withoutAgi = { ...UNATTESTED, salaried_employee_since: null }
+      const withAgi = { ...UNATTESTED, salaried_employee_since: '2026-03-01' }
+      const { supabase, inserts } = makeSupabase({
+        company_settings: [
+          { company_id: 'company-1', ...raw },
+          // Already regenerated: holds the AGI rows the evidence expects.
+          { company_id: 'company-2', ...raw },
+          // Only an employee who left.
+          { company_id: 'company-3', ...raw },
+          // Attested as not a registered employer.
+          { company_id: 'company-4', ...raw, employer_registered: false },
+        ],
+        employees: [
+          employee({ id: 'e1', company_id: 'company-1' }),
+          employee({ id: 'e2', company_id: 'company-2' }),
+          employee({ id: 'e3', company_id: 'company-3', is_active: false }),
+          employee({ id: 'e4', company_id: 'company-4' }),
+        ],
+        deadlines: [
+          ...storedRows('company-1', withoutAgi),
+          ...storedRows('company-2', withAgi),
+          ...storedRows('company-3', withoutAgi),
+          ...storedRows('company-4', withoutAgi),
+        ],
+      })
+
+      const result = await backfillMissingTaxDeadlines(supabase)
+
+      expect(result).toMatchObject({ companiesScanned: 4, companiesRepaired: 1 })
+      expect(inserts).toHaveLength(1)
+      expect(new Set(inserts[0].map((row) => row.company_id))).toEqual(new Set(['company-1']))
+      expect(inserts[0].map((row) => `${row.tax_deadline_type}:${row.tax_period}`))
+        .toContain('arbetsgivardeklaration:2026-11')
+      // One read of the employees for every company, none per company.
+      expect((supabase.from as ReturnType<typeof vi.fn>).mock.calls.filter(([table]) => table === 'employees'))
+        .toHaveLength(1)
+    })
   })
 })
