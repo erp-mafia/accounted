@@ -22,6 +22,7 @@ import { CONTRACT_VERSION } from '@accounted/connect-contract'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
 import { isPsuHeaderRefusal, type PsuHeaders } from './psu-headers'
+import { usableCurrency } from './account-currency'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
@@ -195,6 +196,8 @@ export interface Transaction {
   status?: string
   booking_date?: string
   value_date?: string
+  /** When the transaction took place. PayPal sends only this date, on entries it marks BOOK (crm#1767). */
+  transaction_date?: string
   transaction_amount: {
     amount: string
     currency: string
@@ -1017,12 +1020,28 @@ function pickBalanceByType(balances: Balance[], preference: string[]): Balance |
  * `referenceDate` and `type` are the bank's own day and type for the booked
  * amount (null when the bank gave no day): a closingBooked balance is the
  * close of that day, often yesterday, not of the day it was fetched.
+ *
+ * `accountCurrency`, when given, is the currency the account is stored
+ * under: a balance the bank reports in another currency is never this
+ * account's balance. An account without one fixed currency (PayPal reports
+ * 'XXX', crm#1767) can come back with one balance per currency it holds, and
+ * the first booked one, whatever its currency, was shown as the account's
+ * kronor. A balance without a usable currency code stays a candidate, as
+ * before. Only balances in other currencies: null, as for no balances.
  */
 export async function getAccountBalance(
   accountUid: string,
-  psu?: PsuHeaders
+  psu?: PsuHeaders,
+  accountCurrency?: string,
 ): Promise<{ amount: number; referenceDate: string | null; type: string; available: number | null } | null> {
-  const balances = await getAccountBalances(accountUid, psu)
+  const reported = await getAccountBalances(accountUid, psu)
+  const wanted = usableCurrency(accountCurrency)
+  const balances = wanted
+    ? reported.filter(b => {
+        const code = usableCurrency(b.balance_amount?.currency)
+        return code === null || code === wanted
+      })
+    : reported
 
   // Prefer closingBooked, then expected, then first available
   const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]

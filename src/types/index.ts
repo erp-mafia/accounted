@@ -4739,6 +4739,13 @@ export interface IngestResult {
    * only skipping them as duplicates. Optional: only that feed produces it.
    */
   enriched_updated?: number
+  /**
+   * Bank-feed rows set aside because their currency is not the bank account's
+   * (IngestOptions.bankRoute), counted per currency code. Not imported, not
+   * duplicates and not errors: the rest of the batch goes in. Omitted when
+   * every row matched.
+   */
+  other_currency?: Record<string, number>
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
 }

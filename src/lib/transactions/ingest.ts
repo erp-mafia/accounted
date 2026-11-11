@@ -986,12 +986,31 @@ export async function ingestTransactions(
   rawTransactions: RawTransaction[],
   options?: IngestOptions
 ): Promise<IngestResult> {
+  // A bank-feed row only ever lands on the cash account its route resolved,
+  // and that account has one currency. A row in another currency is set aside
+  // and counted, never inserted there; it no longer fails the whole batch,
+  // which left every other row of the sync out with it (crm#1767: a wallet
+  // with no fixed currency, Svea's foreign card purchases before that). A
+  // batch for another connection or ledger account is a caller bug and still
+  // throws.
+  let otherCurrency: Record<string, number> | null = null
   if (options?.bankRoute) {
     const route = options.bankRoute
     if (options.settlementAccount !== route.ledgerAccount || rawTransactions.some(raw =>
-      raw.bank_connection_id !== route.connectionId || raw.currency?.toUpperCase() !== route.currency)) {
+      raw.bank_connection_id !== route.connectionId)) {
       throw new Error('Bank ingest context does not match the fetched batch')
     }
+    const inRouteCurrency: RawTransaction[] = []
+    for (const raw of rawTransactions) {
+      const currency = raw.currency?.trim().toUpperCase() || 'NONE'
+      if (currency === route.currency) {
+        inRouteCurrency.push(raw)
+        continue
+      }
+      otherCurrency ??= {}
+      otherCurrency[currency] = (otherCurrency[currency] ?? 0) + 1
+    }
+    rawTransactions = inRouteCurrency
   }
   const duplicatesByReason: Record<IngestSkipReason, number> = {
     external_id_match: 0,
@@ -1031,6 +1050,16 @@ export async function ingestTransactions(
   }
 
   const log = createLogger('transactions.ingest', { companyId })
+  if (otherCurrency) {
+    result.other_currency = otherCurrency
+    // Codes and counts only, never an amount.
+    log.warn('bank rows in another currency than the account set aside', {
+      connectionId: options?.bankRoute?.connectionId,
+      accountCurrency: options?.bankRoute?.currency,
+      otherCurrency,
+      kept: rawTransactions.length,
+    })
+  }
 
   // What each suggestion pass did in this batch: the baseline a per-company
   // package switch is measured against. Counts only, never ids or amounts.

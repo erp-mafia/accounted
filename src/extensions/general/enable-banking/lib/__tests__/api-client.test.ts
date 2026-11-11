@@ -153,6 +153,54 @@ describe('api-client', () => {
       const result = await getAccountBalance('acc-1')
       expect(result?.amount).toBe(2)
     })
+
+    // crm#1767: a PayPal wallet (account currency 'XXX', stored as SEK)
+    // reports one balance per currency it holds.
+    it('never picks a balance in another currency than the account', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1149.22', currency: 'USD' }, reference_date: '2026-11-09' },
+          { balance_type: 'interimAvailable', balance_amount: { amount: '99.00', currency: 'USD' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '310.40', currency: 'sek' }, reference_date: '2026-11-09' },
+          { balance_type: 'interimAvailable', balance_amount: { amount: '300.00', currency: 'SEK' } },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'SEK')
+      expect(result).toEqual({ amount: 310.4, referenceDate: '2026-11-09', type: 'closingBooked', available: 300 })
+    })
+
+    it('returns null when every balance is in another currency than the account', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1149.22', currency: 'EUR' } },
+          { balance_type: 'other', balance_amount: { amount: '5.00', currency: 'USD' } },
+        ])
+      )
+
+      expect(await getAccountBalance('acc-1', undefined, 'SEK')).toBeNull()
+    })
+
+    it('keeps a balance without a usable currency code as a candidate', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '7.00', currency: 'XXX' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '8.00', currency: 'EUR' } },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'SEK')
+      expect(result?.amount).toBe(7)
+    })
+
+    it('does not filter when the account currency is not a usable code', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([{ balance_type: 'closingBooked', balance_amount: { amount: '8.00', currency: 'EUR' } }])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'XXX')
+      expect(result?.amount).toBe(8)
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -913,6 +961,8 @@ describe('convertTransaction', () => {
       status: 'BOOK',
       booking_date: '2025-03-10',
       value_date: '2025-03-11',
+      // Read by the sync to date a BOOK entry sent without booking_date (crm#1767); never stored.
+      transaction_date: '2025-03-09',
       transaction_amount: { amount: '12500.00', currency: 'SEK' },
       credit_debit_indicator: 'CRDT',
       creditor_name: 'Vårt Bolag AB',

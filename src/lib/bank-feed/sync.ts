@@ -111,6 +111,8 @@ export interface BankFeedAccountSyncResult {
   enrichment: { lastEnrichedAt: string | null; windowEnriched: boolean } | null
   /** Stored rows the re-read updated with richer data (IngestResult.enriched_updated). */
   enrichedUpdated: number
+  /** Rows in another currency than the account's, set aside by ingest (IngestResult.other_currency); omitted when none. */
+  otherCurrency?: number
 }
 
 function looksLikeIban(value: string | null | undefined): boolean {
@@ -281,6 +283,9 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
   if (input.options?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (input.options?.rawInsertOnly) ingestOptions.rawInsertOnly = true
   const result = await ingest(supabase, companyId, userId, mapped.rows, ingestOptions)
+  // Rows in another currency than the account's are set aside by ingest, not
+  // a failed batch (crm#1767); the count travels with the result.
+  const otherCurrency = Object.values(result.other_currency ?? {}).reduce((sum, rows) => sum + rows, 0)
   if (result.errors > 0) {
     // Keep the previous cursor so a retry fetches the incomplete batch again;
     // the rows already inserted keep their external ids and dedupe.
@@ -319,5 +324,6 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
     truncated: remote.truncated === true,
     enrichment: enrichmentOf(remote.enrichment),
     enrichedUpdated: result.enriched_updated ?? 0,
+    ...(otherCurrency > 0 ? { otherCurrency } : {}),
   }
 }

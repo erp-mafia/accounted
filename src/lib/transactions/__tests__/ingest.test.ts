@@ -2529,6 +2529,71 @@ describe('ingestTransactions', () => {
     if (error) expect(result.first_error).toMatchObject(error)
   })
 
+  // crm#1767: a wallet with no fixed currency (PayPal, stored as SEK) sends
+  // rows in each currency it holds. The SEK rows land; the others are set
+  // aside and counted instead of the whole batch being refused.
+  it('sets aside bank rows in another currency than the route and imports the rest', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const sek = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', external_id: 'eb_sek' })
+    const usd = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', external_id: 'eb_usd', currency: 'USD' })
+    const eur = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', external_id: 'eb_eur', currency: 'eur' })
+    const usd2 = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', external_id: 'eb_usd2', currency: 'USD' })
+    const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+      cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: cashAccountRows('cash', '1930') },
+      { data: makeTransaction({ id: 'tx-sek', cash_account_id: 'cash' }) })
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [usd, sek, eur, usd2], {
+      rawInsertOnly: true, settlementAccount: '1930', bankRoute,
+    })
+    const insertCalls = supabase.rpc.mock.calls.filter((call) => call[0] === 'insert_bank_transaction')
+    expect(insertCalls).toHaveLength(1)
+    expect(insertCalls[0][1]).toMatchObject({ p_transaction: { external_id: 'eb_sek', currency: 'SEK' } })
+    expect(inserts.transactions).toBeUndefined()
+    expect(result).toMatchObject({ imported: 1, duplicates: 0, errors: 0, transaction_ids: ['tx-sek'] })
+    expect(result.other_currency).toEqual({ USD: 2, EUR: 1 })
+  })
+
+  it('imports nothing and fails nothing when every bank row is in another currency', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const usd = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', currency: 'USD' })
+    const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+      cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+    enqueue({ data: cashAccountRows('cash', '1930') })
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [usd], {
+      rawInsertOnly: true, settlementAccount: '1930', bankRoute,
+    })
+    expect(supabase.rpc).not.toHaveBeenCalledWith('insert_bank_transaction', expect.anything())
+    expect(result).toMatchObject({ imported: 0, duplicates: 0, errors: 0, other_currency: { USD: 1 } })
+  })
+
+  it('omits other_currency when every bank row matches the route', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking', currency: 'sek' })
+    const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+      cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: cashAccountRows('cash', '1930') },
+      { data: makeTransaction({ id: 'tx-bank', cash_account_id: 'cash' }) })
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      rawInsertOnly: true, settlementAccount: '1930', bankRoute,
+    })
+    expect(result.imported).toBe(1)
+    expect(result).not.toHaveProperty('other_currency')
+  })
+
+  it.each([
+    ['another connection', { bank_connection_id: 'other-connection' }, '1930'],
+    ['another ledger account', { bank_connection_id: 'connection' }, '1931'],
+  ] as const)('still refuses a bank batch for %s before anything is read', async (_case, rowOverrides, settlementAccount) => {
+    const { supabase } = createQueueMockSupabase()
+    const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+      cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+    await expect(ingestTransactions(supabase as never, COMPANY_ID, USER_ID,
+      [makeRaw({ import_source: 'enable_banking', ...rowOverrides })],
+      { rawInsertOnly: true, settlementAccount, bankRoute })).rejects.toThrow('Bank ingest context does not match the fetched batch')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   // Root-cause guard, first half: every RawTransaction field reaches the
   // insert payload under its column name (the pg test follows the payload into
   // insert_bank_transaction). See tests/fixtures/full-raw-transaction.ts.

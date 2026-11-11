@@ -182,6 +182,7 @@ describe('runConnectionSync', () => {
 
     expect(outcome.truncated).toBe(false)
     expect(outcome.notBooked).toBe(0)
+    expect(outcome.otherCurrency).toBe(0)
   })
 
   // PH 221: a bank that sent only unbooked entries imported nothing; the
@@ -195,6 +196,20 @@ describe('runConnectionSync', () => {
     const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
 
     expect(outcome.notBooked).toBe(3)
+  })
+
+  // crm#1767: rows in another currency than their account are set aside, not
+  // a failed sync; the count is what lets an empty sync say why.
+  it('sums the entries set aside as another currency than their account', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync
+      .mockResolvedValueOnce(result({ imported: 0, duplicates: 0, otherCurrency: 4 }) as never)
+      .mockResolvedValueOnce(result() as never)
+
+    const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+
+    expect(outcome.otherCurrency).toBe(4)
+    expect(outcome.errors).toBe(0)
   })
 
   it('links instead of booking over a completed SIE import, sweeping from the oldest returned date', async () => {
