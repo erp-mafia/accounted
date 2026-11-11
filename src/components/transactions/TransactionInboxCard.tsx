@@ -137,6 +137,13 @@ interface TransactionInboxCardProps {
   proposal?: RowProposal | null
   /** Book the row with its proposal (opens the review with the template set). */
   onBookProposal?: (transaction: TransactionWithInvoice) => void
+  /**
+   * The period ("2026-10") of a booked salary run that already pays this row
+   * out (lib/transactions/salary-run-payouts.ts, crm#1685): the primary
+   * action matches the row to the run's verifikat (onOpenMatchVoucher)
+   * instead of booking it again.
+   */
+  salaryRunPeriod?: string | null
   /** Whose giro number a row that names nobody shows (lib/transactions/giro-counterparty, crm#1204). */
   giroCounterparty?: GiroCounterparty | null
 }
@@ -177,6 +184,7 @@ export default function TransactionInboxCard({
   accountLogo = null,
   proposal = null,
   onBookProposal,
+  salaryRunPeriod = null,
   giroCounterparty = null,
 }: TransactionInboxCardProps) {
   const show = (c: TxColumnId) => columns.has(c)
@@ -271,15 +279,25 @@ export default function TransactionInboxCard({
           ? t('match_expense_payout_btn', { name: transaction.potential_expense_payout!.claimant_name })
           : null
 
+  // A booked salary run's net pay: matched to the run's verifikat in the
+  // existing-verifikat matcher, which opens with it picked; booking the row
+  // again would count the salary twice.
+  const salaryRunLabel =
+    salaryRunPeriod && isUnbooked && onOpenMatchVoucher
+      ? t('match_salary_run_btn', { period: salaryRunPeriod })
+      : null
+
   // Primary action: invoice/supplier-invoice match keeps the 1-click
-  // shortcut; otherwise the user opens the template picker. Rendered as the
-  // row-level quiet pill AND as the drawer's leading pill.
+  // shortcut, then a salary run's payout; otherwise the user opens the
+  // template picker. Rendered as the row-level quiet pill AND as the
+  // drawer's leading pill.
   const runPrimary = (anchor?: HTMLElement) => {
     if (matchLabel) onOpenMatchDialog(transaction)
+    else if (salaryRunLabel && onOpenMatchVoucher) onOpenMatchVoucher(transaction)
     else if (proposal && onBookProposal) onBookProposal(transaction)
     else onOpenCategoryDialog(transaction, anchor)
   }
-  const primaryLabel = matchLabel ?? 'Bokför'
+  const primaryLabel = matchLabel ?? salaryRunLabel ?? 'Bokför'
 
   // Manual invoice-match affordance. Hidden once an auto-detected match is
   // already shown as the primary button: having both makes the row noisy.
