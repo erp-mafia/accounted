@@ -13,6 +13,8 @@ import { orgNumberKey } from '@/lib/invariants/org-number'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { roundOre } from '@/lib/money'
 import { fileResponse } from '@/lib/api/file-response'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
 
 /**
  * Generate the payment file for paying skatt + arbetsgivaravgifter for a
@@ -30,10 +32,14 @@ import { fileResponse } from '@/lib/api/file-response'
  * requireWrite: this GET mutates state (stamps tax_payment_file_generated_at
  * on the AGI declaration), so it retains the non-viewer role gate the
  * hand-rolled version enforced.
+ *
+ * An unfiled declaration of a month in which another live run is also paid
+ * out holds one run's totals: no file pays it (AGI_PAYMENT_PERIOD_CONFLICT,
+ * crm#1768), and nothing is stamped.
  */
 export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   'tax_payment.payment_file',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -55,7 +61,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   const { data: agi } = await supabase
     .from('agi_declarations')
-    .select('id, total_tax, total_avgifter')
+    .select('id, status, salary_run_id, total_tax, total_avgifter')
     .eq('company_id', companyId)
     .eq('period_year', periodYear)
     .eq('period_month', periodMonth)
@@ -66,6 +72,25 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       { error: `Ingen AGI för perioden ${period}. Generera AGI först.` },
       { status: 404 }
     )
+  }
+
+  // One run's totals while another live run is paid out in the month: the
+  // file would leave that run's skatt and avgifter unpaid. A failed read
+  // refuses too (thrown: the wrapper answers it).
+  const check = await readAgiPaymentPeriodConflict(supabase, companyId, {
+    salary_run_id: agi.salary_run_id ?? null,
+    status: agi.status,
+    period_year: periodYear,
+    period_month: periodMonth,
+  })
+  if (!check.ok) throw check.error
+  if (check.conflict) {
+    return errorResponseFromCode(check.conflict.code, log, {
+      requestId,
+      details: check.conflict.details,
+      messageSv: check.conflict.messageSv,
+      messageEn: check.conflict.messageEn,
+    })
   }
 
   // Declarations generated since the whole-krona change store the declared

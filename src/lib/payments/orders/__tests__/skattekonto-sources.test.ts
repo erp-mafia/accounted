@@ -176,6 +176,73 @@ describe('resolveSkattekontoSource: arbetsgivardeklaration', () => {
   })
 })
 
+/** salary_runs: the declaration's run by id, and the live runs paid out in the month asked. */
+function salaryRuns(live: Array<Record<string, unknown>>, liveError: unknown = null) {
+  return (calls: Array<{ method: string; args: unknown[] }>) => {
+    const select = calls.find((c) => c.method === 'select')?.args[0]
+    if (select === 'id, corrects_run_id') return { data: { id: 'run-own', corrects_run_id: null } }
+    return liveError ? { data: null, error: liveError } : { data: live }
+  }
+}
+const OWN_LIVE = { id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null }
+const OTHER_LIVE = { id: 'run-other', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-05', corrects_run_id: null }
+const UNFILED_AGI = { status: 'generated', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null, salary_run_id: 'run-own' }
+
+describe('resolveSkattekontoSource: an AGI holding one run of its month (crm#1768)', () => {
+  const OCTOBER = { kind: 'agi', year: 2026, month: 10 } as const
+
+  it('refuses an unfiled declaration while another live run is paid out in the month, naming it', async () => {
+    db.setTable('agi_declarations', { data: UNFILED_AGI })
+    db.setTable('salary_runs', salaryRuns([OWN_LIVE, OTHER_LIVE]))
+
+    const result = await resolveSkattekontoSource(db.supabase as never, COMPANY, OCTOBER, TODAY)
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'AGI_PAYMENT_PERIOD_CONFLICT',
+      details: { period: '2026-10', tax_period: '2026-10', due_date: '2026-11-12', other_salary_run_id: 'run-other' },
+    })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.messageSv).toMatch(/^Lönekörningen för 2026-09 med utbetalning 2026-10-05 hör också till redovisningsperiod 2026-10\./)
+    expect(db.findCall('salary_runs', 'gte')).toEqual(['payment_date', '2026-10-01'])
+  })
+
+  it('pays a single-run month as before', async () => {
+    db.setTable('agi_declarations', { data: UNFILED_AGI })
+    db.setTable('salary_runs', salaryRuns([OWN_LIVE]))
+
+    const result = await resolveSkattekontoSource(db.supabase as never, COMPANY, OCTOBER, TODAY)
+
+    expect(result).toMatchObject({ ok: true, due: { declared: 30568, payable: 30568, filed: false } })
+  })
+
+  it('pays a filed declaration as before, without reading the runs', async () => {
+    db.setTable('agi_declarations', { data: { ...UNFILED_AGI, status: 'submitted' } })
+    db.setTable('salary_runs', salaryRuns([OWN_LIVE, OTHER_LIVE]))
+
+    const result = await resolveSkattekontoSource(db.supabase as never, COMPANY, OCTOBER, TODAY)
+
+    expect(result).toMatchObject({ ok: true, due: { declared: 30568, payable: 30568, filed: true } })
+    expect(db.findCall('salary_runs', 'select')).toBeUndefined()
+  })
+
+  it('answers a month marked paid as already paid, as before', async () => {
+    db.setTable('agi_declarations', { data: { ...UNFILED_AGI, tax_paid_at: '2026-11-10T00:00:00Z' } })
+    db.setTable('salary_runs', salaryRuns([OWN_LIVE, OTHER_LIVE]))
+
+    const result = await resolveSkattekontoSource(db.supabase as never, COMPANY, OCTOBER, TODAY)
+
+    expect(result).toMatchObject({ ok: true, due: { payable: null, nothing_due: 'already_paid' } })
+  })
+
+  it('throws when the runs cannot be read, so nothing is paid', async () => {
+    db.setTable('agi_declarations', { data: UNFILED_AGI })
+    db.setTable('salary_runs', salaryRuns([], { message: 'boom' }))
+
+    await expect(resolveSkattekontoSource(db.supabase as never, COMPANY, OCTOBER, TODAY)).rejects.toEqual({ message: 'boom' })
+  })
+})
+
 describe('the source fields', () => {
   const schema = z.object(SKATTEKONTO_SOURCE_FIELDS).superRefine(refineSkattekontoSource)
 
@@ -318,6 +385,43 @@ describe('resolveSkattekontoDueDate: everything declared due on one day', () => 
     expect(result).toMatchObject({ ok: true, combined: { total: 107972 } })
     expect(vat.vatPeriodDeadline).not.toHaveBeenCalled()
     expect(vat.computeVatDeclaration).not.toHaveBeenCalled()
+  })
+
+  it('refuses the day when its AGI holds one run while another is paid out in the month (crm#1768)', async () => {
+    db.setTable('agi_declarations', agiByMonth({ 10: UNFILED_AGI, 9: AGI_ROW }))
+    db.setTable('salary_runs', salaryRuns([OWN_LIVE, OTHER_LIVE]))
+
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'AGI_PAYMENT_PERIOD_CONFLICT',
+      details: { tax_period: '2026-10', due_date: DUE, other_salary_run_id: 'run-other' },
+    })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.messageSv).toContain('hör också till redovisningsperiod 2026-10')
+  })
+
+  it('pays the day as before when the refused AGI is not due that day', async () => {
+    // The September AGI holds one of two runs paid in September; it was due 12 October, not on the day.
+    db.setTable('agi_declarations', agiByMonth({ 10: AGI_ROW, 9: UNFILED_AGI }))
+    const september = [
+      { ...OWN_LIVE, period_month: 9, payment_date: '2026-09-25' },
+      { ...OTHER_LIVE, period_month: 8, payment_date: '2026-09-05' },
+    ]
+    db.setTable('salary_runs', (calls: Chain) => {
+      const select = calls.find((c) => c.method === 'select')?.args[0]
+      if (select === 'id, corrects_run_id') return { data: { id: 'run-own', corrects_run_id: null } }
+      const from = calls.find((c) => c.method === 'gte')?.args[1]
+      return { data: from === '2026-09-01' ? september : [] }
+    })
+
+    const result = await resolveSkattekontoDueDate(db.supabase as never, COMPANY, DUE, TODAY)
+
+    expect(result).toMatchObject({ ok: true, combined: { total: 107972 } })
+    // The September AGI was asked, and refused, but it is not the day's.
+    const septemberAgi = await resolveSkattekontoSource(db.supabase as never, COMPANY, { kind: 'agi', year: 2026, month: 9 }, TODAY)
+    expect(septemberAgi).toMatchObject({ ok: false, code: 'AGI_PAYMENT_PERIOD_CONFLICT', details: { due_date: '2026-10-12' } })
   })
 
   it('answers VAT_REPORT_GENERATION_FAILED when the moms due that day cannot be computed', async () => {

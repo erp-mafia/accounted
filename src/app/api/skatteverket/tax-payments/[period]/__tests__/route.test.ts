@@ -82,7 +82,7 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
 
     expect(status).toBe(200)
     // 12 September 2026 is a Saturday: the money is due on the Monday.
-    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14' })
+    expect(body.data).toEqual({ ...AGI, payment_due_date: '2026-09-14', period_conflict: null })
     expect(findCalls('agi_declarations', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['period_year', 2026],
@@ -106,5 +106,60 @@ describe('GET /api/skatteverket/tax-payments/[period]', () => {
     const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-07'))
 
     expect(body.data.payment_due_date).toBe('2026-08-12')
+  })
+  describe('a declaration holding one run of its month (crm#1768)', () => {
+    const UNFILED = { ...AGI, status: 'generated', salary_run_id: 'run-own' }
+    const OWN = { id: 'run-own', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-25', corrects_run_id: null }
+    const OTHER = { id: 'run-other', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-10-05', corrects_run_id: null }
+    const SETTINGS = { vat_registered: true, vat_taxable_base_over_40m: false }
+
+    it('carries the refusal the payment file gives it, in both languages', async () => {
+      enqueue({ data: UNFILED }) // agi_declarations
+      enqueue({ data: SETTINGS }) // company_settings
+      enqueue({ data: { id: 'run-own', corrects_run_id: null } }) // salary_runs: the declaration's run
+      enqueue({ data: [OWN, OTHER] }) // salary_runs: live runs paid out in October
+
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-10'))
+
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({
+        total_tax: 12000,
+        period_conflict: {
+          code: 'AGI_PAYMENT_PERIOD_CONFLICT',
+          message: expect.stringMatching(/^Lönekörningen för 2026-09 med utbetalning 2026-10-05 hör också till redovisningsperiod 2026-10\./),
+          message_en: expect.stringMatching(/^The salary run for 2026-09 paid out 2026-10-05 also belongs to reporting period 2026-10\./),
+          details: { period: '2026-10', other_salary_run_id: 'run-other' },
+        },
+      })
+      // The check's own columns are not part of the answer.
+      expect(body.data).not.toHaveProperty('status')
+      expect(body.data).not.toHaveProperty('salary_run_id')
+    })
+
+    it('answers null for a single-run month and for a filed declaration', async () => {
+      enqueue({ data: UNFILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: { id: 'run-own', corrects_run_id: null } })
+      enqueue({ data: [OWN] })
+      let { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-10'))
+      expect(body.data.period_conflict).toBeNull()
+
+      reset()
+      enqueue({ data: { ...UNFILED, status: 'submitted' } })
+      enqueue({ data: SETTINGS })
+      ;({ body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await get('2026-10')))
+      expect(body.data.period_conflict).toBeNull()
+      expect(findCalls('salary_runs', 'select')).toEqual([])
+    })
+
+    it('fails the read when the runs cannot be read', async () => {
+      enqueue({ data: UNFILED })
+      enqueue({ data: SETTINGS })
+      enqueue({ data: null, error: { message: 'connection reset', code: '08006' } })
+
+      const response = await get('2026-10')
+
+      expect(response.status).toBeGreaterThanOrEqual(500)
+    })
   })
 })

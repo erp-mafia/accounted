@@ -1,0 +1,1 @@
+[2026-11-11] An unfiled AGI of a month in which another live run is also paid out is never paid from Accounted: the payment file, the skattekonto payment (agi or due_date) and the tax panel refuse its one-run totals. Filed AGIs unchanged, rows not repaired (crm#1768).

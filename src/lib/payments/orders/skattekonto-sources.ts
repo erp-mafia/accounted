@@ -16,7 +16,10 @@
  *     and Skatteverket draws. Due on the day the deadline configuration gives
  *     the month (getAgiPaymentDueDate: the 12th, 17th in January and
  *     August; the 12th, 17th in January, above the SEK 40M VAT taxable base),
- *     moved to the next banking day.
+ *     moved to the next banking day. An unfiled declaration of a month in
+ *     which another live run is also paid out holds one run's totals, and is
+ *     refused (AGI_PAYMENT_PERIOD_CONFLICT, crm#1768): so is a payment of
+ *     everything due on its due day, which cannot be summed without it.
  *
  * Everything declared due on one day (due_date): the momsdeklaration and the
  * AGI(s) whose payment day is that day, each read by the resolver above and
@@ -39,6 +42,7 @@ import { hasEnded } from '@/lib/dates/iso'
 import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
 import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 import { vatPeriodDeadline, type VatPeriodDeadline } from '@/lib/vat/filing-record-store'
+import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
 
 /** The declaration a skattekonto payment pays. */
 export type SkattekontoDeclarationSource =
@@ -201,7 +205,13 @@ export interface SkattekontoSourceDue {
 
 export type SkattekontoSourceResolution =
   | { ok: true; due: SkattekontoSourceDue }
-  | { ok: false; code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND' | 'VAT_REPORT_GENERATION_FAILED'; details?: Record<string, unknown> }
+  | {
+      ok: false
+      code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND' | 'VAT_REPORT_GENERATION_FAILED' | 'AGI_PAYMENT_PERIOD_CONFLICT'
+      details?: Record<string, unknown>
+      /** AGI_PAYMENT_PERIOD_CONFLICT: the refusal's own sentence, naming the other runs. */
+      messageSv?: string
+    }
 
 /** The AGI statuses that mean the declaration reached Skatteverket. */
 const AGI_FILED_STATUSES = new Set(AGI_RECEIPT_STATUSES)
@@ -274,7 +284,7 @@ async function resolveAgi(
   const [agiRes, settingsRes, deadlineRes] = await Promise.all([
     supabase
       .from('agi_declarations')
-      .select('status, total_tax, total_avgifter, tax_paid_at')
+      .select('status, total_tax, total_avgifter, tax_paid_at, salary_run_id')
       .eq('company_id', companyId)
       .eq('period_year', source.year)
       .eq('period_month', source.month)
@@ -301,6 +311,7 @@ async function resolveAgi(
     total_tax: number | string
     total_avgifter: number | string
     tax_paid_at: string | null
+    salary_run_id: string | null
   } | null
   if (!agi) return { ok: false, code: 'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND', details: { tax_period: taxPeriod } }
 
@@ -309,6 +320,27 @@ async function resolveAgi(
     vat_registered: settings?.vat_registered === true,
     vat_taxable_base_over_40m: settings?.vat_taxable_base_over_40m === true,
   })
+  // One run's totals while another live run is paid out in the month: never
+  // paid (agi-payable-declaration.ts). A month marked paid asks for nothing
+  // either way (already_paid below) and is answered as before.
+  if (!agi.tax_paid_at) {
+    const check = await readAgiPaymentPeriodConflict(supabase, companyId, {
+      salary_run_id: agi.salary_run_id ?? null,
+      status: agi.status,
+      period_year: source.year,
+      period_month: source.month,
+    })
+    if (!check.ok) throw check.error
+    if (check.conflict) {
+      return {
+        ok: false,
+        code: check.conflict.code,
+        details: { ...check.conflict.details, tax_period: taxPeriod, due_date: dueDate },
+        messageSv: check.conflict.messageSv,
+      }
+    }
+  }
+
   const deadlineRows = (deadlineRes.data ?? []) as Array<{ is_completed: boolean | null }>
   const filed = AGI_FILED_STATUSES.has(agi.status) || deadlineRows.some((row) => row.is_completed === true)
 
@@ -378,7 +410,12 @@ export type SkattekontoDueDateResolution =
       /** Every declaration due on the day as its own source resolves it, payable or not, moms first. */
       parts: SkattekontoSourceDue[]
     }
-  | { ok: false; code: 'VAT_REPORT_GENERATION_FAILED'; details?: Record<string, unknown> }
+  | {
+      ok: false
+      code: 'VAT_REPORT_GENERATION_FAILED' | 'AGI_PAYMENT_PERIOD_CONFLICT'
+      details?: Record<string, unknown>
+      messageSv?: string
+    }
 
 /** The month `back` months before the month of an ISO day. */
 function monthBefore(iso: string, back: number): { year: number; month: number } {
@@ -477,7 +514,15 @@ export async function resolveSkattekontoDueDate(
     if (isKnown(source)) continue
     // A month without an AGI has nothing declared: no part.
     const resolved = await resolveAgi(supabase, companyId, source)
-    if (resolved.ok && resolved.due.due_date === dueDate) parts.push(resolved.due)
+    if (resolved.ok) {
+      if (resolved.due.due_date === dueDate) parts.push(resolved.due)
+      continue
+    }
+    // An AGI due that day holding one run's totals (crm#1768): the day's sum
+    // is not known without it, and the rest paid alone would read as the day.
+    if (resolved.code === 'AGI_PAYMENT_PERIOD_CONFLICT' && resolved.details?.due_date === dueDate) {
+      return { ok: false, code: resolved.code, details: resolved.details, messageSv: resolved.messageSv }
+    }
   }
   // The caller's declaration counts when due that day, also outside the
   // cadence's candidates (a period of another cadence, a company not marked

@@ -730,6 +730,7 @@ export const paymentOrdersPrepare = defineOperation({
     'SKATTEKONTO_PAYMENT_NOTHING_DUE',
     'SKATTEKONTO_PAYMENT_OCR_MISSING',
     'SKATTEKONTO_PAYMENT_AGI_NOT_FOUND',
+    'AGI_PAYMENT_PERIOD_CONFLICT',
     'VAT_REPORT_GENERATION_FAILED',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/payment-orders' },

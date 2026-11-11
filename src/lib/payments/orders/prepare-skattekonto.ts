@@ -263,7 +263,10 @@ export async function prepareSkattekontoPaymentOrder(
   let dayParts: SkattekontoSourceDue[] = []
   if (input.source?.kind === 'due_date') {
     const resolved = await resolveSkattekontoDueDate(supabase, companyId, input.source.dueDate, input.today)
-    if (!resolved.ok) return { ok: false, code: resolved.code, details: resolved.details }
+    if (!resolved.ok) {
+      // An AGI holding one run's totals brings its own sentence, naming the other runs (crm#1768).
+      return { ok: false, code: resolved.code, details: resolved.details, ...(resolved.messageSv ? { messageSv: resolved.messageSv } : {}) }
+    }
     combined = resolved.combined
     dayParts = resolved.parts
     declarations = resolved.parts.filter((p) => p.payable !== null)
@@ -272,7 +275,9 @@ export async function prepareSkattekontoPaymentOrder(
     source = declarations.length === 1 ? (declarations[0] ?? null) : null
   } else if (input.source) {
     const resolved = await resolveSkattekontoSource(supabase, companyId, input.source, input.today)
-    if (!resolved.ok) return { ok: false, code: resolved.code, details: resolved.details }
+    if (!resolved.ok) {
+      return { ok: false, code: resolved.code, details: resolved.details, ...(resolved.messageSv ? { messageSv: resolved.messageSv } : {}) }
+    }
     source = resolved.due
     declarations = [source]
   }
