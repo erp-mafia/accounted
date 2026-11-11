@@ -105,6 +105,7 @@ function enqueueHappyPath(
     { data: roster }, // salary_run_employees select
     { data: [] }, // salary_absence_days select
     { data: null }, // agi_declarations maybeSingle (first generation)
+    { data: [] }, // salary_runs: no other live run paid out in the month
     { data: { id: 'agi-1' } }, // agi_declarations insert
     { data: null }, // salary_runs update (agi_generated_at stamp)
   ])
@@ -160,6 +161,7 @@ describe('generateAgiDeclaration: a stale run', () => {
       { data: [{ ...REGULAR_ROW, calculation_breakdown: null }] },
       { data: [] }, // salary_absence_days
       { data: null }, // agi_declarations maybeSingle
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -183,6 +185,7 @@ describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', ()
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: null }, // agi_declarations maybeSingle
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -253,6 +256,7 @@ describe('generateAgiDeclaration: the identity it files under', () => {
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: null }, // agi_declarations maybeSingle
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -312,6 +316,7 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -367,6 +372,7 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: [REGULAR_ROW] },
       { data: [] },
       { data: { id: 'agi-0', salary_run_id: 'run-0', status: 'generated', submitted_at: null } }, // declared by the run this one corrects
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-0' }] }, // agi_declarations update
       { data: null }, // salary_runs update
     ])
@@ -396,6 +402,7 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: stored }, // agi_declarations for the period
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: stored.id }] }, // agi_declarations update
       { data: null }, // salary_runs agi_generated_at stamp
     ])
@@ -1260,6 +1267,7 @@ describe('generateAgiDeclaration: växa-stöd never reaches the IU (Lag 2025:133
       { data: roster },
       { data: [] }, // salary_absence_days
       { data: null }, // agi_declarations maybeSingle (first generation)
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } }, // agi_declarations insert
       { data: null }, // salary_runs update
     ])
@@ -1593,6 +1601,7 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: stored }, // agi_declarations for the period
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-1' }] }, // agi_declarations update
       { data: null }, // salary_runs agi_generated_at stamp
     ])
@@ -1694,6 +1703,7 @@ describe('generateAgiDeclaration: regionalt stöd (PH 208)', () => {
       { data: roster },
       { data: [] },
       { data: null },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: { id: 'agi-1' } },
       { data: null },
     ])
@@ -1840,6 +1850,7 @@ describe('generateAgiDeclaration: a filed declaration is never rewritten (#58)',
     const db = createQueuedMockSupabase()
     enqueueBefore(db.enqueueMany, { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }, [
       { data: { ...FILED_ROW, id: 'agi-0', salary_run_id: 'run-0' } },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-0' }] }, // agi_declarations update
       { data: null }, // salary_runs stamp
     ])
@@ -1946,7 +1957,7 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
 
   it('updates its own row only while it is still its own and unchanged in status', async () => {
     const db = createQueuedMockSupabase()
-    enqueueThrough(db.enqueueMany, [{ data: OWN_ROW }, { data: [{ id: 'agi-1' }] }, { data: null }])
+    enqueueThrough(db.enqueueMany, [{ data: OWN_ROW }, { data: [] }, { data: [{ id: 'agi-1' }] }, { data: null }])
 
     const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
 
@@ -1962,6 +1973,7 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
     const db = createQueuedMockSupabase()
     enqueueThrough(db.enqueueMany, [
       { data: null }, // no declaration yet
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { error: { code: '23505', message: 'duplicate key value' } }, // insert lost the race
       { data: { id: 'agi-2', salary_run_id: 'run-2', status: 'generated', submitted_at: null } },
       { data: { id: 'run-2', status: 'booked', period_year: 2026, period_month: 6 } },
@@ -1978,8 +1990,10 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
     const db = createQueuedMockSupabase()
     enqueueThrough(db.enqueueMany, [
       { data: null },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { error: { code: '23505', message: 'duplicate key value' } },
       { data: OWN_ROW },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [{ id: 'agi-1' }] },
       { data: null },
     ])
@@ -1995,6 +2009,7 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
     const filedXml = '<Skatteverket>filed meanwhile</Skatteverket>'
     enqueueThrough(db.enqueueMany, [
       { data: OWN_ROW },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [] }, // compare-and-set missed: the status moved on
       { data: { ...OWN_ROW, status: 'submitted', submitted_at: '2099-01-01T00:00:00Z', xml_content: filedXml } },
     ])
@@ -2010,8 +2025,10 @@ describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
     const db = createQueuedMockSupabase()
     enqueueThrough(db.enqueueMany, [
       { data: OWN_ROW },
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [] }, // first compare-and-set missed
       { data: OWN_ROW }, // re-read
+      { data: [] }, // salary_runs: no other live run paid out in the month
       { data: [] }, // second compare-and-set missed
     ])
 
@@ -2054,5 +2071,178 @@ describe('decideAgiWrite: the one write decision (#58)', () => {
     expect(decideAgiWrite(row('run-9'), run, { status: 'booked' })).toBe('conflict')
     expect(decideAgiWrite(row('run-9'), run, null)).toBe('conflict')
     expect(decideAgiWrite(row('run-9'), { ...run, corrects_run_id: null }, null)).toBe('conflict')
+  })
+})
+
+describe('generateAgiDeclaration: another live run paid out in the same month (crm#1768)', () => {
+  // October's run paid 25 November and September's run paid 11 November both
+  // belong to redovisningsperiod 2026-11: one declaration must cover both.
+  const OCTOBER_RUN = { ...RUN, status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-11-25' }
+  const SEPTEMBER_RUN = {
+    id: 'run-2',
+    status: 'booked',
+    period_year: 2026,
+    period_month: 9,
+    payment_date: '2026-11-11',
+    corrects_run_id: null,
+  }
+  const OWN_ROW = { id: 'agi-1', salary_run_id: 'run-1', status: 'generated', submitted_at: null }
+
+  function enqueueThroughPeriodRead(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    run: Record<string, unknown>,
+    rest: { data?: unknown; error?: unknown }[],
+  ) {
+    enqueueMany([
+      { data: run },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      ...rest,
+    ])
+  }
+
+  async function generate(db: ReturnType<typeof createQueuedMockSupabase>, extra: Record<string, unknown> = {}) {
+    const emitted: unknown[] = []
+    const off = eventBus.on('agi.generated', async (event) => {
+      emitted.push(event)
+    })
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS, ...extra })
+    off()
+    return { result, emitted }
+  }
+
+  function expectNothingWritten(db: ReturnType<typeof createQueuedMockSupabase>) {
+    expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  }
+
+  it('refuses the first generation of the month instead of declaring the one run alone', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThroughPeriodRead(db.enqueueMany, OCTOBER_RUN, [
+      { data: null }, // no declaration for 2026-11 yet
+      { data: [SEPTEMBER_RUN] }, // salary_runs paid out in 2026-11
+    ])
+
+    const { result, emitted } = await generate(db)
+
+    expect(result).toMatchObject({ ok: false, code: 'AGI_PERIOD_CONFLICT', status: 409 })
+    if (result.ok) return
+    expect(result.details).toMatchObject({
+      period: '2026-11',
+      other_salary_run_id: 'run-2',
+      other_run_period: '2026-09',
+      other_runs: [{ salary_run_id: 'run-2', run_period: '2026-09', payment_date: '2026-11-11', status: 'booked' }],
+    })
+    const message = (result.details as { message: string }).message
+    expect(message).toContain('Lönekörningen för 2026-09 med utbetalning 2026-11-11 hör också till redovisningsperiod 2026-11')
+    expect(message).toContain('Skatteverkets e-tjänst')
+    expectNothingWritten(db)
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('reads the live runs of the company paid out inside the payout month', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThroughPeriodRead(db.enqueueMany, OCTOBER_RUN, [{ data: null }, { data: [SEPTEMBER_RUN] }])
+
+    await generate(db)
+
+    expect(db.findCalls('salary_runs', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(db.findCall('salary_runs', 'in')).toEqual(['status', ['review', 'approved', 'paid', 'booked']])
+    expect(db.findCall('salary_runs', 'gte')).toEqual(['payment_date', '2026-11-01'])
+    expect(db.findCall('salary_runs', 'lte')).toEqual(['payment_date', '2026-11-30'])
+  })
+
+  it.each([
+    ['a regeneration', false],
+    ['the submit-time regeneration', true],
+  ])('refuses %s of a declaration the run already holds, and leaves it as it is', async (_label, writeOnlyIfChanged) => {
+    const db = createQueuedMockSupabase()
+    enqueueThroughPeriodRead(db.enqueueMany, OCTOBER_RUN, [{ data: OWN_ROW }, { data: [SEPTEMBER_RUN] }])
+
+    const { result } = await generate(db, { writeOnlyIfChanged })
+
+    expect(result).toMatchObject({ ok: false, code: 'AGI_PERIOD_CONFLICT', status: 409 })
+    expectNothingWritten(db)
+  })
+
+  it('names every other run paid out in the month', async () => {
+    const db = createQueuedMockSupabase()
+    const augustRun = { ...SEPTEMBER_RUN, id: 'run-3', period_month: 8, payment_date: '2026-11-05' }
+    enqueueThroughPeriodRead(db.enqueueMany, OCTOBER_RUN, [{ data: null }, { data: [SEPTEMBER_RUN, augustRun] }])
+
+    const { result } = await generate(db)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    const details = result.details as { other_salary_run_id: string; other_runs: Array<{ salary_run_id: string }>; message: string }
+    expect(details.other_runs.map((other) => other.salary_run_id)).toEqual(['run-3', 'run-2'])
+    expect(details.other_salary_run_id).toBe('run-3')
+    expect(details.message).toContain(
+      'Lönekörningarna för 2026-08 med utbetalning 2026-11-05 och 2026-09 med utbetalning 2026-11-11 hör också till',
+    )
+  })
+
+  it('still answers a filed declaration with its stored XML: nothing new is declared', async () => {
+    const db = createQueuedMockSupabase()
+    const filedXml = '<Skatteverket>filed</Skatteverket>'
+    enqueueThroughPeriodRead(
+      db.enqueueMany,
+      { ...OCTOBER_RUN, agi_generated_at: '2026-11-09T10:00:00Z', agi_submitted_at: '2026-11-10T08:30:00Z' },
+      [
+        {
+          data: {
+            ...OWN_ROW,
+            status: 'submitted',
+            submitted_at: '2026-11-10T08:30:00Z',
+            xml_content: filedXml,
+            total_gross: 40000,
+            total_tax: 12000,
+            total_avgifter_basis: 40000,
+            total_avgifter: 12568,
+            employee_count: 1,
+          },
+        },
+      ],
+    )
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, xml: filedXml, unchanged: true, filed: true })
+    expect(db.findCall('salary_runs', 'in')).toBeUndefined()
+    expectNothingWritten(db)
+  })
+
+  it('is not stopped by itself, the run it corrects or its own correction', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThroughPeriodRead(db.enqueueMany, { ...OCTOBER_RUN, corrects_run_id: 'run-0' }, [
+      { data: null },
+      {
+        data: [
+          { ...SEPTEMBER_RUN, id: 'run-1', period_month: 10, payment_date: '2026-11-25' }, // this run
+          { ...SEPTEMBER_RUN, id: 'run-0', period_month: 10, payment_date: '2026-11-25' }, // the run it corrects
+          { ...SEPTEMBER_RUN, id: 'run-4', period_month: 10, payment_date: '2026-11-25', corrects_run_id: 'run-1' }, // its correction
+        ],
+      },
+      { data: { id: 'agi-1' } }, // agi_declarations insert
+      { data: null }, // salary_runs agi_generated_at stamp
+    ])
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, agiDeclarationId: 'agi-1', periodYear: 2026, periodMonth: 11 })
+  })
+
+  it('refuses when the runs of the month cannot be read, instead of declaring on a guess', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThroughPeriodRead(db.enqueueMany, OCTOBER_RUN, [{ data: null }, { error: { message: 'timeout' } }])
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expectNothingWritten(db)
   })
 })

@@ -49,7 +49,7 @@ import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
 import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
-import { stockholmYearMonth } from '@/lib/dates/iso'
+import { addMonthsIso, previousMonthEndIso, stockholmYearMonth } from '@/lib/dates/iso'
 import { effectiveOrgNumber } from '@/lib/company/org-number'
 import { parseEntityType } from '@/lib/company/entity-type'
 
@@ -110,6 +110,12 @@ const SalaryRunEmployeeRowSchema = z
 type SalaryRunEmployeeRow = z.infer<typeof SalaryRunEmployeeRowSchema>
 
 const ELIGIBLE_STATUSES = ['review', 'approved', 'paid', 'booked', 'corrected'] as const
+
+/**
+ * The runs whose pay belongs in the declaration of their payout month: every
+ * eligible run except one a correction replaced (its correction carries the pay).
+ */
+const LIVE_STATUSES = ELIGIBLE_STATUSES.filter((status) => status !== 'corrected')
 
 export interface GenerateAgiDeclarationArgs {
   supabase: SupabaseClient
@@ -289,7 +295,8 @@ export interface AgiWriteRun {
  *   declaration, which the generator cannot do; overwriting would file the
  *   wrong amounts. Reachable since the period follows payment_date (#2191):
  *   an August run paid 25 Sept and a September run paid 30 Sept both land
- *   in 202609.
+ *   in 202609. The month's first generation has no row to conflict with;
+ *   the generator refuses that one on readOtherRunsPaidInPeriod (crm#1768).
  *
  * `holder` is the run holding the row when that is neither this run nor the
  * one it corrects (null when not found); only then is it read.
@@ -358,6 +365,68 @@ async function readAgiPeriod(
     .maybeSingle()
   if (holderError) return { ok: false, error: holderError }
   return { ok: true, row, holder: holder as AgiHolderRun | null }
+}
+
+/** Another live run paid out in the same AGI period. */
+interface AgiPeriodOtherRun {
+  id: string
+  status: string
+  period_year: number
+  period_month: number
+  payment_date: string
+  corrects_run_id: string | null
+}
+
+/**
+ * The other live runs paid out in the run's AGI period (crm#1768). One
+ * declaration covers every payment of its month, and the generator builds it
+ * from one run, so a second live run paid that month would be left out of it.
+ * decideAgiWrite only sees that once the other run holds the period's row;
+ * the first generation of the month has no row to conflict with and used to
+ * file the one run alone. The run this one corrects and a correction of this
+ * run are the same pay, not another payment.
+ */
+async function readOtherRunsPaidInPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { periodYear: number; periodMonth: number },
+  run: AgiWriteRun,
+): Promise<{ ok: true; runs: AgiPeriodOtherRun[] } | { ok: false; error: unknown }> {
+  // payment_date is NOT NULL, so the payout month is exactly this date range;
+  // agiReportingPeriod below stays the one definition of the period.
+  const monthStart = `${formatAgiPeriodDashed(period)}-01`
+  const monthEnd = previousMonthEndIso(addMonthsIso(monthStart, 1))
+  const { data, error } = await supabase
+    .from('salary_runs')
+    .select('id, status, period_year, period_month, payment_date, corrects_run_id')
+    .eq('company_id', companyId)
+    .in('status', LIVE_STATUSES)
+    .gte('payment_date', monthStart)
+    .lte('payment_date', monthEnd)
+  if (error) return { ok: false, error }
+  const runs = ((data ?? []) as AgiPeriodOtherRun[])
+    .filter((other) => {
+      const otherPeriod = agiReportingPeriod(other)
+      return (
+        other.id !== run.id &&
+        other.id !== run.corrects_run_id &&
+        other.corrects_run_id !== run.id &&
+        otherPeriod.periodYear === period.periodYear &&
+        otherPeriod.periodMonth === period.periodMonth
+      )
+    })
+    .sort((a, b) => a.payment_date.localeCompare(b.payment_date))
+  return { ok: true, runs }
+}
+
+/** "Lönekörningen för 2026-09 med utbetalning 2026-11-11"; several are joined with "och". */
+function describeOtherRuns(runs: AgiPeriodOtherRun[]): string {
+  const parts = runs.map(
+    (other) =>
+      `${formatAgiPeriodDashed({ periodYear: other.period_year, periodMonth: other.period_month })} med utbetalning ${other.payment_date}`,
+  )
+  const listed = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} och ${parts[parts.length - 1]}` : parts[0]
+  return `${runs.length > 1 ? 'Lönekörningarna' : 'Lönekörningen'} för ${listed}`
 }
 
 /** The declaration columns a generation writes, whichever way it writes them. */
@@ -1046,6 +1115,39 @@ export async function generateAgiDeclaration(
       }
     }
     if (decision === 'filed') return { answer: storedAnswer(read.row as StoredAgiDeclaration, true) }
+    // Every write, the month's first included: refused while another live
+    // run is paid out in the same month, since this declaration would leave
+    // that run's pay out (readOtherRunsPaidInPeriod). A filed declaration
+    // above is still answered as filed: nothing new is declared.
+    const others = await readOtherRunsPaidInPeriod(supabase, companyId, agiPeriod, run)
+    if (!others.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: others.error } }
+    if (others.runs.length > 0) {
+      const period = formatAgiPeriodDashed(agiPeriod)
+      const [first] = others.runs
+      return {
+        answer: {
+          ok: false,
+          code: 'AGI_PERIOD_CONFLICT',
+          status: 409,
+          details: {
+            period,
+            other_salary_run_id: first.id,
+            other_run_period: formatAgiPeriodDashed({ periodYear: first.period_year, periodMonth: first.period_month }),
+            other_runs: others.runs.map((other) => ({
+              salary_run_id: other.id,
+              run_period: formatAgiPeriodDashed({ periodYear: other.period_year, periodMonth: other.period_month }),
+              payment_date: other.payment_date,
+              status: other.status,
+            })),
+            message:
+              `${describeOtherRuns(others.runs)} hör också till redovisningsperiod ${period}. ` +
+              'Arbetsgivardeklarationen för en månad ska omfatta alla utbetalningar den månaden, och Accounted kan ännu inte ' +
+              'slå ihop flera lönekörningar till en deklaration, så den här körningen deklareras inte ensam. ' +
+              `Lämna in deklarationen för ${period} med summan av körningarna i Skatteverkets e-tjänst.`,
+          },
+        },
+      }
+    }
     if (decision === 'insert') return { decision, row: null }
     return { decision, row: read.row as StoredAgiDeclaration }
   }
