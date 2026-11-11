@@ -18,8 +18,9 @@
  *     idempotent re-attach;
  *   - with checkFit, a document that plainly belongs to another purchase
  *     (lib/documents/bank-match/fit.ts: it asks for more than the row paid
- *     and names another seller) is refused, DOC_ROW_MISMATCH, unless the
- *     caller states a mismatchReason (crm#1479);
+ *     and names another seller, or its money goes the other way) is refused,
+ *     DOC_ROW_MISMATCH, unless the caller states a mismatchReason (crm#1479,
+ *     crm#1779);
  *   - on a booked transaction the link propagates to
  *     document_attachments.journal_entry_id at once (BFL 5 kap 6 §: the
  *     verifikat must reference its underlag), and a failed propagation is an

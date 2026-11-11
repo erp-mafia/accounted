@@ -45,6 +45,8 @@ describe('documentRowMismatch (crm#1479)', () => {
   it('flags a document from another seller asking for more than the row paid, converted through kronor', () => {
     // 90 EUR is about 1 030 kr: five times the 202.78 kr row, and the seller is not the one the bank names.
     expect(documentRowMismatch(facts(), row(), 1029.6)).toEqual({
+      kind: 'other_purchase',
+      document_direction: 'out',
       document_vendor: 'Synthetic AI Ltd',
       document_amount: 90,
       document_currency: 'EUR',
@@ -95,6 +97,59 @@ describe('documentRowMismatch (crm#1479)', () => {
     expect(isMismatchReason('Invoice paid in two parts')).toBe(true)
     expect(isMismatchReason('  ')).toBe(false)
     expect(isMismatchReason(true)).toBe(false)
+  })
+})
+
+describe('documentRowMismatch: the way the money went (crm#1779)', () => {
+  const receipt = (overrides: Partial<BankMatchFacts> = {}) =>
+    facts({ kind: 'receipt', amount: 2390, currency: 'SEK', names: ['Möbelvaruhuset'], dueDate: null, ...overrides })
+  const named = (overrides: Partial<FitRow> = {}) =>
+    row({ amount: 2390, description: 'MOBELVARUHUSET', original_description: null, ...overrides })
+
+  it('flags a purchase receipt on money that came in, though the amount and the seller agree', () => {
+    expect(documentRowMismatch(receipt(), named(), 2390)).toEqual({
+      kind: 'direction',
+      document_direction: 'out',
+      document_vendor: 'Möbelvaruhuset',
+      document_amount: 2390,
+      document_currency: 'SEK',
+      document_amount_sek: null,
+      transaction_text: 'MOBELVARUHUSET',
+      transaction_amount: 2390,
+      transaction_currency: 'SEK',
+    })
+  })
+
+  it('flags a refund or a credit note on money that went out', () => {
+    expect(documentRowMismatch(receipt({ direction: 'in' }), named({ amount: -2390 }), 2390)).toMatchObject({ kind: 'direction', document_direction: 'in' })
+    expect(documentRowMismatch(receipt({ kind: 'credit_note', direction: 'in' }), named({ amount: -2390 }), 2390)).toMatchObject({ kind: 'direction' })
+  })
+
+  it('needs no row text to see the money go the other way', () => {
+    expect(documentRowMismatch(receipt(), named({ description: null, merchant_name: null }), 2390)).toMatchObject({
+      kind: 'direction',
+      transaction_text: null,
+    })
+  })
+
+  it('holds a document that names no seller to no direction: it may be the company\'s own invoice', () => {
+    // The reading leaves the company itself out as seller: an own sales invoice paid by a customer.
+    expect(documentRowMismatch(facts({ amount: 2390, currency: 'SEK', names: [] }), named({ description: 'BG 5050-1055' }), 2390)).toBeNull()
+  })
+
+  it('lets each way through on its own side', () => {
+    expect(documentRowMismatch(receipt(), named({ amount: -2390 }), 2390)).toBeNull()
+    expect(documentRowMismatch(receipt({ direction: 'in' }), named({ amount: 2390 }), 2390)).toBeNull()
+  })
+
+  it('says in Swedish which way each side went', () => {
+    const purchaseOnRefund = formatMismatchSv(documentRowMismatch(receipt(), named(), 2390)!)
+    expect(purchaseOnRefund).toContain('Möbelvaruhuset')
+    expect(purchaseOnRefund).toContain('pengar in')
+    const refundOnPurchase = formatMismatchSv(documentRowMismatch(receipt({ direction: 'in' }), named({ amount: -2390 }), 2390)!)
+    expect(refundOnPurchase).toContain('återbetalning')
+    expect(refundOnPurchase).toContain('pengar ut')
+    expect(`${purchaseOnRefund}${refundOnPurchase}`).not.toMatch(/[–—]/)
   })
 })
 
@@ -160,6 +215,24 @@ describe('documentFitGate', () => {
       details: { document_vendor: 'Synthetic AI Ltd', transaction_text: 'PODCASTTOOL' },
       messageSv: expect.stringContaining('Synthetic AI Ltd'),
     })
+  })
+
+  it('refuses a purchase receipt on a refund unless a reason is stated (crm#1779)', async () => {
+    mocks.loadDocumentReading.mockResolvedValue({
+      fields: {
+        document_type: { value: 'receipt' },
+        amount_due_for_payment: { value: 2390 },
+        invoice_currency_code: { value: 'SEK' },
+        seller_name: { value: 'Möbelvaruhuset' },
+        invoice_issue_date: { value: '2026-10-02' },
+      },
+    })
+    const refundRow = row({ amount: 2390, description: 'MOBELVARUHUSET', original_description: null })
+    await expect(documentFitGate({} as never, 'company-1', undefined)('doc-1', refundRow)).resolves.toMatchObject({
+      code: 'DOC_ROW_MISMATCH',
+      details: { kind: 'direction', document_direction: 'out' },
+    })
+    await expect(documentFitGate({} as never, 'company-1', 'Shows what the refund was for')('doc-1', refundRow)).resolves.toBeNull()
   })
 
   it('lets a mismatch through with a stated reason, and a fitting document without one', async () => {

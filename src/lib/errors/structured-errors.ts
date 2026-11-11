@@ -6179,12 +6179,12 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   DOC_ROW_MISMATCH: {
     httpStatus: 409,
     message_sv:
-      'Underlaget verkar höra till ett annat köp: beloppet är större än transaktionens och säljaren är en annan. Koppla det bara om det verkligen hör hit.',
+      'Underlaget verkar höra till ett annat köp: beloppet är större än transaktionens och säljaren är en annan, eller så går pengarna åt andra hållet. Koppla det bara om det verkligen hör hit.',
     message_en:
-      'The document looks like it belongs to another purchase: it asks for more than the transaction paid and names another seller. Nothing was linked.',
+      'The document looks like it belongs to another purchase: it asks for more than the transaction paid and names another seller, or its money goes the other way (a purchase on money in, a refund on money out). Nothing was linked.',
     remediation: {
       description:
-        'details names both sides. Pick the bank transaction that paid this document instead. If it does belong here (an invoice paid in parts, one statement covering several payments), call again with mismatch_reason saying why.',
+        'details names both sides, and kind says what disagrees: other_purchase (a larger amount and another seller) or direction (a purchase on money in, a refund or credit note on money out). Pick the bank transaction that paid this document instead. If it does belong here (an invoice paid in parts, one statement covering several payments), call again with mismatch_reason saying why.',
     },
   },
   DOC_DETACH_CONCURRENT: {

@@ -11,7 +11,19 @@
  * was booked, where BFL keeps it. Nothing in the pairing looked at the two
  * sides.
  *
- * A mismatch is the document asking for MORE than the row paid, beyond the
+ * crm#1779: a copy of a purchase receipt could be paired with the refund of
+ * that purchase, money that came in, because nothing compared the signs: the
+ * amounts agree as magnitudes and so does the seller.
+ *
+ * A mismatch is either of two things. The money goes the other way: a
+ * purchase (an invoice, a receipt) from a named seller on a row where money
+ * came in, or a credit note or a refund on a row where money went out
+ * (../underlag-bank-candidates.ts bankAmountGoesTheWay, the comparison the
+ * matchers make), whatever the amounts say. A document that names no seller
+ * says nothing about direction (directionWhenNamed): the reading leaves the
+ * company itself out as seller, so it is often the company's own invoice to a
+ * customer, paid by money coming in. Or the document asks
+ * for MORE than the row paid, beyond the
  * converted-amount tolerance the bank matchers use, AND no name it carries
  * agreeing with the row's texts (the bank matchers' NAME_AGREEMENT). Either
  * alone is everyday: one invoice paid in parts or several payments on one
@@ -24,8 +36,8 @@
  * a confirmation from a person) and the pairing goes ahead.
  *
  * No verdict (null) whenever a side cannot be read: a document that is not an
- * invoice, receipt or credit note, no amount, no names, no row text, or no
- * rate for a currency the row does not carry. The automatic matchers cannot
+ * invoice, receipt or credit note, no amount, no names; and, for the amount,
+ * no row text or no rate for a currency the row does not carry. The automatic matchers cannot
  * propose such a pair at all: match on arrival requires the amounts to agree
  * (./decide.ts) and the receipt hunt's confidence stays below its
  * floor once the amount disagrees (lib/documents/core-receipt-matcher.ts
@@ -39,6 +51,7 @@ import { createLogger } from '@/lib/logger'
 import { formatCurrency } from '@/lib/utils'
 import { calculateMerchantSimilarity, CONVERTED_AMOUNT_TOLERANCE_PERCENT } from '@/lib/documents/core-receipt-matcher'
 import { loadDocumentReading } from '@/lib/documents/reading/load'
+import { bankAmountGoesTheWay, directionWhenNamed } from '@/lib/documents/underlag-bank-candidates'
 import { NAME_AGREEMENT } from './decide'
 import { bankMatchFacts, type BankMatchFacts } from './facts'
 
@@ -58,12 +71,21 @@ export interface FitRow {
 
 /** Both sides of a mismatch, for the refusal and the person who decides. */
 export interface DocumentRowMismatch {
+  /**
+   * What disagrees. direction: the money goes the other way (a purchase on
+   * money in, a credit note or refund on money out). other_purchase: the
+   * document asks for more than the row paid and names another seller.
+   */
+  kind: 'direction' | 'other_purchase'
+  /** out: the document is a purchase; in: a credit note or a refund. */
+  document_direction: 'out' | 'in'
   document_vendor: string
   document_amount: number
   document_currency: string
   /** The document's amount in kronor, when it had to be converted to compare. */
   document_amount_sek: number | null
-  transaction_text: string
+  /** What the bank row says; null only on a direction mismatch, which needs no text. */
+  transaction_text: string | null
   transaction_amount: number
   transaction_currency: string
 }
@@ -107,6 +129,23 @@ export function documentRowMismatch(
 ): DocumentRowMismatch | null {
   if (!facts || facts.names.length === 0) return null
   const texts = rowTexts(row)
+  const rowAmount = Number(row.amount)
+  // The money goes the other way, whatever the amounts say: a purchase
+  // receipt and the refund of it agree on the amount and the seller (crm#1779).
+  const direction = directionWhenNamed(facts.direction, facts.names[0])
+  if (Number.isFinite(rowAmount) && rowAmount !== 0 && !bankAmountGoesTheWay(rowAmount, direction)) {
+    return {
+      kind: 'direction',
+      document_direction: facts.direction,
+      document_vendor: facts.names[0],
+      document_amount: facts.amount,
+      document_currency: facts.currency,
+      document_amount_sek: null,
+      transaction_text: texts[0] ?? null,
+      transaction_amount: row.amount,
+      transaction_currency: (row.currency ?? 'SEK').toUpperCase(),
+    }
+  }
   if (texts.length === 0) return null
   const amounts = comparableAmounts(facts, row, documentSek)
   if (!amounts || amounts.row === 0) return null
@@ -114,6 +153,8 @@ export function documentRowMismatch(
   const nameAgrees = facts.names.some((name) => texts.some((text) => calculateMerchantSimilarity(name, text) >= NAME_AGREEMENT))
   if (nameAgrees) return null
   return {
+    kind: 'other_purchase',
+    document_direction: facts.direction,
     document_vendor: facts.names[0],
     document_amount: facts.amount,
     document_currency: facts.currency,
@@ -183,6 +224,16 @@ export function formatMismatchSv(mismatch: DocumentRowMismatch): string {
   const inKronor =
     mismatch.document_amount_sek != null ? ` (cirka ${formatCurrency(mismatch.document_amount_sek, 'SEK')})` : ''
   const rowAmount = formatCurrency(mismatch.transaction_amount, mismatch.transaction_currency)
+  if (mismatch.kind === 'direction') {
+    const row = mismatch.transaction_text ? `${mismatch.transaction_text} på ${rowAmount}` : rowAmount
+    return mismatch.document_direction === 'out'
+      ? `Underlaget och transaktionen går åt olika håll: underlaget är ett köp från ${mismatch.document_vendor} på ${documentAmount}, ` +
+          `som betalas med pengar ut, men transaktionen (${row}) är pengar in. ` +
+          'Koppla det bara om det verkligen hör hit.'
+      : `Underlaget och transaktionen går åt olika håll: underlaget är en kreditering eller återbetalning från ${mismatch.document_vendor} på ${documentAmount}, ` +
+          `som kommer in på kontot, men transaktionen (${row}) är pengar ut. ` +
+          'Koppla det bara om det verkligen hör hit.'
+  }
   return (
     `Underlaget verkar höra till ett annat köp: det är från ${mismatch.document_vendor} på ${documentAmount}${inKronor}, ` +
     `men transaktionen är ${mismatch.transaction_text} på ${rowAmount}. ` +
