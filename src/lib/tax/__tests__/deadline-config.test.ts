@@ -151,6 +151,38 @@ describe('monthly tax and employer deadlines', () => {
     expect(config.condition(makeSettings({ employer_registered: false, pays_salaries: true }))).toBe(false)
   })
 
+  it('counts an active salaried employee as an employer while neither flag is attested (crm#1790)', () => {
+    const config = getConfig('arbetsgivardeklaration')
+    expect(config.condition(makeSettings({ salaried_employee_since: '2026-03-01' }))).toBe(true)
+    expect(config.condition(makeSettings({ salaried_employee_since: null }))).toBe(false)
+    // Unresolved evidence is no evidence.
+    expect(config.condition(makeSettings({ salaried_employee_since: undefined }))).toBe(false)
+    // An explicit "not registered" stays the user's answer.
+    expect(config.condition(makeSettings({
+      employer_registered: false,
+      salaried_employee_since: '2026-03-01',
+    }))).toBe(false)
+  })
+
+  it('starts employee-derived AGI rows at the first employment month', () => {
+    const config = getConfig('arbetsgivardeklaration')
+    const derived = config.generateDates(2026, makeSettings({ salaried_employee_since: '2026-05-20' }))
+    expect(derived.map((date) => date.period)).toEqual([
+      '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12',
+    ])
+    // Not a year at all before the employment starts.
+    expect(config.generateDates(2026, makeSettings({ salaried_employee_since: '2027-01-15' }))).toEqual([])
+    // An attested flag files every month, whatever the employees say.
+    expect(config.generateDates(2026, makeSettings({
+      employer_registered: true,
+      salaried_employee_since: '2026-05-20',
+    }))).toHaveLength(12)
+    expect(config.generateDates(2026, makeSettings({
+      pays_salaries: true,
+      salaried_employee_since: '2026-05-20',
+    }))).toHaveLength(12)
+  })
+
   it('generates only the December-period AGI row for seasonal employers', () => {
     const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
       employer_registered: true,
@@ -206,6 +238,10 @@ describe('storföretag tax payment deadline', () => {
       pays_salaries: true,
       vat_taxable_base_over_40m: true,
     }))).toBe(false)
+    // And the same employee evidence (crm#1790), from the same first month.
+    const derived = makeSettings({ salaried_employee_since: '2026-11-03', vat_taxable_base_over_40m: true })
+    expect(config.condition(derived)).toBe(true)
+    expect(config.generateDates(2026, derived).map((date) => date.period)).toEqual(['2026-11', '2026-12'])
   })
 
   it('is due the 12th of the following month, the 17th in January', () => {

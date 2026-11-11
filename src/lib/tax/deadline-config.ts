@@ -62,6 +62,47 @@ export interface CompanySettingsForDeadlines {
    * the schedule to fiscal_year_start_month alone.
    */
   fiscal_years?: FiscalYearForDeadlines[]
+  /**
+   * Derived, NOT a company_settings column: the earliest employment_start
+   * (YYYY-MM-DD) among the company's active employees with a monthly salary
+   * or hourly rate set; null when there is none. Employer evidence for the
+   * AGI rows while neither employer flag is attested (isAgiEmployer).
+   * Undefined = not resolved (the generator resolves it).
+   */
+  salaried_employee_since?: string | null
+}
+
+/**
+ * Whether the company gets the monthly AGI rows (and the storföretag payment
+ * row). An attested employer_registered decides in both directions: a
+ * registered employer files every month (SFL 26 kap. 3 §) and an explicit
+ * false is the user's own answer. Never attested, pays_salaries decides, and
+ * without it an active employee with a salary set does (crm#1790): the flags
+ * only follow the ledger once a salary run is booked (20260904191000), so a
+ * company that set up its first employee got no AGI reminder until then.
+ */
+export function isAgiEmployer(settings: CompanySettingsForDeadlines): boolean {
+  if (settings.employer_registered != null) return settings.employer_registered
+  return settings.pays_salaries || employeeEvidenceAgiStart(settings) !== null
+}
+
+/**
+ * The first AGI period (YYYY-MM) when only an employee record, not a flag,
+ * makes the company an employer: no salary is paid for a month before anyone
+ * is employed, so the rows start at the earliest employment month. null when
+ * a flag decides (every period counts) or there is no such employee.
+ */
+function employeeEvidenceAgiStart(settings: CompanySettingsForDeadlines): string | null {
+  if (settings.employer_registered != null || settings.pays_salaries) return null
+  return settings.salaried_employee_since ? settings.salaried_employee_since.slice(0, 7) : null
+}
+
+function fromEmployeeEvidenceStart(
+  instances: DeadlineInstance[],
+  settings: CompanySettingsForDeadlines,
+): DeadlineInstance[] {
+  const start = employeeEvidenceAgiStart(settings)
+  return start === null ? instances : instances.filter((instance) => instance.period >= start)
 }
 
 /** One fiscal_periods row: its first and last day, YYYY-MM-DD. */
@@ -643,8 +684,9 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
 
   // Arbetsgivardeklaration (monthly). A REGISTERED employer must file AGI
   // every month, including nil months (SFL 26 kap. 3 §): the gate is
-  // registration, not whether salaries were paid, with pays_salaries as a
-  // fallback for settings saved before the registration flag existed.
+  // registration, not whether salaries were paid, with pays_salaries and then
+  // an active salaried employee as fallbacks while registration was never
+  // attested (isAgiEmployer).
   // Säsongsregistrerade employers file only for months with payments plus a
   // December nil declaration when nothing was paid all year, so they get
   // only the December-period row; payment months are handled by the salary
@@ -658,7 +700,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
     description: 'Arbetsgivardeklaration för registrerade arbetsgivare',
-    condition: (s) => s.employer_registered ?? s.pays_salaries,
+    condition: isAgiEmployer,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
@@ -679,7 +721,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
           periodLabel: getMonthLabel(month, year),
         })
       }
-      return instances
+      return fromEmployeeEvidenceStart(instances, settings)
     },
   },
 
@@ -692,11 +734,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'skatteinbetalning',
     titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
     description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
-    condition: (s) =>
-      (s.employer_registered ?? s.pays_salaries) && s.vat_registered && s.vat_taxable_base_over_40m,
+    condition: (s) => isAgiEmployer(s) && s.vat_registered && s.vat_taxable_base_over_40m,
     priority: 'important',
     linkedReportType: null,
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
         const deadlineMonth = (month + 1) % 12
@@ -713,7 +754,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
           periodLabel: getMonthLabel(month, year),
         })
       }
-      return instances
+      return fromEmployeeEvidenceStart(instances, settings)
     },
   },
 
