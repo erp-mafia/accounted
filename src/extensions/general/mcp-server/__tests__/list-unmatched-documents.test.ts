@@ -194,6 +194,40 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(result.items.find((i) => i.document_id === 'doc-5')?.pending_link).toBeNull()
   })
 
+  // crm#1783: a forwarded Stripe receipt is three documents (invoice PDF,
+  // receipt PDF, the mail's HTML) and read as three unrelated candidates.
+  it('names the other documents of the same mail on each, and nothing on an upload', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    const row = (id: string, mail: string | null) => ({
+      id,
+      document_id: `doc-${id}`,
+      source: mail ? 'email' : 'upload',
+      email_from: null,
+      email_subject: null,
+      email_received_at: null,
+      resend_email_id: mail,
+      created_at: '2026-11-10T13:20:00Z',
+      document_attachments: { file_name: `${id}.pdf` },
+      extracted_data: null,
+    })
+    enqueue({ data: [row('invoice', 'em_1'), row('receipt', 'em_1'), row('upload', null)], error: null })
+    enqueue({ data: [], error: null }) // no document pinned to a transaction
+    enqueue({ data: [], error: null }) // waiting links
+    enqueue({ data: [], error: null }) // attached transactions
+    // Every document of the mail, the HTML body already matched elsewhere included.
+    enqueue({ data: [{ id: 'invoice', resend_email_id: 'em_1' }, { id: 'receipt', resend_email_id: 'em_1' }, { id: 'html', resend_email_id: 'em_1' }], error: null })
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ inbox_item_id: string; same_mail_inbox_item_ids: string[] }>
+    }
+    const byId = new Map(result.items.map((i) => [i.inbox_item_id, i.same_mail_inbox_item_ids]))
+    expect(byId.get('invoice')).toEqual(['receipt', 'html'])
+    expect(byId.get('receipt')).toEqual(['invoice', 'html'])
+    expect(byId.get('upload')).toEqual([])
+    const mailLookup = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'in')
+    expect(mailLookup?.args).toEqual(['resend_email_id', ['em_1']])
+  })
+
   it('returns an empty result when the inbox query has nothing pending', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [], error: null })

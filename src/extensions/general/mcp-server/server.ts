@@ -18972,7 +18972,7 @@ export const tools: McpTool[] = [
       let inboxQuery = whereInboxItemOpen(
         supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments!inner(file_name, journal_entry_id)')
+          .select('id, document_id, source, email_from, email_subject, email_received_at, resend_email_id, extracted_data, created_at, document_attachments!inner(file_name, journal_entry_id)')
           .eq('company_id', companyId)
           .not('document_id', 'is', null),
       )
@@ -19012,6 +19012,26 @@ export const tools: McpTool[] = [
       // A link waiting for approval already holds some of these: say so, so
       // an agent does not propose the same underlag for a second purchase.
       const claims = await loadDocumentClaims(supabase, companyId, unmatchedRows.map((r) => r.document_id as string))
+      // One forwarded mail can carry several documents (a Stripe receipt: the
+      // invoice PDF, the receipt PDF and the mail's HTML), each its own item.
+      // Each names the others from the same mail, so an agent reads them as
+      // one purchase instead of three candidates (crm#1783).
+      const mailIds = [...new Set(unmatchedRows.map((r) => r.resend_email_id).filter((id): id is string => typeof id === 'string'))]
+      const itemsByMail = new Map<string, string[]>()
+      if (mailIds.length > 0) {
+        const { data: mailRows, error: mailError } = await supabase
+          .from('invoice_inbox_items')
+          .select('id, resend_email_id')
+          .eq('company_id', companyId)
+          .in('resend_email_id', mailIds)
+          .not('document_id', 'is', null)
+        if (mailError) throw dbError(mailError)
+        for (const row of (mailRows ?? []) as Array<{ id: string; resend_email_id: string }>) {
+          const ids = itemsByMail.get(row.resend_email_id)
+          if (ids) ids.push(row.id)
+          else itemsByMail.set(row.resend_email_id, [row.id])
+        }
+      }
       const unmatched = unmatchedRows
         .map((item) => {
           const extracted = item.extracted_data as Record<string, unknown> | null
@@ -19071,6 +19091,9 @@ export const tools: McpTool[] = [
             invoice_date: invoiceDate,
             payment_reference: paymentReference,
             pages,
+            same_mail_inbox_item_ids: item.resend_email_id
+              ? (itemsByMail.get(item.resend_email_id) ?? []).filter((id) => id !== item.id)
+              : [],
             pending_link: (() => {
               const claim = claims.get(item.document_id as string)?.find((c) => c.operation_id)
               return claim ? { operation_id: claim.operation_id, transaction_id: claim.transaction_id, journal_entry_id: claim.journal_entry_id } : null

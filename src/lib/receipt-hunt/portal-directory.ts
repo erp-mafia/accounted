@@ -69,6 +69,10 @@ export interface PortalEntry {
  * the invoice cannot be had any other way, and that claim is worth checking per
  * vendor rather than assuming.
  *
+ * Google Cloud went the same way (crm#1783): it mails "Payment received" for
+ * every card charge, with the amount and the card, and an agent found all six
+ * of a company's charges in the mailbox the entry told it not to search.
+ *
  * ## The URLs were wrong, and shipped anyway
  *
  * Every path here was hand-written and none was opened. The file said so and
@@ -95,11 +99,6 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     // that lands on an error page.
     url: 'https://admin.google.com',
     note: 'Fakturor ligger under Fakturering i adminkonsolen.',
-  },
-  {
-    vendor: 'Google Cloud',
-    aliases: ['google cloud', 'google svcs', 'gcp'],
-    url: 'https://console.cloud.google.com/billing',
   },
   {
     vendor: 'OpenAI',
@@ -240,8 +239,8 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
  *
  * The descriptor is folded first, so "ANTHROPIC* CLAUDE SUB SAN FRANCISCO" and
  * "Kortköp 260228 HETZNER ONLINE GMBH" resolve like anything else the matcher
- * reads. Longer aliases are tried first: "google cloud" must win over a
- * hypothetical bare "google", or a cloud bill would point at Workspace.
+ * reads. Longer aliases are tried first: "amazon web" must win over "amazon",
+ * or an AWS bill would point at an Amazon order history.
  */
 export function lookupPortal(descriptor: string | null | undefined): PortalEntry | null {
   if (!descriptor) return null

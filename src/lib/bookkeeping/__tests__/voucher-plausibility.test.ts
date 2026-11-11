@@ -110,4 +110,24 @@ describe('booksPurchase', () => {
     expect(booksPurchase([D('1686', 5000), C('2611', 1000), C('3001', 4000)])).toBe(false)
     expect(booksPurchase([D('2611', 2500), C('2641', 900), C('2650', 1600)])).toBe(false)
   })
+
+  // crm#1783: shapes a payment-account company books, read as purchases by
+  // their fee or exchange line and sent to the mailbox.
+  it('finds none in a currency conversion, a cashback or a transfer to the own bank with its fee and exchange difference', () => {
+    // Conversion between two currency accounts: fee and exchange gain.
+    expect(booksPurchase([D('1941', 1000), C('1942', 990), C('1942', 5), C('3960', 10), D('6570', 5)])).toBe(false)
+    // Transfer to the company's bank: fee and exchange loss.
+    expect(booksPurchase([D('1930', 9800), C('1943', 9950), D('6570', 50), D('7960', 100)])).toBe(false)
+    // Cashback credited by the payment account.
+    expect(booksPurchase([D('1942', 300), D('1943', 400), C('8311', 700)])).toBe(false)
+    // A bank charge or an exchange difference on its own, on liabilities too.
+    expect(booksPurchase([D('6570', 99), C('1930', 99)])).toBe(false)
+    expect(booksPurchase([D('8436', 12), C('1930', 12)])).toBe(false)
+  })
+
+  it('still finds the purchase when a fee or an exchange difference rides along with it', () => {
+    expect(booksPurchase([D('5420', 900), D('6570', 15), C('1930', 915)])).toBe(true)
+    expect(booksPurchase([D('2440', 5000), D('7960', 40), C('1930', 5040)])).toBe(true)
+    expect(booksPurchase([D('6540', 400), D('2645', 100), C('2614', 100), C('1943', 400)])).toBe(true)
+  })
 })

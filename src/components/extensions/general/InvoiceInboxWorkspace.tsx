@@ -2118,6 +2118,9 @@ function InboundMailRow({
     : t('inbound_mail_former_address')
   const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0, ignored: 0 }
   for (const a of mail.attachments ?? []) {
+    // A text/plain part next to the mail's other parts is ignored too, but it
+    // is no signature image and says nothing worth a line.
+    if (a.outcome === 'ignored' && a.reason === 'text_part') continue
     if (a.outcome in counts) counts[a.outcome] += 1
   }
   const parts: string[] = []

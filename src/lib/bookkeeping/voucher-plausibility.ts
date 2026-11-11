@@ -106,17 +106,32 @@ function percent(part: number, whole: number): number {
 }
 
 /**
+ * What moving money between accounts leaves on a verifikat besides the
+ * accounts themselves: the bank's charge (657x Bankkostnader), the exchange
+ * difference a conversion realises (796x, and 843x on liabilities) and what
+ * the bank credits (83xx: interest, cashback, exchange gains on receivables).
+ * Nobody sells any of them with a receipt: the bank statement or the payment
+ * provider's report is the underlag. Without this a currency conversion, a
+ * cashback and a transfer to the company's own bank read as purchases, by
+ * their fee or exchange line, and were sent to the mailbox (crm#1783).
+ */
+const isMoneyMovementCharge = (a: string) =>
+  inRange(a, '6570', '6579') || inRange(a, '7960', '7969') || inRange(a, '8300', '8399') || inRange(a, '8430', '8439')
+
+/**
  * Whether a verifikat booked a purchase at all: a cost, an asset or a prepaid
  * cost (what a purchase's VAT applies to), a supplier invoice, or input VAT on
  * the debit side, where only a purchase puts it. A verifikat with none of them
  * moved money without buying anything (a sale, a share issue, a transfer
- * between the company's own accounts, a tax, loan or dividend settlement), so
- * no receipt exists for it. Kvittojakten reads it (lib/receipt-hunt).
+ * between the company's own accounts, a currency conversion, a tax, loan or
+ * dividend settlement), so no receipt exists for it. A bank charge or an
+ * exchange difference is no purchase on its own (isMoneyMovementCharge); next
+ * to a cost it changes nothing. Kvittojakten reads it (lib/receipt-hunt).
  */
 export function booksPurchase(lines: readonly Pick<PlausibilityLine, 'account_number' | 'debit_amount'>[]): boolean {
   return lines.some(
     (l) =>
-      isCostBase(l.account_number) ||
+      (isCostBase(l.account_number) && !isMoneyMovementCharge(l.account_number)) ||
       isSupplierLiability(l.account_number) ||
       (isInputVat(l.account_number) && Number(l.debit_amount) > 0),
   )
