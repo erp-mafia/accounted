@@ -197,3 +197,35 @@ export function resolveKindHintForTags(tags: readonly string[]): {
 export function isEmailReceivedEvent(event: WebhookEventPayload): event is EmailReceivedEvent {
   return event.type === 'email.received'
 }
+
+/**
+ * How long a mail over the inbox's per-minute cap is handed back to Resend
+ * instead of being dropped. Resend retries a failed delivery after 5 seconds,
+ * 5 minutes, 30 minutes, 2 hours, 5 hours and 10 hours: inside the first hour
+ * the next attempt lands after the minute window has turned, so a burst (an
+ * agent forwarding 40 receipts in 20 seconds, crm#1783) comes in a few
+ * minutes late instead of not at all. A mail still over the cap after that
+ * belongs to a sustained flood: it is dropped and recorded as before, so it
+ * ends in a record and the cap keeps bounding what a flood costs.
+ */
+export const MINUTE_CAP_REDELIVERY_WINDOW_MS = 60 * 60 * 1000
+
+/**
+ * Whether a mail Resend received at `receivedAt` may still be handed back for
+ * redelivery. An unreadable time counts as too old: the drop is the outcome
+ * that always leaves a record.
+ */
+export function mayRedeliverOverMinuteCap(receivedAt: string | null | undefined, now: number = Date.now()): boolean {
+  const received = receivedAt ? Date.parse(receivedAt) : NaN
+  if (!Number.isFinite(received)) return false
+  return now - received < MINUTE_CAP_REDELIVERY_WINDOW_MS
+}
+
+/**
+ * A text/plain part of a mail: its plain-text alternative, or a client's
+ * ATT00001.txt. Never underlag the inbox takes, and next to any other part of
+ * the same mail it says nothing that part does not.
+ */
+export function isPlainTextPart(contentType: string | null | undefined): boolean {
+  return String(contentType ?? '').split(';')[0].trim().toLowerCase() === 'text/plain'
+}

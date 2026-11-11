@@ -1497,6 +1497,27 @@ describe('POST /inbound with several recipients (#2181)', () => {
     expect(events[1].payload).toMatchObject({ inbox_id: 'inbox-2', tags: [], kind_hint: null })
   })
 
+  it('hands the whole mail back when one of its inboxes is over the minute cap, so the redelivery files it once per inbox', async () => {
+    const to = ['acme-ab-x7f2@arcim.io', 'beta-ab-q9z1@arcim.io']
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, created_at: new Date().toISOString() }) as never)
+    vi.mocked(checkInboxUploadRateLimit)
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, scope: 'minute', retryAfterSec: 60 } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { id: 'inbox-2', company_id: 'company-2', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: { created_by: 'user-owner-2' } })
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(to, [PDF_ATTACHMENT]) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    expect(res.status).toBe(429)
+    expect(vi.mocked(checkInboxUploadRateLimit).mock.calls.map((c) => c[1])).toEqual(['company-1', 'company-2'])
+    expect(uploadAndExtract).not.toHaveBeenCalled()
+    expect(appendProcessingHistory).not.toHaveBeenCalled()
+  })
+
   it('skips a retired address in the list and still files for the active one', async () => {
     const to = ['old-inbox-abcd+lev@arcim.io', 'acme-ab-x7f2+ver@arcim.io']
     vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ to, attachments: [] }) as never)
@@ -1846,7 +1867,8 @@ describe('POST /inbound with several recipients (#2181)', () => {
     })
   })
 
-  it('records the rate-limited drop on the mail record too', async () => {
+  // The fixture mail was received in April: far past the redelivery window.
+  it('drops a mail still over the minute cap past the redelivery window, and records it on the mail record too', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
     vi.mocked(checkInboxUploadRateLimit).mockResolvedValueOnce({ ok: false, scope: 'minute', retryAfterSec: 60 } as never)
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -1857,11 +1879,107 @@ describe('POST /inbound with several recipients (#2181)', () => {
 
     const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
     const body = await res.json()
+    expect(res.status).toBe(200)
     expect(body.data.reason).toBe('rate_limited')
     expect(vi.mocked(appendProcessingHistory).mock.calls.map(([i]) => i.eventType)).toEqual([
       'RateLimitedDropped',
       'InboundMailReceived',
     ])
     expect(receivedEvents()[0].payload).toMatchObject({ outcome: 'rate_limited', attachments: [] })
+  })
+
+  // crm#1783: 42 forwards in 20 seconds, 30 filed, the other 12 dropped with
+  // nothing in the Inkorg. A burst now waits in Resend's retry queue.
+  it('hands a young mail over the minute cap back to Resend with a 429 and files or records nothing', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ created_at: new Date().toISOString() }) as never)
+    vi.mocked(checkInboxUploadRateLimit).mockResolvedValueOnce({ ok: false, scope: 'minute', retryAfterSec: 60 } as never)
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT]) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('60')
+    expect(body.data.reason).toBe('rate_limited_redelivery')
+    // The delivery that gets through records the mail: this attempt leaves
+    // no history event, no inbox row and no download.
+    expect(appendProcessingHistory).not.toHaveBeenCalled()
+    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+    expect(uploadAndExtract).not.toHaveBeenCalled()
+    expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+  })
+
+  it('keeps dropping a young mail over the day cap: the day cap is the flood backstop', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ created_at: new Date().toISOString() }) as never)
+    vi.mocked(checkInboxUploadRateLimit).mockResolvedValueOnce({ ok: false, scope: 'day', retryAfterSec: 3600 } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT]) as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('rate_limited')
+    expect(receivedEvents()[0].payload).toMatchObject({ outcome: 'rate_limited' })
+  })
+
+  describe('a text/plain part (crm#1783)', () => {
+    const TEXT_PART = { id: 'att_txt', filename: null, size: 400, content_type: 'text/plain', content_id: null, content_disposition: 'attachment' }
+
+    it('is ignored next to a PDF: no rejection row, and the PDF is filed', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // PDF dup check
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [TEXT_PART, PDF_ATTACHMENT]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue(PDF_DOWNLOAD)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-pdf', skip_reason: null } as never)
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_1', inbox_item_id: 'item-pdf' }])
+      expect(fetchInboundAttachment).toHaveBeenCalledOnce()
+      expect(vi.mocked(fetchInboundAttachment).mock.calls[0][1]).toBe('att_1')
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_txt', outcome: 'ignored', reason: 'text_part', mime: 'text/plain' },
+          { id: 'att_1', outcome: 'filed', inbox_item_id: 'item-pdf' },
+        ],
+      })
+    })
+
+    it('keeps its rejection row when it is the only part of the mail', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // dup check
+      enqueue({ data: { id: 'rejected-txt' } }) // rejection-row insert
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [TEXT_PART]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_txt',
+        filename: 'attachment-att_txt',
+        contentType: 'text/plain',
+        buffer: new TextEncoder().encode('Kvitto').buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      expect(res.status).toBe(200)
+      const insert = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+      expect((insert?.args[0] as { error_message: string }).error_message).toBe('Avvisad: filtypen text/plain stöds inte')
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [{ id: 'att_txt', outcome: 'rejected', reason: 'unsupported_type', inbox_item_id: 'rejected-txt' }],
+      })
+    })
   })
 })

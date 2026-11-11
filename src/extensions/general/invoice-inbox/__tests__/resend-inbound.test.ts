@@ -3,10 +3,48 @@ import {
   extractLocalPartForDomain,
   extractSharedRecipientsForDomain,
   groupSharedRecipientsByInbox,
+  isPlainTextPart,
   kindHintFromTag,
+  mayRedeliverOverMinuteCap,
+  MINUTE_CAP_REDELIVERY_WINDOW_MS,
   resolveKindHintForTags,
   splitKnownInboxTags,
 } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
+
+describe('mayRedeliverOverMinuteCap', () => {
+  const now = Date.parse('2026-11-10T13:20:30Z')
+
+  it('hands back a mail inside the first hour, where Resend retries at 5 s, 5 min and 30 min', () => {
+    expect(mayRedeliverOverMinuteCap('2026-11-10T13:20:10Z', now)).toBe(true)
+    expect(mayRedeliverOverMinuteCap('2026-11-10T12:50:30Z', now)).toBe(true)
+  })
+
+  it('drops a mail still over the cap after that window, as a flood', () => {
+    expect(mayRedeliverOverMinuteCap(new Date(now - MINUTE_CAP_REDELIVERY_WINDOW_MS).toISOString(), now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap('2026-11-10T10:00:00Z', now)).toBe(false)
+  })
+
+  it('treats a missing or unreadable receive time as too old, so the mail ends in a record', () => {
+    expect(mayRedeliverOverMinuteCap(null, now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap(undefined, now)).toBe(false)
+    expect(mayRedeliverOverMinuteCap('not a date', now)).toBe(false)
+  })
+})
+
+describe('isPlainTextPart', () => {
+  it('reads text/plain with or without parameters and in any case', () => {
+    expect(isPlainTextPart('text/plain')).toBe(true)
+    expect(isPlainTextPart('text/plain; charset=utf-8')).toBe(true)
+    expect(isPlainTextPart('Text/Plain')).toBe(true)
+  })
+
+  it('leaves every other type alone', () => {
+    expect(isPlainTextPart('text/html')).toBe(false)
+    expect(isPlainTextPart('application/pdf')).toBe(false)
+    expect(isPlainTextPart(null)).toBe(false)
+    expect(isPlainTextPart(undefined)).toBe(false)
+  })
+})
 
 describe('extractLocalPartForDomain', () => {
   it('returns the local part when a recipient matches the domain', () => {

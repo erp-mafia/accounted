@@ -66,6 +66,8 @@ import {
   splitKnownInboxTags,
   type InboxKindHint,
   isEmailReceivedEvent,
+  isPlainTextPart,
+  mayRedeliverOverMinuteCap,
   ResendSignatureError,
 } from './lib/resend-inbound'
 import {
@@ -119,7 +121,7 @@ import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { resolvePortal } from '@/lib/receipt-hunt/company-portals'
 import { readCompanyPortals } from '@/lib/receipt-hunt/company-portals-read'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
-import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
+import { checkInboxUploadRateLimit, type InboxLimitResult } from '@/lib/rate-limits/inbox'
 import type { InvoiceExtractionResult } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
@@ -1535,7 +1537,8 @@ export const invoiceInboxExtension: Extension = {
          * What became of one attachment, for the mail's history event. Codes
          * only: the free-text error and the filename stay out of
          * processing_history (append-only, outside the erasure path).
-         * 'ignored' is a signature image: never downloaded, never a row.
+         * 'ignored' is a signature image or a text/plain part next to other
+         * parts (reason says which): never downloaded, never a row.
          */
         type AttachmentOutcome = {
           id: string
@@ -1554,15 +1557,41 @@ export const invoiceInboxExtension: Extension = {
           attachments: AttachmentOutcome[]
         }
 
+        // Per-company rate limit (30/min, 500/day), every inbox before any is
+        // processed. Same Postgres-backed RPC as /upload; a refused call takes
+        // its increment back, so a redelivery spends no budget.
+        const limits = new Map<string, InboxLimitResult>()
+        for (const target of targets) {
+          limits.set(target.companyId, await checkInboxUploadRateLimit(serviceSupabase, target.companyId))
+        }
+        // Over the minute cap, a young mail goes back to Resend (429), whose
+        // next attempt lands after the window has turned. Dropping it lost 12
+        // of 42 receipts an agent forwarded in 20 seconds, with nothing in the
+        // Inkorg to show for them (crm#1783). The whole mail goes back, for
+        // every inbox, so the redelivery files it once each with one record;
+        // nothing is recorded for this attempt. Past the redelivery window,
+        // and on the day cap, the mail is dropped and recorded as before.
+        const redeliverAfter = [...limits.values()].find(
+          (limit) => !limit.ok && limit.scope === 'minute' && mayRedeliverOverMinuteCap(created_at),
+        )
+        if (redeliverAfter) {
+          const retryAfterSec = redeliverAfter.retryAfterSec ?? 60
+          console.warn('[invoice-inbox/inbound] Minute cap reached, asking Resend to redeliver', {
+            targets: targets.length,
+            retryAfterSec,
+          })
+          return NextResponse.json(
+            { error: 'Rate limited', data: { reason: 'rate_limited_redelivery', retry_after: retryAfterSec } },
+            { status: 429, headers: { 'Retry-After': String(retryAfterSec) } },
+          )
+        }
+
         const processForTarget = async (target: InboundTarget): Promise<TargetOutcome> => {
           const { companyId, kindHint } = target
           const userId = owners.get(companyId)!
           const attachmentOutcomes: AttachmentOutcome[] = []
 
-          // Per-company rate limit (30/min, 500/day). Same Postgres-backed
-          // RPC as /upload. Acknowledge + drop on cap: returning 429 to
-          // Resend would just consume more budget via their retry.
-          const limit = await checkInboxUploadRateLimit(serviceSupabase, companyId)
+          const limit = limits.get(companyId) ?? { ok: true }
           if (!limit.ok) {
             try {
               await appendProcessingHistory({
@@ -1788,7 +1817,19 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
+          // A text/plain part next to any other part of the mail is the mail's
+          // plain-text alternative (or an ATT00001.txt). The inbox never takes
+          // it, and the rejection row it got was one line of noise per
+          // forwarded mail (crm#1783). Every other part leaves a row of its
+          // own (filed, duplicate, rejected or failed), so the mail stays
+          // visible; a text/plain part alone keeps its rejection row.
+          const hasNonTextPart = documentAttachments.some((att) => !isPlainTextPart(att.content_type))
+
           for (const att of documentAttachments) {
+            if (hasNonTextPart && isPlainTextPart(att.content_type)) {
+              attachmentOutcomes.push({ id: att.id, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
+              continue
+            }
             let replacedItemId: string | undefined
             try {
               // Scoped to the company so one mail to two inboxes files once
@@ -1921,6 +1962,11 @@ export const invoiceInboxExtension: Extension = {
                     filedParts.set(row.resend_attachment_id, row.id)
                   }
                 }
+                // Same text/plain rule as the outer mail, among the forwarded
+                // mail's own parts.
+                const innerHasNonTextPart = innerAttachments.some(
+                  (inner, i) => !innerIsSignature[i] && !isPlainTextPart(inner.contentType),
+                )
                 for (let i = 0; i < innerAttachments.length; i++) {
                   const inner = innerAttachments[i]
                   const innerType = sanitiseMime(inner.contentType)
@@ -1930,6 +1976,10 @@ export const invoiceInboxExtension: Extension = {
                   const innerId = `${att.id}#${i}`
                   if (innerIsSignature[i]) {
                     attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'signature_image', mime: innerType })
+                    continue
+                  }
+                  if (innerHasNonTextPart && isPlainTextPart(inner.contentType)) {
+                    attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
                     continue
                   }
                   const filedPartId = filedParts.get(innerId)

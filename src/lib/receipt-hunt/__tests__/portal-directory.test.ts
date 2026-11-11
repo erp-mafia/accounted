@@ -13,8 +13,8 @@ describe('lookupPortal', () => {
     expect(lookupPortal('Kortköp 260228 HETZNER ONLINE GMBH')?.vendor).toBe('Hetzner')
   })
 
-  it('prefers the longer alias, so a cloud bill is not sent to Workspace', () => {
-    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')?.vendor).toBe('Google Cloud')
+  it('never sends a cloud bill to Workspace', () => {
+    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')?.vendor).not.toBe('Google Workspace')
     expect(lookupPortal('GOOGLE WORKSPACE REDOV')?.vendor).toBe('Google Workspace')
   })
 
@@ -33,6 +33,10 @@ describe('lookupPortal', () => {
     expect(lookupPortal('ANTHROPIC* CLAUDE SUB SAN FRANCISCO')).toBeNull()
     expect(lookupPortal('Vercel Jul Överföring via internet')).toBeNull()
     expect(lookupPortal('SUPABASE PRO SUBSCRIPTION')).toBeNull()
+    // Google Cloud mails "Payment received" with the amount for every card
+    // charge (crm#1783).
+    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')).toBeNull()
+    expect(lookupPortal('GOOGLE*CLOUD QTHJ4S')).toBeNull()
   })
 
   it('knows the Swedish and ads vendors whose invoice waits behind a login', () => {
