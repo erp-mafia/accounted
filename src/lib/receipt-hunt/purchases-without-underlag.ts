@@ -22,6 +22,10 @@
  *
  * So the list reads public.open_bank_rows, which holds every anchor; nothing
  * here re-implements it.
+ *
+ * It sits in the inbox block, beside the hunt, so the agent's worklist can
+ * read it too: the transactions block already uses inbox code, and inbox code
+ * importing transactions would close a cycle (src/lib/modules).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -38,7 +42,9 @@ import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
  * even when the hunt will not go looking.
  *
  * Matching the hunt's floor hid 52 of one real company's 119 unreceipted
- * purchases: the page under-reported by 44% and looked tidier for it.
+ * purchases: the page under-reported by 44% and looked tidier for it. The
+ * agent's Kvittojakten worklist reads this list for the same reason: its mail
+ * search runs in the user's own agent and costs Accounted nothing (crm#1785).
  */
 export const MIN_PURCHASE_AMOUNT_SEK = 0
 export const PURCHASE_LOOKBACK_MONTHS = 12
@@ -86,6 +92,8 @@ export async function fetchPurchasesWithoutUnderlag(
       .lt('amount', minAmount > 0 ? -minAmount : 0)
       .gte('date', sinceDate)
       .order('date', { ascending: false })
+      // A total order, so a page boundary inside one day skips no row.
+      .order('id', { ascending: true })
       .range(range.from, range.to),
   )
 }

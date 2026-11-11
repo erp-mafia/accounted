@@ -46,6 +46,11 @@ describe('fetchPurchasesWithoutUnderlag', () => {
     expect(findCall('open_bank_rows', 'eq')).toEqual(['company_id', 'company-1'])
     expect(findCalls('open_bank_rows', 'is')).toEqual([['document_id', null]])
     expect(findCall('open_bank_rows', 'lt')).toEqual(['amount', 0])
-    expect(findCall('open_bank_rows', 'order')).toEqual(['date', { ascending: false }])
+    // Newest first, then by id: fetchAllRows pages, and a page boundary inside
+    // one day must neither skip nor repeat a row.
+    expect(findCalls('open_bank_rows', 'order')).toEqual([
+      ['date', { ascending: false }],
+      ['id', { ascending: true }],
+    ])
   })
 })
