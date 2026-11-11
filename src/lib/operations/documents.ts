@@ -403,7 +403,7 @@ export const transactionsAttachDocument = defineOperation({
     doNotUseFor:
       'Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).',
     pitfalls: [
-      'A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).',
+      'A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).',
       'A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.',
       'A pinned document linked to a verifikat other than the transaction\'s own booking is never replaced: 409 DOC_ATTACH_REPLACES_POSTED. On the transaction\'s own verifikat the new document is added beside it (preview adds_to_verifikat; answer previous_document_id null).',
       'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED.',

@@ -767,6 +767,11 @@ interface BurstEntry {
   itemId: string
   companyId: string | null
   extracted: InvoiceExtractionResult | null
+  /**
+   * The reading was skipped (no AI reading on the company's plan, a sandbox,
+   * a PDF too long to slice): its empty fields say nothing about the photo.
+   */
+  unread: boolean
   channelContext: InboxChannelContext | null
   fileSizeBytes: number | null
   ordinal: number
@@ -777,7 +782,8 @@ function ackLine(entry: BurstEntry): string {
     entry.extracted?.supplier?.name ?? entry.row.media_filename ?? 'Kvitto'
   const total = entry.extracted?.totals?.total ?? null
   const currency = entry.extracted?.invoice?.currency ?? null
-  return `${merchant}, ${total != null ? formatAmount(total, currency) : 'belopp saknas'}`
+  if (total != null) return `${merchant}, ${formatAmount(total, currency)}`
+  return `${merchant}, ${entry.unread ? 'inte avläst' : 'belopp saknas'}`
 }
 
 /**
@@ -829,13 +835,14 @@ export async function finalizeBurst(
     const itemIds = rows.map((r) => r.inbox_item_id as string)
     const { data: itemsData } = await supabase
       .from('invoice_inbox_items')
-      .select('id, company_id, extracted_data, channel_context, document_id')
+      .select('id, company_id, extracted_data, extraction_skipped, channel_context, document_id')
       .in('id', itemIds)
     const itemsById = new Map(
       ((itemsData ?? []) as Array<{
         id: string
         company_id: string
         extracted_data: Record<string, unknown> | null
+        extraction_skipped?: boolean | null
         channel_context: InboxChannelContext | null
         document_id: string | null
       }>).map((item) => [item.id, item]),
@@ -861,6 +868,7 @@ export async function finalizeBurst(
         itemId: row.inbox_item_id as string,
         companyId: item?.company_id ?? null,
         extracted: (item?.extracted_data as InvoiceExtractionResult | null) ?? null,
+        unread: item?.extraction_skipped === true,
         channelContext: item?.channel_context ?? null,
         fileSizeBytes: item?.document_id ? (sizesByDocId.get(item.document_id) ?? null) : null,
         ordinal: index + 1,
@@ -878,6 +886,7 @@ export async function finalizeBurst(
         entry,
         candidate: evaluateQuestion({
           extracted: entry.extracted,
+          unread: entry.unread,
           caption: entry.channelContext?.caption ?? entry.row.body_text,
           mime: entry.row.media_mime,
           filename: entry.row.media_filename,
@@ -932,15 +941,21 @@ export async function finalizeBurst(
         body = copy.m10Context({})
         template = TEMPLATE.m10Context
       } else {
-        body =
-          total != null
-            ? copy.m4Ack({
-                merchant: entry.extracted?.supplier?.name ?? null,
-                amount: formatAmount(total, entry.extracted?.invoice?.currency ?? null),
-                date: entry.extracted?.invoice?.invoiceDate ?? null,
-              })
-            : copy.m4AckEmpty()
-        template = total != null ? TEMPLATE.m4Ack : TEMPLATE.m4AckEmpty
+        if (total != null) {
+          body = copy.m4Ack({
+            merchant: entry.extracted?.supplier?.name ?? null,
+            amount: formatAmount(total, entry.extracted?.invoice?.currency ?? null),
+            date: entry.extracted?.invoice?.invoiceDate ?? null,
+          })
+          template = TEMPLATE.m4Ack
+        } else if (entry.unread) {
+          // Nothing read it, so nothing is on its way: the person fills it in (crm#1779).
+          body = copy.m4AckUnread()
+          template = TEMPLATE.m4AckUnread
+        } else {
+          body = copy.m4AckEmpty()
+          template = TEMPLATE.m4AckEmpty
+        }
         if (toAsk?.type === 'representation') {
           body += `\n\n${copy.m7Representation({})}`
           template = TEMPLATE.m7Representation

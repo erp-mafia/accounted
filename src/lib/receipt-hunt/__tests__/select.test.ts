@@ -64,6 +64,14 @@ describe('selectProposals', () => {
     expect(result[0].confidence).toBeGreaterThanOrEqual(HUNT_MIN_CONFIDENCE)
   })
 
+  it('never proposes a refund receipt for the purchase it refunds (crm#1779)', () => {
+    // The return receipt carries the purchase's amount below zero: money back, never this outflow.
+    const refund = item({ id: 'item-refund', document_id: 'doc-refund' }, { documentKind: 'receipt', totals: { total: -438.75, vatAmount: -87.75 } })
+    expect(selectProposals([tx()], [refund], noSuppression)).toEqual([])
+    const purchase = item({}, { documentKind: 'receipt' })
+    expect(selectProposals([tx()], [refund, purchase], noSuppression).map((p) => p.document_id)).toEqual(['doc-1'])
+  })
+
   it('returns nothing when the pool is empty', () => {
     expect(selectProposals([tx()], [], noSuppression)).toEqual([])
   })

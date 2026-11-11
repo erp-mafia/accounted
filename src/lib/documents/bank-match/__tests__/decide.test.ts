@@ -310,11 +310,35 @@ describe('decideBankMatch: another open item the late row could pay (rivals)', (
     expect(decideBankMatch(september, late, RULES, 1250, [rival(other), rival(pricier)])?.evidenceLevel).toBe('stark')
   })
 
+  it('a rival whose money goes the other way never holds the row (crm#1779)', () => {
+    // October's credit note from the same supplier and giro: money that comes back, never this payment out.
+    const creditNote = invoice({ kind: 'credit_note', direction: 'in', reference: null, issueDate: '2026-10-01', dueDate: '2026-10-31' })
+    const late = [giroRow({ date: '2026-10-25' })]
+    expect(decideBankMatch(september, late, RULES, 1250, [rival(creditNote)])?.evidenceLevel).toBe('stark')
+  })
+
   it('a claim inside the window is decided as it always was', () => {
     // Two open invoices the same row pays inside both windows: neither is late, both propose it.
     const sameWeek = invoice({ reference: null, issueDate: '2026-09-03', dueDate: '2026-10-02' })
     const rows = [giroRow({ date: '2026-09-25' })]
     expect(decideBankMatch(september, rows, RULES, 1250, [rival(sameWeek)])?.transactionId).toBe('tx-1')
+  })
+})
+
+describe('decideBankMatch: the way the money went (crm#1779)', () => {
+  const purchase = invoice({ kind: 'receipt', reference: null, bankgiro: null, amount: 2390, issueDate: '2026-10-02', dueDate: null, names: ['Möbelvaruhuset'] })
+  const refund = { ...purchase, direction: 'in' as const }
+  const named = (overrides: Partial<ProposableBankRow> = {}) =>
+    row({ date: '2026-10-02', merchant_name: 'MOBELVARUHUSET', ...overrides })
+
+  it('a purchase receipt is never paid by money that came in, whatever else agrees', () => {
+    expect(decideBankMatch(purchase, [named({ amount: 2390 })], RULES, 2390)).toBeNull()
+    expect(decideBankMatch(purchase, [named({ amount: -2390 })], RULES, 2390)?.evidenceLevel).toBe('trolig')
+  })
+
+  it('a refund is never the money that went out for the purchase', () => {
+    expect(decideBankMatch(refund, [named({ amount: -2390 })], RULES, 2390)).toBeNull()
+    expect(decideBankMatch(refund, [named({ amount: 2390 })], RULES, 2390)?.evidenceLevel).toBe('trolig')
   })
 })
 

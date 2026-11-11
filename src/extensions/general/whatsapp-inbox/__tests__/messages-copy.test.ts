@@ -51,3 +51,15 @@ describe('m22LookupRetry, link lookup unavailable (#2365)', () => {
     })
   }
 })
+
+describe('m4AckUnread, a file nothing read (crm#1779)', () => {
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: says it was not read and leaves the fields to the person, without asking for it again`, () => {
+      const msg = botCopy(locale).m4AckUnread()
+      expect(msg).toMatch(locale === 'sv' ? /lästes inte av/i : /not read/i)
+      expect(msg).toMatch(locale === 'sv' ? /fyll i/i : /fill in/i)
+      expect(msg).not.toMatch(locale === 'sv' ? /skicka/i : /send/i)
+      expect(msg).not.toMatch(/[–—]/)
+    })
+  }
+})

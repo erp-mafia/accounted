@@ -1098,7 +1098,7 @@ Sets the item's matched transaction and, when the transaction has no document ye
 
 **Pitfalls:**
 - The transaction must belong to the same company: otherwise 404 TX_CATEGORIZE_TX_NOT_FOUND.
-- A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway.
+- A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway.
 - A transaction that already carries another document keeps it (details in the dry run: transaction_has_other_document).
 - Matching a booked transaction in a locked period links the document best-effort; check the verifikat afterwards.
 

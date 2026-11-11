@@ -80,6 +80,24 @@ describe('scoreUnderlagCandidates', () => {
     expect(out[0].channelContext?.representation?.purpose).toBe('kundmöte')
   })
 
+  it('never offers a purchase for money that came in, nor a refund for money that went out (crm#1779)', () => {
+    const purchase = { ...extraction({ supplier: 'Espresso House', date: '2026-05-12', total: 184 }), documentKind: 'receipt' as const }
+    const refund = { ...extraction({ supplier: 'Espresso House', date: '2026-05-12', total: -184 }), documentKind: 'receipt' as const }
+    const items = [
+      { id: 'purchase', document_id: 'doc-p', extracted_data: purchase, channel_context: null },
+      { id: 'refund', document_id: 'doc-r', extracted_data: refund, channel_context: null },
+    ]
+    expect(scoreUnderlagCandidates(tx, items).map((c) => c.inbox_item_id)).toEqual(['purchase'])
+    expect(scoreUnderlagCandidates({ ...tx, amount: 184 }, items).map((c) => c.inbox_item_id)).toEqual(['refund'])
+  })
+
+  it('offers a nameless invoice either way: the reading leaves the company itself out as seller', () => {
+    // The company's own invoice, read as an invoice with no seller, paid by its customer.
+    const ownInvoice = { ...extraction({ supplier: null, date: '2026-05-12', total: 184 }), documentKind: 'supplier_invoice' as const }
+    const out = scoreUnderlagCandidates({ ...tx, amount: 184 }, [{ id: 'own', document_id: 'doc-o', extracted_data: ownInvoice, channel_context: null }])
+    expect(out.map((c) => c.inbox_item_id)).toEqual(['own'])
+  })
+
   it('rejects a same-amount receipt from a different month', () => {
     const out = scoreUnderlagCandidates(tx, [
       {

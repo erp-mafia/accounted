@@ -61,6 +61,10 @@
  * as it always was, so a late claim never proposes a row another item
  * proposes too.
  *
+ * A row whose money went the other way (a purchase against money in, a
+ * credit note or a refund against money out) is never a claim, the item's or
+ * a rival's (lib/documents/underlag-bank-candidates.ts bankAmountGoesTheWay).
+ *
  * Among rows at the best level the one nearest the issue-to-due span wins; a
  * tie the date cannot break proposes nothing, since a proposal is a claim
  * about one row. Two rows the OCR names (a payment made twice) give the
@@ -72,6 +76,7 @@ import {
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import type { BankMatchBasis, BankMatchEvidenceLevel, ProposableBankRow } from '@/lib/documents/inbox-bank-match'
+import { bankAmountGoesTheWay } from '@/lib/documents/underlag-bank-candidates'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { daysBetweenIso } from '@/lib/dates/iso'
 import type { SupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
@@ -221,6 +226,10 @@ function lateByName(facts: BankMatchFacts, row: ProposableBankRow, rules: BankMa
 }
 
 function scoreRow(facts: BankMatchFacts, row: ProposableBankRow, rules: BankMatchRules, amountSek: number | null): Scored | null {
+  // Money that went the other way is never this document's payment, for the
+  // item or for a rival weighed against it: the search reads rows by sign,
+  // but a rival is scored on the item's rows (crm#1779).
+  if (!bankAmountGoesTheWay(row.amount, facts.direction)) return null
   const transaction = row as unknown as Transaction
   const window = paymentWindow(facts)
   const distance = window ? distanceFromCore(row.date, window.coreStart, window.coreEnd) : 0

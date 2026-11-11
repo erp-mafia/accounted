@@ -33,6 +33,7 @@ import {
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
+import { bankAmountGoesTheWay, directionWhenNamed, underlagPaymentDirection } from '@/lib/documents/underlag-bank-candidates'
 import { roundOre } from '@/lib/money'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
@@ -154,6 +155,11 @@ export function scoreUnderlagCandidates(
     // An extraction with neither a date nor any amount carries no signal the
     // matcher can use; scoring it returns noise dressed as confidence.
     if (!sig.date && sig.total == null && sig.prominentAmounts.length === 0) continue
+    // The matcher compares magnitudes, so the sign is checked here: a
+    // purchase from a named seller is never the underlag of money that came
+    // in, nor a refund or a credit note of money that went out (crm#1779).
+    const direction = directionWhenNamed(underlagPaymentDirection(item.extracted_data), sig.supplier)
+    if (!bankAmountGoesTheWay(tx.amount, direction)) continue
 
     let amountVariance = amountVarianceForMatch(
       sig.total,

@@ -66,12 +66,47 @@ export interface UnderlagPaymentFacts {
   direction: 'out' | 'in' | null
 }
 
-function paymentDirection(extracted: InvoiceExtractionResult | null): UnderlagPaymentFacts['direction'] {
+/**
+ * Which way an underlag's money went, read off its extraction: out for a
+ * purchase (a supplier invoice, a receipt), in for a credit note or a refund
+ * (a total below zero). Null for any other document, which says neither.
+ */
+export function underlagPaymentDirection(extracted: InvoiceExtractionResult | null): UnderlagPaymentFacts['direction'] {
   const kind = extracted?.documentKind
   if (kind === 'credit_note') return 'in'
   if (kind !== 'supplier_invoice' && kind !== 'receipt') return null
   const total = extracted?.totals?.total
   return typeof total === 'number' && total < 0 ? 'in' : 'out'
+}
+
+/**
+ * Whether a bank amount moved the way the underlag's money went: out is a
+ * row below zero, in a row above it; a null direction takes either. The one
+ * comparison every door that pairs an underlag with a bank row makes, so a
+ * purchase receipt is never offered for a refund that came in, nor a refund
+ * for the purchase it refunds (crm#1779).
+ */
+export function bankAmountGoesTheWay(amount: number, direction: UnderlagPaymentFacts['direction']): boolean {
+  if (direction === null) return true
+  return direction === 'out' ? amount < 0 : amount > 0
+}
+
+/**
+ * The direction a door may hold a document to when it judges a pairing it
+ * did not rank itself (the fit gate on a chosen pairing, the candidates an
+ * agent is handed for one transaction): the document's own, but only when it
+ * names its seller; null, either way, otherwise. The reading leaves the
+ * company itself out as seller (extract-invoice-fields
+ * stripOwnCompanyAsSupplier) and the inbox has no kind for a sales invoice,
+ * so a nameless "supplier invoice" is as often the company's own invoice, paid
+ * by money coming in: of the 83 agent attaches of an invoice or a receipt to
+ * money in over the 30 days to 2026-11-11, 69 named no seller.
+ */
+export function directionWhenNamed(
+  direction: UnderlagPaymentFacts['direction'],
+  seller: string | null | undefined,
+): UnderlagPaymentFacts['direction'] {
+  return typeof seller === 'string' && seller.trim() !== '' ? direction : null
 }
 
 export function underlagPaymentFacts(extracted: InvoiceExtractionResult | null): UnderlagPaymentFacts {
@@ -91,7 +126,7 @@ export function underlagPaymentFacts(extracted: InvoiceExtractionResult | null):
       total == null
         ? (extracted?.prominentAmounts ?? []).filter((a) => Number.isFinite(a.amount) && a.amount !== 0)
         : [],
-    direction: paymentDirection(extracted),
+    direction: underlagPaymentDirection(extracted),
   }
 }
 
@@ -113,12 +148,6 @@ export interface RankedBankRow<T extends UnbookedBankRow = UnbookedBankRow> {
   reasons: string[]
 }
 
-/** A row whose money went the way the underlag says: a purchase is never paid by money coming in. */
-function sameDirection(row: UnbookedBankRow, direction: UnderlagPaymentFacts['direction']): boolean {
-  if (direction === null) return true
-  return direction === 'out' ? row.amount < 0 : row.amount > 0
-}
-
 /**
  * Best match first. `today` anchors the date score when the underlag has no
  * date. A row going the other way (money in for a purchase, money out for a
@@ -132,7 +161,7 @@ export function rankBankRowsForUnderlag<T extends UnbookedBankRow>(
 ): RankedBankRow<T>[] {
   const totalSek = underlagTotalSek(facts, fxRate)
   const anchor = facts.invoiceDate ? new Date(facts.invoiceDate) : today
-  const ranked = rows.filter((row) => sameDirection(row, facts.direction)).map((row) => {
+  const ranked = rows.filter((row) => bankAmountGoesTheWay(row.amount, facts.direction)).map((row) => {
     const currency = (row.currency ?? 'SEK').toUpperCase()
     const rowSek =
       currency === 'SEK'
