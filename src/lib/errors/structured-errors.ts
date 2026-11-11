@@ -7767,12 +7767,19 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_generate_agi',
     },
   },
+  // Another live run is paid out in the same month: it holds the period's
+  // declaration, or it has none yet and this one would leave its pay out
+  // (crm#1768). details.other_runs, when present, lists them.
   AGI_PERIOD_CONFLICT: {
     httpStatus: 409,
     message_sv:
-      'En annan lönekörning är redan deklarerad för samma redovisningsperiod (utbetalningsmånad). En arbetsgivardeklaration per månad ska omfatta alla utbetalningar den månaden: slå ihop körningarna eller rätta den befintliga deklarationen.',
+      'En annan lönekörning har också utbetalning i samma redovisningsperiod (utbetalningsmånad). Arbetsgivardeklarationen för en månad ska omfatta alla utbetalningar den månaden, och Accounted kan ännu inte slå ihop flera lönekörningar till en deklaration. Lämna in deklarationen för månaden med summan av körningarna i Skatteverkets e-tjänst.',
     message_en:
-      'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
+      "Another salary run is also paid out in the same reporting period (payout month). The employer declaration for a month must cover every payment made that month, and Accounted cannot yet combine several salary runs into one declaration. File the month's declaration with the sum of the runs in Skatteverket's e-service.",
+    remediation: {
+      description:
+        "details.other_salary_run_id (and details.other_runs) name the other runs paid out in details.period. Do not generate or submit the AGI for one of them alone: it would declare only that run, and a second declaration for the month does not add to the first (an individuppgift with the same specifikationsnummer replaces the earlier one). Tell the user to file the month in Skatteverket's e-service with the runs' combined figures.",
+    },
   },
   // generateAgiDeclaration writes the period's declaration only if it still
   // holds what was read (salary run and status); two misses in a row answer
