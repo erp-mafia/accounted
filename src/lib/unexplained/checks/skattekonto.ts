@@ -86,6 +86,24 @@ async function run(ctx: CheckContext): Promise<CheckRun<SkattekontoReconciliatio
   }
   const fetchedAt = status.skattekonto?.fetched_at ?? null
   const asOf = fetchedAt ? toIsoDate(new Date(fetchedAt)) : ctx.today
+  // Rows but no connection: the saldo fetched before a disconnect is no
+  // reading to compare with (crm#1701), and "never fetched" would be untrue.
+  if (status.skattekonto?.saldo_missing_reason === 'not_connected') {
+    return [
+      cannotCheck(
+        subject,
+        asOf,
+        {
+          code: 'SKATTEKONTO_NOT_CONNECTED',
+          message_sv:
+            'Skatteverket är inte anslutet för bolaget, så det finns inget saldo från Skatteverket att jämföra skattekontot i bokföringen med. Anslut Skatteverket under Inställningar > Skatteverket så hämtas saldot.',
+          message_en:
+            'Skatteverket is not connected for the company, so there is no balance from Skatteverket to compare the skattekonto in the books with. Connect Skatteverket under Settings > Skatteverket to fetch it.',
+        },
+        sidesOf(status),
+      ),
+    ]
+  }
   if (status.external_balance === null || !fetchedAt) {
     return [
       cannotCheck(

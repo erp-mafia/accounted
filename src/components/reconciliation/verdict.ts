@@ -20,3 +20,12 @@ export function sidesAgree(status: Pick<ReconciliationStatus, 'is_reconciled' | 
 export function lacksSkatteverketSaldo(status: Pick<ReconciliationStatus, 'kind' | 'external_balance'>): boolean {
   return status.kind === 'skattekonto' && status.external_balance == null
 }
+
+/**
+ * The skattekonto lacks a saldo because the company has no Skatteverket
+ * connection (crm#1701): the page says that, not "never fetched", since a
+ * company that disconnected did fetch one once.
+ */
+export function skatteverketNotConnected(status: Pick<ReconciliationStatus, 'kind' | 'skattekonto'>): boolean {
+  return status.kind === 'skattekonto' && status.skattekonto?.saldo_missing_reason === 'not_connected'
+}

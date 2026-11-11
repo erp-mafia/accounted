@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
+import { readSkatteverketConnection, type SkatteverketConnectionState } from '@/lib/skatteverket/connection-state'
 import { loadImportedStornoPairs } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -591,6 +592,13 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  * ledger side together while their open amounts sum to zero, so they move
  * no total.
  *
+ * The saldo is Skatteverket's word only while the company is connected
+ * (lib/skatteverket/connection-state.ts, the rule the skattekonto page
+ * follows): the snapshot outlives a disconnect, and comparing the books with
+ * it read "Saldo hos Skatteverket 0 kr" or "stämmer" for a company that no
+ * longer reads its skattekonto (crm#1701). Without a connection the status
+ * is the never-fetched one, saldo null, with saldo_missing_reason saying why.
+ *
  * Returns null when the company has neither a saldo snapshot nor any
  * skattekonto rows (account not configured).
  */
@@ -600,10 +608,19 @@ export async function getSkattekontoReconciliationStatus(
   options: SkattekontoReconciliationOptions = {},
 ): Promise<SkattekontoReconciliationResult | null> {
   const today = options.today ?? todayIsoStockholm()
-  const [snapshot, rows] = await Promise.all([
+  const [storedSnapshot, rows, connection] = await Promise.all([
     readSnapshot(supabase, companyId),
     fetchRows(supabase, companyId),
+    readSkatteverketConnection(supabase, companyId).catch((err): SkatteverketConnectionState => {
+      log.warn('skatteverket connection read failed', {
+        companyId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return 'unknown'
+    }),
   ])
+  const snapshot = connection === 'not_connected' ? null : storedSnapshot
+  const saldoMissingReason = snapshot ? null : connection === 'not_connected' ? 'not_connected' : 'not_fetched'
   if (!snapshot && rows.length === 0) return null
   const account = options.account ?? (await resolveSkattekontoAccount(supabase, companyId))
 
@@ -1282,6 +1299,7 @@ export async function getSkattekontoReconciliationStatus(
     counts,
     skattekonto: {
       saldo_skatteverket: saldo,
+      saldo_missing_reason: saldoMissingReason,
       fetched_at: snapshot ? snapshot.fetchedAt.toISOString() : null,
       history_start: historyStart,
       opening_difference: openingDifference,

@@ -11,6 +11,11 @@ vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
 
 const fetchEntryLinesMock = vi.fn()
 const sumAccountBalanceMock = vi.fn()
+// Connected unless a test says otherwise (lib/skatteverket/connection-state.ts).
+const readSkatteverketConnectionMock = vi.fn(async (): Promise<string> => 'connected')
+vi.mock('@/lib/skatteverket/connection-state', () => ({
+  readSkatteverketConnection: (...args: unknown[]) => readSkatteverketConnectionMock(...(args as [])),
+}))
 const findOpeningBalanceFloorMock = vi.fn()
 const loadImportedStornoPairsMock = vi.fn()
 
@@ -494,6 +499,76 @@ describe('getSkattekontoReconciliationStatus', () => {
     expect(s.bridge.find((b) => b.key === 'ledger_balance')?.amount).toBe(0)
     // The rows stay listed so they can still be booked or matched.
     expect(s.counts.unmatched_external).toBe(1)
+  })
+
+  // crm#1701: the connection is gone but its last saldo (0 kr) is still
+  // stored. The bridge read "Saldo hos Skatteverket 0 kr" and the verdict
+  // compared the books with a saldo the company no longer reads.
+  it('without a connection: a stored saldo is no reading, the reason says why', async () => {
+    readSkatteverketConnectionMock.mockResolvedValueOnce('not_connected')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 0, rows: [row('r1', '2026-08-01', -500)] })
+    ledger([], { cutoff: 0, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(readSkatteverketConnectionMock).toHaveBeenCalledWith(supabase, COMPANY)
+    expect(s.external_balance).toBeNull()
+    expect(s.skattekonto?.saldo_skatteverket).toBeNull()
+    expect(s.skattekonto?.saldo_missing_reason).toBe('not_connected')
+    expect(s.skattekonto?.fetched_at).toBeNull()
+    expect(s.difference).toBeNull()
+    expect(s.unexplained_difference).toBeNull()
+    expect(s.is_reconciled).toBe(false)
+    expect(s.bridge.map((b) => b.key)).not.toContain('external_balance')
+    // The rows stay listed so they can still be booked or matched.
+    expect(s.counts.unmatched_external).toBe(1)
+  })
+
+  it('without a connection, rows or a readable saldo: not configured', async () => {
+    readSkatteverketConnectionMock.mockResolvedValueOnce('not_connected')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 0, rows: [] })
+
+    expect(await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })).toBeNull()
+  })
+
+  it('connected: the saldo stands and no reason is given; never fetched says not_fetched', async () => {
+    const connected = createQueuedMockSupabase()
+    enqueueBase(connected.enqueue, { saldo: -500, rows: [row('r1', '2026-08-01', -500)] })
+    ledger([], { cutoff: 0, before: 0 })
+    const s = await getSkattekontoReconciliationStatus(connected.supabase as never, COMPANY, { today: TODAY })
+    expect(s?.external_balance).toBe(-500)
+    expect(s?.skattekonto?.saldo_missing_reason).toBeNull()
+    expect(s?.bridge.find((b) => b.key === 'external_balance')?.amount).toBe(-500)
+
+    const neverFetched = createQueuedMockSupabase()
+    enqueueBase(neverFetched.enqueue, { saldo: null, rows: [row('r1', '2026-08-01', -500)] })
+    const n = await getSkattekontoReconciliationStatus(neverFetched.supabase as never, COMPANY, { today: TODAY })
+    expect(n?.external_balance).toBeNull()
+    expect(n?.skattekonto?.saldo_missing_reason).toBe('not_fetched')
+  })
+
+  // A failed connection read never reads as "not connected": the saldo stays.
+  it('an unknown connection keeps the stored saldo', async () => {
+    readSkatteverketConnectionMock.mockResolvedValueOnce('unknown')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: -500, rows: [row('r1', '2026-08-01', -500)] })
+    ledger([], { cutoff: 0, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.external_balance).toBe(-500)
+    expect(s?.skattekonto?.saldo_missing_reason).toBeNull()
+  })
+
+  it('a thrown connection read keeps the stored saldo', async () => {
+    readSkatteverketConnectionMock.mockRejectedValueOnce(new Error('network'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: -500, rows: [row('r1', '2026-08-01', -500)] })
+    ledger([], { cutoff: 0, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.external_balance).toBe(-500)
   })
 
   it('does not propose an entry that another row already links live', async () => {
