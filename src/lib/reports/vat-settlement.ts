@@ -14,11 +14,13 @@ import { buildFiledAmounts } from './vat-manual-filing'
 import {
   FILED_ROUNDING,
   carriedIntoPeriod,
+  clearedByAccount,
   lateSettlementLookupEnd,
   nearFiled,
   settlementsDated,
   settlesPeriod,
   summarizeSettlements,
+  vatBalancesCarriedInto,
   type PeriodVatBalance,
   type SettlementVerifikat,
 } from './vat-settlement-match'
@@ -72,8 +74,9 @@ export interface VatSettlementProposalLine {
  * tagged (source_type 'vat_settlement') or detected by shape (a manual
  * momsomföring clearing 26xx to 2650/1650 or straight to the skattekonto, see
  * fetchVatAccountTotals in vat-declaration.ts), unless its amounts make it
- * the previous period's; or dated after it, tagged with this period's text or
- * tied to it by amount (late_settlement).
+ * the previous period's or the settlement of a balance carried in from before
+ * the period (carriedBalanceSettlements); or dated after it, tagged with this
+ * period's text or tied to it by amount (late_settlement).
  */
 export interface VatSettlementExistingEntry {
   id: string
@@ -422,6 +425,69 @@ async function previousPeriodSettlements(
 }
 
 /**
+ * The posted momsredovisningar recognised by shape and dated inside the
+ * period that settle a balance carried in from before it, not the period's
+ * own VAT (crm#1755). A corrected declaration for an older period is often
+ * settled as its difference only, a 26xx account straight against the
+ * skattekonto, on the day Skatteverket debits it: inside whatever period that
+ * day falls in, where its shape alone made it the period's own momsredovisning
+ * and refused booking the period.
+ *
+ * It is not this period's when it clears neither the period's net nor, on any
+ * moms account it moves, the period's balance in full, and on every one of
+ * them exactly what the books carried into the period (vatBalancesCarriedInto),
+ * less what the earlier periods' momsredovisningar dated inside it cleared.
+ * Nothing of the period's own VAT is cleared then, and the proposal clears
+ * only that. The period's own momsredovisning gates as before (#984): split
+ * in two verifikat (output and input VAT apart) each clears its accounts in
+ * full, and one that no longer clears any account in full (a verifikat added
+ * after it, a quarter settled month by month) moves the period's VAT, not
+ * what was carried in. An opening balance the period's declaration counts
+ * is both the period's and carried in, so nothing is set apart then.
+ * Anything less certain stays this period's.
+ */
+async function carriedBalanceSettlements(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: PeriodRange,
+  ledger: Pick<VatDeclarationLedger, 'countedOpeningBalances'>,
+  lines: VatSettlementProposalLine[],
+  balance: PeriodVatBalance,
+  candidateIds: string[],
+  earlier: ReadonlySet<string>,
+): Promise<Set<string>> {
+  const carriedOver = new Set<string>()
+  if (candidateIds.length === 0) return carriedOver
+  if (ledger.countedOpeningBalances.some((e) => e.status === 'posted')) return carriedOver
+  const own = new Map<string, number>()
+  for (const line of lines) {
+    if (!NET_LINE_ACCOUNTS.has(line.account_number)) own.set(line.account_number, roundOre(line.debit_amount - line.credit_amount))
+  }
+  const moved = await clearedByAccount(supabase, companyId, [...candidateIds, ...earlier])
+  const suspects = candidateIds.filter((id) => {
+    const accounts = moved.get(id)
+    if (!accounts || accounts.size === 0) return false
+    const cleared = roundOre([...accounts.values()].reduce((sum, amount) => sum + amount, 0))
+    if (nearFiled(cleared, balance.cleared)) return false
+    return ![...accounts].some(([account, amount]) => nearFiled(amount, own.get(account) ?? 0))
+  })
+  if (suspects.length === 0) return carriedOver
+  const carried = await vatBalancesCarriedInto(supabase, companyId, period.start)
+  if (!carried) return carriedOver
+  for (const id of earlier) {
+    for (const [account, amount] of moved.get(id) ?? []) carried.set(account, roundOre((carried.get(account) ?? 0) - amount))
+  }
+  for (const id of suspects) {
+    const clearsCarried = [...moved.get(id)!].every(([account, amount]) => {
+      const left = carried.get(account) ?? 0
+      return Math.abs(left) >= FILED_ROUNDING && nearFiled(amount, left)
+    })
+    if (clearsCarried) carriedOver.add(id)
+  }
+  return carriedOver
+}
+
+/**
  * The momsredovisning dated after the period that settles it, if one does
  * (crm#1316): a verifikat dated up to LATE_LOOKAHEAD_DAYS after the period (or
  * the first open day the proposal itself moved to) that clears exactly the
@@ -553,10 +619,23 @@ export async function buildVatSettlementProposal(
     balances,
   )
 
+  // One recognised by shape alone may settle a balance carried in from
+  // before the period instead, a corrected older declaration's difference.
+  const carriedOver = await carriedBalanceSettlements(
+    supabase,
+    companyId,
+    range,
+    ledger,
+    lines,
+    balance,
+    shapedExisting.filter((e) => !earlier.has(e.id)).map((e) => e.id),
+    earlier,
+  )
+
   const existing: VatSettlementExistingEntry[] = [
     ...taggedExisting.map(({ description: _description, ...entry }) => entry),
     ...shapedExisting,
-  ].filter((e) => !earlier.has(e.id))
+  ].filter((e) => !earlier.has(e.id) && !carriedOver.has(e.id))
 
   // No posted momsredovisning for the period yet: one dated after it may
   // settle it by amount, and booking another would clear its accounts twice.
