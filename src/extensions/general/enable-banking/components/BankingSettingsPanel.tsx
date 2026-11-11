@@ -35,7 +35,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
-import { describeEmptySync } from '../lib/empty-sync-text'
+import { describeEmptySync, describeOtherCurrency } from '../lib/empty-sync-text'
 import { AccountPickerDialog } from './AccountPickerDialog'
 import {
   buildPageAttentionSentence,
@@ -622,17 +622,25 @@ export default function BankingSettingsPanel() {
       // fresh balance read as a connection that only reads the balance.
       const emptyText = data.incomplete
         ? null
-        : describeEmptySync({ imported: data.imported, duplicates: data.duplicates, notBooked: data.not_booked })
+        : describeEmptySync({
+          imported: data.imported,
+          duplicates: data.duplicates,
+          notBooked: data.not_booked,
+          otherCurrency: data.other_currency,
+        })
+      // Rows set aside as another currency than the account's are named even
+      // when others came in: otherwise they are missing without a word (crm#1767).
+      const otherCurrencyText = data.incomplete || emptyText !== null ? null : describeOtherCurrency(data.other_currency)
       toast({
         title: data.incomplete ? 'Synkroniseringen blev inte klar' : 'Synkronisering klar',
         description: data.incomplete
           ? `${data.imported} nya transaktioner importerade, men banken lämnade inte ut alla sidor. Försök igen senare, eller importera kontoutdraget som bankfil.`
           : data.history_narrowed && data.history_from
             ? `${data.imported} nya transaktioner importerade. Banken lämnade bara ut historik från ${data.history_from}.`
-            : emptyText ?? `${data.imported} nya transaktioner importerade`,
+            : emptyText ?? [`${data.imported} nya transaktioner importerade`, otherCurrencyText].filter(Boolean).join('. '),
       })
 
-      setShowCsvFallback(data.incomplete === true || emptyText !== null)
+      setShowCsvFallback(data.incomplete === true || emptyText !== null || otherCurrencyText !== null)
       notifyBankSyncUpdated()
       fetchConnections()
     } catch (error) {

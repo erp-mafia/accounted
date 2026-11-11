@@ -83,6 +83,12 @@ export interface SyncResult {
    * say why instead of reading as "the connection only reads the balance" (PH 221).
    */
   notBooked?: number
+  /**
+   * Booked entries in another currency than the account's, set aside by
+   * ingest instead of failing the batch (IngestResult.other_currency, crm#1767).
+   * Omitted when none.
+   */
+  otherCurrency?: number
   /** The date_from asked of the bank. */
   requestedFromDate: string
   /**
@@ -262,6 +268,35 @@ function isNotBookedStatus(status: string | undefined): boolean {
   return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
 }
 
+/** The rows ingest set aside as another currency than the account's (IngestResult.other_currency). */
+const countOtherCurrency = (byCurrency: Record<string, number> | undefined) =>
+  Object.values(byCurrency ?? {}).reduce((sum, rows) => sum + rows, 0)
+
+const trimmedDate = (value: string | null | undefined) =>
+  typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+
+/**
+ * The day a fetched entry is booked on, or null when it is not booked (and
+ * so not imported). A booking_date means booked, unless the bank marks the
+ * entry as not booked (NOT_BOOKED_STATUSES). An entry the bank itself marks
+ * BOOK but sends without a booking_date is booked too, on its value_date,
+ * else its transaction_date: PayPal sends every settled entry that way, and
+ * read as pending they left its feed empty (crm#1767). Without a booking_date
+ * and without that status nothing says the entry is settled, so it waits.
+ */
+export function bookedDateOf(entry: {
+  status?: string
+  booking_date?: string | null
+  value_date?: string | null
+  transaction_date?: string | null
+}): string | null {
+  if (isNotBookedStatus(entry.status)) return null
+  const bookingDate = trimmedDate(entry.booking_date)
+  if (bookingDate) return bookingDate
+  if (entry.status?.trim().toUpperCase() !== 'BOOK') return null
+  return trimmedDate(entry.value_date) ?? trimmedDate(entry.transaction_date)
+}
+
 /** Enable Banking's TransactionStatus values; anything else is logged as OTHER, never verbatim. */
 const TRANSACTION_STATUSES = new Set(['BOOK', 'CNCL', 'HOLD', 'OTHR', 'PDNG', 'RJCT', 'SCHD'])
 
@@ -436,17 +471,18 @@ export async function syncAccountTransactions(
     // that already exists. Gating the import set on a stable booking_date
     // removes the drift at the source, and leaves booked rows' ids byte-identical.
     //
-    // booking_date is read from the RAW transaction, index-aligned with
+    // The booked day is read from the RAW transaction, index-aligned with
     // bankTransactions: convertTransaction's booking_date already falls back to
     // value_date/today, so it cannot tell booked from pending. A date is not
     // enough on its own either: an entry the bank marks as not booked
-    // (NOT_BOOKED_STATUSES) is skipped whatever date it carries.
+    // (NOT_BOOKED_STATUSES) is skipped whatever date it carries, and one the
+    // bank marks BOOK counts as booked without a booking_date (bookedDateOf).
     const skippedRaw: typeof fetched.transactions = []
     bookedEntries = bankTransactions.flatMap((tx, i) => {
       const raw = fetched.transactions[i]
-      const bookingDate = raw?.booking_date
-      if (typeof bookingDate === 'string' && bookingDate.trim() !== '' && !isNotBookedStatus(raw?.status)) {
-        return [{ tx, bookingDate: bookingDate.trim(), page: rowPages?.[i] }]
+      const bookingDate = raw ? bookedDateOf(raw) : null
+      if (bookingDate) {
+        return [{ tx, bookingDate, page: rowPages?.[i] }]
       }
       if (raw) skippedRaw.push(raw)
       return []
@@ -628,8 +664,9 @@ export async function syncAccountTransactions(
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    ...(ingestResult.other_currency ? { otherCurrency: ingestResult.other_currency } : {}),
   })
-
+  const otherCurrency = countOtherCurrency(ingestResult.other_currency)
 
   if (ingestResult.errors > 0) {
     // Keep the previous cursor so a retry fetches the incomplete batch again.
@@ -659,8 +696,9 @@ export async function syncAccountTransactions(
     })
   } else {
     try {
-      const balance = await getAccountBalance(account.uid, psu)
-      // null = the ASPSP returned no balances at all. Keep the previous
+      const balance = await getAccountBalance(account.uid, psu, account.currency)
+      // null = the ASPSP returned no balances at all, or none in the
+      // account's currency (getAccountBalance). Keep the previous
       // stored value and timestamp; writing a fabricated 0 with a fresh
       // timestamp would pin "the bank reports 0 kr" for the next 12h on
       // every balance surface.
@@ -693,6 +731,7 @@ export async function syncAccountTransactions(
     historyNarrowed,
     ...(truncated ? { truncated: true } : {}),
     ...(skippedPending > 0 ? { notBooked: skippedPending } : {}),
+    ...(otherCurrency > 0 ? { otherCurrency } : {}),
   }
 }
 
@@ -749,6 +788,7 @@ async function syncOpenPaymentsAccountAsEnableBanking(
       effectiveFromDate: result.effectiveFromDate,
       historyNarrowed: result.historyNarrowed,
       ...(result.truncated ? { truncated: true } : {}),
+      ...(result.otherCurrency ? { otherCurrency: result.otherCurrency } : {}),
     }
   } catch (error) {
     throw toEnableBankingSyncError(error, fromDate)

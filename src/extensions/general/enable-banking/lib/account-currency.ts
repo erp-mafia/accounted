@@ -14,13 +14,17 @@
  * strongest first: the currency we already store for it, then its balances'
  * balance_amount.currency, then its transactions' currency. Without any, SEK:
  * every such account seen in production carried only SEK transactions.
- * Never returns 'XXX'.
+ * Never returns 'XXX'. A wallet that holds several currencies (PayPal,
+ * crm#1767) is stored as one account in that currency: its rows in another
+ * currency are set aside by ingest and counted, and its balance is the one
+ * the bank reports in that currency (getAccountBalance).
  */
 
 const NO_CURRENCY = 'XXX'
 const FALLBACK_CURRENCY = 'SEK'
 
-function usableCurrency(value: string | null | undefined): string | null {
+/** An ISO 4217 code other than 'XXX', upper-cased; null for 'XXX', empty, missing or malformed. */
+export function usableCurrency(value: string | null | undefined): string | null {
   const code = typeof value === 'string' ? value.trim().toUpperCase() : ''
   return /^[A-Z]{3}$/.test(code) && code !== NO_CURRENCY ? code : null
 }

@@ -933,6 +933,9 @@ export const enableBankingExtension: Extension = {
             // Entries the bank sent but has not booked: a sync that imported
             // nothing says why (PH 221).
             not_booked: outcome.notBooked,
+            // Booked entries in another currency than the account's, set
+            // aside instead of failing the sync (crm#1767).
+            other_currency: outcome.otherCurrency,
           })
         } catch (error) {
           // One durable row per failed sync, whichever branch below answers
@@ -1743,6 +1746,7 @@ export const enableBankingExtension: Extension = {
               returned_min_date: outcome.returnedMin,
               returned_max_date: outcome.returnedMax,
               not_booked: outcome.notBooked,
+              other_currency: outcome.otherCurrency,
             }
             if (outcome.truncated) {
               // The bank had not finished: the first import stays owed (the

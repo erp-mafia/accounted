@@ -201,6 +201,15 @@ describe('syncOpenPaymentsAccount', () => {
       .rejects.toMatchObject({ code: 'PT409', message: expect.stringContaining('route changed') })
   })
 
+  it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
+    const connect = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row(), row({ currency: 'USD', amount: -10 })])) })
+    mocks.ingest.mockResolvedValueOnce({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'], other_currency: { USD: 1 } })
+    const result = await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect })
+    expect(result).toMatchObject({ imported: 1, errors: 0, otherCurrency: 1 })
+    const plain = await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: fakeConnect() })
+    expect(plain).not.toHaveProperty('otherCurrency')
+  })
+
   it('lets a consent that is over fail the sync even from the balance read, and swallows any other balance failure', async () => {
     const over = fakeConnect({ balances: vi.fn().mockRejectedValue(new ConsentOverError('over')) })
     await expect(syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: over }))

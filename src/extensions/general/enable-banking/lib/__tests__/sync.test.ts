@@ -30,7 +30,7 @@ vi.mock('@/lib/bank-feed/page-arrival', () => ({
 // Mock ingest
 const mockIngest = vi.fn()
 
-import { notBookedReasons, syncAccountTransactions } from '../sync'
+import { bookedDateOf, notBookedReasons, syncAccountTransactions } from '../sync'
 import type { StoredAccount } from '../../types'
 
 const USER_ID = 'user-1'
@@ -364,8 +364,9 @@ describe('syncAccountTransactions', () => {
     mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [
-        { status: 'BOOK', transaction_amount: { amount: '50', currency: 'SEK' }, value_date: '2026-10-31', transaction_date: '2026-10-31' },
-        { status: 'BOOK', transaction_amount: { amount: '60', currency: 'SEK' }, value_date: '2026-11-03', transaction_date: '2026-11-03' },
+        // No status and no booking_date: nothing says it is settled.
+        { transaction_amount: { amount: '50', currency: 'SEK' }, value_date: '2026-10-31', transaction_date: '2026-10-31' },
+        { transaction_amount: { amount: '60', currency: 'SEK' }, value_date: '2026-11-03', transaction_date: '2026-11-03' },
         { status: 'PDNG', transaction_amount: { amount: '70', currency: 'SEK' }, booking_date: '2026-11-05', value_date: '2026-11-05' },
         { status: 'BOOK', transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-11-04' },
       ],
@@ -382,7 +383,7 @@ describe('syncAccountTransactions', () => {
     expect(logSpy).toHaveBeenCalledWith('[enable-banking] Skipped pending transactions (not booked or no booking_date)', expect.objectContaining({
       skippedPending: 3,
       total: 4,
-      reasons: { 'BOOK/value_date+transaction_date': 2, 'PDNG/booking_date+value_date': 1 },
+      reasons: { 'NONE/value_date+transaction_date': 2, 'PDNG/booking_date+value_date': 1 },
     }))
     logSpy.mockRestore()
   })
@@ -440,6 +441,85 @@ describe('syncAccountTransactions', () => {
     const batch = mockIngest.mock.calls[0][3]
     expect(batch.map((row: { date: string }) => row.date)).toEqual(['2026-10-12', '2026-10-10', '2026-10-09'])
     expect(batch.every((row: { currency: string }) => row.currency === 'SEK')).toBe(true)
+  })
+
+  it('imports entries the bank marks BOOK without a booking_date, dated by value_date else transaction_date (crm#1767)', async () => {
+    // PayPal sends every settled entry as status BOOK with only a
+    // transaction_date; read as pending, its whole feed stayed empty.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string } }) => ({
+      id: 'x',
+      date: '2099-01-01', // convertTransaction's own fallback, never the ledger date
+      booking_date: '2099-01-01',
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '10', currency: 'SEK' }, transaction_date: '2026-11-02' },
+        { status: 'book', transaction_amount: { amount: '20', currency: 'SEK' }, value_date: '2026-11-04', transaction_date: '2026-11-03' },
+        { status: 'RJCT', transaction_amount: { amount: '30', currency: 'SEK' }, transaction_date: '2026-11-05' }, // rejected: skipped
+        { status: 'PDNG', transaction_amount: { amount: '40', currency: 'SEK' }, transaction_date: '2026-11-06' }, // pending: skipped
+        { status: 'BOOK', transaction_amount: { amount: '50', currency: 'SEK' } },                                  // no date at all: skipped
+      ],
+      rawPages: ['{}'],
+    })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+
+    const batch = mockIngest.mock.calls[0][3]
+    expect(batch.map((row: { date: string; amount: number }) => [row.date, row.amount])).toEqual([
+      ['2026-11-02', -10],
+      ['2026-11-04', -20],
+    ])
+    expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-11-02_-1000_0')
+    expect(result.notBooked).toBe(3)
+    expect(result.returnedMinBookingDate).toBe('2026-11-02')
+    expect(result.returnedMaxBookingDate).toBe('2026-11-04')
+  })
+
+  it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string, currency: string } }) => ({
+      id: 'x',
+      date: '2026-11-02',
+      booking_date: '2026-11-02',
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: tx.transaction_amount.currency,
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '10', currency: 'SEK' }, transaction_date: '2026-11-02' },
+        { status: 'BOOK', transaction_amount: { amount: '20', currency: 'USD' }, transaction_date: '2026-11-02' },
+        { status: 'BOOK', transaction_amount: { amount: '30', currency: 'EUR' }, transaction_date: '2026-11-02' },
+      ],
+      rawPages: ['{}'],
+    })
+    mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0,
+      auto_matched_invoices: 0, transaction_ids: ['tx-1'], other_currency: { USD: 1, EUR: 1 } })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+
+    // Every row goes to ingest with its own currency; the route decides there.
+    expect(mockIngest.mock.calls[0][3].map((row: { currency: string }) => row.currency)).toEqual(['SEK', 'USD', 'EUR'])
+    expect(result).toMatchObject({ imported: 1, errors: 0, otherCurrency: 2 })
+  })
+
+  it('omits otherCurrency when every row is in the account currency', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+    expect(result).not.toHaveProperty('otherCurrency')
   })
 
   it('does not re-import a booked transaction when a later sync returns it pending (no booking_date)', async () => {
@@ -993,7 +1073,7 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined)
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined, 'SEK')
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBe(1100.5)
     expect(account.balance_updated_at).not.toBe(staleAt)
@@ -1059,7 +1139,7 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined)
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined, 'SEK')
     expect(account.balance).toBe(1234.56)
     expect(account.balance_updated_at).not.toBe(futureAt)
   })
@@ -1134,7 +1214,7 @@ describe('syncAccountTransactions: the person asking', () => {
     expect(mockGetAllTransactionsWithRaw).toHaveBeenCalledWith(
       'acc-uid-1', '2026-07-01', '2026-10-01', undefined, { acceptedHistoryDays: undefined, psu: PSU }
     )
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', PSU)
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', PSU, 'SEK')
   })
 
   it('reads in the background without a person (the cron, the agent)', async () => {
@@ -1154,6 +1234,28 @@ describe('syncAccountTransactions: the person asking', () => {
     )
 
     expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
+  })
+})
+
+describe('bookedDateOf (crm#1767)', () => {
+  it('books a dated entry unless the bank marks it as not booked', () => {
+    expect(bookedDateOf({ booking_date: ' 2026-11-02 ' })).toBe('2026-11-02')
+    expect(bookedDateOf({ status: 'OTHR', booking_date: '2026-11-02' })).toBe('2026-11-02')
+    expect(bookedDateOf({ status: 'PDNG', booking_date: '2026-11-02' })).toBeNull()
+    expect(bookedDateOf({ status: 'RJCT', transaction_date: '2026-11-02' })).toBeNull()
+  })
+
+  it('books an entry the bank marks BOOK without a booking_date on its value_date, else its transaction_date', () => {
+    expect(bookedDateOf({ status: 'BOOK', value_date: '2026-11-04', transaction_date: '2026-11-03' })).toBe('2026-11-04')
+    expect(bookedDateOf({ status: 'BOOK', transaction_date: '2026-11-03' })).toBe('2026-11-03')
+    expect(bookedDateOf({ status: ' book ', value_date: '', transaction_date: '2026-11-03' })).toBe('2026-11-03')
+    expect(bookedDateOf({ status: 'BOOK' })).toBeNull()
+  })
+
+  it('keeps an undated entry without that status out', () => {
+    expect(bookedDateOf({ value_date: '2026-11-04' })).toBeNull()
+    expect(bookedDateOf({ status: 'OTHR', transaction_date: '2026-11-03' })).toBeNull()
+    expect(bookedDateOf({ booking_date: null, value_date: null, transaction_date: null })).toBeNull()
   })
 })
 

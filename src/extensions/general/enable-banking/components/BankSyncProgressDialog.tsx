@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { CheckCircleIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { daysBetween } from '@/lib/company/fiscal-year'
 import type { StoredAccount } from '../types'
-import { describeEmptySync } from '../lib/empty-sync-text'
+import { describeEmptySync, describeOtherCurrency } from '../lib/empty-sync-text'
 
 export interface SyncProgressSummary {
   imported: number
@@ -30,6 +30,8 @@ export interface SyncProgressSummary {
   returned_max_date: string | null
   /** Entries the bank sent but has not booked (PH 221). Optional: older responses omit it. */
   not_booked?: number
+  /** Booked entries in another currency than the account's, not imported (crm#1767). Optional: older responses omit it. */
+  other_currency?: number
 }
 
 export interface SyncProgressError {
@@ -252,7 +254,11 @@ function DoneBody({
     imported: summary.imported,
     duplicates: summary.duplicates,
     notBooked: summary.not_booked,
+    otherCurrency: summary.other_currency,
   })
+  // Rows set aside as another currency than the account's are named even
+  // when others came in (crm#1767), in the same notice with the file import.
+  const noticeText = emptyText ?? describeOtherCurrency(summary.other_currency)
   const wasTruncated = summary.returned_min_date !== null && requestedDays - returnedDays > 7
 
   return (
@@ -283,11 +289,11 @@ function DoneBody({
         </div>
       </div>
 
-      {emptyText && (
+      {noticeText && (
         <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            {emptyText}{' '}
+            {noticeText}{' '}
             <Link href="/import?mode=bank" className="text-foreground underline underline-offset-2">
               Till bankfilsimporten
             </Link>
