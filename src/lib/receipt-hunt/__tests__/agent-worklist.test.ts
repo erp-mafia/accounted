@@ -6,9 +6,9 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const mockFetchCandidateTransactions = vi.fn()
-vi.mock('../hunt', () => ({
-  fetchCandidateTransactions: (...args: unknown[]) => mockFetchCandidateTransactions(...args),
+const mockFetchPurchases = vi.fn()
+vi.mock('../purchases-without-underlag', () => ({
+  fetchPurchasesWithoutUnderlag: (...args: unknown[]) => mockFetchPurchases(...args),
 }))
 
 import { readFileSync } from 'node:fs'
@@ -101,7 +101,7 @@ const UNBOOKED = {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
-  mockFetchCandidateTransactions.mockResolvedValue([UNBOOKED])
+  mockFetchPurchases.mockResolvedValue([UNBOOKED])
 })
 
 afterEach(() => {
@@ -182,7 +182,7 @@ describe('resolveAgentWorklist', () => {
   })
 
   it('flags rows that never have a mailed receipt', async () => {
-    mockFetchCandidateTransactions.mockResolvedValue([
+    mockFetchPurchases.mockResolvedValue([
       { ...UNBOOKED, id: 'tx-tax', description: 'Skatteverket', amount: -5000, currency: 'SEK', amount_sek: -5000 },
     ])
     const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
@@ -206,7 +206,7 @@ describe('resolveAgentWorklist', () => {
   })
 
   it('marks a restaurant charge as one that may carry a tip', async () => {
-    mockFetchCandidateTransactions.mockResolvedValue([
+    mockFetchPurchases.mockResolvedValue([
       { ...UNBOOKED, id: 'tx-rest', description: 'JORA RESTAURANG AB', currency: 'SEK', amount: -4002.9, amount_sek: -4002.9 },
     ])
     const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
@@ -217,7 +217,7 @@ describe('resolveAgentWorklist', () => {
   })
 
   it('gives every item one next step naming where the receipt is', async () => {
-    mockFetchCandidateTransactions.mockResolvedValue([
+    mockFetchPurchases.mockResolvedValue([
       { ...UNBOOKED, id: 'tx-kivra', description: 'ICA MAXI', currency: 'SEK', amount: -412.5, amount_sek: -412.5 },
       { ...UNBOOKED, id: 'tx-tax', description: 'Skatteverket', currency: 'SEK', amount: -5000, amount_sek: -5000 },
       UNBOOKED,
@@ -290,7 +290,7 @@ describe('resolveAgentWorklist', () => {
       }),
     )
     ;(supabase as unknown as { rpc: unknown }).rpc = rpc
-    mockFetchCandidateTransactions.mockResolvedValue([])
+    mockFetchPurchases.mockResolvedValue([])
 
     const result = await resolveAgentWorklist(supabase, 'co-1', { limit: 100 })
 
@@ -301,6 +301,47 @@ describe('resolveAgentWorklist', () => {
     const rest = await resolveAgentWorklist(supabase, 'co-1', { limit: 100, offset: 100 })
     expect(rest.items).toHaveLength(20)
     expect(rest.next_offset).toBeUndefined()
+  })
+
+  it('lists every unbooked purchase without underlag, whatever its amount or currency (crm#1785)', async () => {
+    // The nightly hunt's 100 kr floor is a cost bound on its own mail search,
+    // and it read a USD or EUR row's own amount as kronor: these three were
+    // all left out of an agent's worklist.
+    mockFetchPurchases.mockResolvedValue([
+      { ...UNBOOKED, id: 'tx-sek-small', description: 'KORTKÖP FIGMA', currency: 'SEK', amount: -8, amount_sek: null },
+      { ...UNBOOKED, id: 'tx-usd', description: 'CARD-1 Card transaction of 8.00 USD issued by Notion Labs NOTION.SO', amount: -8, amount_sek: -77.41 },
+      { ...UNBOOKED, id: 'tx-eur', description: 'CARD-2 Card transaction of 12.00 EUR issued by Scaleway PARIS', currency: 'EUR', amount: -12, amount_sek: -133.04 },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
+    const result = await resolveAgentWorklist(supabase, 'co-1')
+
+    // The Underlag page's own list, asked without a floor of its own.
+    expect(mockFetchPurchases).toHaveBeenCalledWith(supabase, 'co-1')
+    // Ranked in kronor: EUR 12 over USD 8 over 8 kr.
+    expect(result.items.map((i) => i.transaction_id)).toEqual(['tx-eur', 'tx-usd', 'tx-sek-small'])
+    expect(result.items[1]).toMatchObject({ amount: 8, currency: 'USD', mail_searchable: true })
+    expect(result.total_count).toBe(3)
+  })
+
+  it("sends no mail search for a payment provider's own fee and conversion rows", async () => {
+    mockFetchPurchases.mockResolvedValue([
+      { ...UNBOOKED, id: 'tx-card', description: 'CARD-3 Card transaction of 10.00 USD issued by Linear Orbit LINEAR.APP', amount: -10, amount_sek: -98.2 },
+      { ...UNBOOKED, id: 'tx-fee-card', description: 'FEE-CARD-3 Wise Charges for: CARD-3', amount: -0.5, amount_sek: -4.91 },
+      // A fee on a transfer carries the transfer's payee as its merchant name.
+      { ...UNBOOKED, id: 'tx-fee-transfer', description: 'FEE-TRANSFER-4 USD 1200', merchant_name: 'Acme Consulting', amount: -1.2, amount_sek: -11.78 },
+      { ...UNBOOKED, id: 'tx-convert', description: 'BALANCE-5 Converted 1,000.00 USD to 9,800.00 SEK (fee: 4.20 USD)', amount: -1000, amount_sek: -9820 },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+    const item = (id: string) => items.find((i) => i.transaction_id === id)!
+
+    for (const id of ['tx-fee-card', 'tx-fee-transfer', 'tx-convert']) {
+      expect(item(id)).toMatchObject({ mail_searchable: false, portal: null })
+      expect(item(id).next_step).toMatch(/betalleverantörens rapport/)
+    }
+    // The purchase the fee belongs to still has a receipt to find.
+    expect(item('tx-card')).toMatchObject({ mail_searchable: true })
+    expect(item('tx-card').next_step).toMatch(/kvittoadressen/)
   })
 
   it('throws when the RPC reports not-ok', async () => {
@@ -332,7 +373,7 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
   })
 
   async function worklist(rows: ReturnType<typeof verifikat>[], lines: Row[]) {
-    mockFetchCandidateTransactions.mockResolvedValue([])
+    mockFetchPurchases.mockResolvedValue([])
     const supabase = mockSupabase(
       {
         ...fixture(),
@@ -462,7 +503,7 @@ describe('resolveAgentWorklist: what a verifikat booked', () => {
   // crm#1584: a migrated payment names its invoice verifikat only in the text,
   // and the invoice PDF is already on it. A mail search finds the same PDF.
   it('hands over the invoice already on the verifikat a payment names, instead of a mail search', async () => {
-    mockFetchCandidateTransactions.mockResolvedValue([])
+    mockFetchPurchases.mockResolvedValue([])
     const rows = [
       {
         journal_entry_id: 'je-pay',

@@ -8,7 +8,7 @@ import {
   type ExpectationsResponse,
 } from '@/lib/inkorg/expectations'
 import { loadExpectations } from '@/lib/inkorg/expectations-read'
-import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/receipt-hunt/purchases-without-underlag'
 import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 
 /**

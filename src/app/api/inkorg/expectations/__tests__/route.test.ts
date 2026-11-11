@@ -19,7 +19,7 @@ vi.mock('@/lib/inkorg/expectations-read', () => ({
   loadExpectations: (...args: unknown[]) => loadMock(...args),
 }))
 const openMock = vi.fn()
-vi.mock('@/lib/transactions/purchases-without-underlag', () => ({
+vi.mock('@/lib/receipt-hunt/purchases-without-underlag', () => ({
   fetchPurchasesWithoutUnderlag: (...args: unknown[]) => openMock(...args),
 }))
 const logosMock = vi.fn()

@@ -13,7 +13,7 @@ import { assertTransactionBookable, decideBankRowRebooking } from '@/lib/transac
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { hasOpenTransactions } from '@/lib/cash-accounts/service'
 import { fetchCandidateTransactions } from '@/lib/receipt-hunt/hunt'
-import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/receipt-hunt/purchases-without-underlag'
 import { searchUnmatchedOutgoingTransactions } from '@/lib/transactions/outgoing-transaction-search'
 import { loadUnexplainedInboundRows } from '@/lib/collections/bank-check'
 import { detectVoucherDuplicates } from '@/lib/bookkeeping/voucher-duplicate-check'

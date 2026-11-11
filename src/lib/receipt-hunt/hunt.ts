@@ -196,8 +196,11 @@ export interface HuntOptions {
 }
 
 /**
- * Purchases with no receipt that nobody has booked yet. Exported for the
- * agent worklist (agent-worklist.ts), so both engines share one predicate.
+ * Purchases with no receipt that nobody has booked yet, from MIN_AMOUNT_SEK up.
+ * The agent worklist (agent-worklist.ts) does not read this: its mail search
+ * runs in the user's own agent, so it takes every purchase without underlag
+ * (purchases-without-underlag.ts) and this floor stays the
+ * nightly hunt's own cost bound (crm#1785).
  */
 export async function fetchCandidateTransactions(
   supabase: SupabaseClient,

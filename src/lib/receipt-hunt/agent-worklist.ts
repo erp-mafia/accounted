@@ -11,8 +11,14 @@
  *  - posted verifikat without underlag (the verifikat_without_documents RPC,
  *    the same truth as the Att göra row), enriched with the supplier invoice
  *    or bank transaction behind the verifikat so there is a name to search on;
- *  - unbooked purchases without a receipt (the built-in hunt's own candidate
- *    predicate, so the two engines never disagree about what is missing).
+ *  - unbooked purchases without a receipt: every outflow the Underlag page
+ *    lists (purchases-without-underlag.ts), whatever its amount or currency,
+ *    so the agent and the page never disagree about what is missing. Not the
+ *    built-in hunt's candidates: the hunt reads the same view behind a 100 kr
+ *    floor, a cost bound on Accounted's own mail search and model call. An
+ *    agent searches through its own connector, so the floor only hid work,
+ *    and it compared kronor with a USD or EUR row's own amount, which dropped
+ *    nearly every card row on a foreign-currency account (crm#1785).
  *
  * A supplier invoice without a document is not a third source: it surfaces as
  * its registration verifikat, which is where its underlag has to land.
@@ -23,8 +29,8 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { booksPurchase, type PlausibilityLine } from '@/lib/bookkeeping/voucher-plausibility'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
-import { fetchCandidateTransactions } from './hunt'
 import { resolvePortal, type CompanyPortal } from './company-portals'
+import { fetchPurchasesWithoutUnderlag } from './purchases-without-underlag'
 import { readCompanyPortals } from './company-portals-read'
 import { FETCH_DATE_WINDOW_DAYS, canHaveEmailReceipt } from './select'
 import { resolveUnderlagElsewhere, type UnderlagElsewhere } from './underlag-elsewhere'
@@ -140,6 +146,18 @@ const KIVRA_DESCRIPTOR =
 /** Bought in person, so the receipt is usually paper or in the vendor's app. */
 const IN_PERSON_DESCRIPTOR =
   /parkering|easypark|parkster|circle k|preem|okq8|\bshell\b|\bst1\b|\btaxi\b|uber|pressbyrån|7-eleven|zettle|izettle/i
+
+/**
+ * A payment provider's own rows on its statement, which bought nothing: Wise
+ * books its charge for a card payment, transfer or conversion as a row of its
+ * own ("FEE-CARD-... Wise Charges for: CARD-..."), and a move between the
+ * company's currency balances as another ("BALANCE-... Converted 100.00 EUR
+ * to 1,100.00 SEK"). The underlag is the provider's statement. Read on the
+ * bank row's own description: a fee on a transfer carries the payee of the
+ * transfer as its merchant name. With no amount floor these small rows reach
+ * the worklist, and a mail search for them can only come back empty.
+ */
+const PROVIDER_OWN_ROW = /^(?:FEE-(?:CARD|TRANSFER|BALANCE)-\d+|BALANCE-\d+\s+Converted\b)/i
 
 /** As much of a posted verifikat's line as the classifier reads. */
 export type BookedLine = Pick<PlausibilityLine, 'account_number' | 'debit_amount'>
@@ -275,7 +293,11 @@ function withSearchHints(
       underlag_on: underlagOn,
     }
   }
-  const kind = nextStepKind(descriptor, companyPortals, lines, sourceType)
+  // An unbooked bank row has no lines to say it bought nothing, only its words.
+  const kind =
+    base.kind === 'transaction' && PROVIDER_OWN_ROW.test(base.description ?? '')
+      ? 'no_purchase'
+      : nextStepKind(descriptor, companyPortals, lines, sourceType)
   const mailSearchable = kind !== 'imported' && kind !== 'not_mail' && kind !== 'no_purchase'
   // The company's own portal for the supplier first, then the directory's.
   const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
@@ -439,7 +461,7 @@ export async function resolveAgentWorklist(
 
   const [verifikatWindow, transactions, claimed, inboxAddress, companyPortals] = await Promise.all([
     fetchVerifikatWindow(supabase, companyId, since),
-    fetchCandidateTransactions(supabase, companyId),
+    fetchPurchasesWithoutUnderlag(supabase, companyId),
     fetchClaimedTargets(supabase, companyId),
     resolveInboxAddress(supabase, companyId),
     readCompanyPortals(supabase, companyId),

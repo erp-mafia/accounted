@@ -11,7 +11,7 @@ import { createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helper
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const fetchPurchases = vi.fn()
-vi.mock('@/lib/transactions/purchases-without-underlag', () => ({
+vi.mock('@/lib/receipt-hunt/purchases-without-underlag', () => ({
   fetchPurchasesWithoutUnderlag: (...a: unknown[]) => fetchPurchases(...a),
 }))
 

@@ -94,7 +94,7 @@ import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entrie
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
-import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/receipt-hunt/purchases-without-underlag'
 import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
