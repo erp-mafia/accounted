@@ -778,6 +778,90 @@ describe('FK001-FK004 presence (#83)', () => {
     expect(findings[0].message).toContain('FK001')
   })
 
+  // crm#1822: the moms is booked, it is only under a krona. The finding
+  // still blocks (Skatteverket refuses the rutor), but it must say that the
+  // whole-krona rule empties the moms rutor, not that the books are short.
+  describe('moms booked but under a krona', () => {
+    it('FK003: names the booked fiktiv moms and tells the user not to correct the books', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta21: 3, ruta30: 0.75, ruta48: 0.75 })
+      expect(findings.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+      const [finding] = findings
+      expect(finding.status).toBe('ERROR')
+      expect(isFilingBlocked(findings)).toBe(true)
+      expect(finding.belowOneKrona).toBe(true)
+      expect(finding.message).toContain('FK003')
+      expect(finding.message).toContain(`ruta 21 ${kr(3)}`)
+      expect(finding.message).toContain('ruta 30 0,75 kr')
+      expect(finding.message).toContain('under en krona')
+      expect(finding.message).toContain('hela kronor')
+      expect(finding.message).toContain('momsen saknas inte i bokföringen')
+      expect(finding.message).toContain('inget verifikat ska rättas')
+      expect(finding.message).toContain('Kontakta Skatteverket')
+      // The old cause read as if 2614 were empty.
+      expect(finding.message).not.toContain('Kontrollera att fiktiv moms är bokförd')
+      expect(finding.message).not.toContain('är tomma.')
+      expect(finding.detail).toContain('4.1.1.5')
+    })
+
+    it('FK003: the same at 12 % and 6 %, and for a credited purchase of the same size', () => {
+      const at12 = runVatDeclarationChecks({ ...emptyRutor, ruta21: 8, ruta31: 0.96, ruta48: 0.96 })
+      expect(at12[0].belowOneKrona).toBe(true)
+      expect(at12[0].message).toContain('ruta 31 0,96 kr')
+      const at6 = runVatDeclarationChecks({ ...emptyRutor, ruta20: 16, ruta32: 0.96, ruta48: 0.96 })
+      expect(at6[0].belowOneKrona).toBe(true)
+      const credited = runVatDeclarationChecks({ ...emptyRutor, ruta21: -3, ruta30: -0.75, ruta48: -0.75 })
+      expect(credited.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+      expect(credited[0].belowOneKrona).toBe(true)
+      expect(credited[0].message).not.toContain('storno')
+    })
+
+    it('FK001: output VAT of öre only on a sale of a few kronor', () => {
+      const [finding] = runVatDeclarationChecks({ ...emptyRutor, ruta05: 4, ruta10: 0.9, ruta49: 0.9 })
+      expect(finding.code).toBe('TAXABLE_SALES_WITHOUT_OUTPUT')
+      expect(finding.belowOneKrona).toBe(true)
+      expect(finding.message).toContain('ruta 10 0,90 kr')
+      expect(finding.message).toContain('momsen saknas inte i bokföringen')
+      expect(finding.message).not.toContain('Kontrollera att utgående moms är bokförd')
+    })
+
+    it('FK005: importmoms of öre only on an import of a few kronor', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta50: 3, ruta60: 0.75, ruta48: 0.75 })
+      expect(findings.map((f) => f.code)).toEqual(['IMPORT_BASE_WITHOUT_OUTPUT'])
+      expect(findings[0].status).toBe('ERROR')
+      expect(findings[0].belowOneKrona).toBe(true)
+      expect(findings[0].message).toContain('FK005')
+      expect(findings[0].message).toContain('ruta 60 0,75 kr')
+      expect(findings[0].message).toContain('momsen saknas inte i bokföringen')
+      expect(findings[0].message).not.toContain('Kontrollera att importmoms är bokförd')
+    })
+
+    // Moms that is absent, or of the wrong sign, is still a bookkeeping
+    // matter and keeps the cause it had.
+    it('keeps the ordinary cause when no moms is booked at all', () => {
+      const [finding] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -4000 })
+      expect(finding.belowOneKrona).toBeUndefined()
+      expect(finding.message).toContain('är tomma')
+      expect(finding.message).toContain('storno')
+    })
+
+    it('keeps the ordinary cause when the öre do not belong to the basis', () => {
+      // A credited purchase whose fiktiv moms is öre only: far too little.
+      const [far] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -4000, ruta30: -0.75, ruta48: -0.75 })
+      expect(far.code).toBe('RC_OUTPUT_MISSING')
+      expect(far.belowOneKrona).toBeUndefined()
+      expect(far.message).toContain('storno')
+      // Basis and öre of opposite sign.
+      const [opposite] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -3, ruta30: 0.4, ruta48: 0.4 })
+      expect(opposite.code).toBe('RC_OUTPUT_MISSING')
+      expect(opposite.belowOneKrona).toBeUndefined()
+    })
+
+    it('never marks the mirror direction: moms of a whole krona beside a basis of öre', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta21: 0.8, ruta30: 1, ruta48: 1 })
+      expect(findings.every((f) => f.belowOneKrona === undefined)).toBe(true)
+    })
+  })
+
   // A negative side of öre only files as 0 kr. (A positive one above the
   // 0.50 kr epsilon is the existing checks' to judge, as before.)
   it('does not flag a negative side that holds öre only', () => {

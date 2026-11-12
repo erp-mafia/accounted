@@ -76,6 +76,14 @@ export interface VatDeclarationCheck {
   /** Optional rutor that the user should investigate. */
   rutor?: Array<keyof VatDeclarationRutor>
   /**
+   * Set when the moms side of a pair is booked but holds öre only, so it files
+   * as 0 kr and the pair check (FK001, FK003, FK005) refuses the declaration:
+   * the books are not missing anything and no verifikat is to be corrected.
+   * Readers that add their own advice to a finding (the close check's hint)
+   * must not send the user to the ledger for it (crm#1822).
+   */
+  belowOneKrona?: true
+  /**
    * Set only on a WARNING a person has reviewed for this period while its
    * figures still match the review (applyVatCheckReviews,
    * src/lib/vat/check-reviews.ts). Never set on an ERROR.
@@ -321,9 +329,25 @@ export function vatAccountWithoutRutaFinding(
 function importPairPresenceFinding(
   code: 'IMPORT_BASE_WITHOUT_OUTPUT' | 'IMPORT_OUTPUT_WITHOUT_BASE',
   amount: number,
+  /** FK005 only: the importmoms as booked when it is öre only (vatBelowOneKronaText). */
+  momsBelowOneKrona: string | null = null,
 ): VatDeclarationCheck {
   const kr = Math.trunc(amount).toLocaleString('sv-SE')
   const negative = amount < 0
+  if (code === 'IMPORT_BASE_WITHOUT_OUTPUT' && momsBelowOneKrona) {
+    return {
+      code,
+      status: 'ERROR',
+      message:
+        `Ruta 50 (beskattningsunderlag vid import) är ${kr} kr. Importmomsen på beloppet är bokförd ` +
+        `(${momsBelowOneKrona}) men är under en krona. ${BELOW_ONE_KRONA_FILED_AS_ZERO} rutorna 60-62 ` +
+        '(utgående moms på import) blir tomma i det som lämnas. Då tar Skatteverket inte emot ' +
+        'deklarationen (kontroll FK005): finns ett belopp i ruta 50 måste det finnas ett i någon av ' +
+        `rutorna 60-62. ${BELOW_ONE_KRONA_WHAT_NOW}`,
+      rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
+      belowOneKrona: true,
+    }
+  }
   const message =
     code === 'IMPORT_BASE_WITHOUT_OUTPUT'
       ? `Ruta 50 (beskattningsunderlag vid import) är ${kr} kr men rutorna 60-62 (utgående ` +
@@ -366,10 +390,50 @@ function filedRutorText(rutor: VatDeclarationRutor, keys: ReadonlyArray<keyof Va
     .join(', ')
 }
 
+/**
+ * The moms rutor of a pair as booked, e.g. "ruta 30 0,75 kr", when the moms is
+ * there but files as nothing: every ruta holds öre only, and the base agrees
+ * with it (basbelopp = moms / sats, inside the 1 kr floor the proportional
+ * checks use). Null otherwise, which keeps the finding's ordinary cause: moms
+ * that is absent, or far too small for the base, is a bookkeeping matter.
+ *
+ * Only the base-filed, moms-empty direction can be this case (FK001, FK003,
+ * FK005). The mirror cannot: moms of a whole krona implies a base of at least
+ * four, so a base of öre only beside it is wrong in the books.
+ *
+ * `momsRutor` is ordered 25 %, 12 %, 6 %, as every moms group on the form is.
+ */
+function vatBelowOneKronaText(
+  rutor: VatDeclarationRutor,
+  base: number,
+  momsRutor: readonly [keyof VatDeclarationRutor, keyof VatDeclarationRutor, keyof VatDeclarationRutor],
+): string | null {
+  const held = momsRutor.filter((key) => Math.round(rutor[key] * 100) !== 0)
+  if (held.length === 0 || momsRutor.some((key) => filesAmount(rutor[key]))) return null
+  const impliedBase = rutor[momsRutor[0]] / 0.25 + rutor[momsRutor[1]] / 0.12 + rutor[momsRutor[2]] / 0.06
+  if (Math.abs(base - impliedBase) > 1) return null
+  return held.map((key) => `ruta ${key.slice(4)} ${formatAmount(rutor[key])} kr`).join(', ')
+}
+
+/** Why moms under a krona files as nothing. Ends where the sentence names the rutor it empties. */
+const BELOW_ONE_KRONA_FILED_AS_ZERO =
+  'Momsdeklarationen lämnas i hela kronor och öretal faller bort, så'
+
+/**
+ * What the user is told to do, and not to do, when the whole-krona rule
+ * empties the moms side of a pair. Deliberately no advice on which amounts to
+ * file instead: that is a tax judgment the product has not made (crm#1822).
+ */
+const BELOW_ONE_KRONA_WHAT_NOW =
+  'Det är avrundningen till hela kronor som tömmer rutorna: momsen saknas inte i bokföringen, och ' +
+  'inget verifikat ska rättas för det här. Perioden kan inte lämnas till Skatteverket från Accounted ' +
+  'med de här beloppen. Kontakta Skatteverket om hur perioden ska redovisas.'
+
 const SALES_BASE_RUTOR = ['ruta05', 'ruta06', 'ruta07', 'ruta08'] as const
 const SALES_OUTPUT_RUTOR = ['ruta10', 'ruta11', 'ruta12'] as const
 const RC_BASIS_RUTOR = ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'] as const
 const RC_OUTPUT_RUTOR = ['ruta30', 'ruta31', 'ruta32'] as const
+const IMPORT_OUTPUT_RUTOR = ['ruta60', 'ruta61', 'ruta62'] as const
 
 /**
  * One pair of FK001-FK004 as Skatteverket checks it: one side files an
@@ -387,7 +451,28 @@ function pairPresenceFinding(
   empty: { label: string; rutor: string },
   cause: string,
   rutor: Array<keyof VatDeclarationRutor>,
+  /** FK001 and FK003 only: the moms as booked when it is öre only (vatBelowOneKronaText). */
+  momsBelowOneKrona: string | null = null,
 ): VatDeclarationCheck {
+  const detail =
+    `Skatteverkets formella kontroll ${rule} prövar om ett belopp anges, oavsett tecken, i hela ` +
+    'kronor så som deklarationen lämnas (Tjänstebeskrivning API Momsdeklaration, avsnitt 4.1.1.5). ' +
+    'Öretal faller bort, så ett belopp under en krona räknas inte.'
+  if (momsBelowOneKrona) {
+    return {
+      code,
+      status: 'ERROR',
+      message:
+        `${filed.label} (ruta ${filed.rutor}) har belopp (${filed.text}). Momsen på beloppet är bokförd ` +
+        `(${momsBelowOneKrona}) men är under en krona. ${BELOW_ONE_KRONA_FILED_AS_ZERO} ${empty.label} ` +
+        `(ruta ${empty.rutor}) blir tomma i det som lämnas. Då tar Skatteverket inte emot deklarationen ` +
+        `(kontroll ${rule}): finns ett belopp i någon av rutorna ${filed.rutor} måste det finnas ett i ` +
+        `någon av rutorna ${empty.rutor}. ${BELOW_ONE_KRONA_WHAT_NOW}`,
+      detail,
+      rutor,
+      belowOneKrona: true,
+    }
+  }
   return {
     code,
     status: 'ERROR',
@@ -396,10 +481,7 @@ function pairPresenceFinding(
       `(ruta ${empty.rutor}) är tomma. Då tar Skatteverket inte emot deklarationen (kontroll ${rule}): ` +
       `finns ett belopp i någon av rutorna ${filed.rutor} måste det finnas ett i någon av rutorna ` +
       `${empty.rutor}. ${cause}`,
-    detail:
-      `Skatteverkets formella kontroll ${rule} prövar om ett belopp anges, oavsett tecken, i hela ` +
-      'kronor så som deklarationen lämnas (Tjänstebeskrivning API Momsdeklaration, avsnitt 4.1.1.5). ' +
-      'Öretal faller bort, så ett belopp under en krona räknas inte.',
+    detail,
     rutor,
   }
 }
@@ -565,6 +647,9 @@ export function runVatDeclarationChecks(
           'och fiktiv moms, i den period där det redovisades och lämna en rättad momsdeklaration för den perioden.'
         : 'Kontrollera att fiktiv moms är bokförd på 2614/2624/2634 för varje inköp med omvänd skattskyldighet.',
       rcRutor,
+      // Fiktiv moms booked but under a krona: the whole-krona rule empties
+      // rutor 30-32, the books are not short (crm#1822).
+      vatBelowOneKronaText(rutor, rcBasis, RC_OUTPUT_RUTOR),
     ))
   }
 
@@ -671,6 +756,7 @@ export function runVatDeclarationChecks(
         : 'Kontrollera att utgående moms är bokförd på 2611/2621/2631, eller flytta intäkterna till rätt ' +
           'momsfri ruta (35/36/39/40/42) om de inte är momspliktiga.',
       salesRutor,
+      vatBelowOneKronaText(rutor, taxableSalesBase, SALES_OUTPUT_RUTOR),
     ))
   }
 
@@ -794,7 +880,7 @@ export function runVatDeclarationChecks(
   // importmoms, read as clean here and was refused at filing (crm#1348).
   // Presence is read on whole kronor as filed (filesAmount).
   const importBaseFiled = filesAmount(rutor.ruta50)
-  const importOutputFiled = anyFiled(['ruta60', 'ruta61', 'ruta62'])
+  const importOutputFiled = anyFiled(IMPORT_OUTPUT_RUTOR)
 
   // Rule 5: import base larger than the output importmoms accounts for, i.e.
   // some imports were booked on 4545/4546/4547 without their 26x5 moms.
@@ -813,7 +899,11 @@ export function runVatDeclarationChecks(
       rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
     })
   } else if (importBaseFiled && !importOutputFiled) {
-    findings.push(importPairPresenceFinding('IMPORT_BASE_WITHOUT_OUTPUT', rutor.ruta50))
+    findings.push(importPairPresenceFinding(
+      'IMPORT_BASE_WITHOUT_OUTPUT',
+      rutor.ruta50,
+      vatBelowOneKronaText(rutor, rutor.ruta50, IMPORT_OUTPUT_RUTOR),
+    ))
   }
 
   // Rule 6: output importmoms larger than the reported base, i.e. the

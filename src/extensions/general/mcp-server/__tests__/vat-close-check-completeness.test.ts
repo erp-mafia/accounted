@@ -35,6 +35,7 @@ import {
   RC_BASIS_NEGATIVE_HINT,
   REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
   VAT_ACCOUNT_WITHOUT_RUTA_HINT,
+  VAT_BELOW_ONE_KRONA_HINT,
   vatFilingVerdict,
 } from '@/lib/reports/vat-close-check'
 import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
@@ -399,6 +400,37 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
     expect(blocker.hint).toMatch(/4598 D \/ 45xx K/)
     expect(blocker.hint).toMatch(/storno/)
+  })
+
+  // crm#1822: a reverse-charge purchase of a few kronor books its fiktiv moms
+  // in full, but the moms is under a krona and files as nothing, so FK003
+  // refuses the period. The agent must hear that, not "review the ledger".
+  it('tells the agent not to correct the books when the fiktiv moms is booked but under a krona', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([
+        { entry: 'e1', account_number: '6540', debit_amount: 3 },
+        { entry: 'e1', account_number: '1930', credit_amount: 3 },
+        { entry: 'e1', account_number: '4535', debit_amount: 3 },
+        { entry: 'e1', account_number: '4598', credit_amount: 3 },
+        { entry: 'e1', account_number: '2645', debit_amount: 0.75 },
+        { entry: 'e1', account_number: '2614', credit_amount: 0.75 },
+      ]),
+    )
+
+    expect(result.rutor.ruta21).toBe(3)
+    expect(result.rutor.ruta30).toBe(0.75)
+    expect(result.ready_to_close).toBe(false)
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_OUTPUT_MISSING')!
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/FK003/)
+    expect(finding.message).toMatch(/ruta 30 0,75 kr/)
+    expect(finding.message).toMatch(/momsen saknas inte i bokföringen/)
+    const blocker = result.blockers.find((b) => b.check_code === 'RC_OUTPUT_MISSING')!
+    expect(blocker.message).toBe(finding.message)
+    expect(blocker.hint).toBe(VAT_BELOW_ONE_KRONA_HINT)
+    expect(blocker.hint).not.toMatch(/huvudboken/)
   })
 
   it('one ordinary domestic receipt no longer suppresses the reverse-charge check', async () => {
