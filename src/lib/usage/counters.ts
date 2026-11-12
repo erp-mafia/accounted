@@ -4,7 +4,8 @@
  * moment that counts (the column whose month the unit falls in) and the
  * filters that make a row a billable unit:
  *
- *   bank_payment  payment_orders that reached the provider, by submitted_at
+ *   bank_payment  payment_orders that reached the provider, by submitted_at,
+ *                 less those that ended unpaid before anybody signed them
  *                 (the same count as the bank payments cap, lib/payments/usage.ts)
  *   peppol_send   Peppol deliveries handed to the access point, by submitted_at
  *   kivra_send    invoices and payslips Kivra accepted, by created_at
@@ -16,10 +17,12 @@
  *                 the customer's own agent read (bring your own extraction),
  *                 or that was not read at all, has extraction_skipped
  *
- * A failed or refused send is never counted: its row carries another status.
+ * A failed or refused send is never counted: its row carries another status,
+ * or the source's `keep` drops it.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { countsAsUsedBankPayment } from '@/lib/payments/orders/status'
 import { usagePeriodBounds } from '@/lib/payments/usage'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { countLiveBankAccountsByCompany, readLiveBankAccounts } from './bank-accounts'
@@ -32,10 +35,20 @@ export interface UsageSource {
   eq?: Readonly<Record<string, string>>
   notNull?: readonly string[]
   isNull?: readonly string[]
+  /**
+   * A rule the filters above cannot say: the extra columns it reads and the
+   * test a row must pass to count. Rows are then read and counted in code.
+   */
+  keep?: { columns: readonly string[]; test: (row: Record<string, unknown>) => boolean }
+}
+
+const BANK_PAYMENT_KEEP: UsageSource['keep'] = {
+  columns: ['status', 'signed_at'],
+  test: (row) => countsAsUsedBankPayment({ status: String(row.status), signed_at: (row.signed_at as string | null) ?? null }),
 }
 
 export const USAGE_SOURCES: Readonly<Record<UsageKind, readonly UsageSource[]>> = Object.freeze({
-  bank_payment: [{ table: 'payment_orders', at: 'submitted_at', notNull: ['provider_payment_id'] }],
+  bank_payment: [{ table: 'payment_orders', at: 'submitted_at', notNull: ['provider_payment_id'], keep: BANK_PAYMENT_KEEP }],
   peppol_send: [{ table: 'peppol_deliveries', at: 'submitted_at' }],
   kivra_send: [
     { table: 'digital_mailbox_dispatches', at: 'created_at', eq: { provider: 'kivra', status: 'sent' } },
@@ -91,6 +104,15 @@ export async function countCompanyUsage(
   if (kind === 'bank_account') return options.before ? 0 : (await readLiveBankAccounts(supabase, companyId)).size
   let total = 0
   for (const source of USAGE_SOURCES[kind]) {
+    if (source.keep) {
+      const keep = source.keep
+      const rows = await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
+        const query = supabase.from(source.table).select(['id', ...keep.columns].join(', ')) as unknown as UsageQuery<Record<string, unknown>>
+        return applySource(query.eq('company_id', companyId), source, period, options.before).order('id').range(from, to)
+      })
+      total += rows.filter(keep.test).length
+      continue
+    }
     const query = supabase.from(source.table).select('id', { count: 'exact', head: true }) as unknown as UsageQuery<never>
     const { count, error } = await applySource(query.eq('company_id', companyId), source, period, options.before)
     if (error) throw new Error(`usage count ${kind} (${source.table}) failed: ${error.message}`)
@@ -113,11 +135,12 @@ export async function countUsageByCompany(
   if (kind === 'bank_account') return options.before ? new Map() : countLiveBankAccountsByCompany(service)
   const counts = new Map<string, number>()
   for (const source of USAGE_SOURCES[kind]) {
-    const rows = await fetchAllRows<{ id: string; company_id: string }>(({ from, to }) => {
-      const query = service.from(source.table).select('id, company_id') as unknown as UsageQuery<{ id: string; company_id: string }>
+    const rows = await fetchAllRows<{ id: string; company_id: string } & Record<string, unknown>>(({ from, to }) => {
+      const columns = ['id', 'company_id', ...(source.keep?.columns ?? [])].join(', ')
+      const query = service.from(source.table).select(columns) as unknown as UsageQuery<{ id: string; company_id: string } & Record<string, unknown>>
       return applySource(query, source, period, options.before).order('id').range(from, to)
     })
-    for (const row of rows) counts.set(row.company_id, (counts.get(row.company_id) ?? 0) + 1)
+    for (const row of source.keep ? rows.filter(source.keep.test) : rows) counts.set(row.company_id, (counts.get(row.company_id) ?? 0) + 1)
   }
   return counts
 }

@@ -47,6 +47,20 @@ export const SIGNED_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = ne
   'accepted',
 ])
 
+/** Ended without the bank paying it. */
+const ENDED_UNPAID_PAYMENT_ORDER_STATUSES: ReadonlySet<string> = new Set(['rejected', 'cancelled', 'failed'])
+
+/**
+ * Whether an order that reached the provider counts as a bank payment the
+ * company used (the monthly allowance and the usage statement). One that
+ * ended unpaid before anybody signed it does not: the bank refused it or the
+ * BankID never completed, so nothing was sent on the company's behalf. A
+ * signed one counts whatever became of it afterwards.
+ */
+export function countsAsUsedBankPayment(order: { status: PaymentOrderStatus | string; signed_at?: string | null }): boolean {
+  return !!order.signed_at || !ENDED_UNPAID_PAYMENT_ORDER_STATUSES.has(order.status)
+}
+
 export const PAYMENT_ORDER_TRANSITIONS: Readonly<Record<PaymentOrderStatus, readonly PaymentOrderStatus[]>> = {
   draft: ['approved', 'cancelled'],
   approved: ['draft', 'submitted', 'cancelled', 'failed'],

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  countsAsUsedBankPayment,
   canMovePaymentOrder,
   isBankConfirming,
   isOpenPaymentOrder,
@@ -86,5 +87,17 @@ describe('isBankConfirming', () => {
     expect(isBankConfirming({ status: 'accepted' }, 'signed')).toBe(false)
     expect(isBankConfirming({ status: 'submitted' }, 'signed')).toBe(false)
     expect(isBankConfirming({ status: 'awaiting_signature', outcome_unknown_at: '2026-10-16T12:15:00Z' }, 'signed')).toBe(false)
+  })
+})
+
+describe('countsAsUsedBankPayment', () => {
+  it('counts every order still alive and every signed one, never one that ended unpaid unsigned', () => {
+    expect(countsAsUsedBankPayment({ status: 'submitted', signed_at: null })).toBe(true)
+    expect(countsAsUsedBankPayment({ status: 'accepted', signed_at: '2026-11-11T08:45:48.164Z' })).toBe(true)
+    expect(countsAsUsedBankPayment({ status: 'executed', signed_at: null })).toBe(true)
+    expect(countsAsUsedBankPayment({ status: 'rejected', signed_at: '2026-11-11T08:45:48.164Z' })).toBe(true)
+    for (const status of ['rejected', 'cancelled', 'failed']) {
+      expect(countsAsUsedBankPayment({ status, signed_at: null })).toBe(false)
+    }
   })
 })

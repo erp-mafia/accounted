@@ -1,10 +1,11 @@
 /**
- * What a company has used of its bank payments in a month, counted the way
- * the payment initiation provider bills: every payment that reached the
- * provider (an order with a provider payment id) and every account one left
- * from, in the month a signing sent it, never the month it was drafted. The
- * counter is read from the orders the ledger already keeps: no second ledger
- * of usage.
+ * What a company has used of its bank payments in a month: every payment
+ * that reached the provider (an order with a provider payment id) and every
+ * account one left from, in the month a signing sent it, never the month it
+ * was drafted. A payment that ended unpaid before anybody signed it (the bank
+ * refused it, or the BankID never completed) is not counted
+ * (countsAsUsedBankPayment). The counter is read from the orders the ledger
+ * already keeps: no second ledger of usage.
  *
  * Payments are capped (founder decision 2026-10-14, while the provider
  * prices per payment and our own pricing is not set): a company may send
@@ -28,6 +29,7 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { consentCovers, readOpenConsents } from '@/lib/usage/consent'
 import { billedUsageKinds, USAGE_PRICES } from '@/lib/usage/kinds'
 import { readCompanyPays } from '@/lib/usage/paying'
+import { countsAsUsedBankPayment } from './orders/status'
 
 /** Payments per company and Stockholm calendar month, unless company_bank_payment_allowances says otherwise. A hard cap. */
 export const BANK_PAYMENTS_INCLUDED_PER_MONTH = 10
@@ -192,20 +194,23 @@ export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId:
   const { start, end } = usagePeriodBounds(month)
   const { data, error } = await supabase
     .from('payment_orders')
-    .select('id, cash_account_id')
+    .select('id, cash_account_id, status, signed_at')
     .eq('company_id', companyId)
     .not('provider_payment_id', 'is', null)
     .gte('submitted_at', start)
     .lt('submitted_at', end)
     .limit(USAGE_ROW_CAP)
   if (error) throw error
+  const sent = ((data ?? []) as Array<{ id: string; cash_account_id: string | null; status: string; signed_at: string | null }>)
+    .filter(countsAsUsedBankPayment)
+    .map(({ id, cash_account_id }) => ({ id, cash_account_id }))
   const included = await includedBankPayments(supabase, companyId)
   const billed = bankPaymentsBilled()
   const offered = billed && (await readCompanyPays(supabase, companyId))
   const accepted = offered && consentCovers((await readOpenConsents(supabase, companyId)).get('bank_payment'), 'bank_payment')
   return {
     period: month,
-    sent: (data ?? []) as BankPaymentsMonth['sent'],
+    sent,
     included_payments: included,
     cap_payments: bankPaymentsCap(included, accepted),
     extra_offered: offered,

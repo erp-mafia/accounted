@@ -32,11 +32,27 @@ describe('countCompanyUsage', () => {
   })
 
   it('counts bank payments that reached the provider, by when they were sent', async () => {
-    enqueue({ count: 7 })
+    enqueue({ data: Array.from({ length: 7 }, (_, i) => ({ id: `o${i}`, status: 'accepted', signed_at: '2026-10-05T08:00:00.000Z' })) })
 
     expect(await countCompanyUsage(db, 'c1', 'bank_payment', '2026-10')).toBe(7)
+    expect(findCalls('payment_orders', 'select')).toEqual([['id, status, signed_at']])
     expect(findCalls('payment_orders', 'not')).toEqual([['provider_payment_id', 'is', null]])
     expect(findCalls('payment_orders', 'gte')[0]?.[0]).toBe('submitted_at')
+  })
+
+  it('leaves out a bank payment that ended unpaid before anybody signed it', async () => {
+    enqueue({
+      data: [
+        { id: 'refused', status: 'rejected', signed_at: null },
+        { id: 'unsigned', status: 'cancelled', signed_at: null },
+        { id: 'failed', status: 'failed', signed_at: null },
+        { id: 'signed-then-cancelled', status: 'cancelled', signed_at: '2026-10-05T08:00:00.000Z' },
+        { id: 'waiting', status: 'submitted', signed_at: null },
+        { id: 'paid', status: 'executed', signed_at: '2026-10-05T08:00:00.000Z' },
+      ],
+    })
+
+    expect(await countCompanyUsage(db, 'c1', 'bank_payment', '2026-10')).toBe(3)
   })
 
   it('counts completed signings, leaving out the annual report', async () => {
@@ -99,5 +115,20 @@ describe('countUsageByCompany', () => {
 
     expect(counts).toEqual(new Map([['c1', 2], ['c2', 2]]))
     expect(findCalls('digital_mailbox_dispatches', 'order')).toEqual([['id']])
+  })
+
+  it('leaves unsigned, unpaid bank payments off every company\'s statement', async () => {
+    enqueue({
+      data: [
+        { id: 'a', company_id: 'c1', status: 'accepted', signed_at: '2026-10-05T08:00:00.000Z' },
+        { id: 'b', company_id: 'c1', status: 'rejected', signed_at: null },
+        { id: 'c', company_id: 'c2', status: 'cancelled', signed_at: null },
+      ],
+    })
+
+    const counts = await countUsageByCompany(db, 'bank_payment', '2026-10')
+
+    expect(counts).toEqual(new Map([['c1', 1]]))
+    expect(findCalls('payment_orders', 'select')).toEqual([['id, company_id, status, signed_at']])
   })
 })
