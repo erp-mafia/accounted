@@ -36,6 +36,21 @@ describe('readDocumentBytes', () => {
     expect((out as { pages: Array<{ pageNo: number }> }).pages.map((p) => p.pageNo)).toEqual([1, 2, 3, 4])
   })
 
+  it('sends no more pages to the model once one page has failed: the reading is lost either way', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], pageCount: 12, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('p'))
+    mock(transcribeWithModel).mockImplementation(async (doc: { fileName?: string }) => {
+      await new Promise((r) => setTimeout(r, 5))
+      if (doc.fileName === 'page-1.pdf') throw new Error('503 Bedrock is unable to process your request.')
+      return { ok: true, text: 'sida' }
+    })
+    await expect(readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true })).rejects.toThrow('503 Bedrock')
+    // Let the pages already in flight end, and any worker that would have gone on take its next page.
+    await new Promise((r) => setTimeout(r, 30))
+    // The three in flight when the first failed, never the nine behind them.
+    expect(mock(transcribeWithModel).mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
   it('skips structured archives and unknown types without reading', async () => {
     expect(await readDocumentBytes(Buffer.from('<x/>'), 'application/xml')).toEqual({ ok: false, skipped: 'structured' })
     expect(await readDocumentBytes(Buffer.from('zzz'), 'application/zip')).toEqual({ ok: false, skipped: 'unsupported_mime' })

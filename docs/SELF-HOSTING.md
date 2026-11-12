@@ -303,6 +303,7 @@ Three things about such endpoints are declared rather than probed, because the a
 
 - `AI_VISION=false` says the configured model cannot read images. Images and PDFs are then skipped honestly (the inbox row lands with the empty skeleton and the "AI-tolkning kördes inte" hint) instead of failing with a 400 on every upload; HTML mail invoices still extract as text on any model.
 - `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs (`apk add poppler-utils`, the only system package beyond the base image; page images are written to `/tmp`, a tmpfs in `docker-compose.yml`). If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing; `AI_PDF_RASTERIZER_BIN` points at a non-standard install. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
+- `AI_CALL_TIMEOUT_SECONDS` (default 120) is how long one structured answer or one document reading may take before it is ended and counted as the provider not answering. A local model on modest hardware can need more for a dense page: raise it if readings end with "Request timed out". The scheduled jobs still end their model calls shortly before their own time is up, whatever this is set to.
 - `AI_STRICT_JSON=true` asks for `response_format: json_schema` on providers that enforce it. The default (JSON answered in prose, then parsed and validated) works on every model and is what hosted runs.
 
 #### What runs on any model
@@ -328,6 +329,7 @@ AI_EXTRACTION_MODEL=...                  # document extraction model
 AI_HEAVY_MODEL=...                       # assistant model, heavy intents
 AI_ASSISTANT_MODEL=...                   # assistant model, standard intents
 AI_EXTRACTION_MAX_TOKENS=8192            # output cap for document extraction
+AI_CALL_TIMEOUT_SECONDS=120              # time limit of one structured answer or document reading, retries included
 AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below)
 ```
 

@@ -11,6 +11,7 @@ import { captureArkivEvent } from '@/lib/arkiv/events'
 import { markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { isPeriodLockRefusal } from '@/lib/documents/locked-period'
 import { CLASSIFY_RULES } from './rules'
+import { queueHoldsDocument, type HeldJobRow } from '@/lib/documents/jobs/hold'
 
 const log = createLogger('documents/classify')
 
@@ -434,13 +435,18 @@ export async function loadCompanyIdentity(supabase: SupabaseClient, companyId: s
   return { name: row.name ?? 'the company', orgNumber: row.org_number ?? null }
 }
 
-/** Backfill: classify documents that have pages but no current classification, newest first. */
+/**
+ * Backfill: classify documents that have pages but no current classification, newest first. No document is
+ * started at or after `deadlineAt` (epoch ms): the ones not reached are counted as deferred and stay untyped
+ * for the next run.
+ */
 export async function classifyUnclassifiedDocuments(
   supabase: SupabaseClient,
   companyId: string,
   limit: number,
-): Promise<{ processed: number; classified: number; held: number; skipped: number; errors: number }> {
-  const counts = { processed: 0, classified: 0, held: 0, skipped: 0, errors: 0 }
+  opts: { deadlineAt?: number } = {},
+): Promise<{ processed: number; classified: number; held: number; skipped: number; errors: number; deferred: number }> {
+  const counts = { processed: 0, classified: 0, held: 0, skipped: 0, errors: 0, deferred: 0 }
   const { data, error } = await supabase
     .from('document_attachments')
     .select('id')
@@ -460,20 +466,32 @@ export async function classifyUnclassifiedDocuments(
   const candidates = ((data ?? []) as Array<{ id: string }>).map((r) => r.id)
   let asked = new Set<string>()
   if (candidates.length) {
-    const [{ data: prior, error: priorError }, { data: missed, error: missedError }] = await Promise.all([
+    const [{ data: prior, error: priorError }, { data: jobs, error: jobsError }] = await Promise.all([
       supabase.from('document_classifications').select('document_id').in('document_id', candidates),
-      // A document whose answer did not fit the schema gets the same answer to the same prompt: the queue settled it for a person.
-      supabase.from('document_jobs').select('document_id').eq('kind', 'classify').eq('status', 'done').eq('result', SCHEMA_MISS_RESULT).in('document_id', candidates),
+      supabase.from('document_jobs').select('document_id, status, result, attempts, max_attempts, run_after, locked_at').eq('kind', 'classify').in('document_id', candidates),
     ])
     if (priorError) throw new Error(`fetch prior classifications failed: ${priorError.message}`)
-    if (missedError) throw new Error(`fetch schema-missed classify jobs failed: ${missedError.message}`)
-    asked = new Set([...((prior ?? []) as Array<{ document_id: string }>), ...((missed ?? []) as Array<{ document_id: string }>)].map((r) => r.document_id))
+    if (jobsError) throw new Error(`fetch classify jobs failed: ${jobsError.message}`)
+    const queueHasIt = ((jobs ?? []) as Array<HeldJobRow & { document_id: string; result: string | null }>).filter(
+      (j) =>
+        // The queue is classifying it or still going to: a document just read has its classify job queued, and the
+        // worker and this backfill both tick at minute :02. Both asked the model about the same document (two paid
+        // calls, two document.classified events for one arrival). A failed job the queue will retry counts too.
+        queueHoldsDocument(j) ||
+        // A document whose answer did not fit the schema gets the same answer to the same prompt: the queue settled it for a person.
+        (j.status === 'done' && j.result === SCHEMA_MISS_RESULT),
+    )
+    asked = new Set([...((prior ?? []) as Array<{ document_id: string }>), ...queueHasIt].map((r) => r.document_id))
   }
   const todo = candidates.filter((id) => !asked.has(id)).slice(0, limit)
   if (todo.length === 0) return counts
   const company = await loadCompanyIdentity(supabase, companyId)
-  for (const row of todo.map((id) => ({ id }))) {
-    const out = await classifyDocument(supabase, row.id, company)
+  for (const [index, id] of todo.entries()) {
+    if (opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt) {
+      counts.deferred = todo.length - index
+      break
+    }
+    const out = await classifyDocument(supabase, id, company)
     counts.processed++
     if (out.status === 'classified') { counts.classified++; if (out.admission === 'held') counts.held++ }
     else if (out.status === 'skipped') counts.skipped++

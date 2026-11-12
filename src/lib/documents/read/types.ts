@@ -106,6 +106,37 @@ export class ReaderUnavailableError extends Error {
 export const READER_UNAVAILABLE = 'reader_unavailable'
 
 /**
+ * Minutes to wait after the nth try in a row that the model provider did not
+ * answer: 30, 60, 120, 240. One schedule for a queued job's attempts
+ * (lib/documents/jobs/queue.ts) and for a document's readings
+ * (read_retry_after, lib/documents/read/store.ts), so five tries span about
+ * 7.5 hours either way: Bedrock 503 bursts outlasted the 30 minutes a short
+ * schedule covers and killed 139 read and classify jobs in a week (prod
+ * 2026-10-19..26).
+ */
+export const outageBackoffMinutes = (tries: number): number => Math.min(240, 30 * 2 ** Math.max(0, tries - 1))
+
+/** Readings in a row without an answer after which a document is given up on: as many as a queued job has attempts. */
+export const READ_GIVE_UP_AFTER = 5
+
+/**
+ * The wait after each reading in a row that got no answer, before the next
+ * may start and count (read_retry_after, note_document_read_unavailable):
+ * the queue's outage backoff for the first four, so five take at least 7.5
+ * hours, then a day, so a document given up on is tried again once a day.
+ */
+export const READ_RETRY_WAIT_MINUTES = [1, 2, 3, 4].map(outageBackoffMinutes).concat(24 * 60)
+
+/**
+ * The read_error of a document given up on after READ_GIVE_UP_AFTER readings
+ * without an answer, and the prefix of the outcome that says so. Its
+ * pages_read_at stays NULL: the document is still unread, so the backfill
+ * takes it again after its day's wait and a question reads it at once. The
+ * job queue ends the document's read job on it instead of trying again.
+ */
+export const READ_GAVE_UP = 'read_failed: gave up'
+
+/**
  * Prefix of a stored step failure the AI provider caused (classifyExtractionError
  * says 'provider_unavailable'), so the job queue can tell "wait for the
  * provider" from "this document is broken" once the error object is gone.

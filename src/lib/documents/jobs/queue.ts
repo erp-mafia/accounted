@@ -7,7 +7,9 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
-import { PROVIDER_UNAVAILABLE, READER_UNAVAILABLE } from '@/lib/documents/read/types'
+import { PROVIDER_UNAVAILABLE, READ_GAVE_UP, READER_UNAVAILABLE, outageBackoffMinutes } from '@/lib/documents/read/types'
+import { isRunDeadlineCut } from '@/lib/ai/call-limit'
+import { jobHasAttemptsLeft } from './hold'
 import { isActingType, isBooked } from '@/lib/documents/read/lanes'
 import { HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 import { ensurePreview } from '@/lib/documents/preview'
@@ -37,8 +39,6 @@ export interface RunSummary {
   claimed: number
   done: number
   failed: number
-  /** Claimed but handed back untouched because the time budget ran out. */
-  returned: number
 }
 
 /** Queue one step for a document. False when a queued or running job already covers it. */
@@ -60,22 +60,27 @@ export async function enqueueMissingExtractions(supabase: SupabaseClient, limit:
   return (data as number | null) ?? 0
 }
 
-export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; budgetMs: number; now?: () => number }): Promise<RunSummary> {
+/**
+ * Claims due jobs one at a time and runs each, up to `limit`, starting none at
+ * or after `deadlineAt` (epoch ms). A job is claimed only when it is about to
+ * run: the batch used to be claimed up front, so a run that was killed left
+ * the jobs it never started marked running, each with an attempt spent, for
+ * the ten minutes before another worker may take them over (the worker was
+ * seen at 242 s of its 300 in the 30 days to 2026-11-12). Jobs not reached
+ * stay queued, untouched, for the next tick a minute later.
+ */
+export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; deadlineAt: number; now?: () => number }): Promise<RunSummary> {
   const now = opts.now ?? Date.now
-  const deadline = now() + opts.budgetMs
   await failAbandonedJobs(supabase)
-  const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: opts.limit, p_worker: opts.worker })
-  if (error) throw new Error(`claim failed: ${error.message}`)
-  const jobs = (data ?? []) as ClaimedJob[]
-  const summary: RunSummary = { claimed: jobs.length, done: 0, failed: 0, returned: 0 }
+  const summary: RunSummary = { claimed: 0, done: 0, failed: 0 }
   const identities = new Map<string, CompanyIdentity>()
 
-  for (const job of jobs) {
-    if (now() > deadline) {
-      await settleJob(supabase, job, { status: 'queued', attempts: job.attempts - 1 })
-      summary.returned++
-      continue
-    }
+  while (summary.claimed < opts.limit && now() < opts.deadlineAt) {
+    const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: 1, p_worker: opts.worker })
+    if (error) throw new Error(`claim failed: ${error.message}`)
+    const job = ((data ?? []) as ClaimedJob[])[0]
+    if (!job) break
+    summary.claimed++
     const outcome = await runClaimed(supabase, job, identities, now)
     if ('error' in outcome) summary.failed++
     else summary.done++
@@ -130,7 +135,19 @@ async function runClaimed(
       log.error('document classification did not match schema, left for a person', fields)
       return { kind: job.kind, result: SCHEMA_MISS_RESULT }
     }
-    const waitOut = isProviderOutage(reason)
+    // The reader gave the document up: five readings without an answer, counted on the document across the queue
+    // and the backfill (lib/documents/read/store.ts). The job ends with it, out of attempts, so no claim takes it
+    // again and the upload surface shows the read as failed. The reader reported it; this does not report it twice.
+    if (job.kind === 'read' && reason.startsWith(READ_GAVE_UP)) {
+      await settleJob(supabase, job, { status: 'failed', attempts: Math.max(job.attempts, MAX_ATTEMPTS), last_error: reason })
+      log.warn('document job ended: the reader gave the document up', fields)
+      return { kind: job.kind, error: reason }
+    }
+    // A call cut by the run's own stop is not the provider being down: the step did not fit in what was left of
+    // the run (a job claimed late, a long scan). It is tried again on the short schedule, where the next run gives
+    // it the whole run, instead of waiting half an hour for an outage that is not there. The attempt stays spent:
+    // a step that never fits must run out of attempts, not come back every minute for good.
+    const waitOut = isProviderOutage(reason) && !isRunDeadlineCut(reason)
     await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts, waitOut)).toISOString() })
     // The last attempt leaves the document unread or untyped for good: that reaches error tracking, a retry does not.
     if (job.attempts >= MAX_ATTEMPTS) log.error('document job gave up', fields)
@@ -149,6 +166,15 @@ export async function runDocumentJobFor(
   documentId: string,
   worker: string,
 ): Promise<{ kind: string; result: string } | { kind: string; error: string } | null> {
+  // A step that ran out of its run's time is left to the worker cron: the route that calls this has a minute, the
+  // worker five, and claim_document_job_for retries a failed step at once, backoff or not. Without this every poll
+  // of a person watching a long scan would start the read again, be cut again and spend an attempt, until none
+  // were left and a document the worker could have read was given up on. Only a step the queue will still run:
+  // one out of attempts is never claimed again, and must not keep the document's other steps from running.
+  const { data: open, error: openError } = await supabase.from('document_jobs').select('status, attempts, max_attempts, last_error').eq('document_id', documentId).neq('status', 'done')
+  if (openError) throw new Error(`jobs fetch failed: ${openError.message}`)
+  const steps = (open ?? []) as Array<{ attempts: number; max_attempts: number; last_error: string | null }>
+  if (steps.some((j) => jobHasAttemptsLeft(j) && isRunDeadlineCut(j.last_error))) return null
   const { data, error } = await supabase.rpc('claim_document_job_for', { p_document_id: documentId, p_worker: worker })
   if (error) throw new Error(`claim failed: ${error.message}`)
   const job = ((data ?? []) as ClaimedJob[])[0]
@@ -161,12 +187,11 @@ const MAX_ATTEMPTS = 5
 
 /**
  * 2, 4, 8, 16 minutes, capped at an hour. A provider outage waits 30, 60, 120
- * and 240 minutes instead, so the five attempts span about 7.5 hours: Bedrock
- * 503 bursts outlasted the 30 minutes the short schedule covers and killed 139
- * read and classify jobs in a week (prod 2026-10-19..26).
+ * and 240 minutes instead (outageBackoffMinutes, the schedule a document's
+ * unanswered readings share), so the five attempts span about 7.5 hours.
  */
 const backoffMs = (attempts: number, providerOutage = false) =>
-  providerOutage ? Math.min(240, 30 * 2 ** Math.max(0, attempts - 1)) * 60_000 : Math.min(60, 2 ** attempts) * 60_000
+  (providerOutage ? outageBackoffMinutes(attempts) : Math.min(60, 2 ** attempts)) * 60_000
 
 /** The step failed on the reader or the model provider, not on the document. */
 const isProviderOutage = (reason: string) => reason.startsWith(READER_UNAVAILABLE) || reason.startsWith(PROVIDER_UNAVAILABLE)

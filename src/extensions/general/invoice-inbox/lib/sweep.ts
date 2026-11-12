@@ -114,7 +114,13 @@ async function flipStaleProcessing(supabase: SupabaseClient): Promise<InboxSweep
 
   const flipped = Array.isArray(claimed) ? claimed.length : 0
   if (flipped > 0) {
-    log.info('flipped stale processing rows to received', { flipped })
+    // Each of these is a reading that died with its function: the person sees the item unread ("Inte AI-tolkad")
+    // with no reason. Reported as an error, once per item (the flip is the transition), since nothing reads it
+    // again and the crash itself only reached the console.
+    log.error('inbox readings died before they finished, items left unread for manual entry', {
+      flipped,
+      items: ((claimed ?? []) as Array<{ id: string }>).map((r) => r.id),
+    })
   }
   return { flipped }
 }

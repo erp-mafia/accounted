@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
 vi.mock('../lib/route-from-arkiv', () => ({
   routeStaleQueueItems: vi.fn(),
   requeueHiddenRoutedItems: vi.fn(),
@@ -128,6 +130,9 @@ describe('runInboxSweep', () => {
     const summary = await runInboxSweep(supabase)
 
     expect(summary).toEqual({ flipped: 1, routed: 0, requeued: 0, reread: NO_REREAD })
+    // A reading that died is reported as an error, naming the item: it was an info line nobody read.
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('readings died'), { flipped: 1, items: ['i1'] })
   })
 
   it('does nothing when no processing row is stale', async () => {
@@ -137,6 +142,7 @@ describe('runInboxSweep', () => {
 
     expect(summary).toEqual({ flipped: 0, routed: 0, requeued: 0, reread: NO_REREAD })
     expect(captured.updatePayload).toBeUndefined()
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('never throws: a failed select reports zero flips', async () => {

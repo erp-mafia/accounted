@@ -5,6 +5,7 @@ import {
   type AiProvider,
 } from './provider'
 import type { AiCapabilities, AiPdfMode, AiStatus, AiTier } from './types'
+import { AI_CALL_LIMIT_MS } from './call-limit'
 
 /**
  * Environment parsing for the AI layer. Read on every call (cheap string
@@ -25,6 +26,9 @@ import type { AiCapabilities, AiPdfMode, AiStatus, AiTier } from './types'
  *   AI_STRICT_JSON           OpenAI-compatible only: use response_format json_schema (default false)
  *   AI_PDF_MODE              auto | native | rasterize (auto = native on Claude, rasterize elsewhere)
  *   AI_PDF_MAX_PAGES         pages rasterized per PDF (default 4)
+ *   AI_CALL_TIMEOUT_SECONDS  how long one structured answer or one document reading may take,
+ *                              retries included (default 120; lib/ai/call-limit.ts). A slow local
+ *                              model may need more; a scheduled run still ends its calls at its own stop.
  */
 
 export interface ResolvedAiConfig {
@@ -41,6 +45,8 @@ export interface ResolvedAiConfig {
   strictJson: boolean
   pdfMode: AiPdfMode
   pdfMaxPages: number
+  /** The time limit of one structured answer or document reading whose caller set none (lib/ai/call-limit.ts). */
+  callLimitMs: number
 }
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5'
@@ -140,7 +146,14 @@ export function readAiConfig(): ResolvedAiConfig {
     strictJson: envBool('AI_STRICT_JSON', false),
     pdfMode,
     pdfMaxPages: envPositiveInt('AI_PDF_MAX_PAGES') ?? DEFAULT_PDF_MAX_PAGES,
+    callLimitMs: aiCallLimitMs(),
   }
+}
+
+/** The configured call limit: AI_CALL_TIMEOUT_SECONDS, else the default. */
+export function aiCallLimitMs(): number {
+  const seconds = envPositiveInt('AI_CALL_TIMEOUT_SECONDS')
+  return seconds === null ? AI_CALL_LIMIT_MS : seconds * 1000
 }
 
 export function capabilitiesFor(cfg: ResolvedAiConfig): AiCapabilities {

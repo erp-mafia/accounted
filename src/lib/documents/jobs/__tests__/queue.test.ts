@@ -34,16 +34,27 @@ const mocked = (fn: unknown) => fn as ReturnType<typeof vi.fn>
 const job = (over: Partial<ClaimedJob> = {}): ClaimedJob => ({ id: 'job-1', company_id: 'co-1', document_id: 'doc-1', kind: 'read', attempts: 1, ...over })
 const DOCUMENT = { id: 'doc-1', company_id: 'co-1', storage_path: 'documents/co-1/a.pdf', mime_type: 'application/pdf' }
 const lastJobUpdate = () => findCalls('document_jobs', 'update').at(-1)?.[0]
-const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDocumentJobs(supabase, { limit: 8, worker: 'test', budgetMs: 60_000, ...over })
-/** A run first fails abandoned jobs (none here), then claims these. */
+const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDocumentJobs(supabase, { limit: 8, worker: 'test', deadlineAt: Number.MAX_SAFE_INTEGER, ...over })
+/**
+ * A run first fails abandoned jobs (none here), then claims these one at a
+ * time, each when the one before it is settled: the claim RPC hands out the
+ * next due job, the way the database does, without taking a place in the
+ * queue of answers the steps read.
+ */
+let due: ClaimedJob[] | null = null
 const claim = (...jobs: ClaimedJob[]) => {
   enqueue({ data: [] })
-  enqueue({ data: jobs })
+  due = jobs
 }
+const queuedRpc = rpc.getMockImplementation()!
 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  due = null
+  rpc.mockImplementation((name: string, args: { p_batch_size?: number }) =>
+    name === 'claim_document_jobs' && due ? Promise.resolve({ data: due.splice(0, args.p_batch_size), error: null }) : queuedRpc(name, args),
+  )
   process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1'
 })
 
@@ -92,8 +103,9 @@ describe('runDocumentJobs', () => {
     enqueue({ data: true })
     enqueue({})
 
-    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
-    expect(rpc).toHaveBeenCalledWith('claim_document_jobs', { p_batch_size: 8, p_worker: 'test' })
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0 })
+    // One job a claim: a job is marked running only when it is about to run.
+    expect(rpc).toHaveBeenCalledWith('claim_document_jobs', { p_batch_size: 1, p_worker: 'test' })
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'classify' })
     expect(lastJobUpdate()).toEqual({ status: 'done', result: 'read 3 pages (pdf_text, live)', last_error: null, locked_at: null, locked_by: null })
     // The meter for pages lives in the store; the runner counts nothing for a read.
@@ -143,7 +155,7 @@ describe('runDocumentJobs', () => {
     enqueue({})
     const t0 = Date.parse('2026-09-15T08:00:00Z')
 
-    await expect(run({ now: () => t0 })).resolves.toEqual({ claimed: 2, done: 1, failed: 1, returned: 0 })
+    await expect(run({ now: () => t0 })).resolves.toEqual({ claimed: 2, done: 1, failed: 1 })
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'extract' })
     // A classified document counts once; a failed extraction counts nothing.
     expect(recordArkivUsage).toHaveBeenCalledTimes(1)
@@ -155,7 +167,7 @@ describe('runDocumentJobs', () => {
     claim(job({ kind: 'classify' }))
     mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'document update failed: Cannot attach documents to entries in a locked/closed fiscal period' })
     enqueue({})
-    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0 })
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: period_locked' })
     expect(recordArkivUsage).not.toHaveBeenCalled()
   })
@@ -166,7 +178,7 @@ describe('runDocumentJobs', () => {
     claim(job({ kind: 'classify', attempts: 1 }))
     mocked(classifyDocument).mockResolvedValue({ status: 'error', reason })
     enqueue({})
-    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0 })
     expect(classifyDocument).toHaveBeenCalledTimes(1)
     // Done, so no claim takes it again; no run_after, and the validation message kept for whoever looks.
     expect(lastJobUpdate()).toEqual({ status: 'done', result: 'skipped: schema_mismatch', last_error: reason, locked_at: null, locked_by: null })
@@ -219,6 +231,39 @@ describe('runDocumentJobs', () => {
     expect(lastJobUpdate()).toMatchObject({ status: 'failed', run_after: new Date(t0 + 60 * 60_000).toISOString() })
   })
 
+  it('retries a step the run\'s own stop cut on the short schedule: the provider is not down, the step did not fit', async () => {
+    const t0 = Date.parse('2026-11-12T08:00:00Z')
+    const cut = "reader_unavailable: Request timed out: the run's time was up 95 s into the model call"
+    claim(job({ kind: 'read', attempts: 1 }))
+    enqueue({ data: DOCUMENT })
+    mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: cut } })
+    enqueue({})
+    await expect(run({ now: () => t0 })).resolves.toMatchObject({ failed: 1 })
+    // Two minutes, not the outage's thirty: the next run gives it the whole run. The attempt stays spent.
+    expect(lastJobUpdate()).toEqual({ status: 'failed', last_error: cut, run_after: new Date(t0 + 2 * 60_000).toISOString(), locked_at: null, locked_by: null })
+
+    // The call's own limit running out is the provider not answering: the outage schedule, as before.
+    reset()
+    claim(job({ kind: 'read', attempts: 1 }))
+    enqueue({ data: DOCUMENT })
+    mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: 'reader_unavailable: Request timed out: no answer from the model within 120 s' } })
+    enqueue({})
+    await run({ now: () => t0 })
+    expect(lastJobUpdate()).toMatchObject({ status: 'failed', run_after: new Date(t0 + 30 * 60_000).toISOString() })
+  })
+
+  it('ends the read job, out of attempts, when the reader gave the document up, and leaves the report to the reader', async () => {
+    const gaveUp = 'read_failed: gave up after 5 readings without an answer: Request timed out'
+    claim(job({ kind: 'read', attempts: 3 }))
+    enqueue({ data: DOCUMENT })
+    mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: gaveUp } })
+    enqueue({})
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 0, failed: 1 })
+    // Failed with no attempts left: no claim takes it again, and the upload surface shows the read as failed.
+    expect(lastJobUpdate()).toEqual({ status: 'failed', attempts: 5, last_error: gaveUp, locked_at: null, locked_by: null })
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
   it('reports the attempt that gives up as an error and a retry as a warning', async () => {
     claim(job({ kind: 'extract', attempts: 4 }), job({ id: 'job-2', kind: 'extract', attempts: 5 }))
     mocked(extractDocument).mockResolvedValue({ status: 'error', reason: 'model timeout' })
@@ -238,16 +283,26 @@ describe('runDocumentJobs', () => {
     expect(lastJobUpdate()).toMatchObject({ status: 'failed', last_error: 'ai_unconfigured' })
   })
 
-  it('hands unstarted jobs back without counting the attempt when the budget is spent', async () => {
+  it('claims no job once the deadline has passed: the rest stays queued, untouched, for the next tick', async () => {
+    // Claimed up front, a killed run left the unstarted jobs running for ten minutes with an attempt spent.
     claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'extract', attempts: 2 }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'agreement.loan', reviewFields: [] })
     enqueue({})
-    enqueue({})
-    const ticks = [0, 5, 100]
+    const ticks = [0, 100]
 
-    await expect(run({ budgetMs: 10, now: () => ticks.shift() ?? 100 })).resolves.toEqual({ claimed: 2, done: 1, failed: 0, returned: 1 })
+    await expect(run({ deadlineAt: 10, now: () => ticks.shift() ?? 100 })).resolves.toEqual({ claimed: 1, done: 1, failed: 0 })
     expect(extractDocument).toHaveBeenCalledTimes(1)
-    expect(lastJobUpdate()).toEqual({ status: 'queued', attempts: 1, locked_at: null, locked_by: null })
+    expect(rpc.mock.calls.filter(([name]) => name === 'claim_document_jobs')).toHaveLength(1)
+    // The second job was never claimed: nothing to hand back, no attempt to give back.
+    expect(due).toEqual([job({ id: 'job-2', kind: 'extract', attempts: 2 })])
+    expect(findCalls('document_jobs', 'update')).toEqual([[{ status: 'done', result: 'extracted agreement.loan', last_error: null, locked_at: null, locked_by: null }]])
+  })
+
+  it('claims at most its limit of jobs in one run', async () => {
+    claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'extract' }), job({ id: 'job-3', kind: 'extract' }))
+    mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'generic', reviewFields: [] })
+    await expect(run({ limit: 2 })).resolves.toEqual({ claimed: 2, done: 2, failed: 0 })
+    expect(due).toHaveLength(1)
   })
 
   it('queues a derivation after extracting an agreement, and runs it', async () => {
@@ -259,7 +314,7 @@ describe('runDocumentJobs', () => {
     mocked(recordFactsForDocument).mockResolvedValue({ status: 'recorded', facts: 9, subjectKind: 'agreement' })
     enqueue({}) // job-2 done
 
-    await expect(run()).resolves.toEqual({ claimed: 2, done: 2, failed: 0, returned: 0 })
+    await expect(run()).resolves.toEqual({ claimed: 2, done: 2, failed: 0 })
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'derive' })
     expect(deriveDocument).toHaveBeenCalledWith(supabase, 'doc-2')
     expect(recordFactsForDocument).toHaveBeenCalledWith(supabase, 'doc-2')
@@ -297,7 +352,7 @@ describe('runDocumentJobs', () => {
   it('fails jobs abandoned on their last attempt before claiming, and reports them as an error', async () => {
     enqueue({ data: [job({ id: 'dead-1', attempts: 5 }), job({ id: 'dead-2', company_id: 'co-2', attempts: 5 })] })
     enqueue({ data: [] })
-    await expect(run()).resolves.toEqual({ claimed: 0, done: 0, failed: 0, returned: 0 })
+    await expect(run()).resolves.toEqual({ claimed: 0, done: 0, failed: 0 })
     expect(rpc.mock.calls.map(([name]) => name)).toEqual(['fail_abandoned_document_jobs', 'claim_document_jobs'])
     expect(log.error).toHaveBeenCalledTimes(1)
     expect(log.error).toHaveBeenCalledWith('document jobs abandoned on their last attempt', {
@@ -327,8 +382,44 @@ describe('runDocumentJobFor', () => {
     const { createQueuedMockSupabase } = await import('@/tests/helpers')
     const local = createQueuedMockSupabase()
     const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
-    local.enqueue({ data: [] })
+    local.enqueue({ data: [{ status: 'queued', attempts: 0, max_attempts: 5, last_error: null }] }) // the document's open jobs
+    local.enqueue({ data: [] }) // the claim: nothing due
     expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')).toBeNull()
     expect(local.supabase.rpc).toHaveBeenLastCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
+  })
+
+  it('leaves a step that ran out of its run\'s time to the worker: a watcher\'s polls would spend every attempt on it', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: "reader_unavailable: Request timed out: the run's time was up 48 s into the model call" }] })
+    expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')).toBeNull()
+    // The claim retries a failed step at once, backoff or not: it is never asked.
+    expect(local.supabase.rpc).not.toHaveBeenCalled()
+    expect(local.findCalls('document_jobs', 'eq')).toEqual([['document_id', 'doc-1']])
+  })
+
+  it('still retries at once a step that failed for another reason, for the person waiting', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: 'provider_unavailable: 503 Bedrock is unable to process your request.' }] })
+    local.enqueue({ data: [] })
+    await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')
+    expect(local.supabase.rpc).toHaveBeenCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
+  })
+
+  it('does not let a step out of attempts hold the document: its other steps still run for the person waiting', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    // Cut by its run on its last attempt: never claimed again, and only re-queueing would clear its last_error.
+    local.enqueue({ data: [{ status: 'failed', attempts: 5, max_attempts: 5, last_error: "reader_unavailable: Request timed out: the run's time was up 48 s into the model call" }] })
+    local.enqueue({ data: [] })
+    await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')
+    expect(local.supabase.rpc).toHaveBeenCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
   })
 })

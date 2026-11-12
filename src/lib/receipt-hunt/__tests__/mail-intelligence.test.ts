@@ -6,12 +6,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
 const mockCreate = vi.fn()
 vi.mock('@/lib/ai', () => ({
   getAiService: () => ({ generateStructured: (...args: unknown[]) => mockCreate(...args) }),
 }))
 
-import { extractMailDocuments, type CandidateForReview } from '../mail-intelligence'
+import { extractMailDocuments, mailExtractionLimitMs, MAIL_EXTRACTION_MIN_LIMIT_MS, type CandidateForReview } from '../mail-intelligence'
+import { AI_CALL_LIMIT_MS, AiCallTimeoutError } from '@/lib/ai/call-limit'
 
 /** A reply in the shape the AI service's structured call returns (unvalidated). */
 function toolReply(input: unknown) {
@@ -149,6 +152,61 @@ describe('extractMailDocuments', () => {
   it('reports nothing when the call fails', async () => {
     mockCreate.mockRejectedValue(new Error('bedrock timeout'))
     await expect(extractMailDocuments([candidate()])).resolves.toEqual([])
+    expect(log.warn).toHaveBeenCalledTimes(1)
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('brings a limit of its own that fits its 8 192-token answer: the service default would cut a healthy call', async () => {
+    mockCreate.mockResolvedValue(toolReply({ documents: [doc()] }))
+    await extractMailDocuments([candidate()])
+    const [request] = mockCreate.mock.calls[0] as [{ signal?: AbortSignal; maxTokens: number }]
+    expect(request.maxTokens).toBe(8192)
+    expect(request.signal).toBeInstanceOf(AbortSignal)
+    expect(MAIL_EXTRACTION_MIN_LIMIT_MS).toBeGreaterThan(150_000)
+    expect(mailExtractionLimitMs()).toBe(MAIL_EXTRACTION_MIN_LIMIT_MS)
+    expect(mailExtractionLimitMs()).toBeGreaterThan(AI_CALL_LIMIT_MS)
+  })
+
+  it('takes the deployment\'s own limit when it is longer: a slow self-hosted model gets what every call gets', () => {
+    vi.stubEnv('AI_CALL_TIMEOUT_SECONDS', '600')
+    try {
+      expect(mailExtractionLimitMs()).toBe(600_000)
+      vi.stubEnv('AI_CALL_TIMEOUT_SECONDS', '60')
+      expect(mailExtractionLimitMs()).toBe(MAIL_EXTRACTION_MIN_LIMIT_MS)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('reports a batch the model gave no answer on in time as an error: the same mails would be sent, and cut, every press', async () => {
+    mockCreate.mockRejectedValue(new AiCallTimeoutError('call_limit', 180_000))
+    await expect(extractMailDocuments([candidate()], 'company-1')).resolves.toEqual([])
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('ran out of time'), expect.objectContaining({ mails: 1, companyId: 'company-1' }))
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('only warns when the press\'s own time ran out first: the next press starts with a whole budget', async () => {
+    mockCreate.mockRejectedValue(new AiCallTimeoutError('run_deadline', 40_000))
+    await expect(extractMailDocuments([candidate()], 'company-1')).resolves.toEqual([])
+    expect(log.error).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('end of the press'), expect.objectContaining({ mails: 1 }))
+  })
+
+  it('reports its own limit running out the same way', async () => {
+    vi.useFakeTimers()
+    try {
+      mockCreate.mockImplementation(
+        (req: { signal?: AbortSignal }) =>
+          new Promise<never>((_resolve, reject) => req.signal?.addEventListener('abort', () => reject(new Error('Request was aborted.')))),
+      )
+      const call = extractMailDocuments([candidate()])
+      await vi.advanceTimersByTimeAsync(MAIL_EXTRACTION_MIN_LIMIT_MS)
+      await expect(call).resolves.toEqual([])
+      expect(log.error).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not call the model when there is nothing to read', async () => {

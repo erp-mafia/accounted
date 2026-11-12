@@ -234,6 +234,17 @@ describe('generateText / generateStructured', () => {
     expect(result.value).toEqual({ paired: true })
   })
 
+  it('generateStructured and generateText hand a signal to the SDK as the request option, never in the body', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    const limit = new AbortController()
+    mockCreate.mockResolvedValue({ content: [{ type: 'tool_use', name: 'pick', input: {} }, { type: 'text', text: 'ok' }], usage: {} })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'p', maxTokens: 1, schema: { name: 'pick', jsonSchema: {} }, signal: limit.signal })
+    await svc.generateText({ tier: 'cheap', prompt: 'p', maxTokens: 1, signal: limit.signal })
+    await svc.generateStructured({ tier: 'cheap', prompt: 'p', maxTokens: 1, schema: { name: 'pick', jsonSchema: {} } })
+    expect(mockCreate.mock.calls.map((c) => c[1])).toEqual([{ signal: limit.signal }, { signal: limit.signal }, undefined])
+    for (const call of mockCreate.mock.calls) expect(call[0]).not.toHaveProperty('signal')
+  })
+
   it('generateStructured marks the tool strict only when the caller asks, so every other request stays byte-identical', async () => {
     const schema = { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['a', 'b'] } }, required: ['kind'] }
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 't1', name: 'pick', input: { kind: 'a' } }], usage: {} })

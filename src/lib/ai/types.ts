@@ -108,6 +108,8 @@ export interface GenerateTextRequest {
    * with no visible text) gets one more turn that may not call tools.
    */
   maxSteps?: number
+  /** Ends the call when it fires: every model turn of it is aborted and not retried. */
+  signal?: AbortSignal
 }
 
 export interface GenerateTextResult {
@@ -154,6 +156,11 @@ export interface GenerateStructuredRequest {
      */
     strict?: boolean
   }
+  /**
+   * Ends the call when it fires: the request is aborted and not retried. A
+   * caller that sets none gets the service's own limit (lib/ai/call-limit.ts).
+   */
+  signal?: AbortSignal
 }
 
 export interface GenerateStructuredResult {
@@ -183,7 +190,8 @@ export interface ExtractFromDocumentRequest {
   /**
    * Ends the call when it fires: the request is aborted and not retried. For a
    * caller with a deadline of its own, e.g. work that runs after the response
-   * inside a route's 300 s.
+   * inside a route's 300 s. A caller that sets none gets the service's own
+   * limit (lib/ai/call-limit.ts).
    */
   signal?: AbortSignal
 }

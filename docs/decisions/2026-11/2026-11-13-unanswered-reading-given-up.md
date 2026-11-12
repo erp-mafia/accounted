@@ -1,0 +1,1 @@
+[2026-11-13] A document the model gives no answer five times in a row, counted once per wait (30 min to 4 h, 7.5 h at least), is marked read_failed: gave up but stays unread, tried daily or when someone asks; backfills hold it only while its job can still run: a scan was re-read every 5 min.

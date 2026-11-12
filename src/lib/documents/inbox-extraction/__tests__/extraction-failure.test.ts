@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk'
+import { AiCallTimeoutError } from '@/lib/ai/call-limit'
 import { classifyExtractionError } from '../extraction-failure'
 
 /**
@@ -69,6 +70,11 @@ describe('classifyExtractionError', () => {
     expect(classifyExtractionError(new APIUserAbortError(), { deadlineReached: true })).toBe('provider_unavailable')
     // Without the deadline an abort is not a provider signal.
     expect(classifyExtractionError(new APIUserAbortError())).toBe('error')
+  })
+
+  it('reads a call our own time limit ended as unavailable: no answer in time says nothing about the document', () => {
+    expect(classifyExtractionError(new AiCallTimeoutError('call_limit', 120_000, new APIUserAbortError()))).toBe('provider_unavailable')
+    expect(classifyExtractionError(new AiCallTimeoutError('run_deadline', 40_000))).toBe('provider_unavailable')
   })
 
   it('reads a parse, schema or configuration failure as an error', () => {
