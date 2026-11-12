@@ -44,6 +44,7 @@ import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
 import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
+import { fetchCompanySettingsNames } from '@/lib/company/settings-names'
 import { mayHaveBankIdEngagements } from '@/lib/company-lookup/engagements'
 import { addCompanyHref } from '@/components/settings/company-deletion'
 import {
@@ -343,7 +344,7 @@ export default async function DashboardLayout({
     { data: settings, error: settingsError },
     agentProfileIdentity,
     entitlements,
-    { data: allSettingsNames },
+    allSettingsNames,
     navFlags,
     { data: seedFiscalPeriods },
     { data: seedCashAccounts },
@@ -364,11 +365,15 @@ export default async function DashboardLayout({
       companyId,
       { teamId: companyRow?.team_id ?? null },
     ),
-    // Current display names for ALL the user's companies (the switcher list).
-    // RLS scopes company_settings SELECT to user_company_ids(), so this bare
-    // select returns exactly the caller's companies, letting non-active rows
-    // show company_settings.company_name instead of the frozen companies.name.
-    supabase.from('company_settings').select('company_id, company_name'),
+    // Current display names for ALL the user's companies (the switcher list),
+    // so non-active rows show company_settings.company_name instead of the
+    // frozen companies.name. The companies are named from the memberships read
+    // above: a bare select scoped by RLS alone returns the same rows by reading
+    // every company's settings (lib/company/settings-names.ts).
+    fetchCompanySettingsNames(
+      supabase,
+      (allMemberships ?? []).map((m) => m.company_id),
+    ),
     getDashboardNavFlags(supabase, companyId),
     // Reference-data seed (lib/reference-data/seed.ts): the two small lists
     // that gate almost every form, fetched once here so the first picker a
@@ -417,7 +422,7 @@ export default async function DashboardLayout({
 
   // company_id -> current display name for every company the user belongs to.
   const nameByCompany = new Map(
-    (allSettingsNames || []).map((s) => [s.company_id, s.company_name as string | null]),
+    allSettingsNames.map((s) => [s.company_id, s.company_name]),
   )
 
   // Where "Tillbaka till klienter" points: the byrå cockpit's home domain

@@ -492,9 +492,10 @@ export async function detectBackupFailing(
 export async function detectOtherAccountHint(
   supabase: SupabaseClient,
   companyId: string,
+  userId: string,
 ): Promise<Notice | null> {
   try {
-    const show = await shouldShowOtherAccountHint(supabase)
+    const show = await shouldShowOtherAccountHint(supabase, userId)
     if (!show) return null
     return {
       id: 'other_account_hint',
