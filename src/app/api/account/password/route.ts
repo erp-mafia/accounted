@@ -38,7 +38,13 @@ const SetPasswordSchema = z.object({
  *     users sit at AAL1 with a TOTP factor enrolled, and `updateUser` on the
  *     user session would be rejected with "AAL2 session is required to update
  *     email or password when MFA is enabled". Setting an initial password has
- *     no existing credential to protect, so bypassing AAL2 is safe.
+ *     no existing credential to protect, so bypassing AAL2 is safe. The
+ *     admin write ends EVERY session of the user, this request's included
+ *     (GoTrue signs the user out everywhere when a password is written with
+ *     no session to keep), so the route hands the user a new one right after
+ *     (restoreSession): without it the next request met a dead session and
+ *     the user was bounced to /login seconds after choosing a password, on
+ *     the way into MFA enrolment for most (13 users in two weeks, 2026-11).
  *
  *   - Change-password (a known password): write via the user session so
  *     Supabase's AAL2 guard still fires. A stolen AAL1 cookie must not be
@@ -58,7 +64,10 @@ const SetPasswordSchema = z.object({
  * first-time set and the recovery flow (/reset-password posts here with the
  * recovery session), so a password reset also signs out whoever was using
  * the old one. A failed revocation is logged at error level and reported as
- * `otherSessionsEnded: false`; the password change itself stands.
+ * `otherSessionsEnded: false`; the password change itself stands. On a
+ * first-time set the session it is called with is the restored one;
+ * `sessionKept: false` says the restore failed, the password is saved and
+ * the user has to sign in with it.
  */
 export async function POST(request: Request) {
   const { user, supabase, error: authError } = await requireAuth()
@@ -123,11 +132,74 @@ export async function POST(request: Request) {
     // banner will show once more and a retry will succeed.
   }
 
-  const otherSessionsEnded = await endOtherSessions(supabase, user.id)
+  // After the flag write, so the new session's token already says has_password.
+  const sessionKept = isFirstTimeSet ? await restoreSession(service, supabase, user.id) : true
 
-  log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk, otherSessionsEnded })
+  // Without a session there is nothing to call GoTrue's logout with; the
+  // admin write that cost the session ended the others with it.
+  const otherSessionsEnded = sessionKept ? await endOtherSessions(supabase, user.id) : false
 
-  return NextResponse.json({ data: { ok: true, otherSessionsEnded } })
+  log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk, otherSessionsEnded, sessionKept })
+
+  return NextResponse.json({ data: { ok: true, otherSessionsEnded, sessionKept } })
+}
+
+type RouteSupabase = Awaited<ReturnType<typeof requireAuth>>['supabase']
+
+/**
+ * A new session for the user whose sessions the admin password write just
+ * ended, minted the way the BankID sign-in mints one: a magic link from the
+ * admin API, verified at once on this request's client, which writes the
+ * session cookie onto the response. Not a password sign-in: that door is the
+ * login route's, with its captcha and its limits. Returns whether the user
+ * is signed in again.
+ *
+ * The link is minted for the address the auth server holds for this user id,
+ * read now, never for the one in the request's token: that one can be an hour
+ * old, and after an e-mail change it names nobody (GoTrue would create an
+ * account for it) or somebody else. A link that came back for another user is
+ * thrown away unverified.
+ */
+async function restoreSession(
+  service: ReturnType<typeof createServiceClient>,
+  supabase: RouteSupabase,
+  userId: string,
+): Promise<boolean> {
+  try {
+    const { data: current } = await service.auth.admin.getUserById(userId)
+    const email = current?.user?.email
+    if (!email) {
+      log.error('no session after a first-time password set: the user has no e-mail to mint one for', { userId })
+      return false
+    }
+    const { data: link, error: linkError } = await service.auth.admin.generateLink({ type: 'magiclink', email })
+    const tokenHash = link?.properties?.hashed_token
+    if (linkError || !tokenHash) {
+      log.error('no session after a first-time password set: minting the link failed', {
+        userId,
+        code: linkError?.code,
+        status: linkError?.status,
+      })
+      return false
+    }
+    if (link.user?.id !== userId) {
+      log.error('no session after a first-time password set: the link was minted for another user', { userId })
+      return false
+    }
+    const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'magiclink' })
+    if (error || !data?.session) {
+      log.error('no session after a first-time password set: verifying the link failed', {
+        userId,
+        code: error?.code,
+        status: error?.status,
+      })
+      return false
+    }
+    return true
+  } catch (err) {
+    log.error('no session after a first-time password set: restoring it threw', { userId, err })
+    return false
+  }
 }
 
 /**
@@ -135,7 +207,7 @@ export async function POST(request: Request) {
  * Returns whether GoTrue confirmed it.
  */
 async function endOtherSessions(
-  supabase: Awaited<ReturnType<typeof requireAuth>>['supabase'],
+  supabase: RouteSupabase,
   userId: string,
 ): Promise<boolean> {
   try {
