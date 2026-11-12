@@ -14,6 +14,7 @@
  * preview, validates with reads.
  */
 import { z } from 'zod'
+import { peppolOutcomeUnreported } from '@/lib/invoices/peppol-attention'
 import type { PeppolDeliverySummary } from '@/lib/invoices/peppol-delivery'
 import {
   getInvoicePeppolReadiness,
@@ -83,6 +84,8 @@ const Delivery = z.object({
   status_detail: z.string().nullable(),
   submitted_at: z.string().nullable(),
   terminal_at: z.string().nullable(),
+  outcome_unreported: z.literal(true).optional().describe('Only when submission_accepted for over 24 h: the access point reports no outcome. Not a failure.'),
+  outcome_hint: z.string().optional().describe('Set with outcome_unreported: what it means and what to do.'),
 })
 
 function toDelivery(d: PeppolDeliverySummary): z.infer<typeof Delivery> {
@@ -99,6 +102,8 @@ function toDelivery(d: PeppolDeliverySummary): z.infer<typeof Delivery> {
     status_detail: d.status_detail,
     submitted_at: d.submitted_at,
     terminal_at: d.terminal_at,
+    // The invoice page's rule, so an agent reads the same state the user sees.
+    ...peppolOutcomeUnreported(d, Date.now()),
   }
 }
 
@@ -355,6 +360,7 @@ export const invoicesPeppolDeliveries = defineOperation({
     doNotUseFor: 'Checking whether an invoice can be sent (GET /invoices/{id}/peppol) or email deliveries.',
     pitfalls: [
       'submission_accepted means the access point took the document, not that the buyer received it; transport_succeeded and business_accepted come later.',
+      'outcome_unreported=true (submission_accepted for over 24 hours) means the access point has not reported an outcome back. It is not a failed delivery: do not resend, and ask the buyer when certainty is needed.',
       'A delivery in retryable_failure, failed or no_route can be resent with POST /invoices/{id}/send-peppol (a failed one as a new delivery that replaces its submission); a business_rejected one cannot: the buyer refused the invoice.',
     ],
     example: {
