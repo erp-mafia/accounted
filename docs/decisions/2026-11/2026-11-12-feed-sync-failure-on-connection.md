@@ -1,0 +1,1 @@
+[2026-11-12] A nightly webshop or Stripe sync that throws is written on its connection (error_message: our Swedish sentence, never the raw error) and cleared by the next sync that runs through: the only trace a user had was a last-synced date that stopped moving.

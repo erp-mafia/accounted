@@ -76,6 +76,12 @@ export type TriggerSyncResult =
       next_allowed_at?: string
       /** Seconds until next_allowed_at (cooldown and bank rate limit). */
       retry_after_seconds?: number
+      /**
+       * Only from the Open Payments cron, which passes a deadline: the run's
+       * time budget stopped the sync before every account was read. Nothing
+       * was stamped, so the connection is still due (lib/bank-feed/feed.ts).
+       */
+      deadline_reached?: true
     }
 
 /** Services the enable-banking extension registers for core callers. */

@@ -16,7 +16,7 @@ export const maxDuration = 300
  */
 export const GET = withCronContext('cron.collections_sync', async (_request, ctx) => {
   try {
-    const summary = await runCollectionsSync({ db: createServiceClient() })
+    const summary = await runCollectionsSync({ db: createServiceClient(), startedAtMs: ctx.startedAt })
     ctx.log.info('collections sync summary', { ...summary })
     return NextResponse.json({ data: summary })
   } catch (err) {

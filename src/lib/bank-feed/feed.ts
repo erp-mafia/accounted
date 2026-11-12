@@ -42,11 +42,14 @@ import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { SYNC_COOLDOWN_MS, type TriggerSyncInput, type TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { eventBus } from '@/lib/events/bus'
 import { announceSyncedTransactions } from '@/lib/transactions/announce-synced'
+import { stableExternalIdHead } from '@/lib/transactions/external-id'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { BankFeedError, BankFeedRefusedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { consentFailureText, isPermanentConsentFailure } from './failure-text'
-import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
+import { claimBankFeedLease, holdBankFeedLease, rateLimitCooldownMs, rateLimitHoldUntil, releaseBankFeedLease, takeOverBankFeedHold, throttleCooldownMs, UNATTENDED_FAILURE_HOLD_MS } from './lease'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
 import { syncOpenPaymentsAccount, type BankFeedAccount, type BankFeedIngestFn } from './sync'
+import { accountDedupScope } from './account-scope'
 import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /** Shown on a connection whose consent is over; the bank notices surface it. */
@@ -227,6 +230,53 @@ export function initialWindow(input: { extendedHistoryDays: number | null | unde
   return { fromDate: isoDay(Math.min(from, now)), toDate: isoDay(now), lookbackDays: Math.max(1, Math.round((now - Math.min(from, now)) / DAY_MS)) }
 }
 
+/**
+ * The newest booking day among the rows one account has stored on this
+ * connection, found by the start of its own keys (`eb_{scope}_`).
+ *
+ * A first import overlaps, per account, the later of this and the history
+ * the connection took over (takenOverLastBookedDay): never the connection's
+ * newest row. A first import stopped after one account (the run's deadline,
+ * a failure, a kill) has stored that account's rows up to today, and the
+ * next attempt asked every other account for a week only, then marked the
+ * import done, so their history was cut short for good. A first import the
+ * bank had not finished (PH 195) still resumes, per account. A read that
+ * fails counts as no row: the longer window, whose overlap the stored keys
+ * dedupe.
+ */
+async function ownLastBookedDay(
+  supabase: SupabaseClient,
+  connection: Pick<FeedConnection, 'id' | 'company_id'>,
+  account: BankFeedAccount,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('transactions')
+    .select('date')
+    .eq('company_id', connection.company_id)
+    .eq('bank_connection_id', connection.id)
+    .like('external_id', `${escapeLikePattern(stableExternalIdHead('eb', accountDedupScope(account)))}%`)
+    .order('date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (data as { date?: string } | null)?.date ?? null
+}
+
+/** The newest booking day of the history a connection took over: rows stored before the connection was made. */
+async function takenOverLastBookedDay(
+  supabase: SupabaseClient,
+  connection: Pick<FeedConnection, 'id' | 'company_id' | 'created_at'>,
+): Promise<string | null> {
+  let query = supabase
+    .from('transactions')
+    .select('date')
+    .eq('company_id', connection.company_id)
+    .eq('bank_connection_id', connection.id)
+  // Without a creation time every row counts, as before this was per account.
+  if (connection.created_at) query = query.lt('created_at', connection.created_at)
+  const { data } = await query.order('date', { ascending: false }).limit(1).maybeSingle()
+  return (data as { date?: string } | null)?.date ?? null
+}
+
 /** The incremental window: the gap since the last success plus a day of overlap, between a week and what the bank serves (88 days unless it says). */
 export function incrementalWindow(connection: Pick<FeedConnection, 'last_synced_at'>, now: number, maxLookbackDays: number = MAX_INCREMENTAL_LOOKBACK_DAYS): SyncWindow & { lookbackDays: number } {
   const syncedAt = connection.last_synced_at ? new Date(connection.last_synced_at).getTime() : Number.NaN
@@ -247,6 +297,12 @@ export interface RunOpenPaymentsSyncInput extends TriggerSyncInput {
   unattended?: boolean
   ingest?: BankFeedIngestFn
   connect?: BankFeedConnect
+  /**
+   * Absolute deadline (epoch ms) from the cron's time budget, checked before
+   * each account is read: one read can wait AIS_SYNC_TIMEOUT_MS at Connect,
+   * and a connection has as many reads as it has accounts.
+   */
+  deadlineMs?: number
 }
 
 type FailureClass = 'session_expired' | 'consent_refused' | 'rate_limited' | 'throttled' | 'bank_unavailable' | 'unknown'
@@ -362,20 +418,16 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
   }
 
   let window: SyncWindow
+  /** A first import's window start per account uid (ownLastBookedDay); `window` is then the earliest. */
+  const accountFrom = new Map<string, string>()
+  /** The order the accounts are read in; see the first import below. */
+  let readOrder: BankFeedAccount[] = accounts
   let historyWindow: 'extended' | 'ordinary' | undefined
   let booksStart: string | null = null
   if (input.window) {
     window = input.window
   } else if (initial) {
     const limits = await bankHistoryLimits(connect, companyId, connection.bic)
-    const { data: latest } = await supabase
-      .from('transactions')
-      .select('date')
-      .eq('company_id', companyId)
-      .eq('bank_connection_id', connectionId)
-      .order('date', { ascending: false })
-      .limit(1)
-      .maybeSingle()
     // The extended range only with the person present and while the bank
     // still serves it. A first import the cron or an agent retries would
     // otherwise ask for two years without anyone there: Swedbank refuses that
@@ -386,18 +438,32 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     const extended = personPresent && extendedHistoryWindowOpen(connection, limits.extendedWindowMinutes, now)
     historyWindow = extended ? 'extended' : 'ordinary'
     const listedExtended = connection.consent_attempt?.selection?.extended_history_days ?? connection.consent_attempt?.extended_history_days ?? null
-    const asked = initialWindow({
-      extendedHistoryDays: extended
-        ? listedExtended && listedExtended > EXTENDED_HISTORY_MARGIN_DAYS ? listedExtended - EXTENDED_HISTORY_MARGIN_DAYS : null
-        : limits.maxDays,
-      lastBookedDate: (latest as { date?: string } | null)?.date ?? null,
-    }, now)
+    const extendedHistoryDays = extended
+      ? listedExtended && listedExtended > EXTENDED_HISTORY_MARGIN_DAYS ? listedExtended - EXTENDED_HISTORY_MARGIN_DAYS : null
+      : limits.maxDays
     // Bank history starts where the books start (lib/bank-sync/books-start.ts):
     // rows from before it have no verifikat to land in here. Only the extended
     // history is cut; the ordinary window always comes, and a company without
     // a fiscal period (or an unanswered read) gets the whole range as before.
     booksStart = await resolveBooksStart(supabase, companyId, { now, log })
-    window = { fromDate: clampToBooksStart(asked.fromDate, booksStart, isoDay(now - limits.maxDays * DAY_MS)), toDate: asked.toDate }
+    const takenOver = await takenOverLastBookedDay(supabase, connection)
+    const storedNothing: BankFeedAccount[] = []
+    const storedSome: BankFeedAccount[] = []
+    for (const account of accounts) {
+      const own = await ownLastBookedDay(supabase, connection, account)
+      ;(own ? storedSome : storedNothing).push(account)
+      const lastBookedDate = own && (!takenOver || own > takenOver) ? own : takenOver
+      const asked = initialWindow({ extendedHistoryDays, lastBookedDate }, now)
+      accountFrom.set(account.uid, clampToBooksStart(asked.fromDate, booksStart, isoDay(now - limits.maxDays * DAY_MS)))
+    }
+    window = { fromDate: [...accountFrom.values()].sort()[0]!, toDate: isoDay(now) }
+    // The accounts that have stored nothing yet are read first. A first
+    // import the run's deadline cut short read the first accounts; its retry
+    // read them again before the rest, each read one of the four unattended
+    // reads a day the bank allows an account, so a connection that kept
+    // landing late in its bank's turn could spend the first account's budget
+    // while the next one was never read.
+    readOrder = [...storedNothing, ...storedSome]
   } else {
     const limits = await bankHistoryLimits(connect, companyId, connection.bic)
     window = incrementalWindow(connection, now, limits.maxDays)
@@ -426,6 +492,19 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
   const sieOverlap = Boolean(sieImport) || Boolean(sieOverlapError)
 
   const startedAt = new Date(now).toISOString()
+  // Outside the try: rows an account stored before a later one failed are in
+  // the inbox all the same, and the failure path announces them too. So are
+  // the rows the failing account itself stored before it failed (rows ingest
+  // rejected beside them, a consent that ended on the balance read after
+  // them): its account sync reports them as soon as they are stored.
+  const transactionIds: string[] = []
+  let storedByFailingAccount: readonly string[] = []
+  let announced = false
+  const announce = async () => {
+    if (announced || rawInsertOnly) return
+    announced = true
+    await announceSyncedTransactions(supabase, { companyId, userId, transactionIds, log, context: { connectionId } })
+  }
   try {
     let imported = 0
     let duplicates = 0
@@ -438,10 +517,14 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     let returnedMin: string | null = null
     let returnedMax: string | null = null
     let truncated = false
-    const transactionIds: string[] = []
     const ledgerAccounts: string[] = []
     const includeEnrichment = shouldAskForEnrichment(connection, input.unattended === true, now)
-    for (const account of accounts) {
+    let deadlineReached = false
+    for (const account of readOrder) {
+      if (input.deadlineMs !== undefined && Date.now() >= input.deadlineMs) {
+        deadlineReached = true
+        break
+      }
       const bankRoute = await resolveBankIngestRoute(supabase, companyId, connectionId, account.uid, account.currency)
       ledgerAccounts.push(bankRoute.ledgerAccount)
       if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
@@ -449,10 +532,12 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       }
       const result = await syncOpenPaymentsAccount(supabase, {
         companyId, userId, connectionId, account, bankRoute, party: party.party as AisParty,
-        fromDate: window.fromDate, toDate: window.toDate, ingest: input.ingest, connect, now,
+        fromDate: accountFrom.get(account.uid) ?? window.fromDate, toDate: window.toDate, ingest: input.ingest, connect, now,
         options: { ...(rawInsertOnly ? { rawInsertOnly: true } : {}), ...(sieOverlap ? { skipAutoCategorization: true } : {}) },
         ...(includeEnrichment ? { includeEnrichment: true } : {}),
+        onStored: (ids) => { storedByFailingAccount = ids },
       })
+      storedByFailingAccount = []
       imported += result.imported
       duplicates += result.duplicates
       enrichedUpdated += result.enrichedUpdated ?? 0
@@ -478,6 +563,29 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         companyId, userId, connectionId, ledgerAccounts,
         fromDate: window.fromDate, toDate: window.toDate, returnedMin, log,
       })
+    }
+    if (deadlineReached) {
+      // Not stamped as synced: an account was left unread, and last_synced_at
+      // decides both when the connection is due and how far back the next
+      // read asks, so moving it would hide the unread account's days. On a
+      // first import the window is per account (ownLastBookedDay), so
+      // the unread account still gets its whole history next time. The rows
+      // of the accounts that were read are stored and announced here; the
+      // next read of them finds duplicates. The claim is given back, so a
+      // person's Synka nu is not answered with a cooldown meanwhile.
+      await announce()
+      await releaseBankFeedLease(supabase, connectionId, new Date(now + SYNC_COOLDOWN_MS).toISOString(), now).catch((releaseError: unknown) => {
+        // The claim then runs out by itself (SYNC_COOLDOWN_MS).
+        log.warn('open payments sync: the lease was not given back', { connectionId, message: releaseError instanceof Error ? releaseError.message : String(releaseError) })
+      })
+      log.info('open payments sync stopped on the run deadline; the connection stays due', {
+        connectionId, trigger, accounts: accounts.length, accountsRead: ledgerAccounts.length, imported, duplicates,
+      })
+      return {
+        ok: false, code: 'BANK_SYNC_COOLDOWN', connection_id: connectionId, status: connection.status,
+        next_allowed_at: new Date(now + SYNC_COOLDOWN_MS).toISOString(), retry_after_seconds: Math.ceil(SYNC_COOLDOWN_MS / 1000),
+        deadline_reached: true,
+      }
     }
     const completedAt = new Date().toISOString()
     await persistBankSyncResult(supabase, {
@@ -509,9 +617,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         .eq('company_id', companyId)
       if (enrichedError) log.warn('open payments sync: last_enriched_at not stored', { connectionId, message: enrichedError.message })
     }
-    if (!rawInsertOnly) {
-      await announceSyncedTransactions(supabase, { companyId, userId, transactionIds, log, context: { connectionId } })
-    }
+    await announce()
     log.info('open payments sync completed', {
       connectionId, trigger, imported, duplicates, enrichedUpdated, windowEnriched, lastEnrichedAt,
       from: window.fromDate, to: window.toDate, ...(historyWindow ? { historyWindow } : {}), ...(booksStart ? { booksStart } : {}),
@@ -530,6 +636,11 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       window_enriched: windowEnriched,
     }
   } catch (error) {
+    // Rows stored before the failure are in the inbox: without the event,
+    // matching and the forecast never see them, and the next read only finds
+    // them as duplicates. announceSyncedTransactions never throws.
+    transactionIds.push(...storedByFailingAccount)
+    await announce()
     if (error instanceof BankSyncResultObsoleteError) {
       log.warn('open payments sync result not persisted: the connection changed meanwhile', { connectionId })
       return { ok: false, code: 'BANK_SYNC_FAILED', connection_id: connectionId }

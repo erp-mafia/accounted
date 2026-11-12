@@ -9,6 +9,7 @@ import {
   detectExpiringBankConnections,
   detectNoFiscalYear,
   detectOtherAccountHint,
+  detectPosConnectionAction,
   detectSkvDisconnected,
   detectSkvUnexplained,
 } from './categories'
@@ -57,6 +58,7 @@ export async function getCompanyNotices(
       // Service role: the refresh-token presence check reads a column end-user
       // roles cannot. userId and companyId are the authenticated caller's.
       detectSkvDisconnected(createServiceClient(), userId, companyId, now),
+      detectPosConnectionAction(supabase, companyId),
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
       detectSkvUnexplained(supabase, companyId),

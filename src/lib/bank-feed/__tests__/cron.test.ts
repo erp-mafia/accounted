@@ -24,13 +24,18 @@ vi.mock('../connect', async (importOriginal) => ({
 
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { CONSENT_EXPIRED_MESSAGE } from '../feed'
+import { AIS_CONNECT_TIMEOUT_MS, AIS_SYNC_TIMEOUT_MS } from '../connect'
 import {
+  ACCOUNT_STORE_MARGIN_MS,
   CATCHUP_PER_RUN,
+  CRON_ROUTE_LIMIT_MS,
+  CRON_TIME_BUDGET_MS,
   isScheduledNow,
   nextScheduledTime,
   RENEWAL_NOTICE_DAYS,
   renewalDeepLink,
   runOpenPaymentsCron,
+  STUCK_AFTER_MS,
   SYNC_SLOTS,
   SYNC_WINDOW_MS,
   syncSlotOf,
@@ -258,6 +263,72 @@ describe('runOpenPaymentsCron', () => {
     const { supabase } = stub({ bank_connections: [{ data: [], error: null }, { data: [connection({}, now), connection({ id: 'unpaid', company_id: 'co-free' }, now)], error: null }] })
     const result = await runOpenPaymentsCron(supabase, log, { now })
     expect(result).toMatchObject({ due: 1, synced: 0, failed: 1, skipped: expect.objectContaining({ notEntitled: 1 }) })
+  })
+
+  it('counts the budget from the start of the route, and hands every sync the same deadline', async () => {
+    // The clock used to start after the sweep and the expiry pass, and a sync
+    // (120 s for one account read) could start at its very end.
+    const now = nextScheduledTime('conn-1', NOW)
+    const startedAt = Date.now() - 10_000
+    const { supabase } = stub({ bank_connections: [{ data: [], error: null }, { data: [connection({}, now)], error: null }] })
+    await runOpenPaymentsCron(supabase, log, { now, startedAt })
+    expect(mocks.run).toHaveBeenCalledWith(supabase, expect.objectContaining({ deadlineMs: startedAt + CRON_TIME_BUDGET_MS }))
+  })
+
+  it('leaves room inside the route\'s 300 s for the slowest account started last, its balance read included', () => {
+    // An account is a transactions read (120 s), archive and ingest, then a balance read (30 s).
+    expect(AIS_SYNC_TIMEOUT_MS).toBe(120_000)
+    expect(AIS_CONNECT_TIMEOUT_MS).toBe(30_000)
+    expect(CRON_TIME_BUDGET_MS + AIS_SYNC_TIMEOUT_MS + AIS_CONNECT_TIMEOUT_MS + ACCOUNT_STORE_MARGIN_MS).toBeLessThanOrEqual(CRON_ROUTE_LIMIT_MS)
+    expect(CRON_ROUTE_LIMIT_MS).toBe(300_000)
+    expect(CRON_TIME_BUDGET_MS).toBe(130_000)
+  })
+
+  it('starts no sync once the budget from the start of the route is spent, and counts what is left', async () => {
+    const now = nextScheduledTime('conn-1', NOW)
+    const { supabase } = stub({ bank_connections: [{ data: [], error: null }, { data: [connection({}, now)], error: null }] })
+    const result = await runOpenPaymentsCron(supabase, log, { now, startedAt: Date.now() - CRON_TIME_BUDGET_MS - 1 })
+    expect(mocks.run).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ due: 1, synced: 0, failed: 0, skipped: expect.objectContaining({ budget: 1 }) })
+  })
+
+  it('counts a sync the deadline stopped between accounts as left for later, not as failed', async () => {
+    const now = nextScheduledTime('conn-1', NOW)
+    mocks.run.mockResolvedValueOnce({ ok: false, code: 'BANK_SYNC_COOLDOWN', deadline_reached: true })
+    const { supabase } = stub({ bank_connections: [{ data: [], error: null }, { data: [connection({}, now)], error: null }] })
+    const result = await runOpenPaymentsCron(supabase, log, { now })
+    expect(result).toMatchObject({ synced: 0, failed: 0, skipped: expect.objectContaining({ budget: 1 }) })
+  })
+
+  it('reports an active connection in the window its age passes 48 hours without a sync, and in that window every day after', async () => {
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    const stuckSince = NOW - STUCK_AFTER_MS
+    const rows = (at: number) => [
+      connection({ id: 'stuck', last_synced_at: new Date(stuckSince).toISOString(), sync_lease_until: new Date(at + HOUR).toISOString() }, at),
+      // Already visible to the user as a failed connection, and reported when it failed.
+      connection({ id: 'errored', status: 'error', last_synced_at: new Date(stuckSince).toISOString(), sync_lease_until: new Date(at + HOUR).toISOString() }, at),
+      // Not ours to read: no plan.
+      connection({ id: 'unpaid', company_id: 'co-free', last_synced_at: new Date(stuckSince).toISOString() }, at),
+      connection({ id: 'fine', last_synced_at: new Date(at - HOUR).toISOString() }, at),
+    ]
+    const DAY = 24 * HOUR
+    // The window of the mark, and the same window on later days: a run that
+    // is skipped, or fails before this step, costs a day, never the report.
+    for (const [at, daysPastMark] of [[NOW, 0], [NOW + DAY, 1], [NOW + 3 * DAY + 5 * 60_000, 3]] as const) {
+      errors.mockClear()
+      const during = stub({ bank_connections: [{ data: [], error: null }, { data: rows(at), error: null }] })
+      expect((await runOpenPaymentsCron(during.supabase, log, { now: at })).stuck).toBe(1)
+      expect(errors).toHaveBeenCalledTimes(1)
+      expect(errors).toHaveBeenCalledWith('open payments connection has not synced for 48 hours or more', expect.objectContaining({ connectionId: 'stuck', companyId: 'co-1', daysPastMark }))
+    }
+
+    // Every other run says nothing: once a day, not once a run.
+    for (const at of [NOW - SYNC_WINDOW_MS, NOW + SYNC_WINDOW_MS, NOW + DAY - SYNC_WINDOW_MS, NOW + DAY + SYNC_WINDOW_MS, NOW + 12 * HOUR]) {
+      errors.mockClear()
+      const other = stub({ bank_connections: [{ data: [], error: null }, { data: rows(at), error: null }] })
+      expect((await runOpenPaymentsCron(other.supabase, log, { now: at })).stuck).toBe(0)
+      expect(errors).not.toHaveBeenCalled()
+    }
   })
 
   it('is a truthful no-op on syncs without a connector key, after the sweep and the expiry pass', async () => {

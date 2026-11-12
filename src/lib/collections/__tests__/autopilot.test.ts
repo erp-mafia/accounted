@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { eventBus } from '@/lib/events'
+import type { Logger } from '@/lib/logger'
 import { runWithTrace } from '@/lib/observability/trace-context-node'
-import { bankExclusion, batchTitle, ladderDueCutoff, resolveBatchOwner, runLadderCron, scanDecision } from '../autopilot'
+import { bankExclusion, batchTitle, ladderDueCutoff, LADDER_RUN_BUDGET_MS, resolveBatchOwner, runLadderCron, scanDecision } from '../autopilot'
 import { COLLECTIONS_BATCH_TYPE, type BatchParams } from '../batch'
 import { batches, caseAfter, gather, LADDER_ENV, ladderWorld, OWNER_ID, stage } from './batch-fixtures'
 import { CUSTOMER_ID, ENV_ON, INVOICE_ID, OPENED_AT, type CaseWorld } from './case-fixtures'
@@ -387,5 +389,74 @@ describe('runLadderCron', () => {
       }),
     )
     expect(summary).toMatchObject({ companies: 1, failed: 1, staged: 0 })
+  })
+
+  describe('inside the run budget', () => {
+    /** Three companies on the ladder; each one's turn takes a minute of the run's clock. */
+    async function threeCompanies() {
+      const world = await ladderWorld()
+      const base = world.db.rows('collection_connections')[0]!
+      world.db.rows('collection_connections').length = 0
+      // Stored out of order: the run must not depend on how the rows come back.
+      world.db.seed('collection_connections', ['company-c', 'company-a', 'company-b'].map((company_id) => ({ ...base, id: `conn-${company_id}`, company_id })))
+      const timer = { ms: 0 }
+      const visited: string[] = []
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+      const deps = (overrides: Partial<Parameters<typeof runLadderCron>[0]> = {}) =>
+        cronDeps(world, {
+          clock: () => timer.ms,
+          log: logger as unknown as Logger,
+          // Gated: the order and the deadline are what is under test, not the staging.
+          loadFacts: async (_db, companyId) => {
+            visited.push(companyId)
+            timer.ms += 60_000
+            return world.facts({ capability: false })
+          },
+          ...overrides,
+        })
+      return { world, timer, visited, logger, deps }
+    }
+
+    it('stops at the deadline, counts the companies it did not reach and reports them as an error', async () => {
+      // There was no limit at all: past maxDuration the run was killed wherever it stood.
+      const { visited, logger, deps } = await threeCompanies()
+      const summary = await runLadderCron(deps({ deadlineMs: 120_000 }))
+      expect(visited).toEqual(['company-a', 'company-b'])
+      expect(summary).toMatchObject({ companies: 2, gated: 2, notReached: 1 })
+      expect(logger.error).toHaveBeenCalledTimes(1)
+      expect(logger.error).toHaveBeenCalledWith('collections ladder ran out of time before every company was reached', { notReached: 1, reached: 2 })
+    })
+
+    it('reaches every company inside the default budget, and says nothing', async () => {
+      const { visited, logger, deps } = await threeCompanies()
+      const summary = await runLadderCron(deps())
+      expect(LADDER_RUN_BUDGET_MS).toBe(240_000)
+      expect(visited).toEqual(['company-a', 'company-b', 'company-c'])
+      expect(summary).toMatchObject({ companies: 3, notReached: 0 })
+      expect(logger.error).not.toHaveBeenCalled()
+    })
+
+    it('takes the companies without today\'s batch first, so a rerun does not spend its time on the staged ones', async () => {
+      const { world, visited, deps } = await threeCompanies()
+      const now = world.now()
+      world.db.seed('pending_operations', [
+        // Today's batch, already approved: nothing more to do for company-a today.
+        { id: 'op-a', company_id: 'company-a', operation_type: COLLECTIONS_BATCH_TYPE, status: 'committed', params: { batch_date: todayIsoStockholm(now) }, created_at: new Date(now.getTime() - 3_600_000).toISOString() },
+        // Yesterday's, done: company-c still needs today's.
+        { id: 'op-c', company_id: 'company-c', operation_type: COLLECTIONS_BATCH_TYPE, status: 'committed', params: { batch_date: '2000-01-01' }, created_at: new Date(now.getTime() - 26 * 3_600_000).toISOString() },
+      ])
+      const summary = await runLadderCron(deps({ deadlineMs: 120_000 }))
+      expect(visited).toEqual(['company-b', 'company-c'])
+      expect(summary.notReached).toBe(1)
+    })
+
+    it('runs in plain order when the order lookup fails', async () => {
+      const { world, visited, logger, deps } = await threeCompanies()
+      // The expiry sweep is an update; the only read here is the order lookup (the companies are gated).
+      world.db.failures.set('pending_operations:select', { message: 'down' })
+      await runLadderCron(deps())
+      expect(visited).toEqual(['company-a', 'company-b', 'company-c'])
+      expect(logger.warn).toHaveBeenCalledWith('collections batch order lookup failed; companies run in plain order', { error: 'down' })
+    })
   })
 })

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
-import { runLadderCron } from '@/lib/collections/autopilot'
+import { LADDER_RUN_BUDGET_MS, runLadderCron } from '@/lib/collections/autopilot'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -19,7 +19,7 @@ export const maxDuration = 300
  */
 export const GET = withCronContext('cron.collections_ladder', async (_request, ctx) => {
   try {
-    const summary = await runLadderCron({ db: createServiceClient(), log: ctx.log })
+    const summary = await runLadderCron({ db: createServiceClient(), log: ctx.log, deadlineMs: ctx.startedAt + LADDER_RUN_BUDGET_MS })
     ctx.log.info('collections ladder summary', { ...summary })
     return NextResponse.json({ data: summary })
   } catch (err) {

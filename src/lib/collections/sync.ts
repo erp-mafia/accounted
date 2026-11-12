@@ -95,6 +95,15 @@ export const FAKE_CASE_REFRESH_MS = 2 * 60_000
  * Connect, a read 30 s. What is left waits for the next run.
  */
 export const SYNC_RUN_BUDGET_MS = 270_000
+/**
+ * The slice of the run the connection poll may use, counted from the start
+ * of the run and checked before each connection (one read can wait 30 s at
+ * the provider). The poll used to run before the run's clock started: up to
+ * SYNC_CONNECTION_BATCH reads with no deadline, ahead of the forwards a
+ * customer's payment waits on. A connection it does not reach is polled by
+ * the next run, which takes the longest unpolled first.
+ */
+export const CONNECTION_POLL_BUDGET_MS = 45_000
 
 export interface CollectionsCaseSyncSummary {
   released: number
@@ -109,6 +118,8 @@ export interface CollectionsSyncSummary {
   polled: number
   changed: number
   failed: number
+  /** Connections due for a poll that the poll's time slice did not reach. */
+  pollNotReached: number
   forwardRows: ForwardReconcileSummary
   forwards: ForwardDrainSummary
   sweepUpkeep: SweepUpkeepSummary
@@ -166,18 +177,33 @@ export interface CollectionsSyncDeps {
   /** Wall-clock milliseconds for the run budget (default Date.now; independent of `now`, which tests freeze). */
   clock?: () => number
   budgetMs?: number
+  /** When the route started, on the clock's scale (ctx.startedAt): the budget counts from here. Default: now. */
+  startedAtMs?: number
+}
+
+/**
+ * One failure in a run. `row` marks a failure of one case or connection,
+ * which lands on its own row and is retried there; the rest are a whole
+ * part of the run failing.
+ */
+interface RunFailure {
+  part: string
+  message: string
+  row: boolean
 }
 
 export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<CollectionsSyncSummary> {
   const env = deps.env ?? readCollectionsEnv()
   const now = () => (deps.now ? deps.now() : new Date())
-  const errors: string[] = []
+  const errors: RunFailure[] = []
 
-  const connections = await pollConnections(deps, env, errors)
+  // The clock starts before the first provider call: maxDuration is
+  // wall-clock for the whole route, the connection poll included.
   const clock = deps.clock ?? Date.now
   const budget = deps.budgetMs ?? SYNC_RUN_BUDGET_MS
-  const runStarted = clock()
+  const runStarted = deps.startedAtMs ?? clock()
   const left = () => Math.max(0, budget - (clock() - runStarted))
+  const connections = await pollConnections(deps, env, errors, () => clock() - runStarted >= Math.min(CONNECTION_POLL_BUDGET_MS, budget))
   const beforeSettlements = () => Math.max(0, left() - SETTLEMENT_SYNC_RESERVE_MS)
   const forwardRows = await guarded('forward reconcile', errors, EMPTY_FORWARD_ROWS, () => reconcileForwardRows(deps.db))
   const forwards = await drainForwards(deps, now, errors)
@@ -196,7 +222,9 @@ export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<Col
       const result = await sweepCollectionPayments({ ...sweepDeps, budgetMs })
       return { ...result, complete: clock() - startedAt <= budgetMs }
     })
-    reconcile = await guarded('daily reconcile', errors, { ...EMPTY_RECONCILE, complete: false }, () =>
+    // One part name with the other runs' reconcile: a reconcile that keeps
+    // failing is one part that keeps failing, not a new one once a night.
+    reconcile = await guarded('reconcile', errors, { ...EMPTY_RECONCILE, complete: false }, () =>
       reconcileCases({ ...sweepDeps, budgetMs: beforeSettlements() }, { only: 'all' }),
     )
     const { complete, ...sweepSummary } = sweep
@@ -220,11 +248,34 @@ export async function runCollectionsSync(deps: CollectionsSyncDeps): Promise<Col
     runSettlementSync(settlementDeps, { importAll: nightly !== null, budgetMs: left(), clock }),
   )
 
+  // Each part's failure is caught so the others still run, logged as a
+  // warning, and the run answers 200, so a part that failed every ten
+  // minutes reached nobody. Now a part that starts failing is an error, once:
+  // the parts that failed are kept in last_error (which nothing else reads),
+  // and while the same parts keep failing run after run (a provider outage
+  // is 144 runs a day) it stays a warning. A single case's or connection's
+  // failure is not a part: it is on its own row and retried there.
+  const failedPartErrors = errors.filter((e) => !e.row)
+  const failedParts = [...new Set(failedPartErrors.map((e) => e.part))].sort()
+  const failedBefore = await readFailedParts(deps.db)
+  const newlyFailing = failedParts.filter((part) => !failedBefore.has(part))
+  const lastError = failedPartErrors.length > 0
+    ? `${FAILED_PARTS_MARK}${failedParts.join('|')}; ${failedPartErrors[failedPartErrors.length - 1]!.message}`
+    : errors[errors.length - 1]?.message ?? null
   const { error: stateError } = await deps.db
     .from('collection_sync_state')
-    .update({ last_run_at: now().toISOString(), last_error: errors[errors.length - 1] ?? null })
+    .update({ last_run_at: now().toISOString(), last_error: lastError })
     .eq('id', 1)
   if (stateError) log.warn('collection_sync_state update failed', { error: stateError.message })
+  if (failedParts.length > 0) {
+    const report = {
+      parts: failedParts,
+      newlyFailing,
+      errors: failedPartErrors.map((e) => `${e.part}: ${e.message}`.slice(0, 300)),
+    }
+    if (newlyFailing.length > 0) log.error('collections sync: parts of the run failed', report)
+    else log.warn('collections sync: the same parts of the run still fail', report)
+  }
   return { ...connections, forwardRows, forwards, sweepUpkeep: upkeep, cases, nightly, reconcile, collected, settlements }
 }
 
@@ -235,15 +286,35 @@ const EMPTY_SETTLEMENTS: SettlementSyncSummary = { imported: 0, booked: 0, needs
 const EMPTY_RECONCILE: CaseReconcileSummary = { checked: 0, mismatched: 0, paused: 0, resent: 0, failed: 0, complete: true }
 
 /** Run one part of the sync; its failure is recorded and never stops the rest. */
-async function guarded<T>(scope: string, errors: string[], fallback: T, run: () => Promise<T>): Promise<T> {
+async function guarded<T>(scope: string, errors: RunFailure[], fallback: T, run: () => Promise<T>): Promise<T> {
   try {
     return await run()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    errors.push(message)
+    errors.push({ part: scope, message, row: false })
     log.warn(`collections ${scope} failed`, { error: message })
     return fallback
   }
+}
+
+/** How last_error names the parts that failed in its run: `parts=a|b; <last message>`. */
+const FAILED_PARTS_MARK = 'parts='
+
+/**
+ * The parts that failed in the previous run, from its last_error. Empty when
+ * none did, or when it cannot be read: a part then reads as newly failing,
+ * which errs on the side of saying it.
+ */
+async function readFailedParts(db: SupabaseClient): Promise<Set<string>> {
+  const { data, error } = await db.from('collection_sync_state').select('last_error').eq('id', 1).maybeSingle()
+  if (error) {
+    log.warn('collection_sync_state lookup failed', { error: error.message })
+    return new Set()
+  }
+  const stored = (data as { last_error: string | null } | null)?.last_error ?? ''
+  if (!stored.startsWith(FAILED_PARTS_MARK)) return new Set()
+  const end = stored.indexOf(';')
+  return new Set(stored.slice(FAILED_PARTS_MARK.length, end === -1 ? undefined : end).split('|').filter(Boolean))
 }
 
 async function readLastDailyAt(db: SupabaseClient): Promise<string | null> {
@@ -257,7 +328,7 @@ async function readLastDailyAt(db: SupabaseClient): Promise<string | null> {
 
 const EMPTY_FORWARD_SUMMARY: ForwardDrainSummary = { claimed: 0, reported: 0, reverted: 0, skipped: 0, retried: 0, failed: 0, leaseLost: 0 }
 
-async function drainForwards(deps: CollectionsSyncDeps, now: () => Date, errors: string[]): Promise<ForwardDrainSummary> {
+async function drainForwards(deps: CollectionsSyncDeps, now: () => Date, errors: RunFailure[]): Promise<ForwardDrainSummary> {
   try {
     return await drainCollectionForwards({
       db: deps.db,
@@ -269,7 +340,7 @@ async function drainForwards(deps: CollectionsSyncDeps, now: () => Date, errors:
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    errors.push(message)
+    errors.push({ part: 'forwards drain', message, row: false })
     log.warn('collections forwards drain failed', { error: message })
     return { ...EMPTY_FORWARD_SUMMARY }
   }
@@ -278,8 +349,10 @@ async function drainForwards(deps: CollectionsSyncDeps, now: () => Date, errors:
 async function pollConnections(
   deps: CollectionsSyncDeps,
   env: CollectionsEnv,
-  errors: string[],
-): Promise<{ polled: number; changed: number; failed: number }> {
+  errors: RunFailure[],
+  /** Whether the poll's slice of the run is used up. */
+  outOfTime: () => boolean,
+): Promise<{ polled: number; changed: number; failed: number; pollNotReached: number }> {
   const { data, error } = await deps.db
     .from('collection_connections')
     .select('*')
@@ -290,8 +363,13 @@ async function pollConnections(
 
   const rows = ((data ?? []) as Record<string, unknown>[]).map(normalizeConnectionRow)
   const due = rows.filter((row) => row.connection_handle !== null || row.submitted_at !== null)
-  const summary = { polled: due.length, changed: 0, failed: 0 }
-  for (const row of due) {
+  const summary = { polled: 0, changed: 0, failed: 0, pollNotReached: 0 }
+  for (const [index, row] of due.entries()) {
+    if (outOfTime()) {
+      summary.pollNotReached = due.length - index
+      break
+    }
+    summary.polled++
     try {
       const after = await refreshRow(
         { db: deps.db, companyId: row.company_id, actor: null, env, now: deps.now, adapterFor: deps.adapterFor },
@@ -301,7 +379,7 @@ async function pollConnections(
     } catch (err) {
       summary.failed++
       const message = err instanceof Error ? err.message : String(err)
-      errors.push(message)
+      errors.push({ part: 'connection poll', message, row: true })
       log.warn('collections connection poll failed', { connectionId: row.id, companyId: row.company_id, error: message })
     }
   }
@@ -312,7 +390,7 @@ function changedState(before: CollectionConnectionRow, after: CollectionConnecti
   return before.state !== after.state || before.sub_status !== after.sub_status
 }
 
-async function syncCases(deps: CollectionsSyncDeps, now: () => Date, errors: string[]): Promise<CollectionsCaseSyncSummary> {
+async function syncCases(deps: CollectionsSyncDeps, now: () => Date, errors: RunFailure[]): Promise<CollectionsCaseSyncSummary> {
   const summary: CollectionsCaseSyncSummary = { released: 0, retried: 0, registered: 0, changes: 0, refreshed: 0, failed: 0 }
   const clock = deps.clock ?? Date.now
   const startedAt = clock()
@@ -329,7 +407,8 @@ async function syncCases(deps: CollectionsSyncDeps, now: () => Date, errors: str
         : typeof (err as { message?: unknown })?.message === 'string'
           ? (err as { message: string }).message
           : String(err)
-    errors.push(message)
+    // Without a case id the lookup or the feed itself failed: a part of the run.
+    errors.push({ part: scope, message, row: caseId !== null })
     log.warn(`collections ${scope} failed`, { caseId, error: message })
   }
 

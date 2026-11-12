@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -31,6 +32,7 @@ import {
   detectExpiringBankConnections,
   detectNoFiscalYear,
   detectOtherAccountHint,
+  detectPosConnectionAction,
   detectSkvDisconnected,
   detectSkvUnexplained,
   expiringBankConnectionsFrom,
@@ -635,6 +637,60 @@ describe('never-throws contract', () => {
     await expect(detectBackupFailing(throwing, COMPANY)).resolves.toBeNull()
     await expect(detectOtherAccountHint(throwing, COMPANY, USER)).resolves.toBeNull()
     await expect(detectNoFiscalYear(throwing, COMPANY)).resolves.toBeNull()
+    await expect(detectPosConnectionAction(throwing, COMPANY)).resolves.toBeNull()
+  })
+})
+
+// Before: a POS connection waiting for a person showed only on the Kassa page
+// and in its settings.
+describe('detectPosConnectionAction', () => {
+  it('stays quiet when no active connection waits for a person', async () => {
+    enqueue({ data: [] })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toBeNull()
+    expect(findCalls('pos_connections', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['status', 'active'],
+      ['health', 'action_required'],
+    ])
+  })
+
+  it('names the one venue and links to the Kassa settings', async () => {
+    enqueue({ data: [{ id: 'p1', venue_name: 'Restaurang Exempel' }] })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toEqual({
+      id: 'pos_connection_action:p1',
+      category: 'pos_connection_action',
+      severity: 'error',
+      messageKey: 'pos_action_one',
+      messageParams: { venue: 'Restaurang Exempel' },
+      actionKey: 'pos_action_action',
+      actionHref: '/settings/pos',
+    })
+  })
+
+  it('folds several venues into one counted notice with an id stable across orderings', async () => {
+    enqueue({ data: [{ id: 'p1', venue_name: 'A' }, { id: 'p2', venue_name: 'B' }] })
+    const first = await detectPosConnectionAction(supabase, COMPANY)
+    enqueue({ data: [{ id: 'p2', venue_name: 'B' }, { id: 'p1', venue_name: 'A' }] })
+    const second = await detectPosConnectionAction(supabase, COMPANY)
+    expect(first).toMatchObject({ messageKey: 'pos_action_many', messageParams: { count: 2 } })
+    expect(first!.id).toMatch(/^pos_connection_action:2@[0-9a-f]{8}$/)
+    expect(second!.id).toBe(first!.id)
+  })
+
+  it('soft-fails to null on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(detectPosConnectionAction(supabase, COMPANY)).resolves.toBeNull()
+  })
+
+  it('has its wording in both locales', () => {
+    // Read from disk: importing the two message files through the test
+    // transform takes seconds on a loaded machine.
+    for (const locale of ['sv', 'en']) {
+      const { notices } = JSON.parse(readFileSync(`src/messages/${locale}.json`, 'utf8')) as { notices: Record<string, string> }
+      for (const key of ['pos_action_one', 'pos_action_many', 'pos_action_action']) {
+        expect(notices[key], `${locale}.${key}`).toBeTruthy()
+      }
+    }
   })
 })
 

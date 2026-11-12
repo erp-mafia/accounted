@@ -3,10 +3,24 @@ import type { CollectionsChanges, CollectionsChangesRequest } from '@accounted/c
 import { eventBus } from '@/lib/events'
 import { openCollectionCase } from '../open-case'
 import { applyCaseSnapshot, loadCaseById } from '../case'
-import { changeFeedStart, nightlyDue, runCollectionsSync, SETTLEMENT_SYNC_RESERVE_MS, submissionRetryDelayMs } from '../sync'
+import { changeFeedStart, CONNECTION_POLL_BUDGET_MS, nightlyDue, runCollectionsSync, SETTLEMENT_SYNC_RESERVE_MS, submissionRetryDelayMs } from '../sync'
 import type { CollectionsAdapter } from '../port'
 import { CONNECTION_ID, createCaseWorld, ENV_OFF, INVOICE_ID, MINUTE, OPENED_AT, retryableError, type CaseWorld } from './case-fixtures'
 import { COMPANY_ID } from './memory-supabase'
+
+// Only the sync's own error and warning logs are captured: the error is what reaches the error tracker.
+const syncLogError = vi.hoisted(() => vi.fn())
+const syncLogWarn = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => {
+      const logger = actual.createLogger(module, base)
+      return module === 'collections/sync' ? { ...logger, error: syncLogError, warn: syncLogWarn } : logger
+    },
+  }
+})
 
 vi.mock('../case-document', async () => {
   const { TEST_DOCUMENT: document } = await import('./case-fixtures')
@@ -264,6 +278,57 @@ describe('runCollectionsSync: cases', () => {
     const summary = await runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => broken, feedAdapter: null })
     expect(summary.cases.failed).toBe(1)
     expect(world.db.rows('collection_cases')[0]).toMatchObject({ sync_error: 'CONNECTOR_UNREACHABLE', stage: 'registered', is_open: true })
+    // One case's failure is on its own row and retried there: not an alert.
+    expect(syncLogError).not.toHaveBeenCalled()
+  })
+})
+
+describe('runCollectionsSync: the connection poll inside the run budget', () => {
+  /** Three activations under way, each poll taking 30 s of the run's clock. */
+  async function pollWorld() {
+    const world = await createCaseWorld()
+    const base = world.db.rows('collection_connections')[0]
+    world.db.rows('collection_connections').length = 0
+    world.db.seed('collection_connections', ['a', 'b', 'c'].map((id, i) => ({
+      ...base, id: `connecting-${id}`, company_id: `company-${id}`, state: 'connecting',
+      updated_at: new Date(OPENED_AT + i * MINUTE).toISOString(),
+    })))
+    const timer = { ms: 0 }
+    const polled: string[] = []
+    const adapter: CollectionsAdapter = {
+      ...world.adapter,
+      async connection(ctx) {
+        polled.push(ctx.companyId)
+        timer.ms += 30_000
+        // What the read answers does not matter here: the poll counts it either way.
+        throw retryableError()
+      },
+    }
+    return { world, timer, polled, adapter }
+  }
+
+  it('checks its slice of the run before each connection and leaves the rest to the next run', async () => {
+    // The poll ran before the run's clock started: up to 200 provider reads of 30 s with no deadline.
+    const { world, timer, polled, adapter } = await pollWorld()
+    const summary = await runCollectionsSync({
+      db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => adapter, feedAdapter: null, clock: () => timer.ms,
+    })
+    // 0 s and 30 s are inside the 45 s slice; at 60 s the third waits.
+    expect(CONNECTION_POLL_BUDGET_MS).toBe(45_000)
+    // The longest unpolled first; the third is first in line next run.
+    expect(polled).toEqual(['company-a', 'company-b'])
+    expect(summary).toMatchObject({ polled: 2, failed: 2, pollNotReached: 1 })
+  })
+
+  it('counts the budget from the start of the route, not from after the poll', async () => {
+    const { world, timer, polled, adapter } = await pollWorld()
+    const summary = await runCollectionsSync({
+      db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => adapter, feedAdapter: null, clock: () => timer.ms,
+      // The route had already run for a minute when the sync started.
+      startedAtMs: -60_000,
+    })
+    expect(polled).toEqual([])
+    expect(summary).toMatchObject({ polled: 0, pollNotReached: 3 })
   })
 })
 
@@ -327,5 +392,71 @@ describe('runCollectionsSync: the nightly sweep and reconcile', () => {
     const summary = await runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => world.adapter, feedAdapter: null })
     expect(order.slice(0, 2)).toEqual(['reconcile', 'claim'])
     expect(summary.forwardRows).toEqual({ createdPayments: 0, createdCredits: 0, reverted: 0, skipped: 0 })
+    // The failed part was a warning in a run that answered 200, and the stored
+    // last_error is read by nothing: one error per run names the parts.
+    expect(syncLogError).toHaveBeenCalledTimes(1)
+    expect(syncLogError).toHaveBeenCalledWith('collections sync: parts of the run failed', {
+      parts: ['forward reconcile'],
+      newlyFailing: ['forward reconcile'],
+      errors: [expect.stringContaining('forward reconcile: ')],
+    })
+  })
+
+  it('reports a part as an error when it starts failing, and as a warning while it keeps failing', async () => {
+    // A provider outage fails the same part in all 144 runs a day: one error, not 144.
+    const world = await createCaseWorld()
+    await handedOver(world)
+    world.db.rpcs.set('reconcile_collection_forwards', () => {
+      throw new Error('boom')
+    })
+    const run = () => runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => world.adapter, feedAdapter: null })
+    const repeats = () => syncLogWarn.mock.calls.filter(([message]) => message === 'collections sync: the same parts of the run still fail')
+
+    await run()
+    expect(syncLogError).toHaveBeenCalledTimes(1)
+    // The parts are what the next run compares against.
+    expect(world.db.rows('collection_sync_state')[0]!.last_error).toBe('parts=forward reconcile; boom')
+
+    syncLogError.mockClear()
+    await run()
+    expect(syncLogError).not.toHaveBeenCalled()
+    expect(repeats()).toEqual([['collections sync: the same parts of the run still fail', expect.objectContaining({ parts: ['forward reconcile'], newlyFailing: [] })]])
+
+    // Another part failed last time, this one did not: it is new.
+    world.db.rows('collection_sync_state')[0]!.last_error = 'parts=settlements; payout import down'
+    await run()
+    expect(syncLogError).toHaveBeenCalledWith('collections sync: parts of the run failed', expect.objectContaining({ newlyFailing: ['forward reconcile'] }))
+
+    // Once it runs again, nothing is stored, and a later failure is new again.
+    world.db.rpcs.set('reconcile_collection_forwards', () => ({ created_payments: 0, created_credits: 0, reverted: 0, skipped: 0 }))
+    syncLogError.mockClear()
+    await run()
+    expect(world.db.rows('collection_sync_state')[0]!.last_error).toBeNull()
+    expect(syncLogError).not.toHaveBeenCalled()
+  })
+
+  it('names the nightly and the ordinary reconcile as one part: one that keeps failing is not new again after each night', async () => {
+    const world = await createCaseWorld()
+    await handedOver(world)
+    world.db.failures.set('collection_cases:select', { message: 'cases down' })
+    const run = () => runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => world.adapter, feedAdapter: null })
+
+    // A nightly run: the full reconcile fails with the rest.
+    await run()
+    expect(syncLogError).toHaveBeenCalledTimes(1)
+    expect(String(world.db.rows('collection_sync_state')[0]!.last_error)).toMatch(/^parts=[^;]*\breconcile\b/)
+
+    // An ordinary run after it: the same reconcile part, still failing.
+    syncLogError.mockClear()
+    world.db.rows('collection_sync_state')[0]!.last_daily_at = world.now().toISOString()
+    world.clock.now += 10 * MINUTE
+    await run()
+    expect(syncLogError).not.toHaveBeenCalled()
+  })
+
+  it('says nothing at error level when every part ran', async () => {
+    const world = await createCaseWorld()
+    await runCollectionsSync({ db: world.db.client, env: ENV_OFF, now: world.now, adapterFor: () => world.adapter, feedAdapter: null })
+    expect(syncLogError).not.toHaveBeenCalled()
   })
 })

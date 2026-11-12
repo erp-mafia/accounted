@@ -40,7 +40,7 @@ import { mapWithConcurrency } from '@/lib/concurrency'
 import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { Logger } from '@/lib/logger'
-import { getBankFeedConnect } from './connect'
+import { AIS_CONNECT_TIMEOUT_MS, AIS_SYNC_TIMEOUT_MS, getBankFeedConnect } from './connect'
 import { bankFeedPilotAdmits } from './door'
 import { CONSENT_EXPIRED_MESSAGE, runOpenPaymentsSync } from './feed'
 import { SYNC_DUE_AFTER_MS } from './lease'
@@ -48,8 +48,23 @@ import { SYNC_DUE_AFTER_MS } from './lease'
 export const STALE_ATTEMPT_MS = 60 * 60 * 1000
 /** Banks synced in parallel; within one bank the connections go one at a time. */
 export const CRON_CONCURRENCY = 4
-/** No sync starts past this; what is left is caught up in a later window. */
-export const CRON_TIME_BUDGET_MS = 230_000
+/** The route's maxDuration (app/api/bank/open-payments/sync/cron/route.ts). */
+export const CRON_ROUTE_LIMIT_MS = 300_000
+/** What one account needs after its reads: archive, ingest, the result and the announcement. */
+export const ACCOUNT_STORE_MARGIN_MS = 20_000
+/**
+ * No sync starts, and no account is read, later than this into the run,
+ * counted from the start of the route. One account is a transactions read
+ * (up to AIS_SYNC_TIMEOUT_MS, 120 s, at Connect), then archive and ingest,
+ * then a balance read when the stored one is old (up to AIS_CONNECT_TIMEOUT_MS,
+ * 30 s): the account started last still ends inside the route's limit, 130 s
+ * in all. The budget used to be 230 s counted from after steps 1 and 2 and
+ * checked only before a connection, so a read started at its end ran past
+ * the limit. What is left is caught up in a later window.
+ */
+export const CRON_TIME_BUDGET_MS = CRON_ROUTE_LIMIT_MS - AIS_SYNC_TIMEOUT_MS - AIS_CONNECT_TIMEOUT_MS - ACCOUNT_STORE_MARGIN_MS
+/** An active connection this long without a sync is reported, and again every day it stays so (see runOpenPaymentsCron step 3). */
+export const STUCK_AFTER_MS = 48 * 60 * 60 * 1000
 /** The day in ten-minute windows: 144, of which a connection owns two, twelve hours apart. */
 export const SYNC_WINDOW_MS = 10 * 60 * 1000
 export const WINDOWS_PER_DAY = 144
@@ -130,6 +145,8 @@ export interface OpenPaymentsCronResult {
   skipped: { notAdmitted: number; notEntitled: number; noAccounts: number; fresh: number; leased: number; notScheduled: number; budget: number }
   /** Connections taken outside their window because they had waited CATCHUP_AFTER_MS. */
   caughtUp: number
+  /** Active connections reported this run for going STUCK_AFTER_MS or more without a sync (once a day each). */
+  stuck: number
   /** Stored rows the re-reads updated with the bank's daily enrichment, over every synced connection. */
   enrichedUpdated: number
   /** Synced connections whose window carried today's enrichment, did not, or whose bank said nothing. */
@@ -139,14 +156,21 @@ export interface OpenPaymentsCronResult {
 export async function runOpenPaymentsCron(
   supabase: SupabaseClient,
   log: Logger,
-  options: { now?: number; baseUrl?: string } = {},
+  options: {
+    now?: number
+    baseUrl?: string
+    /** When the route started (ctx.startedAt): the time budget counts from here, steps 1 and 2 included. */
+    startedAt?: number
+  } = {},
 ): Promise<OpenPaymentsCronResult> {
+  const deadlineMs = (options.startedAt ?? Date.now()) + CRON_TIME_BUDGET_MS
   const now = options.now ?? Date.now()
   const baseUrl = options.baseUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
   const result: OpenPaymentsCronResult = {
     connector: false, staleAttemptsRemoved: 0, expired: 0, renewalNoticed: 0, due: 0, synced: 0, failed: 0,
     skipped: { notAdmitted: 0, notEntitled: 0, noAccounts: 0, fresh: 0, leased: 0, notScheduled: 0, budget: 0 },
     caughtUp: 0,
+    stuck: 0,
     enrichedUpdated: 0,
     windowEnriched: { yes: 0, no: 0, unknown: 0 },
   }
@@ -259,6 +283,28 @@ export async function runOpenPaymentsCron(
     if (admitted === 'with_capability' && !entitled.has(connection.company_id)) { result.skipped.notEntitled++; continue }
     if (!(connection.accounts_data ?? []).some((a) => isSyncedAccount(a))) { result.skipped.noAccounts++; continue }
     const synced = connection.last_synced_at ? new Date(connection.last_synced_at).getTime() : null
+    // A connection the cron is meant to read (admitted, paid, with accounts)
+    // that has gone STUCK_AFTER_MS without a sync: a bank that keeps
+    // answering unavailable, a hold renewed every six hours. Each retry only
+    // warns, so nobody heard of it. Reported in the ten-minute window its age
+    // passes the mark, and in that same window of every day after while it
+    // stays stuck: once a day, not once a run, and a run that is skipped,
+    // fails before this step or finds the connection outside the plan that
+    // day costs a day, never the report. A connection that never synced
+    // counts from when it was made.
+    const stuckAt = (synced ?? new Date(connection.created_at).getTime()) + STUCK_AFTER_MS
+    const windowsPastMark = Math.floor(now / SYNC_WINDOW_MS) - Math.floor(stuckAt / SYNC_WINDOW_MS)
+    if (connection.status === 'active' && windowsPastMark >= 0 && windowsPastMark % WINDOWS_PER_DAY === 0) {
+      result.stuck++
+      log.error('open payments connection has not synced for 48 hours or more', {
+        connectionId: connection.id,
+        companyId: connection.company_id,
+        bank: connection.bank_name,
+        lastSyncedAt: connection.last_synced_at,
+        daysPastMark: windowsPastMark / WINDOWS_PER_DAY,
+        leaseUntil: connection.sync_lease_until,
+      })
+    }
     if (synced !== null && now - synced < SYNC_DUE_AFTER_MS) { result.skipped.fresh++; continue }
     const lease = connection.sync_lease_until ? new Date(connection.sync_lease_until).getTime() : 0
     if (lease > now) { result.skipped.leased++; continue }
@@ -281,10 +327,9 @@ export async function runOpenPaymentsCron(
     const key = connection.bic ?? connection.bank_name ?? 'unknown'
     byBank.set(key, [...(byBank.get(key) ?? []), connection])
   }
-  const startedRun = Date.now()
   await mapWithConcurrency([...byBank.values()], CRON_CONCURRENCY, async (group) => {
     for (const connection of group) {
-      if (Date.now() - startedRun > CRON_TIME_BUDGET_MS) {
+      if (Date.now() >= deadlineMs) {
         result.skipped.budget++
         continue
       }
@@ -297,6 +342,7 @@ export async function runOpenPaymentsCron(
           trigger: 'cron',
           unattended: true,
           connect,
+          deadlineMs,
         })
         if (outcome.ok) {
           result.synced++
@@ -304,6 +350,10 @@ export async function runOpenPaymentsCron(
           if (outcome.window_enriched === true) result.windowEnriched.yes++
           else if (outcome.window_enriched === false) result.windowEnriched.no++
           else result.windowEnriched.unknown++
+        } else if (outcome.deadline_reached) {
+          // Stopped between two accounts: not a failure, and not stamped as
+          // synced, so it is still due and caught up like the ones not started.
+          result.skipped.budget++
         } else {
           result.failed++
         }

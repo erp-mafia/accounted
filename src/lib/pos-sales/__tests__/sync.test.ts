@@ -121,8 +121,8 @@ describe('syncPosConnection', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3)
     const conn = db.tables.pos_connections[0]
     expect(conn.synced_through).toBe('2026-09-27')
-    // Days are still missing: a catch-up run an hour later, under the provider's hourly limit.
-    expect(conn.next_run_at).toBe(new Date(NOW.getTime() + 60 * 60 * 1000).toISOString())
+    // Days are still missing: due for the next hourly run, under the provider's hourly limit.
+    expect(conn.next_run_at).toBe(new Date(NOW.getTime() + 50 * 60 * 1000).toISOString())
   })
 
   it('reads the latest unbooked days once more after 18 hours, and stores a changed answer', async () => {
@@ -210,6 +210,93 @@ describe('syncPosConnection', () => {
     const { deps } = connect({ '2026-09-30': fail(502, 'CONNECTOR_POS_PROVIDER_ERROR', true) })
     await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps })
     expect(db.tables.pos_connections[0]).toMatchObject({ health: 'action_required', failures_in_row: 6 })
+  })
+
+  it('reports the turn to action_required once, not every retry after it', async () => {
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    errors.mockClear()
+    const db = createFakeDb({ pos_connections: [connectionRow({ failures_in_row: 5, health: 'degraded' })], pos_sales_days: [] })
+    const { deps } = connect({ '2026-09-30': fail(502, 'CONNECTOR_POS_PROVIDER_ERROR', true) })
+
+    await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps })
+
+    expect(db.tables.pos_connections[0]).toMatchObject({ health: 'action_required', failures_in_row: 6 })
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors).toHaveBeenCalledWith('pos connection needs action; days are no longer fetched', {
+      connectionId: 'conn-1',
+      companyId: COMPANY,
+      code: 'CONNECTOR_POS_PROVIDER_ERROR',
+      failuresInRow: 6,
+    })
+
+    // The six-hourly retry of a connection that already waits for a person.
+    errors.mockClear()
+    await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps })
+    expect(db.tables.pos_connections[0]).toMatchObject({ health: 'action_required', failures_in_row: 7 })
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('a transient failure below the limit stays a warning', async () => {
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    errors.mockClear()
+    const db = createFakeDb({ pos_connections: [connectionRow()], pos_sales_days: [] })
+    const { deps } = connect({ '2026-09-30': fail(502, 'CONNECTOR_POS_PROVIDER_ERROR', true) })
+    await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps })
+    expect(db.tables.pos_connections[0]).toMatchObject({ health: 'degraded' })
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('checks the deadline before each day, and releases the lease with what it fetched', async () => {
+    // One day can wait 65 s at Connect and a run is up to six: the cron's
+    // budget was only checked between connections.
+    const deadlineMs = Date.now() + 60_000
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      const db = createFakeDb({ pos_connections: [connectionRow()], pos_sales_days: [] })
+      const { fetchImpl, deps } = connect({
+        '2026-09-30': () => {
+          // The first day used up the budget.
+          clock.mockReturnValue(deadlineMs + 1)
+          return ok(response('2026-09-30'))()
+        },
+        '2026-10-01': ok(response('2026-10-01')),
+        '2026-10-02': ok(response('2026-10-02')),
+      })
+
+      const result = await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps, deadlineMs })
+
+      expect(result).toMatchObject({ status: 'synced', fetched: ['2026-09-30'], stoppedEarly: true })
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      const conn = db.tables.pos_connections[0]
+      expect(conn).toMatchObject({ synced_through: '2026-09-30', health: 'ok', failures_in_row: 0 })
+      expect(conn.lease_until).toBe(new Date(0).toISOString())
+      // The rest with the next hourly run, not tomorrow morning. An hour from
+      // this sync's start landed after that run's tick (the sync starts some
+      // way into its own run), so the rest waited two hours.
+      expect(conn.next_run_at).toBe(new Date(NOW.getTime() + 50 * 60 * 1000).toISOString())
+      const thisTick = NOW.getTime() - 4 * 60 * 1000
+      expect(Date.parse(conn.next_run_at as string)).toBeLessThan(thisTick + 60 * 60 * 1000)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('a run the deadline stops before its first day only releases the lease: the health is not reset', async () => {
+    const db = createFakeDb({
+      pos_connections: [connectionRow({ health: 'action_required', health_code: 'CONNECTOR_POS_PROVIDER_ERROR', failures_in_row: 6, last_error_code: 'CONNECTOR_POS_PROVIDER_ERROR' })],
+      pos_sales_days: [],
+    })
+    const { fetchImpl, deps } = connect({})
+
+    const result = await syncPosConnection(db.client as unknown as SupabaseClient, 'conn-1', { now: NOW, log, connect: deps, deadlineMs: Date.now() - 1 })
+
+    expect(result).toMatchObject({ status: 'synced', fetched: [], stoppedEarly: true })
+    expect(fetchImpl).not.toHaveBeenCalled()
+    const conn = db.tables.pos_connections[0]
+    // Still waiting for a person, and no success was stamped.
+    expect(conn).toMatchObject({ health: 'action_required', health_code: 'CONNECTOR_POS_PROVIDER_ERROR', failures_in_row: 6, last_success_at: null })
+    expect(conn.lease_until).toBe(new Date(0).toISOString())
+    expect(conn.next_run_at).toBe(new Date(NOW.getTime() + 50 * 60 * 1000).toISOString())
   })
 
   it('leaves a leased connection alone, and reports an ended one as inactive', async () => {

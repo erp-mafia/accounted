@@ -390,6 +390,46 @@ export async function detectSkvDisconnected(
   }
 }
 
+/**
+ * pos_connection_action: point-of-sale connections whose fetch has stopped
+ * and waits for a person (health 'action_required'). Before, that state
+ * showed only on the Kassa page and in its settings, so a company that books
+ * its sales from the day reports learned of it by missing them. Several
+ * venues fold into one counted notice. The id carries the connection ids
+ * only: health_code can change between retries of the same incident.
+ */
+export async function detectPosConnectionAction(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Notice | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pos_connections')
+      .select('id, venue_name')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .eq('health', 'action_required')
+    if (error) return logAndNull('pos_connection_action', companyId, error)
+    const rows = data ?? []
+    if (rows.length === 0) return null
+    return {
+      id: `pos_connection_action:${boundedDiscriminator(rows.map((r) => r.id as string))}`,
+      category: 'pos_connection_action',
+      severity: 'error',
+      messageKey: rows.length === 1 ? 'pos_action_one' : 'pos_action_many',
+      messageParams: rows.length === 1 ? { venue: rows[0].venue_name as string } : { count: rows.length },
+      actionKey: 'pos_action_action',
+      actionHref: '/settings/pos',
+    }
+  } catch (err) {
+    return logAndNull(
+      'pos_connection_action',
+      companyId,
+      err instanceof Error ? { message: err.message } : null,
+    )
+  }
+}
+
 /** Brand names stay untranslated; the sentence around them is localised. */
 const BACKUP_PROVIDER_LABELS: Record<string, string> = {
   google_drive: 'Google Drive',

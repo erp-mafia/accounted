@@ -39,6 +39,7 @@ import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { recordBankFeedPageArrival } from './page-arrival'
+import { accountDedupScope } from './account-scope'
 import { createLogger } from '@/lib/logger'
 
 const archiveLog = createLogger('bank-feed/sync')
@@ -93,6 +94,15 @@ export interface BankFeedAccountSyncInput {
   includeEnrichment?: boolean
   connect?: BankFeedConnect
   now?: number
+  /**
+   * Told the ids of the rows ingest stored, as soon as it has stored them and
+   * before the checks that can still fail this account (rows ingest rejected,
+   * a consent that ended on the balance read). The rows are in the inbox
+   * either way, and a caller that announces stored rows needs them on the
+   * failure path too: the next read finds them as duplicates and never
+   * announces them.
+   */
+  onStored?: (transactionIds: readonly string[]) => void
 }
 
 export interface BankFeedAccountSyncResult {
@@ -119,10 +129,7 @@ function looksLikeIban(value: string | null | undefined): boolean {
   return Boolean(value && /^[A-Z]{2}\d/.test(value.replace(/\s+/g, '').toUpperCase()))
 }
 
-/** The dedup scope of an account: the one it was first ingested under, else the IBAN, else the provider uid. */
-export function accountDedupScope(account: Pick<BankFeedAccount, 'dedup_scope' | 'iban' | 'uid'>): string {
-  return account.dedup_scope || normalizeIban(account.iban) || account.uid
-}
+export { accountDedupScope }
 
 /**
  * The service's rows as ingest rows. External ids come from the same function
@@ -283,6 +290,7 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
   if (input.options?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (input.options?.rawInsertOnly) ingestOptions.rawInsertOnly = true
   const result = await ingest(supabase, companyId, userId, mapped.rows, ingestOptions)
+  input.onStored?.(result.transaction_ids ?? [])
   // Rows in another currency than the account's are set aside by ingest, not
   // a failed batch (crm#1767); the count travels with the result.
   const otherCurrency = Object.values(result.other_currency ?? {}).reduce((sum, rows) => sum + rows, 0)

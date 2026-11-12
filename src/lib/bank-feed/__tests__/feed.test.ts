@@ -37,7 +37,7 @@ vi.mock('../party', async (importOriginal) => ({
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...a: unknown[]) => mocks.emit(...a) } }))
 vi.mock('@/lib/bank-sync/post-sync-sweep', () => ({ sweepAfterOverlappingSync: (...a: unknown[]) => mocks.sweep(...a) }))
 
-import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
+import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import { BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { BankFeedRefusedError, BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, type BankFeedConnect } from '../connect'
@@ -67,8 +67,8 @@ const PRESENT = { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA
 const connect = {} as BankFeedConnect
 
 /** The shared per-table Supabase mock (tests/helpers.ts), keyed by table, answers consumed in call order. */
-function stub(answers: Record<string, unknown[]>) {
-  const mock = createTableMockSupabase(Object.fromEntries(Object.entries(answers).map(([key, value]) => [key, value as TableMockResult[]])))
+function stub(answers: Record<string, unknown[] | TableMockResolver>) {
+  const mock = createTableMockSupabase(Object.fromEntries(Object.entries(answers).map(([key, value]) => [key, value as TableMockResult[] | TableMockResolver])))
   return { supabase: mock.supabase as never, calls: mock.calls, from: mock.supabase.from }
 }
 
@@ -500,6 +500,224 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.party).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ userId: 'owner-1', connectionId: 'conn-1', signer: { personalNumber: null, ipAddress: null, userAgent: null } }))
     const stranger = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: null, error: null }] })
     expect(await run(stranger.supabase)).toEqual({ ok: false, code: 'NOT_FOUND', connection_id: 'conn-1' })
+  })
+
+  it('checks the cron deadline before each account: the unread one leaves the connection due, the rows read are announced', async () => {
+    // One account read can wait 120 s at Connect; the budget used to be checked only before a connection.
+    const deadlineMs = Date.now() + 60_000
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      const accounts = [
+        { uid: 'A', currency: 'SEK', enabled: true, ledger_account: '1930' },
+        { uid: 'B', currency: 'SEK', enabled: true, ledger_account: '1930' },
+      ]
+      const { supabase } = stub({
+        bank_connections: [{ data: row({ accounts_data: accounts }), error: null }],
+        sie_imports: [{ data: null, error: null }],
+        transactions: [{ data: [{ id: 't1' }, { id: 't2' }], error: null }],
+      })
+      mocks.syncAccount.mockImplementationOnce(async () => {
+        // The first account used up the budget.
+        clock.mockReturnValue(deadlineMs + 1)
+        return { imported: 2, duplicates: 0, errors: 0, transactionIds: ['t1', 't2'], returnedMinBookingDate: '2026-10-05', returnedMaxBookingDate: '2026-10-11', requestedFromDate: '2026-10-03', historyNarrowed: false, truncated: false }
+      })
+
+      const result = await run(supabase, { trigger: 'cron', unattended: true, deadlineMs })
+
+      expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_COOLDOWN', connection_id: 'conn-1', deadline_reached: true })
+      expect(mocks.syncAccount).toHaveBeenCalledTimes(1)
+      // Not stamped as synced, and not a failure on the row.
+      expect(mocks.persistResult).not.toHaveBeenCalled()
+      expect(mocks.persistFailure).not.toHaveBeenCalled()
+      expect(mocks.holdLease).not.toHaveBeenCalled()
+      // The rows of the account that was read are announced now: the next read finds them as duplicates.
+      expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('gives its claim back when the deadline stops it, so a person\'s Synka nu is not answered with a cooldown', async () => {
+    const { supabase, calls } = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(supabase, { trigger: 'cron', unattended: true, deadlineMs: Date.now() - 1 })).toMatchObject({ deadline_reached: true })
+    const updates = calls.filter((c) => c.table === 'bank_connections' && c.method === 'update')
+    expect(updates.map((c) => c.args[0])).toEqual([{ sync_lease_until: new Date(NOW).toISOString() }])
+    // Only the claim this sync wrote: a hold written meanwhile stays.
+    expect(calls).toContainEqual({ table: 'bank_connections', method: 'eq', args: ['sync_lease_until', new Date(NOW + SYNC_COOLDOWN_MS).toISOString()] })
+  })
+
+  it('reads nothing when the deadline has passed before the first account, and a sync without a deadline is never stopped', async () => {
+    const past = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(past.supabase, { trigger: 'cron', unattended: true, deadlineMs: Date.now() - 1 })).toMatchObject({ ok: false, deadline_reached: true })
+    expect(mocks.syncAccount).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+
+    const none = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
+    expect(await run(none.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true })
+  })
+
+  describe('a first import over several accounts', () => {
+    const accountA = { uid: 'A', iban: 'SE4550000000058398257466', currency: 'SEK', enabled: true, ledger_account: '1930' }
+    const accountB = { uid: 'B', iban: 'SE3550000000054910000003', currency: 'SEK', enabled: true, ledger_account: '1930' }
+    const read = (rows: string[]) => ({ imported: rows.length, duplicates: 0, errors: 0, transactionIds: rows, returnedMinBookingDate: '2026-07-20', returnedMaxBookingDate: '2026-10-12', requestedFromDate: '2026-07-16', historyNarrowed: false, truncated: false })
+    const firstImportRow = () => row({ initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 3 * 60 * 60_000).toISOString(), accounts_data: [accountA, accountB] })
+
+    /**
+     * The transactions table as the window reads ask it: the newest row an
+     * account stored (by its key's start), the newest row the connection
+     * took over (stored before it was made), and the announcement's read.
+     */
+    function transactions(own: Record<string, string | null>, takenOver: string | null = null): TableMockResolver {
+      return (chain) => {
+        if (chain.some((c) => c.method === 'in')) return { data: [{ id: 'a1' }] }
+        const like = chain.find((c) => c.method === 'like')
+        if (like) {
+          const head = String(like.args[1])
+          const uid = Object.keys(own).find((key) => head.includes(key === 'A' ? accountA.iban : accountB.iban))
+          const date = uid ? own[uid] : null
+          return { data: date ? { date } : null }
+        }
+        if (chain.some((c) => c.method === 'lt' && c.args[0] === 'created_at')) return { data: takenOver ? { date: takenOver } : null }
+        // The connection's newest row, whichever account stored it: what the window was read from before.
+        const newest = [takenOver, ...Object.values(own)].filter((d): d is string => Boolean(d)).sort().pop()
+        return { data: newest ? { date: newest } : null }
+      }
+    }
+
+    it('cut after one account by the deadline, the next attempt still asks the other for its whole history', async () => {
+      // Account A's rows were stored up to today; the window used to start at
+      // the connection's newest row, so B was asked for one week and the
+      // import was then marked done: B's history was short for good.
+      const clock = vi.spyOn(Date, 'now')
+      try {
+        const deadlineMs = Date.now() + 60_000
+        const first = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: null, B: null }) })
+        mocks.syncAccount.mockImplementationOnce(async () => {
+          clock.mockReturnValue(deadlineMs + 1)
+          return read(['a1'])
+        })
+        expect(await run(first.supabase, { trigger: 'cron', unattended: true, deadlineMs })).toMatchObject({ deadline_reached: true })
+        expect(mocks.syncAccount).toHaveBeenCalledTimes(1)
+        expect(mocks.persistResult).not.toHaveBeenCalled()
+        clock.mockRestore()
+
+        // The next attempt: A has stored rows through today, B none.
+        mocks.syncAccount.mockReset().mockResolvedValue(read([]))
+        const second = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: '2026-10-12', B: null }) })
+        const result = await run(second.supabase, { trigger: 'cron', unattended: true })
+
+        const fromOf = (uid: string) => (mocks.syncAccount.mock.calls.find((c) => (c[1] as { account: { uid: string } }).account.uid === uid)![1] as { fromDate: string }).fromDate
+        // A overlaps its own rows by a week; B gets the whole ordinary window.
+        expect(fromOf('A')).toBe('2026-10-05')
+        expect(fromOf('B')).toBe('2026-07-16')
+        expect(result).toMatchObject({ ok: true, from_date: '2026-07-16' })
+        expect(mocks.persistResult).toHaveBeenCalledWith(second.supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-07-16', lookbackDays: 88 }) }))
+        // Each account's rows are found by the start of its own keys.
+        expect(second.calls.filter((c) => c.table === 'transactions' && c.method === 'like').map((c) => c.args)).toEqual([
+          ['external_id', 'eb\\_SE4550000000058398257466\\_%'],
+          ['external_id', 'eb\\_SE3550000000054910000003\\_%'],
+        ])
+      } finally {
+        clock.mockRestore()
+      }
+    })
+
+    it('a failure on the second account leaves its history whole too, and the rows the first stored are announced', async () => {
+      const first = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: null, B: null }) })
+      mocks.syncAccount
+        .mockResolvedValueOnce(read(['a1']))
+        .mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
+      expect(await run(first.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
+      // Before, A's rows stayed unannounced: matching and the forecast never saw them.
+      expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced', payload: expect.objectContaining({ transactions: [{ id: 'a1' }] }) }))
+
+      mocks.syncAccount.mockReset().mockResolvedValue(read([]))
+      const second = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: '2026-10-12', B: null }) })
+      await run(second.supabase, { trigger: 'cron', unattended: true })
+      const callOf = (uid: string) => mocks.syncAccount.mock.calls.find((c) => (c[1] as { account: { uid: string } }).account.uid === uid)![1] as { fromDate: string }
+      expect(callOf('B').fromDate).toBe('2026-07-16')
+      expect(callOf('A').fromDate).toBe('2026-10-05')
+    })
+
+    it('reads the accounts that have stored nothing first, so a retry spends no account\'s reads twice before the rest', async () => {
+      // A cut first import read A; its retry read A again first, one of A's
+      // four unattended reads a day, and a connection that kept landing late
+      // could spend A's budget while B was never read.
+      const clock = vi.spyOn(Date, 'now')
+      try {
+        const deadlineMs = Date.now() + 60_000
+        const { supabase } = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: '2026-10-12', B: null }) })
+        mocks.syncAccount.mockImplementationOnce(async () => {
+          clock.mockReturnValue(deadlineMs + 1)
+          return read(['b1'])
+        })
+        expect(await run(supabase, { trigger: 'cron', unattended: true, deadlineMs })).toMatchObject({ deadline_reached: true })
+        expect(mocks.syncAccount.mock.calls.map((c) => (c[1] as { account: { uid: string } }).account.uid)).toEqual(['B'])
+      } finally {
+        clock.mockRestore()
+      }
+      // Without the deadline both are read, B first.
+      mocks.syncAccount.mockReset().mockResolvedValue(read([]))
+      const whole = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: '2026-10-12', B: null }) })
+      await run(whole.supabase, { trigger: 'cron', unattended: true })
+      expect(mocks.syncAccount.mock.calls.map((c) => (c[1] as { account: { uid: string } }).account.uid)).toEqual(['B', 'A'])
+    })
+
+    it('overlaps the history the connection took over by a week, for an account with no rows of its own', async () => {
+      // A switch from Enable Banking: the old connection's rows were moved over, stored before this connection was made.
+      const { supabase, calls } = stub({ bank_connections: [{ data: firstImportRow(), error: null }], sie_imports: [{ data: null, error: null }], transactions: transactions({ A: null, B: null }, '2026-10-01') })
+      mocks.syncAccount.mockResolvedValue(read([]))
+      expect(await run(supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true, from_date: '2026-09-24' })
+      expect(mocks.syncAccount.mock.calls.map((c) => (c[1] as { fromDate: string }).fromDate)).toEqual(['2026-09-24', '2026-09-24'])
+      expect(calls).toContainEqual({ table: 'transactions', method: 'lt', args: ['created_at', new Date(NOW - 3 * 60 * 60_000).toISOString()] })
+    })
+  })
+
+  it('announces the rows the failing account itself stored: beside rejected rows, and before a consent that ended on the balance read', async () => {
+    // Both throws came after ingest had stored rows, and their ids were lost:
+    // the next read found them as duplicates, so they were never announced.
+    const accounts = [
+      { uid: 'A', currency: 'SEK', enabled: true, ledger_account: '1930' },
+      { uid: 'B', currency: 'SEK', enabled: true, ledger_account: '1930' },
+    ]
+    const failures = [
+      Object.assign(new Error('Bank transaction persistence failed: duplicate key'), { code: '23505' }),
+      new ConsentOverError('over'),
+    ]
+    for (const failure of failures) {
+      mocks.emit.mockClear()
+      mocks.syncAccount.mockReset()
+        .mockResolvedValueOnce({ imported: 1, duplicates: 0, errors: 0, transactionIds: ['a1'], returnedMinBookingDate: '2026-10-05', returnedMaxBookingDate: '2026-10-11', requestedFromDate: '2026-10-05', historyNarrowed: false, truncated: false })
+        .mockImplementationOnce(async (_s: unknown, input: { onStored?: (ids: readonly string[]) => void }) => {
+          input.onStored?.(['b1', 'b2'])
+          throw failure
+        })
+      const { supabase, calls } = stub({
+        bank_connections: [{ data: row({ accounts_data: accounts }), error: null }],
+        sie_imports: [{ data: null, error: null }],
+        transactions: [{ data: [{ id: 'a1' }, { id: 'b1' }, { id: 'b2' }], error: null }],
+      })
+      expect(await run(supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false })
+      expect(calls.filter((c) => c.table === 'transactions' && c.method === 'in').map((c) => c.args)).toEqual([['id', ['a1', 'b1', 'b2']]])
+      expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+    }
+  })
+
+  it('announces what an earlier account stored when a later one fails on an ordinary sync too', async () => {
+    const accounts = [
+      { uid: 'A', currency: 'SEK', enabled: true, ledger_account: '1930' },
+      { uid: 'B', currency: 'SEK', enabled: true, ledger_account: '1930' },
+    ]
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ accounts_data: accounts }), error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [{ data: [{ id: 't1' }, { id: 't2' }], error: null }],
+    })
+    mocks.syncAccount
+      .mockResolvedValueOnce({ imported: 2, duplicates: 0, errors: 0, transactionIds: ['t1', 't2'], returnedMinBookingDate: '2026-10-05', returnedMaxBookingDate: '2026-10-11', requestedFromDate: '2026-10-05', historyNarrowed: false, truncated: false })
+      .mockRejectedValueOnce(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 }))
+    expect(await run(supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: false })
+    expect(mocks.emit.mock.calls.filter((c) => (c[0] as { type: string }).type === 'transaction.synced')).toHaveLength(1)
   })
 
   it('an unattended read sends the PSU-ID the consent was created with, and no IP address or user agent', async () => {

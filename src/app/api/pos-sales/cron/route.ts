@@ -6,7 +6,13 @@ import { syncPosConnection, type PosSyncResult } from '@/lib/pos-sales/sync'
 
 export const maxDuration = 300
 
-/** Stop starting new connections this long into the run; one connection runs at most six provider calls. */
+/**
+ * No day is fetched later than this into the run. One day can wait 65 s at
+ * Connect (lib/pos-sales/connect-client.ts), so the last one started still
+ * ends well inside maxDuration. The check used to sit only between
+ * connections, and one connection is up to six days: a connection started
+ * at 199 s could run to 590 s.
+ */
 const TIME_BUDGET_MS = 200_000
 const BATCH = 200
 
@@ -27,7 +33,7 @@ export const GET = withCronContext('cron.pos_sales', async (_request, ctx) => {
     return NextResponse.json({ success: true, skipped: true, reason: 'no connector key' })
   }
   const supabase = createServiceClientNoCookies()
-  const startedAt = Date.now()
+  const deadlineMs = ctx.startedAt + TIME_BUDGET_MS
 
   const { data, error } = await supabase
     .from('pos_connections')
@@ -42,22 +48,25 @@ export const GET = withCronContext('cron.pos_sales', async (_request, ctx) => {
   const results: PosSyncResult[] = []
   let deferred = 0
   const summary = await ctx.forEach('pos_connection', ids, async (connectionId, itemCtx) => {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+    if (Date.now() >= deadlineMs) {
       deferred += 1
       return
     }
-    results.push(await syncPosConnection(supabase, connectionId, { log: itemCtx.log }))
+    results.push(await syncPosConnection(supabase, connectionId, { log: itemCtx.log, deadlineMs }))
   })
 
   const fetched = results.reduce((sum, r) => sum + r.fetched.length, 0)
   const failed = results.filter((r) => r.status === 'failed').length
-  ctx.log.info('pos sales summary', { connections: ids.length, fetched, failed, deferred })
+  // Connections the budget stopped between two days; they run again next hour.
+  const stoppedEarly = results.filter((r) => r.stoppedEarly).length
+  ctx.log.info('pos sales summary', { connections: ids.length, fetched, failed, deferred, stoppedEarly })
   return NextResponse.json({
     success: true,
     connections: ids.length,
     fetched,
     failed,
     deferred,
+    stoppedEarly,
     errors: summary.failed,
   })
 })

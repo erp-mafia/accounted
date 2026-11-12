@@ -201,6 +201,23 @@ describe('syncOpenPaymentsAccount', () => {
       .rejects.toMatchObject({ code: 'PT409', message: expect.stringContaining('route changed') })
   })
 
+  it('tells the caller what ingest stored before a check that fails the account, so those rows are announced', async () => {
+    // Rows ingest rejected beside stored ones, and a consent that ended on the
+    // balance read after them: both throw after the rows are in the inbox.
+    const input = (connect: BankFeedConnect, onStored: (ids: readonly string[]) => void) => ({
+      companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect, onStored,
+    })
+    const rejected = vi.fn()
+    mocks.ingest.mockResolvedValueOnce({ imported: 1, duplicates: 0, errors: 1, first_error: { code: '23505', message: 'duplicate' }, transaction_ids: ['tx-9'] })
+    await expect(syncOpenPaymentsAccount({} as never, input(fakeConnect(), rejected))).rejects.toMatchObject({ code: '23505' })
+    expect(rejected).toHaveBeenCalledWith(['tx-9'])
+
+    const ended = vi.fn()
+    await expect(syncOpenPaymentsAccount({} as never, input(fakeConnect({ balances: vi.fn().mockRejectedValue(new ConsentOverError('over')) }), ended)))
+      .rejects.toBeInstanceOf(ConsentOverError)
+    expect(ended).toHaveBeenCalledWith(['tx-1'])
+  })
+
   it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
     const connect = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row(), row({ currency: 'USD', amount: -10 })])) })
     mocks.ingest.mockResolvedValueOnce({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'], other_currency: { USD: 1 } })

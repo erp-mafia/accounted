@@ -24,7 +24,7 @@ vi.mock('../switch-campaign', async (importOriginal) => ({
   bankSwitchProgressTotals: (...a: unknown[]) => mocks.totals(...a),
 }))
 
-import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
+import { createTableMockSupabase, type TableMockResolver, type TableMockResult } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanySwitchState } from '../switch-campaign'
 import {
@@ -36,6 +36,7 @@ import {
   runBankSwitchReminderCron,
   sendBankSwitchMail,
   sendByraNudge,
+  SWITCH_REMINDER_RUN_BUDGET_MS,
 } from '../switch-notifications'
 
 const NOW = new Date('2026-10-26T06:30:00Z')
@@ -56,12 +57,25 @@ function state(overrides: Partial<CompanySwitchState> = {}): CompanySwitchState 
   }
 }
 
-function stub(tables: Record<string, TableMockResult | TableMockResult[]> = {}) {
+/**
+ * The send log, answering by what is asked: the insert of a log row answers
+ * its id, a delete nothing, and a read `reads` (the rows already logged, or
+ * the last nudge).
+ */
+function sendLog(reads: TableMockResult = { data: [] }): TableMockResolver {
+  return (chain) => {
+    if (chain.some((c) => c.method === 'insert')) return { data: { id: 'log-1' } }
+    if (chain.some((c) => c.method === 'delete')) return { data: null }
+    return reads
+  }
+}
+
+function stub(tables: Record<string, TableMockResult | TableMockResult[] | TableMockResolver> = {}) {
   const mock = createTableMockSupabase({
     companies: { data: { team_id: null } },
     teams: { data: null },
     company_settings: { data: { company_name: 'Exempelbolaget AB' } },
-    bank_switch_notifications: { data: [] },
+    bank_switch_notifications: sendLog(),
     ...tables,
   })
   return { ...mock, service: mock.supabase as unknown as SupabaseClient }
@@ -165,11 +179,85 @@ describe('sendBankSwitchMail', () => {
     expect(mocks.sendEmail).not.toHaveBeenCalled()
   })
 
-  it('reports a failed send without logging it as sent', async () => {
-    mocks.sendEmail.mockResolvedValue({ success: false, error: 'bounced' })
-    const { service, payloads } = stub()
-    expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind: 'reminder_3', state: state(), log })).toEqual({ outcome: 'failed', recipients: 2, reason: 'bounced' })
-    expect(payloads('bank_switch_notifications', 'insert')).toEqual([])
+  it('writes the log row before the mail is handed over, so a run killed or started again in between finds it', async () => {
+    // The row used to be written after the send: the one job here that could mail the same people twice.
+    const { service, calls } = stub()
+    mocks.sendEmail.mockImplementation(async () => {
+      expect(calls.some((c) => c.table === 'bank_switch_notifications' && c.method === 'insert')).toBe(true)
+      return { success: true }
+    })
+    expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind: 'reminder_7', state: state(), log })).toEqual({ outcome: 'sent', recipients: 2 })
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
+    // Two runs at the same moment are one mail at the provider: same company, kind and day.
+    expect(mocks.sendEmail.mock.calls[0][0]).toMatchObject({ idempotencyKey: 'bank-switch:co-1:reminder_7:14' })
+  })
+
+  it('takes the log row off again when the provider refused the mail, so the next run tries again', async () => {
+    mocks.sendEmail.mockResolvedValue({ success: false, error: 'invalid recipient', outcomeUnknown: false })
+    const { service, payloads, findCalls } = stub()
+    expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind: 'reminder_3', state: state(), log })).toEqual({ outcome: 'failed', recipients: 2, reason: 'invalid recipient' })
+    expect(payloads('bank_switch_notifications', 'insert')).toHaveLength(1)
+    expect(findCalls('bank_switch_notifications', 'delete')).toHaveLength(1)
+    expect(findCalls('bank_switch_notifications', 'eq')).toContainEqual(['id', 'log-1'])
+  })
+
+  const unclearAnswers = [
+    async () => ({ success: false, error: 'socket hang up', outcomeUnknown: true }),
+    // A service that cannot tell is read as unknown too.
+    async () => ({ success: false, error: 'boom' }),
+    async () => {
+      throw new Error('timeout')
+    },
+  ]
+
+  it('asks once more with the same key on an unclear answer, and a clear second answer settles it', async () => {
+    mocks.sendEmail.mockImplementationOnce(unclearAnswers[0]!).mockResolvedValueOnce({ success: true, messageId: 'm-1' })
+    const { service, findCalls } = stub()
+    expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind: 'reminder_7', state: state(), log })).toEqual({ outcome: 'sent', recipients: 2 })
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(2)
+    // The provider answers a key it has seen with the first request's result: never a second mail.
+    const keys = mocks.sendEmail.mock.calls.map((c) => (c[0] as { idempotencyKey: string }).idempotencyKey)
+    expect(keys).toEqual(['bank-switch:co-1:reminder_7:14', 'bank-switch:co-1:reminder_7:14'])
+    expect(findCalls('bank_switch_notifications', 'delete')).toEqual([])
+  })
+
+  it('keeps the log row of the announcement and the 14, 7 and 3 day reminders when the answer stays unclear: a later mail follows', async () => {
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    for (const kind of ['announcement', 'reminder_14', 'reminder_7', 'reminder_3'] as const) {
+      for (const answer of unclearAnswers) {
+        errors.mockClear()
+        mocks.sendEmail.mockReset().mockImplementation(answer)
+        const { service, payloads, findCalls } = stub()
+        expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind, state: state(), log })).toMatchObject({ outcome: 'failed', recipients: 2 })
+        expect(mocks.sendEmail).toHaveBeenCalledTimes(2)
+        expect(payloads('bank_switch_notifications', 'insert')).toHaveLength(1)
+        expect(findCalls('bank_switch_notifications', 'delete')).toEqual([])
+        // A mail that may be missing is an error, not a warning.
+        expect(errors).toHaveBeenCalledTimes(1)
+      }
+    }
+  })
+
+  it('takes the log row off the last day\'s reminder and the sunset mail when the answer stays unclear: nothing follows them', async () => {
+    // A duplicate costs less than a company never told its bank feed stops.
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    for (const kind of ['reminder_1', 'sunset'] as const) {
+      for (const answer of unclearAnswers) {
+        errors.mockClear()
+        mocks.sendEmail.mockReset().mockImplementation(answer)
+        const { service, findCalls } = stub()
+        expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind, state: state({ days_left: kind === 'sunset' ? -1 : 1 }), log })).toMatchObject({ outcome: 'failed' })
+        expect(mocks.sendEmail).toHaveBeenCalledTimes(2)
+        expect(findCalls('bank_switch_notifications', 'delete')).toHaveLength(1)
+        expect(errors).toHaveBeenCalledWith('bank switch mail got no clear answer twice; the next run sends it again, so it may arrive twice', expect.objectContaining({ companyId: 'co-1', kind }))
+      }
+    }
+  })
+
+  it('does not send when the log row cannot be written', async () => {
+    const { service } = stub({ bank_switch_notifications: { error: { message: 'insert refused' } } })
+    expect(await sendBankSwitchMail(service, { companyId: 'co-1', kind: 'announcement', state: state(), log })).toEqual({ outcome: 'failed', recipients: 2, reason: 'insert refused' })
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
   })
 
   it('links to Kopplingar, not a connection, when several banks wait', async () => {
@@ -190,13 +278,20 @@ describe('sendByraNudge', () => {
     const { service } = stub()
     expect(await sendByraNudge(service, { companyId: 'co-1', state: state({ state: 'done', pending: [] }), now: NOW })).toMatchObject({ outcome: 'not_pending' })
     expect(await sendByraNudge(service, { companyId: 'co-1', state: null, now: NOW })).toMatchObject({ outcome: 'not_pending' })
-    const recent = stub({ bank_switch_notifications: { data: { sent_at: new Date(NOW.getTime() - 86_400_000).toISOString() } } })
+    const recent = stub({ bank_switch_notifications: sendLog({ data: { sent_at: new Date(NOW.getTime() - 86_400_000).toISOString() } }) })
     expect(await sendByraNudge(recent.service, { companyId: 'co-1', state: state(), now: NOW })).toMatchObject({ outcome: 'recently_sent', recipients: 0 })
     expect(mocks.sendEmail).not.toHaveBeenCalled()
   })
 
+  it('does not block the byrå for a week after a nudge whose answer stayed unclear', async () => {
+    mocks.sendEmail.mockResolvedValue({ success: false, error: 'socket hang up', outcomeUnknown: true })
+    const { service, findCalls } = stub({ bank_switch_notifications: sendLog({ data: null }) })
+    expect(await sendByraNudge(service, { companyId: 'co-1', state: state(), now: NOW })).toMatchObject({ outcome: 'failed' })
+    expect(findCalls('bank_switch_notifications', 'delete')).toHaveLength(1)
+  })
+
   it('sends the announcement as a byra_nudge and logs it under that kind', async () => {
-    const { service, payloads, findCalls } = stub({ bank_switch_notifications: [{ data: null }, { data: [] }] })
+    const { service, payloads, findCalls } = stub({ bank_switch_notifications: sendLog({ data: null }) })
     const result = await sendByraNudge(service, { companyId: 'co-1', state: state(), now: NOW })
     expect(result).toMatchObject({ outcome: 'sent', recipients: 2, last_sent_at: null })
     expect(findCalls('bank_switch_notifications', 'eq')).toContainEqual(['kind', 'byra_nudge'])
@@ -239,7 +334,7 @@ describe('runBankSwitchReminderCron', () => {
     const kinds: Array<string | null> = []
     for (const daysLeft of days) {
       mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: daysLeft, urgent: daysLeft <= 14 })]]))
-      const { service } = stub({ bank_switch_notifications: { data: [...sent].map((kind) => ({ company_id: 'co-1', kind })) } })
+      const { service } = stub({ bank_switch_notifications: sendLog({ data: [...sent].map((kind) => ({ company_id: 'co-1', kind })) }) })
       mocks.sendEmail.mockClear()
       const result = await runBankSwitchReminderCron(service, log, { now: NOW, env })
       if (result.sent.reminder === 1) {
@@ -258,12 +353,12 @@ describe('runBankSwitchReminderCron', () => {
 
   it('catches up on a missed day with the current threshold only, and sends the sunset mail after the deadline', async () => {
     mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: 5 })]]))
-    let { service } = stub({ bank_switch_notifications: { data: [{ company_id: 'co-1', kind: 'announcement' }] } })
+    let { service } = stub({ bank_switch_notifications: sendLog({ data: [{ company_id: 'co-1', kind: 'announcement' }] }) })
     expect((await runBankSwitchReminderCron(service, log, { now: NOW, env })).sent.reminder).toBe(1)
     expect((mocks.sendEmail.mock.calls[0][0] as { text: string }).text).toMatch(/5 dagar kvar/)
     mocks.sendEmail.mockClear()
     mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: -2, passed: true })]]))
-    ;({ service } = stub({ bank_switch_notifications: { data: [{ company_id: 'co-1', kind: 'announcement' }, { company_id: 'co-1', kind: 'reminder_7' }] } }))
+    ;({ service } = stub({ bank_switch_notifications: sendLog({ data: [{ company_id: 'co-1', kind: 'announcement' }, { company_id: 'co-1', kind: 'reminder_7' }] }) }))
     const result = await runBankSwitchReminderCron(service, log, { now: NOW, env })
     expect(result.sent).toEqual({ announcement: 0, reminder: 0, sunset: 1 })
     expect((mocks.sendEmail.mock.calls[0][0] as { subject: string }).subject).toMatch(/Från i dag hämtar den gamla kopplingen inga transaktioner/)
@@ -277,7 +372,7 @@ describe('runBankSwitchReminderCron', () => {
     ]))
     // co-1 got every reminder, co-2 never even the announcement: both get the one final mail.
     const everyReminder = ['announcement', 'reminder_14', 'reminder_7', 'reminder_3', 'reminder_1'].map((kind) => ({ company_id: 'co-1', kind }))
-    let { service, payloads } = stub({ bank_switch_notifications: { data: everyReminder } })
+    let { service, payloads } = stub({ bank_switch_notifications: sendLog({ data: everyReminder }) })
     const day = await runBankSwitchReminderCron(service, log, { now: NOW, env })
     expect(day.sent).toEqual({ announcement: 0, reminder: 0, sunset: 2 })
     expect(payloads('bank_switch_notifications', 'insert')).toEqual([
@@ -290,7 +385,7 @@ describe('runBankSwitchReminderCron', () => {
     // The day after: the log holds the sunset mail, nothing goes again.
     mocks.sendEmail.mockClear()
     mocks.states.mockResolvedValue(new Map([['co-1', state({ days_left: -2, passed: true })], ['co-2', state({ days_left: -2, passed: true })]]))
-    ;({ service, payloads } = stub({ bank_switch_notifications: { data: [...everyReminder, { company_id: 'co-1', kind: 'sunset' }, { company_id: 'co-2', kind: 'sunset' }] } }))
+    ;({ service, payloads } = stub({ bank_switch_notifications: sendLog({ data: [...everyReminder, { company_id: 'co-1', kind: 'sunset' }, { company_id: 'co-2', kind: 'sunset' }] }) }))
     const after = await runBankSwitchReminderCron(service, log, { now: NOW, env })
     expect(after.sent).toEqual({ announcement: 0, reminder: 0, sunset: 0 })
     expect(after.skipped.already).toBe(2)
@@ -300,12 +395,35 @@ describe('runBankSwitchReminderCron', () => {
   it('counts companies without recipients and failed sends without stopping the run', async () => {
     mocks.states.mockResolvedValue(new Map([['co-1', state()], ['co-2', state()], ['co-3', state()]]))
     mocks.recipients.mockImplementation(async (_s: unknown, companyId: string) => (companyId === 'co-2' ? [] : ['x@y.se']))
-    mocks.sendEmail.mockResolvedValueOnce({ success: false, error: 'boom' }).mockResolvedValue({ success: true })
+    mocks.sendEmail.mockResolvedValueOnce({ success: false, error: 'boom', outcomeUnknown: false }).mockResolvedValue({ success: true })
     const { service } = stub()
     const result = await runBankSwitchReminderCron(service, log, { now: NOW, env })
     expect(result.sent.announcement).toBe(1)
     expect(result.failed).toBe(1)
     expect(result.skipped.no_recipient).toBe(1)
+  })
+
+  it('stops starting companies at the run\'s deadline, before writing any log row, and reports the ones it did not reach', async () => {
+    // A kill between writing a company's log row and handing its mail over would lose that mail without a trace.
+    mocks.states.mockResolvedValue(new Map([['co-1', state()], ['co-2', state()], ['co-3', state()]]))
+    const errors = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    errors.mockClear()
+    const startedAt = Date.now()
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      mocks.sendEmail.mockImplementation(async () => {
+        // The first company's mail used up the run.
+        clock.mockReturnValue(startedAt + SWITCH_REMINDER_RUN_BUDGET_MS)
+        return { success: true }
+      })
+      const { service, payloads } = stub()
+      const result = await runBankSwitchReminderCron(service, log, { now: NOW, env, startedAt })
+      expect(result).toMatchObject({ sent: { announcement: 1 }, not_reached: 2 })
+      expect(payloads('bank_switch_notifications', 'insert')).toHaveLength(1)
+      expect(errors).toHaveBeenCalledWith('bank switch reminders ran out of time before every company was reached', { notReached: 2, reached: 1 })
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('survives a counter RPC that is not there yet', async () => {

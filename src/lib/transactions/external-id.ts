@@ -107,12 +107,21 @@ export function buildStableExternalIds(
   txns: Array<{ date: string; amount: number | string }>
 ): string[] {
   const occurrences = new Map<string, number>()
+  const head = stableExternalIdHead(prefix, accountScope)
   return txns.map((tx) => {
     const fingerprint = `${tx.date}_${amountToOre(tx.amount)}`
     const n = occurrences.get(fingerprint) ?? 0
     occurrences.set(fingerprint, n + 1)
-    return `${prefix}_${accountScope}_${fingerprint}_${n}`
+    return `${head}${fingerprint}_${n}`
   })
+}
+
+/**
+ * The start every stable id of one account shares (`eb_{accountScope}_`):
+ * how a read finds the rows one account of a connection has stored.
+ */
+export function stableExternalIdHead(prefix: string, accountScope: string): string {
+  return `${prefix}_${accountScope}_`
 }
 
 /**

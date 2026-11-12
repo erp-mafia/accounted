@@ -1,6 +1,8 @@
 /**
  * The switch campaign's mail: who gets it, when, and the log that keeps any
- * mail from going twice (bank_switch_notifications, service role only).
+ * mail from going twice (bank_switch_notifications, service role only). The
+ * log row is written before the mail is handed to the provider and removed
+ * only when the provider refused it (sendBankSwitchMail).
  *
  *   - The daily cron (runBankSwitchReminderCron) sends every pending company
  *     the announcement once, then one reminder per threshold (14, 7, 3 and 1
@@ -27,7 +29,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateBankSwitchEmailHtml, generateBankSwitchEmailSubject, generateBankSwitchEmailText } from '@/lib/email/bank-switch-templates'
 import { getBaseUrlForBrand, getSenderForCompany } from '@/lib/email/brand-sender'
-import { getEmailService } from '@/lib/email/service'
+import { getEmailService, type SendEmailOptions, type SendEmailResult } from '@/lib/email/service'
 import type { Logger } from '@/lib/logger'
 import { resolveCompanyAdminEmails } from '@/lib/notifications/member-email'
 import { chunk } from '@/lib/utils'
@@ -95,6 +97,29 @@ export async function isByraManaged(service: SupabaseClient, companyId: string):
  * Send one campaign mail to a company's owners and admins and log it. The
  * caller has already decided that the mail is due; this never checks the
  * flags, so the cron and the byrå route keep that decision in one place each.
+ *
+ * The log row is what the next run reads to know the mail went, so it is
+ * written first: written after the send, as it was, a run killed or started
+ * again between the two sent the same mail to the same people the next time.
+ * After the send:
+ *   - sent: the row stays;
+ *   - refused (SendEmailResult.outcomeUnknown false: nothing went out): the
+ *     row comes off and the next run tries again;
+ *   - no clear answer, or a throw while the request was out: asked once more
+ *     at once with the same idempotency key, which the provider answers with
+ *     the first request's result, so the second ask never sends a second
+ *     mail. Still unclear, the mail may or may not have gone. The
+ *     announcement and the reminders at 14, 7 and 3 days keep the row (never
+ *     twice; a later mail of the campaign follows). The reminder of the last
+ *     day and the sunset mail lose it and go again on the next run: nothing
+ *     follows them, and a mail twice costs less than a company never told its
+ *     bank feed stops. A byrå's nudge loses it too, or the byrå could not ask
+ *     again for a week after a send that may have failed.
+ *
+ * Two runs at the very same moment both read the log before either writes
+ * it; the table has no unique key on (company_id, kind) to stop the second
+ * row. The idempotency key covers that case at the provider: the same
+ * company, kind and day is one mail there.
  */
 export async function sendBankSwitchMail(
   service: SupabaseClient,
@@ -121,7 +146,18 @@ export async function sendBankSwitchMail(
       companyName: ((settings.data as { company_name?: string | null } | null)?.company_name ?? '').trim(),
       byraManaged,
     }
-    const result = await emailService.sendEmail({
+    const { data: logged, error: logError } = await service
+      .from('bank_switch_notifications')
+      .insert({ company_id: companyId, kind, recipient_count: recipients.length })
+      .select('id')
+      .single()
+    if (logError) {
+      // Without the row nothing would stop the next run from sending again.
+      log?.error('bank switch mail not sent: its log row could not be written', { companyId, kind, message: logError.message })
+      return { outcome: 'failed', recipients: recipients.length, reason: logError.message }
+    }
+
+    const mail = {
       to: recipients,
       subject: generateBankSwitchEmailSubject(data),
       html: generateBankSwitchEmailHtml(data),
@@ -129,18 +165,64 @@ export async function sendBankSwitchMail(
       ...(sender.fromName ? { fromName: sender.fromName } : {}),
       ...(sender.fromAddress ? { fromAddress: sender.fromAddress } : {}),
       ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
-    })
-    if (!result.success) {
-      log?.warn('bank switch mail not sent', { companyId, kind, reason: result.error })
-      return { outcome: 'failed', recipients: recipients.length, reason: result.error }
+      idempotencyKey: `bank-switch:${companyId}:${kind}:${state.days_left}`,
     }
-    const { error } = await service.from('bank_switch_notifications').insert({ company_id: companyId, kind, recipient_count: recipients.length })
-    if (error) log?.error('bank switch mail sent but not logged', { companyId, kind, message: error.message })
-    return { outcome: 'sent', recipients: recipients.length }
+    let answer: SendAnswer = { outcome: 'unclear', reason: undefined }
+    for (let attempt = 1; attempt <= SEND_ATTEMPTS && answer.outcome === 'unclear'; attempt++) {
+      answer = await sendOnce(emailService, mail)
+    }
+    if (answer.outcome === 'sent') return { outcome: 'sent', recipients: recipients.length }
+
+    if (answer.outcome === 'refused' || UNLOGGED_WHEN_UNCLEAR.has(kind)) {
+      // Nothing went out (refused), or the mail is one a later run must send
+      // again rather than miss: the row comes off.
+      const { error: removeError } = await service
+        .from('bank_switch_notifications')
+        .delete()
+        .eq('id', (logged as { id: string }).id)
+      if (removeError) {
+        log?.error('bank switch mail not sent but stays logged as sent; it will not be tried again', { companyId, kind, message: removeError.message })
+      }
+    }
+    if (answer.outcome === 'refused') {
+      log?.warn('bank switch mail not sent', { companyId, kind, reason: answer.reason })
+    } else if (UNLOGGED_WHEN_UNCLEAR.has(kind)) {
+      log?.error('bank switch mail got no clear answer twice; the next run sends it again, so it may arrive twice', { companyId, kind, reason: answer.reason })
+    } else {
+      log?.error('bank switch mail got no clear answer twice; it stays logged as sent so it never goes twice, and a later mail of the campaign follows', { companyId, kind, reason: answer.reason })
+    }
+    return { outcome: 'failed', recipients: recipients.length, reason: answer.reason }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     log?.error('bank switch mail failed', { companyId, kind, message: reason })
     return { outcome: 'failed', recipients: 0, reason }
+  }
+}
+
+/** Asks per mail: the second, on an unclear answer, carries the same idempotency key. */
+const SEND_ATTEMPTS = 2
+
+/**
+ * Mails whose log row comes off when the provider's answer stays unclear
+ * (see sendBankSwitchMail): nothing follows the last day's reminder or the
+ * sunset mail, and a nudge kept logged would block the byrå for a week.
+ */
+const UNLOGGED_WHEN_UNCLEAR: ReadonlySet<BankSwitchMailKind> = new Set(['reminder_1', 'sunset', 'byra_nudge'])
+
+type SendAnswer = { outcome: 'sent' | 'refused' | 'unclear'; reason: string | undefined }
+
+/** One ask of the provider, read as sent, refused (nothing went out) or unclear (it may have). */
+async function sendOnce(
+  emailService: { sendEmail: (options: SendEmailOptions) => Promise<SendEmailResult> },
+  mail: SendEmailOptions,
+): Promise<SendAnswer> {
+  try {
+    const result = await emailService.sendEmail(mail)
+    if (result.success) return { outcome: 'sent', reason: undefined }
+    return { outcome: result.outcomeUnknown === false ? 'refused' : 'unclear', reason: result.error }
+  } catch (error) {
+    // Thrown while the request was out: the provider may have taken it.
+    return { outcome: 'unclear', reason: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -186,6 +268,14 @@ export async function sendByraNudge(
   return { ...result, last_sent_at: lastSentAt }
 }
 
+/**
+ * No company's mail is started later than this into the run, counted from
+ * the start of the route (maxDuration 300 s): a minute is left for the one
+ * started last, its second ask included. A kill between writing the log row
+ * and handing the mail over would lose that mail without a trace.
+ */
+export const SWITCH_REMINDER_RUN_BUDGET_MS = 240_000
+
 export interface BankSwitchCronResult {
   /** The campaign is on (OPENPAYMENTS_SWITCH_DEADLINE set). */
   campaign: boolean
@@ -197,6 +287,8 @@ export interface BankSwitchCronResult {
   sent: { announcement: number; reminder: number; sunset: number }
   skipped: { no_recipient: number; not_configured: number; already: number }
   failed: number
+  /** Pending companies the time budget did not reach; tomorrow's run sends what is then due. */
+  not_reached: number
   /** The founders' counter, when the RPC answered. */
   totals: BankSwitchProgressTotals | null
 }
@@ -226,8 +318,14 @@ async function sentKindsByCompany(service: SupabaseClient, companyIds: readonly 
 export async function runBankSwitchReminderCron(
   service: SupabaseClient,
   log: Logger,
-  options: { now?: Date; env?: BankFeedEnv } = {},
+  options: {
+    now?: Date
+    env?: BankFeedEnv
+    /** When the route started (ctx.startedAt): the time budget counts from here. */
+    startedAt?: number
+  } = {},
 ): Promise<BankSwitchCronResult> {
+  const deadlineMs = (options.startedAt ?? Date.now()) + SWITCH_REMINDER_RUN_BUDGET_MS
   const now = options.now ?? new Date()
   const campaign = switchCampaign(options.env)
   const result: BankSwitchCronResult = {
@@ -239,6 +337,7 @@ export async function runBankSwitchReminderCron(
     sent: { announcement: 0, reminder: 0, sunset: 0 },
     skipped: { no_recipient: 0, not_configured: 0, already: 0 },
     failed: 0,
+    not_reached: 0,
     totals: null,
   }
   if (!campaign.on) return result
@@ -260,7 +359,16 @@ export async function runBankSwitchReminderCron(
   if (!result.mails || pending.length === 0) return result
 
   const sentByCompany = await sentKindsByCompany(service, pending.map(([id]) => id))
-  for (const [companyId, state] of pending) {
+  for (const [index, [companyId, state]] of pending.entries()) {
+    if (Date.now() >= deadlineMs) {
+      result.not_reached = pending.length - index
+      // Their mail waits a day: tomorrow's run sends what is due then.
+      log.error('bank switch reminders ran out of time before every company was reached', {
+        notReached: result.not_reached,
+        reached: index,
+      })
+      break
+    }
     const sent = sentByCompany.get(companyId) ?? new Set<string>()
     const kind = campaignMailDue(state.days_left, sent)
     if (!kind) {
