@@ -34,7 +34,7 @@ import { LineVatCodeBadge, LineVatCodeMenu } from '@/components/bookkeeping/Line
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
-import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import { deriveTemplateLinesFromBooking, templateAccountNames } from '@/lib/bookkeeping/template-library'
 import { sourceTypeForTemplateCategory } from '@/lib/bookkeeping/template-source-type'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
@@ -671,7 +671,13 @@ export default function JournalEntryForm({
     }
   }, [dimPopoverRow])
 
-  const updateLine = (index: number, field: keyof FormLine, value: string) => {
+  const updateLine = (
+    index: number,
+    field: keyof FormLine,
+    value: string,
+    // An account created a moment ago: not in `accounts` as this closure sees it.
+    createdAccount?: { account_number: string; account_name?: string },
+  ) => {
     const updated = [...lines]
     updated[index] = { ...updated[index], [field]: value }
 
@@ -700,8 +706,9 @@ export default function JournalEntryForm({
       // the chosen account isn't in the active chart yet.
       const account =
         accounts.find((a) => a.account_number === value) ??
-        catalog.find((a) => a.account_number === value)
-      if (account) {
+        catalog.find((a) => a.account_number === value) ??
+        (createdAccount?.account_number === value ? createdAccount : undefined)
+      if (account?.account_name) {
         updated[index].line_description = account.account_name
         // Fortnox-style: seed the verifikationstext from the first row's account
         // when the user hasn't typed one yet. Non-destructive: never overwrites.
@@ -861,10 +868,11 @@ export default function JournalEntryForm({
     setLines((prev) => foldGeneratedVatLines(prev, vatRowOf, { stored: !!editEntryId }))
   }, [vatRowOf, editEntryId])
 
-  // Account number → BAS name, so derived template lines get meaningful labels.
+  // Account number → name, so derived template lines get meaningful labels:
+  // the company's chart, then BAS for a standard account not activated yet.
   const accountNameMap = useMemo(
-    () => Object.fromEntries(catalog.map((a) => [a.account_number, a.account_name])),
-    [catalog],
+    () => templateAccountNames(accounts, catalog),
+    [accounts, catalog],
   )
   // Template lines derived from the current kontering. Fewer than two usable
   // lines (a 4-digit account + an amount) disables "Spara som mall".
@@ -965,10 +973,15 @@ export default function JournalEntryForm({
   // Only the number is required: the dialog also reaches here after
   // reactivating an existing account, where the rest of the row is whatever
   // the company already had stored and is picked up by fetchAccounts.
-  const handleAccountCreated = async (account: { account_number: string }) => {
+  //
+  // The create path also reports the new account's name. The refreshed chart
+  // is not visible in this closure, so the name is handed to updateLine: a
+  // new own account fills the line description like a BAS account does
+  // (crm#1821).
+  const handleAccountCreated = async (account: { account_number: string; account_name?: string }) => {
     await invalidateReferenceData('ref:accounts')
     if (creatingAccountForLine != null) {
-      updateLine(creatingAccountForLine, 'account_number', account.account_number)
+      updateLine(creatingAccountForLine, 'account_number', account.account_number, account)
     }
     setCreatingAccountForLine(null)
     setCreateAccountPrefill('')
