@@ -3150,9 +3150,26 @@ describe('reverse-charge basis pair in a learned line pattern', () => {
     ] as LinePatternEntry[][]) {
       const plan = patternReplayPlan(pattern)
       expect(plan.rcPair).toBeNull()
-      expect(plan.ratioScale).toBe(1)
       expect(plan.entries).toEqual(pattern)
     }
+  })
+
+  it('scales a pattern that is no pair but has lines on both sides to its net (crm#1746)', () => {
+    // Legs of different size: no basis pair, but the lines still net to the
+    // payment (0.5 + 0.3 - 0.2), not to their sum.
+    const plan = patternReplayPlan([
+      { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+      { account: '4598', type: 'business', side: 'credit', ratio: 0.2 },
+      { account: '5420', type: 'business', side: 'debit', ratio: 0.3 },
+    ])
+    expect(plan.rcPair).toBeNull()
+    expect(plan.netSide).toBe('debit')
+    expect(plan.ratioScale).toBeCloseTo(1 / 0.6, 10)
+    // Legs that cancel out book nothing for the payment: left as stored.
+    expect(patternReplayPlan([
+      { account: '4531', type: 'business', side: 'debit', ratio: 0.5 },
+      { account: '4599', type: 'business', side: 'credit', ratio: 0.5 },
+    ])).toMatchObject({ ratioScale: 1, netSide: null })
   })
 
   it('leaves an ordinary multi-line pattern exactly as before', () => {
@@ -3161,7 +3178,7 @@ describe('reverse-charge basis pair in a learned line pattern', () => {
       { account: '6540', type: 'business', side: 'debit', ratio: 0.6 },
       { account: '5420', type: 'business', side: 'debit', ratio: 0.4 },
     ]
-    expect(patternReplayPlan(domestic)).toEqual({ entries: domestic, ratioScale: 1, rcPair: null })
+    expect(patternReplayPlan(domestic)).toEqual({ entries: domestic, ratioScale: 1, rcPair: null, netSide: null })
     const { lines } = replay(domestic, -1250)
     expect(lines).toEqual([
       { account: '2641', debit: 250, credit: 0 },

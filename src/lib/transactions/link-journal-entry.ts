@@ -48,6 +48,7 @@ import {
   type PreparedBankLink,
 } from '@/lib/transactions/bank-link'
 import { createLogger } from '@/lib/logger'
+import { learnFromBankLink } from '@/lib/transactions/link-learning'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -655,6 +656,14 @@ export async function linkTransactionToJournalEntry(
       entryDate: transaction.date as string,
       trigger: 'payment',
     })
+  }
+
+  // The caller named this verifikat for this row, so the row teaches its
+  // bank text from it at once (crm#1746). A link that settles an invoice
+  // teaches nothing: the invoice match is that row's next proposal. Never
+  // fails the link: learnFromBankLink logs and returns.
+  if (!invoiceId) {
+    await learnFromBankLink(supabase, companyId, { transactionId, journalEntryId }, 'explicit')
   }
 
   const voucherLabel = formatVoucher(journalEntry, { separator: '-' })

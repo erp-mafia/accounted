@@ -89,6 +89,7 @@ import { getActor } from '@/lib/bookkeeping/actor-context'
 import { isBankMovementEntry } from '@/lib/transactions/bank-link'
 import { readNamedBankRows } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { learnFromBankLink } from '@/lib/transactions/link-learning'
 import {
   detectBookingDuplicate,
   type BookedDuplicateCandidate,
@@ -670,6 +671,19 @@ export async function bulkBookTransactions(
         })
       }
     }
+  }
+
+  // One row linked onto a verifikat the caller named teaches its bank text
+  // from it at once (crm#1746). Several rows on one verifikat are a
+  // samlingsverifikat, which teaches nothing. Never fails the booking:
+  // learnFromBankLink logs and returns.
+  if (body.existing_journal_entry_id && body.tx_ids.length === 1) {
+    await learnFromBankLink(
+      supabase,
+      companyId,
+      { transactionId: body.tx_ids[0], journalEntryId: result.journal_entry_id },
+      'explicit',
+    )
   }
 
   return {
