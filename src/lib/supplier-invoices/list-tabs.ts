@@ -8,7 +8,7 @@
 
 import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
 import { canApproveSupplierInvoice } from './lifecycle'
-import { openPaymentMarker, type OpenPaymentInstruction } from './stages'
+import { openPaymentMarker, type OpenPaymentInstruction, type OpenPaymentMarker } from './stages'
 
 export interface ListTabInvoice {
   status: string
@@ -16,9 +16,16 @@ export interface ListTabInvoice {
   auto_debit?: boolean | null
   is_credit_note?: boolean | null
   open_payment?: OpenPaymentInstruction | null
+  /** The "Inlagd i banken" tick and what decides whether it still holds (bankEnteredHolds). */
+  bank_entered_at?: string | null
+  due_date?: string | null
+  remaining_amount?: number | null
 }
 
 const PAYABLE: ReadonlySet<string> = new Set(PAYABLE_SUPPLIER_INVOICE_STATUSES)
+
+/** The markers that say the payment is with the bank: such an invoice waits for nobody. */
+const AT_THE_BANK: ReadonlySet<OpenPaymentMarker> = new Set(['bank_payment', 'bank_entered'])
 
 /**
  * Registrerade: what can still be attested (canApproveSupplierInvoice: not
@@ -35,9 +42,14 @@ export function isAwaitingAttestInList(invoice: ListTabInvoice): boolean {
  * the supplier debits itself has nothing to pay (crm#1463). An invoice with an
  * open bank payment is not waiting either: the bank has it (or a person is
  * approving and signing it under Betalningar), every payment channel refuses
- * it, and offering it again invites paying it twice (crm#1243). An invoice in
- * a payment file stays: a generated file may never have reached the bank.
+ * it, and offering it again invites paying it twice (crm#1243). One a person
+ * ticked "Inlagd i banken" is not waiting either, until it falls due: then it
+ * is back here, so a tick no payment followed cannot hide an unpaid invoice
+ * (crm#1824, bankEnteredHolds). An invoice in a payment file stays: a
+ * generated file may never have reached the bank.
  */
 export function isToPayInList(invoice: ListTabInvoice): boolean {
-  return PAYABLE.has(invoice.status) && !invoice.auto_debit && openPaymentMarker(invoice) !== 'bank_payment'
+  if (!PAYABLE.has(invoice.status) || invoice.auto_debit) return false
+  const marker = openPaymentMarker(invoice)
+  return marker === null || !AT_THE_BANK.has(marker)
 }

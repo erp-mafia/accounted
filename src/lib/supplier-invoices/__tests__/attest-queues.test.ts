@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { NO_ATTEST_POLICY, type AttestPolicy } from '../attest-policy'
-import { attestQueueOf, isToPayWithoutAttest, loadAttestQueues, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
+import { attestQueueOf, isToPayWithoutAttest, loadAttestQueues, loadToPayQueue, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
 
 const POLICY: AttestPolicy = { ...NO_ATTEST_POLICY, enabled: true, attesters: ['kim'] }
 
@@ -229,5 +229,38 @@ describe('loadAttestQueues', () => {
     const mock = createTableMockSupabase()
     mock.setTable('company_attest_policies', { error: { message: 'boom' } })
     await expect(loadAttestQueues(mock.supabase as unknown as SupabaseClient, ['c1'], '2026-10-31')).rejects.toBeTruthy()
+  })
+})
+
+describe('a ticked "Inlagd i banken" in the to-pay counts (crm#1824)', () => {
+  const attested = '2026-10-31T10:00:00Z'
+  const tick = '2026-11-10T09:00:00Z'
+  const policyRow = { company_id: 'c1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null }
+
+  /** Four attested invoices of c1 on 12 Nov: plain, ticked and not due, ticked and fallen due, ticked then un-ticked. */
+  function seed(policies: unknown[], accountingMethod: string) {
+    const mock = createTableMockSupabase()
+    mock.setTable('company_attest_policies', { data: policies })
+    mock.setTable('company_settings', { data: [{ company_id: 'c1', accounting_method: accountingMethod }] })
+    mock.setTable('supplier_invoices', {
+      data: [
+        invoice({ id: 'plain', status: 'approved', approved_at: attested, due_date: '2026-11-25' }),
+        invoice({ id: 'ticked', status: 'approved', approved_at: attested, due_date: '2026-11-30', bank_entered_at: tick }),
+        invoice({ id: 'ticked-due', status: 'overdue', approved_at: attested, due_date: '2026-11-05', bank_entered_at: tick }),
+        invoice({ id: 'unticked', status: 'approved', approved_at: attested, due_date: '2026-11-28', bank_entered_at: null }),
+      ],
+    })
+    mock.setTable('payment_orders', { data: [] })
+    return mock.supabase as unknown as SupabaseClient
+  }
+
+  it('leaves the ticked one out of ready until it falls due, where the attest policy governs', async () => {
+    const queues = await loadAttestQueues(seed([policyRow], 'accrual'), ['c1'], '2026-11-12')
+    expect(queues.get('c1')?.ready).toEqual({ count: 3, next_due: '2026-11-05', overdue: 1 })
+  })
+
+  it('counts the same way for a company without an attest queue', async () => {
+    const toPay = await loadToPayQueue(seed([], 'cash'), 'c1', '2026-11-12')
+    expect(toPay).toEqual({ attested: false, queue: { count: 3, next_due: '2026-11-05', overdue: 1 } })
   })
 })

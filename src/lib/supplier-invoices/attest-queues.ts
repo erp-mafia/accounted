@@ -19,8 +19,9 @@
  * left on it, minus what is no longer the payer's to do: a supplier that
  * debits the invoice itself (auto_debit, crm#1463) and an invoice with an
  * open bank payment (isOpenPaymentOrder, the Att betala tab's rule,
- * crm#1243). A payment file keeps the invoice ready: a generated file may
- * never have reached the bank.
+ * crm#1243), and one a person ticked "Inlagd i banken" that has not fallen
+ * due (bankEnteredHolds, the same tab's rule, crm#1824). A payment file keeps
+ * the invoice ready: a generated file may never have reached the bank.
  *
  * A company without queues still has invoices to pay: loadToPayQueue counts
  * them with the same ready rule (isToPayWithoutAttest), so the Att göra
@@ -35,6 +36,7 @@ import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib
 import { invoiceNeedsAttest, type AttestInvoiceFacts, type AttestPolicy } from './attest-policy'
 import { toPolicy, type PolicyRow } from './attest-policy-read'
 import { canApproveSupplierInvoice, companyAttestsSupplierInvoices, isOverduePayable } from './lifecycle'
+import { bankEnteredHolds } from './stages'
 
 export type AttestQueueKind = 'waiting' | 'ready'
 
@@ -61,6 +63,8 @@ export type AttestQueueInvoice = AttestInvoiceFacts & {
   due_date: string
   remaining_amount: number
   auto_debit?: boolean | null
+  /** The "Inlagd i banken" tick; it keeps the invoice out of ready until it falls due (bankEnteredHolds). */
+  bank_entered_at?: string | null
 }
 
 /** "Nothing left to pay", as lifecycle.ts and the payment paths read it. */
@@ -229,14 +233,15 @@ export async function loadAttestQueues(
   }
   const inBankPayment = await readInBankPayment(supabase, attestedByCompany)
   const shownElsewhere = attestedByCompany.size > 0 && options.leaveOut ? await options.leaveOut() : new Set<string>()
-  const leftOut = (invoiceId: string) => inBankPayment.has(invoiceId) || shownElsewhere.has(invoiceId)
+  const leftOut = (invoice: AttestQueueInvoice) =>
+    inBankPayment.has(invoice.id) || shownElsewhere.has(invoice.id) || bankEnteredHolds(invoice, today)
 
   for (const companyId of governed) result.set(companyId, { waiting: EMPTY_ATTEST_QUEUE, ready: EMPTY_ATTEST_QUEUE })
   for (const invoice of invoices) {
     const queues = result.get(invoice.company_id)
     const policy = policies.get(invoice.company_id)
     if (!queues || !policy) continue
-    const kind = attestQueueOf(policy, methods.get(invoice.company_id) ?? null, invoice, leftOut(invoice.id))
+    const kind = attestQueueOf(policy, methods.get(invoice.company_id) ?? null, invoice, leftOut(invoice))
     if (kind) result.set(invoice.company_id, { ...queues, [kind]: addToQueue(queues[kind], invoice, today) })
   }
   return result
@@ -249,7 +254,7 @@ async function readOwedInvoices(supabase: SupabaseClient, companyIds: readonly s
     const rows = await fetchAllRows<AttestQueueInvoice>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
-        .select('id, company_id, user_id, status, approved_at, due_date, remaining_amount, auto_debit, is_credit_note, currency, total, total_sek, exchange_rate')
+        .select('id, company_id, user_id, status, approved_at, due_date, remaining_amount, auto_debit, bank_entered_at, is_credit_note, currency, total, total_sek, exchange_rate')
         .in('company_id', part)
         .in('status', [...PAYABLE_SUPPLIER_INVOICE_STATUSES])
         .eq('is_credit_note', false)
@@ -333,7 +338,7 @@ export async function loadToPayQueue(
 
   let queue = EMPTY_ATTEST_QUEUE
   for (const invoice of candidates) {
-    const leftOut = inBankPayment.has(invoice.id) || shownElsewhere.has(invoice.id)
+    const leftOut = inBankPayment.has(invoice.id) || shownElsewhere.has(invoice.id) || bankEnteredHolds(invoice, today)
     if (isToPayWithoutAttest(accountingMethod, invoice, leftOut)) queue = addToQueue(queue, invoice, today)
   }
   return { attested: false, queue }

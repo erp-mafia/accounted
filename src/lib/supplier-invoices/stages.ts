@@ -10,7 +10,8 @@
  * step swaps its evidence, not its place.
  */
 
-import { companyAttestsSupplierInvoices } from './lifecycle'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { companyAttestsSupplierInvoices, isOverduePayable } from './lifecycle'
 
 export const SUPPLIER_INVOICE_STAGES = [
   'incoming',
@@ -104,28 +105,79 @@ export interface OpenPaymentInstruction {
  * a payment instruction already covers. 'bank_payment': a bank payment order
  * is open (prepared, sent, signed, or executed and not yet matched), so every
  * payment channel refuses the invoice and it is not waiting for a payment.
- * 'payment_file': it sits in a payment file that was generated, which may or
- * may not have reached the bank. Null when nothing covers it or it is settled.
+ * 'bank_entered': a person ticked "Inlagd i banken" (the payment was typed
+ * into the internet bank by hand) and the invoice has not fallen due
+ * (bankEnteredHolds, crm#1824). 'payment_file': it sits in a payment file
+ * that was generated, which may or may not have reached the bank. Null when
+ * nothing covers it or it is settled.
  */
-export type OpenPaymentMarker = 'bank_payment' | 'payment_file'
+export type OpenPaymentMarker = 'bank_payment' | 'bank_entered' | 'payment_file'
 
 /** Nothing left to pay on these: no payment instruction is relevant to them. */
 export const SETTLED_SUPPLIER_INVOICE_STATUSES: ReadonlySet<string> = new Set(['paid', 'credited', 'reversed'])
 
-export function openPaymentMarker(invoice: {
+/** What the "Inlagd i banken" rule reads off an invoice. */
+export interface BankEnteredFacts {
   status: string
   is_credit_note?: boolean | null
-  open_payment?: OpenPaymentInstruction | null
-}): OpenPaymentMarker | null {
+  /** When a person ticked "Inlagd i banken"; null or absent when not ticked. */
+  bank_entered_at?: string | null
+  due_date?: string | null
+  remaining_amount?: number | null
+}
+
+/**
+ * True while the "Inlagd i banken" tick stands for a payment under way: the
+ * tick is set and the invoice has not fallen due (crm#1824). The tick is a
+ * person's word, not a payment the system follows, so it holds only until the
+ * due date has passed: an invoice still unpaid after it is back among what
+ * waits to be paid, where a tick nobody followed up cannot hide it. Fallen
+ * due is the list's own rule: the stored 'overdue' status, or the predicate
+ * the nightly flip runs (isOverduePayable), which also covers a part-paid
+ * invoice and the hours before the flip. `today` is todayIsoStockholm().
+ * One definition for the list tabs (openPaymentMarker) and the to-pay counts
+ * (lib/supplier-invoices/attest-queues.ts).
+ */
+export function bankEnteredHolds(invoice: BankEnteredFacts, today: string): boolean {
+  if (!invoice.bank_entered_at) return false
+  if (invoice.is_credit_note || SETTLED_SUPPLIER_INVOICE_STATUSES.has(invoice.status)) return false
+  if (invoice.status === 'overdue') return false
+  if (!invoice.due_date) return true
+  return !isOverduePayable(
+    {
+      due_date: invoice.due_date,
+      // A caller that did not read the amount asks about an unsettled invoice: something is left.
+      remaining_amount: invoice.remaining_amount ?? Number.POSITIVE_INFINITY,
+      is_credit_note: invoice.is_credit_note,
+    },
+    today,
+  )
+}
+
+/**
+ * The marker of an invoice, the strongest evidence first: a bank payment
+ * order the system follows, then a standing "Inlagd i banken" tick, then a
+ * payment file. A tick beside a file reads as the tick: the person says the
+ * payment is at the bank, which is the one thing a file cannot tell.
+ */
+export function openPaymentMarker(
+  invoice: BankEnteredFacts & { open_payment?: OpenPaymentInstruction | null },
+  today: string = todayIsoStockholm(),
+): OpenPaymentMarker | null {
   if (invoice.is_credit_note || SETTLED_SUPPLIER_INVOICE_STATUSES.has(invoice.status)) return null
   if (invoice.open_payment?.payment_order) return 'bank_payment'
+  if (bankEnteredHolds(invoice, today)) return 'bank_entered'
   if (invoice.open_payment?.batch) return 'payment_file'
   return null
 }
 
-/** The chip label per marker, in the `supplier_invoices` namespace: a bank payment reads as the ladder's own step. */
+/**
+ * The chip label per marker, in the `supplier_invoices` namespace: a bank
+ * payment reads as the ladder's own step, a tick as the tick's own label.
+ */
 export const OPEN_PAYMENT_MARKER_LABEL_KEYS: Record<OpenPaymentMarker, string> = {
   bank_payment: 'stage_in_file',
+  bank_entered: 'bank_entered_label',
   payment_file: 'in_batch_chip',
 }
 
