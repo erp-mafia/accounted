@@ -375,7 +375,9 @@ export function FocusDecision({
               ? t('action_not_paid')
               : decision.question === 'invoice_paid'
                 ? t('action_register_unpaid')
-                : t('action_register_invoice')}
+                : decision.question === 'who_paid'
+                  ? t('action_nobody_paid_yet')
+                  : t('action_register_invoice')}
           </Button>
         )
       case 'register_and_settle':
@@ -548,6 +550,11 @@ export function FocusDecision({
         ? t('q_not_read_provider')
         : t(`q_${decision.question}`)
   const rendered = buttons.map(renderAction).filter(Boolean)
+  // The item is on its way to the supplier ledger: its accounts are changed in the invoice form (a row each,
+  // so one invoice can be split on several), which one click skips. The verifikat editor under it books
+  // directly and never becomes a supplier invoice, and its link says so (crm#1799).
+  const registersInvoice = decision.actions.includes('register_invoice') || decision.actions.includes('register_and_settle')
+  const changesAccounts = registersInvoice && decision.question !== 'who_paid'
 
   return (
     <section aria-labelledby={`q-${item.id}`} className="space-y-6">
@@ -596,9 +603,19 @@ export function FocusDecision({
 
       {(decision.editorEscape || decision.quietActions.length > 0) && (
         <div className="flex flex-wrap gap-x-4 gap-y-2">
+          {changesAccounts && (
+            <button type="button" onClick={openPlanEditor} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+              {t('action_change_accounts')}
+            </button>
+          )}
+          {decision.quietActions.includes('register_invoice') && (
+            <button type="button" onClick={() => setOpen('invoice')} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+              {t('action_register_as_invoice')}
+            </button>
+          )}
           {decision.editorEscape && (
             <button type="button" onClick={() => setOpen('editor')} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
-              {tWork('payer_open_editor')}
+              {registersInvoice ? t('action_book_without_invoice') : tWork('payer_open_editor')}
             </button>
           )}
           {decision.quietActions.includes('not_underlag') && (

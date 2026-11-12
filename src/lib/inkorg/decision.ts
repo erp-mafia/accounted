@@ -4,7 +4,9 @@
  *
  * Every answer is an action the Underlag workspace already offers, on the
  * endpoint it already calls; this decides only which of them fit the item:
- *   - register_invoice: NewSupplierInvoiceDialog (POST /items/:id/convert);
+ *   - register_invoice: NewSupplierInvoiceDialog (POST /items/:id/convert),
+ *     also the answer "nobody yet" to who paid a document not read as an
+ *     invoice;
  *   - match_purchase: TransactionMatchPicker (POST /items/:id/match-transaction);
  *   - accept_bank_match: the same match-transaction, with the bank row the
  *     Inkorg found when the document arrived (bank_match) instead of a pick;
@@ -420,11 +422,28 @@ export function focusDecision(
     }
   }
   // A receipt, a letter or an unread document: who paid decides the booking.
+  // Nobody yet is an answer too: an invoice the reading took for a letter or
+  // another document (an agency's invoice reads as a myndighetsbrev) had no
+  // road to the supplier ledger here (crm#1799). Anything not read as a
+  // receipt gets it as the third answer, and dropping the item falls to the
+  // quiet link as it does for an invoice; a receipt says it is paid, so
+  // there it is only a quiet link, for the reading that got it wrong. The
+  // receipt half of a pair follows its invoice and never becomes one.
+  const canRegister = startable.supplierInvoices && !item.pairing
+  if (canRegister && kind !== 'receipt') {
+    return {
+      question: 'who_paid',
+      evidence: firstDecisionEvidence(item, kind, today),
+      actions: ['match_purchase', privatelyPaid(startable), 'register_invoice'],
+      quietActions: ['not_underlag'],
+      editorEscape: true,
+    }
+  }
   return {
     question: 'who_paid',
     evidence: firstDecisionEvidence(item, kind, today),
     actions: ['match_purchase', privatelyPaid(startable), 'not_underlag'],
-    quietActions: [],
+    quietActions: canRegister ? ['register_invoice'] : [],
     editorEscape: true,
   }
 }
