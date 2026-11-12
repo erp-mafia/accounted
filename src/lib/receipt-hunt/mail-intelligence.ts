@@ -23,6 +23,8 @@
  */
 import { z } from 'zod'
 import { getAiService } from '@/lib/ai'
+import { AiCallTimeoutError, isRunDeadlineCut } from '@/lib/ai/call-limit'
+import { aiCallLimitMs } from '@/lib/ai/config'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-intelligence')
@@ -37,6 +39,21 @@ const log = createLogger('receipt-hunt-intelligence')
 const TIER = 'extraction' as const
 const METER_FEATURE = 'receipt_hunt_mail'
 
+/**
+ * How long one batch may take. This call asks for up to 8 192 tokens of
+ * output on the reading tier, which by this repo's own measure of that size
+ * is 90 to 150 s (invoice-inbox sweep, PROCESSING_STUCK_MS): the service's
+ * 120 s default would cut a healthy call. Three minutes fits the slow end, or
+ * the deployment's own limit when it set a longer one (AI_CALL_TIMEOUT_SECONDS,
+ * a slow self-hosted model). The press that runs the batches also ends every
+ * model call at its own stop (receipt-hunt/run, withAiDeadline).
+ */
+export const MAIL_EXTRACTION_MIN_LIMIT_MS = 180_000
+
+export function mailExtractionLimitMs(): number {
+  return Math.max(MAIL_EXTRACTION_MIN_LIMIT_MS, aiCallLimitMs())
+}
+
 export interface CandidateForReview {
   messageId: string
   mailbox: string
@@ -46,6 +63,10 @@ export interface CandidateForReview {
   bodyText: string | null
   attachmentNames: string[]
 }
+
+/** A call ended by a time limit of the service's (a run's deadline), whichever copy of the module threw it. */
+const isAiCallTimeout = (error: unknown): boolean =>
+  error instanceof AiCallTimeoutError || (error as { code?: unknown } | null)?.code === 'AI_CALL_TIMEOUT'
 
 /** What a mail says a document is. Fields, not judgements. */
 export interface MailReceipt {
@@ -180,10 +201,13 @@ export async function extractMailDocuments(
     })),
   }
 
+  const limit = new AbortController()
+  const timer = setTimeout(() => limit.abort(), mailExtractionLimitMs())
   try {
     // Forced tool use on the Anthropic family, a JSON schema elsewhere; the
     // answer is not trusted either way and goes through the parse below.
     const { value } = await getAiService().generateStructured({
+      signal: limit.signal,
       tier: TIER,
       meter: { feature: METER_FEATURE, companyId },
       system: EXTRACT_SYSTEM,
@@ -229,9 +253,19 @@ export async function extractMailDocuments(
     })
     return out
   } catch (error) {
-    log.warn('mail extraction failed, fetching nothing this run', {
-      error: error instanceof Error ? error.message : String(error),
-    })
+    const fields = { mails: candidates.length, companyId, error: error instanceof Error ? error.message : String(error) }
+    // The batch's own time ran out: the model gave no answer in what a batch
+    // gets. The same mails are sent again next press and would be cut again, so
+    // nothing is ever fetched for this company until someone looks. That is an
+    // error, not one more failed run.
+    if (limit.signal.aborted || (isAiCallTimeout(error) && !isRunDeadlineCut(error))) {
+      log.error('mail extraction ran out of time, fetching nothing this run', fields)
+    } else if (isAiCallTimeout(error)) {
+      // The press's own time ran out first: the next press starts with a whole budget.
+      log.warn('mail extraction stopped at the end of the press, the rest waits for the next one', fields)
+    } else log.warn('mail extraction failed, fetching nothing this run', fields)
     return []
+  } finally {
+    clearTimeout(timer)
   }
 }

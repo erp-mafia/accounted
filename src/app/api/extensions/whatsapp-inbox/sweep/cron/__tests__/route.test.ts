@@ -23,6 +23,7 @@ import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { runSweep } from '@/extensions/general/whatsapp-inbox/lib/sweep'
 import { verifyCronSecret } from '@/lib/auth/cron'
+import { currentAiDeadline } from '@/lib/ai/call-limit'
 
 const mockRegistryGet = vi.mocked(extensionRegistry.get)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -76,6 +77,8 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       clearedPins: 0,
       outboundFailed24h: 3,
       reopenedOrphans: 0,
+      deferred: 0,
+      failedPasses: [],
     })
 
     const response = await GET(makeRequest())
@@ -92,6 +95,52 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       clearedPins: 0,
       outboundFailed24h: 3,
       reopenedOrphans: 0,
+      deferred: 0,
+      failedPasses: [],
     })
+  })
+
+  const cleanSummary = {
+    reclaimedReceived: 0,
+    reclaimedProcessing: 0,
+    erroredMaxAttempts: 0,
+    finalizedAcks: 0,
+    expiredQuestions: 0,
+    clearedPins: 0,
+    outboundFailed24h: 0,
+    reopenedOrphans: 0,
+    deferred: 0,
+    failedPasses: [] as string[],
+  }
+
+  it('gives the sweep a deadline counted from when the request arrived, and ends its model calls before the function is killed', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    mockRegistryGet.mockResolvedValue({ id: 'whatsapp-inbox' } as never)
+    let modelStop: number | undefined
+    mockRunSweep.mockImplementation(async () => {
+      modelStop = currentAiDeadline()
+      return cleanSummary
+    })
+    try {
+      await GET(makeRequest())
+    } finally {
+      clock.mockRestore()
+    }
+    expect(mockRunSweep).toHaveBeenCalledWith(expect.anything(), { deadlineAt: 1_200_000 })
+    expect(modelStop).toBe(1_270_000)
+  })
+
+  it('answers 500 when a pass could not read its work: a 200 would say the recovery is running', async () => {
+    mockRegistryGet.mockResolvedValue({ id: 'whatsapp-inbox' } as never)
+    mockRunSweep.mockResolvedValue({ ...cleanSummary, reclaimedProcessing: 1, failedPasses: ['received'] })
+
+    const response = await GET(makeRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(500)
+    expect(body.error.code).toBe('SWEEP_PASS_FAILED')
+    // What the other passes did is still reported.
+    expect(body.data.reclaimedProcessing).toBe(1)
+    expect(body.data.failedPasses).toEqual(['received'])
   })
 })

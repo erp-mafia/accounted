@@ -23,8 +23,11 @@ function isUnavailableStatus(status: number): boolean {
 const UNAVAILABLE_ERROR_TYPES = new Set(['overloaded_error', 'api_error', 'rate_limit_error', 'timeout_error'])
 
 // Class names, for errors that carry no status: the Anthropic SDK's
-// connection errors and the AWS-shaped Bedrock exceptions.
+// connection errors, the AWS-shaped Bedrock exceptions, and a call our own
+// time limit ended (lib/ai/call-limit.ts): a call that gave no answer in time
+// says nothing about the document.
 const UNAVAILABLE_ERROR_NAMES = new Set([
+  'AiCallTimeoutError',
   'APIConnectionError',
   'APIConnectionTimeoutError',
   'RateLimitError',

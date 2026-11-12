@@ -11,6 +11,7 @@ import { GET } from '../route'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { readUnreadDocuments } from '@/lib/documents/read/store'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
+import { currentAiDeadline } from '@/lib/ai/call-limit'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -31,7 +32,23 @@ describe('GET /api/documents/read/cron', () => {
     const { status, body } = await parseJsonResponse(await GET(new Request('http://localhost/api/documents/read/cron')))
     expect(status).toBe(200)
     expect(body).toMatchObject({ ok: true, processed: 3, read: 2 })
-    expect(readUnreadDocuments).toHaveBeenCalledWith({ tag: 'service' }, 40, expect.objectContaining({ budgetMs: 180_000, budgetPagesPerDay: 0 }))
+    expect(readUnreadDocuments).toHaveBeenCalledWith({ tag: 'service' }, 40, expect.objectContaining({ budgetPagesPerDay: 0 }))
+  })
+
+  it('counts its time from when the request arrived: no document starts after 180 s, no model call is open after 280 s', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    let modelStop: number | undefined
+    ;(readUnreadDocuments as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      modelStop = currentAiDeadline()
+      return { processed: 0, read: 0, skipped: 0, errors: 0 }
+    })
+    try {
+      await GET(new Request('http://localhost/api/documents/read/cron'))
+    } finally {
+      clock.mockRestore()
+    }
+    expect(readUnreadDocuments).toHaveBeenCalledWith({ tag: 'service' }, 40, expect.objectContaining({ deadlineAt: 1_180_000 }))
+    expect(modelStop).toBe(1_280_000)
   })
 
   it('passes the daily page budget for voucher-tied history from the environment', async () => {

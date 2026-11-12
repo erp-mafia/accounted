@@ -11,10 +11,18 @@ const MODEL_PAGE_CONCURRENCY = 3
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let next = 0
+  // One failed item fails the whole map, so the other workers take no new items after it: a reading that is
+  // already lost (a page the provider did not answer) went on sending the pages behind it to the model.
+  let failed = false
   const worker = async () => {
-    while (next < items.length) {
+    while (next < items.length && !failed) {
       const i = next++
-      out[i] = await fn(items[i])
+      try {
+        out[i] = await fn(items[i])
+      } catch (err) {
+        failed = true
+        throw err
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))

@@ -9,7 +9,9 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { readDocumentBytes } from './router'
 import { keptPreview } from '@/lib/documents/preview'
 import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
-import { READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
+import { READ_GAVE_UP, READ_GIVE_UP_AFTER, READ_RETRY_WAIT_MINUTES, READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
+import { AI_CALL_LIMIT_MS, currentAiDeadline, isRunDeadlineCut } from '@/lib/ai/call-limit'
+import { aiCallLimitMs } from '@/lib/ai/config'
 import { classifyExtractionError } from '@/lib/documents/inbox-extraction/extraction-failure'
 
 const log = createLogger('documents/read')
@@ -38,6 +40,14 @@ export type StoreOutcome =
 
 export const isReaderUnavailable = (out: StoreOutcome) => out.status === 'error' && out.reason.startsWith(READER_UNAVAILABLE)
 
+/**
+ * How many documents in a row the reader or its model provider may fail on before a backfill pass stops. One
+ * failure says little: it may be that document (a scan too long for what was left of the run), and stopping on it
+ * let the same document head every run while the ones behind it were never tried. Three in a row is the reader
+ * missing or the provider down, which fails every document the same way: stop and try again next run.
+ */
+const UNAVAILABLE_IN_A_ROW = 3
+
 /** Reasons the backfill retries later: the model was gated or unconfigured when the row was read. */
 const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'partial:ai_unconfigured', 'partial:budget']
 
@@ -46,7 +56,10 @@ const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'parti
  * are replaced, and pages_read_at is stamped on every outcome about the
  * document so the backfill moves on (read_error names why when no or only some
  * pages were produced). A reader that could not be loaded is an outcome about
- * the environment: nothing is stamped and the document stays unread.
+ * the environment: nothing is stamped and the document stays unread. A
+ * reading the model provider did not answer is not stamped either, but it is
+ * counted, once per wait, and the document is given up on at the fifth in a
+ * row (see noteUnanswered and giveUp).
  * Never touches the file itself. The model is called only for a document
  * that belongs to a company; text layers are read for everyone.
  */
@@ -71,11 +84,21 @@ export async function readAndStoreDocument(
   } else {
     const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
     if (error || !blob) {
-      return stamp(supabase, doc.id, { status: 'error', reason: `download_failed: ${error?.message ?? 'no data'}` }, null)
+      const reason = `download_failed: ${error?.message ?? 'no data'}`
+      // The stored file could not be fetched: a storage fault, or an archived document whose object is gone. It was
+      // stamped without a word, so nobody knew the document had no text. Stamped still, so the backfill moves on,
+      // and reported once: a retry of the same failure (the job's later attempts) only warns.
+      const fields = { doc: doc.id, company: doc.company_id, storagePath: doc.storage_path, reason }
+      if (doc.read_error?.startsWith('download_failed')) log.warn('document file could not be downloaded, again', fields)
+      else log.error('document file could not be downloaded, left without page text', fields)
+      return stamp(supabase, doc.id, { status: 'error', reason }, null)
     }
     bytes = Buffer.from(await blob.arrayBuffer())
   }
 
+  // What the reading has of its run when it starts: all of it, unless the run has a stop for its model calls.
+  const modelStop = currentAiDeadline()
+  const timeAtStart = modelStop === undefined ? Infinity : modelStop - Date.now()
   let outcome: ReadOutcome
   try {
     outcome = await withAiMeter({ feature: 'document_read', companyId: doc.company_id }, () =>
@@ -83,10 +106,23 @@ export async function readAndStoreDocument(
     )
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    if (err instanceof ReaderUnavailableError || classifyExtractionError(err) === 'provider_unavailable') {
+    const readerMissing = err instanceof ReaderUnavailableError
+    if (readerMissing || classifyExtractionError(err) === 'provider_unavailable') {
       // Not stamped: the document is fine, the reader is missing or its model provider is down (a Bedrock 503
       // stamped read_failed left 75 documents unread for good, prod 2026-10-19..26). It stays unread for the next run.
-      log.warn('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason })
+      // Counted, though, when it was the provider: see noteUnanswered. Not counted: a reader that could not be
+      // loaded (the deployment's fault, the same for every document), and a reading the run's stop cut before it
+      // had the time one model call gets (it started too late to say anything about the document). That time is
+      // the deployment's limit, but never more than the default two minutes: a self-host that raised its limit past
+      // what a run has would otherwise never count a cut, and a scan too long for a run would be read every run.
+      const startedLate = isRunDeadlineCut(err) && timeAtStart < Math.min(aiCallLimitMs(), AI_CALL_LIMIT_MS)
+      const unanswered = readerMissing || startedLate ? null : await noteUnanswered(supabase, doc.id)
+      // Given up only by the reading that counted the fifth (or a later one, a day apart): never by a retry inside a wait.
+      if (unanswered?.counted && unanswered.failures >= READ_GIVE_UP_AFTER) {
+        const gaveUp = await giveUp(supabase, doc, unanswered.failures, reason)
+        if (gaveUp) return gaveUp
+      }
+      log.warn('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason, ...(unanswered ? { unanswered: unanswered.failures, counted: unanswered.counted } : {}) })
       return { status: 'error', reason: `${READER_UNAVAILABLE}: ${reason.slice(0, 300)}` }
     }
     log.warn('read failed', { doc: doc.id, mime: doc.mime_type, reason })
@@ -123,6 +159,75 @@ export async function readAndStoreDocument(
     { status: 'read', pages: rows.length, reader: outcome.reader, ...(outcome.partial ? { partial: `partial:${outcome.partial}` } : {}) },
     outcome.pageCount,
   )
+}
+
+/**
+ * One more reading of this document that the model provider did not answer:
+ * how many there are in a row, and whether this one counted. Null when it
+ * could not be recorded.
+ *
+ * A reading without an answer is tried again, and nothing used to count the
+ * tries: a scan too long to read inside one run (the recent lane has no page
+ * cap, the model reads three pages at a time) was read from the start every
+ * five minutes for as long as it existed, each run spending what the model
+ * read before the cut. The database keeps the count and when the next try
+ * may start (note_document_read_unavailable, migration 20261112152731), and
+ * counts a failure only once the last wait is over: the upload screen retries
+ * a failed read every 1.5 s, and a one-minute provider burst must not add up
+ * to five. The backfill's candidates leave the document out until then.
+ *
+ * Null, and the document is left exactly as before, when the count cannot be
+ * kept: the function is not there yet (code ships before its migration), the
+ * client is not the service role, or the row refuses the update (a document
+ * on a locked period, which the backfill never takes anyway).
+ */
+async function noteUnanswered(supabase: SupabaseClient, documentId: string): Promise<{ failures: number; counted: boolean } | null> {
+  const { data, error } = await supabase.rpc('note_document_read_unavailable', {
+    p_document_id: documentId,
+    p_backoff_minutes: READ_RETRY_WAIT_MINUTES,
+  })
+  if (error) {
+    log.warn('unanswered reading not counted', { doc: documentId, reason: error.message })
+    return null
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { failures?: unknown; counted?: unknown } | null | undefined
+  return row && typeof row.failures === 'number' ? { failures: row.failures, counted: row.counted === true } : null
+}
+
+/**
+ * The document got no answer READ_GIVE_UP_AFTER readings in a row, at least
+ * 7.5 hours apart in all: not the provider having a bad hour, but this
+ * document (too long to read inside one run, or one the provider fails on
+ * every time). read_error says so, and the next try waits a day (the fifth
+ * wait). Its pages_read_at stays NULL, so it is still an unread document:
+ * the backfill takes it again once the day is over, and a question or an
+ * agent asking for its text reads it at once; a reading that gets an answer
+ * stamps it read like any other.
+ *
+ * Only a document nothing has been read from: the write is conditional on
+ * pages_read_at still being NULL, so a document a pass already stored pages
+ * for is never marked failed, and a reading that landed meanwhile wins.
+ * Null when nothing was written. Reported once, when the document is first
+ * given up on; a later daily try that fails again only warns, and writes
+ * nothing: the mark is there already, and writing the same value again would
+ * add an audit row a day for every such document. It only checks that no
+ * reading landed meanwhile.
+ */
+async function giveUp(supabase: SupabaseClient, doc: ReadableDocumentRow, failures: number, reason: string): Promise<StoreOutcome | null> {
+  if (doc.pages_read_at) return null
+  const rows = supabase.from('document_attachments')
+  const { data, error } = doc.read_error === READ_GAVE_UP
+    ? await rows.select('id').eq('id', doc.id).is('pages_read_at', null)
+    : await rows.update({ read_error: READ_GAVE_UP }).eq('id', doc.id).is('pages_read_at', null).select('id')
+  if (error) {
+    log.warn('give-up not recorded', { doc: doc.id, reason: error.message })
+    return null
+  }
+  if (!Array.isArray(data) || data.length === 0) return null
+  const fields = { doc: doc.id, company: doc.company_id, mime: doc.mime_type, unanswered: failures, reason }
+  if (doc.read_error === READ_GAVE_UP) log.warn('document given up on still gets no answer, tried again in a day', fields)
+  else log.error('document could not be read and is given up on, tried again once a day', fields)
+  return { status: 'error', reason: `${READ_GAVE_UP} after ${failures} readings without an answer: ${reason.slice(0, 220)}` }
 }
 
 /**
@@ -168,13 +273,14 @@ async function stamp(supabase: SupabaseClient, documentId: string, outcome: Stor
  * has room), then the newest unread documents of everyone else, text layers
  * only. The platform holds far more unread files than one run reads, so
  * without that order a company switched on today waits behind every other
- * archive. budgetMs stops the batch between documents.
+ * archive. No document is started at or after deadlineAt (epoch ms); the rest
+ * stays unread for the next run.
  */
 export async function readUnreadDocuments(
   supabase: SupabaseClient,
   limit: number,
   opts: {
-    budgetMs?: number
+    deadlineAt?: number
     budgetPagesPerDay?: number
     now?: Date
     onRead?: (doc: ReadableDocumentRow, outcome: Extract<StoreOutcome, { status: 'read' }>) => Promise<void>
@@ -183,10 +289,13 @@ export async function readUnreadDocuments(
   const now = opts.now ?? new Date()
   const budget = Math.max(0, Math.floor(opts.budgetPagesPerDay ?? 0))
   const counts = { processed: 0, read: 0, skipped: 0, errors: 0 }
-  const startedAt = Date.now()
-  const spentTime = () => counts.processed >= limit || (opts.budgetMs !== undefined && Date.now() - startedAt >= opts.budgetMs)
+  const spentTime = () => counts.processed >= limit || (opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt)
+  let unavailableInARow = 0
+  // True once the reader or the provider has failed several documents in a row: the pass stops.
+  const readerDown = () => unavailableInARow >= UNAVAILABLE_IN_A_ROW
   const tally = async (doc: ReadableDocumentRow, out: StoreOutcome) => {
     counts.processed++
+    unavailableInARow = isReaderUnavailable(out) ? unavailableInARow + 1 : 0
     if (out.status === 'read') {
       counts.read++
       // The caller queues what follows a read (the classification); the store stays free of the queue.
@@ -194,19 +303,16 @@ export async function readUnreadDocuments(
     } else if (out.status === 'skipped') counts.skipped++
     else counts.errors++
   }
-  // False when the reader is missing: that fails every document the same way, so stop and try again next run.
-  const walkByPlan = async (docs: ReadableDocumentRow[]): Promise<boolean> => {
+  const walkByPlan = async (docs: ReadableDocumentRow[]): Promise<void> => {
     for (const doc of docs) {
-      if (spentTime()) return true
+      if (spentTime() || readerDown()) return
       const plan = planForDocument(doc, now)
       // History costs the model only while the company has a budget; without one the backfill reads text layers and a question reads the rest.
       const out = plan
         ? await readAndStoreDocument(supabase, doc, { allowModel: plan.allowModel && (plan.lane === 'live' || budget > 0), maxModelPages: plan.maxModelPages, tier: plan.tier })
         : { status: 'skipped' as const, reason: 'lane_done' }
       await tally(doc, out)
-      if (isReaderUnavailable(out)) return false
     }
-    return true
   }
   // The shelf is on for every company: nobody goes first, and everyone's gated rows are retried under the budget.
   if (!spentTime() && getAiStatus().configured) {
@@ -246,7 +352,7 @@ export async function readUnreadDocuments(
       taken++
       const out = await readAndStoreDocument(supabase, doc, plan)
       await tally(doc, out)
-      if (isReaderUnavailable(out)) return counts
+      if (readerDown()) return counts
       if (lane !== 'live' && out.status === 'read') spent.set(doc.company_id, (spent.get(doc.company_id) ?? 0) + out.pages)
     }
   }

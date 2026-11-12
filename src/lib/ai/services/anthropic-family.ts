@@ -181,6 +181,8 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
 
     async generateText(req: GenerateTextRequest): Promise<GenerateTextResult> {
       const model = modelFor(req.tier)
+      // A request option, never a body field: the request on the wire is unchanged.
+      const options = req.signal ? { signal: req.signal } : undefined
 
       // Fast path (unchanged: keeps hosted byte-identical for every non-tool
       // caller, which is all of them today): one turn, no tools.
@@ -191,7 +193,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           ...(req.system ? { system: req.system } : {}),
           messages: messagesFor(req.prompt, req.history),
         }
-        const resp = await (await getClient()).messages.create(params)
+        const resp = await (await getClient()).messages.create(params, options)
         return { text: textOf(resp), model, usage: usageOf(resp), ...endOf(resp) }
       }
 
@@ -216,7 +218,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           ...(req.system ? { system: req.system } : {}),
           tools,
           messages,
-        })
+        }, options)
         usage = addUsage(usage, usageOf(resp))
         const toolUses = resp.content.filter(
           (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
@@ -283,7 +285,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         tools,
         tool_choice: { type: 'none' },
         messages: withFinalAnswerRequest(messages),
-      })
+      }, options)
       return {
         text: textOf(final),
         model,
@@ -313,7 +315,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         tool_choice: { type: 'tool', name: req.schema.name },
         messages: [{ role: 'user', content: req.prompt }],
       }
-      const resp = await (await getClient()).messages.create(params)
+      const resp = await (await getClient()).messages.create(params, req.signal ? { signal: req.signal } : undefined)
       const toolUse = resp.content.find(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use' && b.name === req.schema.name
       )

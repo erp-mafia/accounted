@@ -5,6 +5,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { huntCompany } from '@/lib/receipt-hunt/hunt'
 import { checkRateLimit, getRedis } from '@/lib/auth/rate-limit-http'
+import { withAiDeadline } from '@/lib/ai/call-limit'
 
 /**
  * A run of the hunt that a person asked for.
@@ -50,6 +51,16 @@ const MAILS_PER_RUN = 100
 const RECEIPTS_PER_RUN = 3
 
 export const maxDuration = 300
+
+/**
+ * No model call of a press is still open past this point, counted from when
+ * the handler starts (lib/ai/call-limit.ts). A press reads up to
+ * MAILS_PER_RUN mails in batches of 25 one after another, and one batch may
+ * take three minutes, so four of them could run far past the 300 s; a call cut
+ * here ends its batch, the batches after it are refused at once, and what was
+ * read is kept. The minute after it is for the pairing and the proposals.
+ */
+const MODEL_STOP_MS = 240_000
 
 /**
  * Passes one company may run in a day. A full sweep of a busy ledger takes a
@@ -103,6 +114,7 @@ async function releasePassSlot(companyId: string, runId: string): Promise<void> 
 // requireWrite: a press archives documents, files inbox items and stages
 // proposals, all through the service role, so RLS cannot stop a viewer.
 export const POST = withRouteContext('receipt_hunt.run', async (_request, ctx) => {
+  const startedAt = Date.now()
   const { companyId, user, log } = ctx
 
   // Reading a PDF is what turns a fetched attachment into something matchable,
@@ -141,12 +153,14 @@ export const POST = withRouteContext('receipt_hunt.run', async (_request, ctx) =
 
     log.info('manual receipt hunt starting', { companyId, runId, userId: user.id })
 
-    result = await huntCompany(supabase, companyId, runId, {
-      searchMail: true,
-      mailSearchLimit: PURCHASES_PER_RUN,
-      maxMails: MAILS_PER_RUN,
-      maxReceipts: RECEIPTS_PER_RUN,
-    })
+    result = await withAiDeadline(startedAt + MODEL_STOP_MS, () =>
+      huntCompany(supabase, companyId, runId, {
+        searchMail: true,
+        mailSearchLimit: PURCHASES_PER_RUN,
+        maxMails: MAILS_PER_RUN,
+        maxReceipts: RECEIPTS_PER_RUN,
+      }),
+    )
   } finally {
     await releasePassSlot(companyId, runId)
   }

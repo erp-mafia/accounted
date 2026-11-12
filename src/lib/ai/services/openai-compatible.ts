@@ -185,6 +185,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
           : { prompt: req.prompt }),
         maxOutputTokens: req.maxTokens,
         ...(tools ? { tools, stopWhen: stepCountIs(req.maxSteps ?? DEFAULT_MAX_STEPS) } : {}),
+        ...(req.signal ? { abortSignal: req.signal } : {}),
       })
       return { text: result.text.trim(), model, usage: usageOf(result) }
     },
@@ -200,6 +201,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
           prompt: req.prompt,
           maxOutputTokens: req.maxTokens,
           output: Output.object({ schema: jsonSchema<Record<string, unknown>>(req.schema.jsonSchema) }),
+          ...(req.signal ? { abortSignal: req.signal } : {}),
         })
         return { value: result.output, model, usage: usageOf(result) }
       }
@@ -213,6 +215,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
         system: req.system ? `${req.system}\n\n${schemaHint}` : schemaHint,
         prompt: req.prompt,
         maxOutputTokens: req.maxTokens,
+        ...(req.signal ? { abortSignal: req.signal } : {}),
       })
       const value: unknown = JSON.parse(extractJsonObject(result.text))
       return { value, model, usage: usageOf(result) }
