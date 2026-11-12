@@ -4,7 +4,8 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useTranslations } from 'next-intl'
 import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { isUuid } from '@/lib/invariants/uuid'
 
 /**
  * link_documents_to_vouchers: up to 300 document-to-verifikat pairings staged
@@ -88,7 +89,19 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
               {rows.map((row, i) => (
                 <tr key={`${row.document_id ?? ''}-${i}`}>
                   <td className={cn(VTD_CLASS, 'min-w-0 break-all')} data-ph-mask="">
-                    {row.document_file_name ?? '-'}
+                    {/* Each pairing's file opens in a new tab: the row is what is approved. */}
+                    {isUuid(row.document_id) ? (
+                      <a
+                        href={`/api/documents/${row.document_id}/inline`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={QUIET_LINK_CLASS}
+                      >
+                        {row.document_file_name ?? t('link_preview_file')}
+                      </a>
+                    ) : (
+                      (row.document_file_name ?? '-')
+                    )}
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>{voucher(row)}</td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>

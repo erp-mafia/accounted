@@ -235,6 +235,13 @@ describe('setInboxItemPurchaseCategory with every_time ("varje gång")', () => {
     expect(mock.findCall('invoice_inbox_items', 'update')).toBeUndefined()
   })
 
+  it('a dry run carries the underlag\'s document, so the proposal can show it', async () => {
+    const DOCUMENT = '99999999-9999-4999-8999-999999999999'
+    mock.enqueue({ data: item({ document_id: DOCUMENT }) })
+    const out = await setInboxItemPurchaseCategory(ctx, ITEM, 'expense.equipment.tools', { via: 'api', dryRun: true })
+    expect(out).toMatchObject({ ok: true, dryRun: true, preview: { inbox_item_id: ITEM, document_id: DOCUMENT } })
+  })
+
   it('a dry run names the supplier it would instruct, as the register has it, and writes nothing', async () => {
     mock.enqueue({ data: item({ matched_supplier_id: SUPPLIER }) })
     mock.enqueue({ data: { id: SUPPLIER, name: 'Clas Ohlson' } })

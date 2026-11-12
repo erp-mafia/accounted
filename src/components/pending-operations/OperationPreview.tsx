@@ -24,6 +24,8 @@ import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTr
 import { LinkDocumentsPreview } from './LinkDocumentsPreview'
 import { ReconciliationMatchPreview, hasReconciliationMatchDetails } from './ReconciliationMatchPreview'
 import { PurchaseCategoryPreview } from './PurchaseCategoryPreview'
+import { ProposalDocument } from './ProposalDocument'
+import { proposalDocumentRef } from './proposal-document'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews, type PostingLineLike } from '@/lib/bookkeeping/voucher-line-view'
@@ -36,11 +38,13 @@ import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 // is widened to string: the chat surface derives it from an MCP tool name and
 // unknown values legitimately fall through to GenericPreview. params carries
 // tool inputs some renderers need (e.g. attach_document_to_transaction's
-// document_id); surfaces that only have preview_data may omit it.
+// document_id); surfaces that only have preview_data may omit it. status
+// lets a resolved removal stop pointing at a file that may be gone.
 export interface OperationPreviewInput {
   operation_type: string
   preview_data: PendingOperation['preview_data']
   params?: PendingOperation['params']
+  status?: string
 }
 
 /**
@@ -1326,11 +1330,16 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
   // One line above every preview type, from the same reading the Granskning
   // row uses. The VAT explanation stays inside the invoice previews, next to
   // the lines it is about.
-  if (!warning || warning.kind === 'vat') return body
+  // The underlag closes every preview that does not render its own, in the
+  // same place whatever the operation type.
+  const docRef = proposalDocumentRef(op)
+  const line = warning && warning.kind !== 'vat' ? warning : null
+  if (!line && !docRef) return body
   return (
     <div className="space-y-3">
-      <AttnLine className="break-words">{warningText(warning)}</AttnLine>
+      {line && <AttnLine className="break-words">{warningText(line)}</AttnLine>}
       {body}
+      {docRef && <ProposalDocument docRef={docRef} detail={detail} />}
     </div>
   )
 }
