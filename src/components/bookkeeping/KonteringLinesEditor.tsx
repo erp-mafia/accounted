@@ -6,6 +6,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
+import { negativeAmountMove } from '@/lib/bookkeeping/kontering-amount-entry'
 import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
 import { PlusIcon, TrashIcon } from '@/components/icons'
 import type { BASAccount } from '@/types'
@@ -159,6 +160,14 @@ export function KonteringLinesEditor({
         aria-label={label}
         value={lines[index][field]}
         onChange={(e) => onAmountChange(index, field, e.target.value)}
+        onBlur={(e) => {
+          // Both sides are written as positive figures: a minus figure is
+          // the same figure on the other side, moved when the field is left.
+          const move = negativeAmountMove(field, e.target.value)
+          if (!move) return
+          onAmountChange(index, field, '')
+          onAmountChange(index, move.side, move.value)
+        }}
         className="tabular-nums text-right"
         ref={amountInputRef ? (el) => amountInputRef(index, field, el) : undefined}
         {...amountInputProps?.(index, field)}
