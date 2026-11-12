@@ -29,6 +29,7 @@ import { conflictCode, getErrorEntry, hasErrorEntry, siCreateInvalidInputMessage
 import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
+import { syncHoldMessage } from '@/lib/bank-sync/sync-hold-message'
 
 export type ErrorContext =
   | 'invoice'
@@ -644,6 +645,11 @@ export function getErrorMessage(
         details?: unknown
       }
       if (structured.code === 'PT409') return conflictMessage(structured.message, locale)
+
+      // A bank sync that is held back: the registry sentence points agents at
+      // the field the time is in (next_allowed_at); a person reads the time.
+      const syncHold = syncHoldMessage(structured.code, structured.details, locale)
+      if (syncHold) return syncHold
 
       // A refused delete as errorResponse sends it: the envelope already
       // carries the register's own sentence in both languages (#2831).

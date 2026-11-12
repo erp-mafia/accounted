@@ -1,0 +1,1 @@
+[2026-11-12] A bank sync held back (cooldown, the bank's read limit, its short throttle) is worded for a person once, in lib/bank-sync/sync-hold-message.ts, with the Stockholm time read from details.next_allowed_at: the registry sentence named the field and 9 companies saw it.

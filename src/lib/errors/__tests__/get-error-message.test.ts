@@ -1027,3 +1027,48 @@ describe('getErrorMessage: TARGET_PERIOD_CLOSED (crm#1290)', () => {
     }
   })
 })
+
+describe('getErrorMessage: a bank sync held back says when (BANK_SYNC_COOLDOWN, BANK_RATE_LIMITED, BANK_THROTTLED)', () => {
+  // The envelope the session sync route answers, as the Synka nu button
+  // hands it over. Inside the cooldown the registry sentence pointed at a
+  // field: "Vänta tills next_allowed_at innan du synkar igen".
+  const quiet = { error: () => {}, warn: () => {} }
+  const envelope = (code: string, details: Record<string, unknown>) => errorResponseFromCode(code, quiet, { details }).json() as Promise<unknown>
+  const NEXT = '2026-11-11T14:43:00.000Z' // 15:43 in Stockholm
+  const HOLDS = ['BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED', 'BANK_THROTTLED']
+  const fieldName = /\b[a-z]+(?:_[a-z0-9]+)+\b/
+
+  it('reads the time out of the envelope instead of naming the field, in both languages', async () => {
+    for (const code of ['BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED']) {
+      const body = await envelope(code, { connection_id: 'c-1', next_allowed_at: NEXT, retry_after_seconds: 821 })
+      expect(getErrorMessage(body), code).toMatch(/tidigast (\d{1,2} \w+\.? )?15:43\./)
+      expect(getErrorMessage(body, { locale: 'en' }), code).toMatch(/at (\d{1,2} \w+ )?15:43 \(Swedish time\) at the earliest/)
+    }
+  })
+
+  it('no hold reaches a person with a field name in it: either language, with the time and without', async () => {
+    for (const code of HOLDS) {
+      for (const details of [{ connection_id: 'c-1', next_allowed_at: NEXT, retry_after_seconds: 821 }, {}]) {
+        const body = await envelope(code, details)
+        for (const locale of ['sv', 'en'] as const) {
+          expect(getErrorMessage(body, { locale }), `${code} ${locale} ${JSON.stringify(details)}`).not.toMatch(fieldName)
+        }
+      }
+    }
+  })
+
+  it('without a time the Swedish registry sentence stands', async () => {
+    for (const code of HOLDS) {
+      expect(getErrorMessage(await envelope(code, {})), code).toBe(getErrorEntry(code)?.message_sv)
+    }
+  })
+
+  it('no Swedish sentence for a bank failure names a field of the answer', () => {
+    // A person reads the Swedish half as it is: a snake_case token in it is a
+    // field name meant for an agent, which reads the English half and details.
+    const offenders = listErrorCodes()
+      .filter((code) => code.startsWith('BANK_') || code.startsWith('OPEN_BANKING_'))
+      .filter((code) => fieldName.test(getErrorEntry(code)?.message_sv ?? ''))
+    expect(offenders).toEqual([])
+  })
+})
