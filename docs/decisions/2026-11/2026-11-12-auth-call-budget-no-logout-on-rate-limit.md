@@ -1,0 +1,1 @@
+[2026-11-12] Proxy answers a repeated /user check from memory for 3 s and a repeated refresh for 10 s per instance, and a rate-limited or unreachable auth service means 503 try again, not logout: one looping client drew 1,665 refresh 429s on 2026-11-11 and each was read as signed out.

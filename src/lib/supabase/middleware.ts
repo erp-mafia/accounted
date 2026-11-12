@@ -49,7 +49,14 @@ import {
 } from '@/lib/supabase/cookie-options'
 import { upgradeLegacyAuthCookies } from '@/lib/supabase/auth-cookies'
 import { quietRejectedRefreshTokenErrors } from '@/lib/supabase/refresh-token-errors'
-import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { createAuthServiceWatch, userSessionFetch } from '@/lib/supabase/auth-call-budget'
+import { describeRepeatedRequest, reachesRepeatThreshold } from '@/lib/supabase/request-repeat-report'
+import {
+  apiPathAnswersWithoutSession,
+  authUnavailableApiResponse,
+  authUnavailablePageResponse,
+} from '@/lib/auth/auth-unavailable'
 import {
   isSessionAuthMethod,
   SESSION_AUTH_METHOD_HINT_COOKIE,
@@ -172,20 +179,35 @@ async function updateSessionInner(
   const requestProtocol =
     requestProtocolFromHeaders(request.headers) ?? request.nextUrl.protocol
   // GoTrue calls (getUser, refresh) carry the end user's IP when IP address
-  // forwarding is configured (lib/supabase/auth-forwarding.ts).
-  const forwardingFetch = authForwardingFetch(clientIpFromHeaders(request.headers))
+  // forwarding is configured, and a repeated request does not repeat them:
+  // the /user check and the refresh are answered from memory within their
+  // budget (lib/supabase/auth-call-budget.ts). `authService` learns when
+  // GoTrue could not answer at all.
+  const authService = createAuthServiceWatch()
+  // True while getUser() runs. auth-js removes a session whose refresh it
+  // could not complete after the access token expired, and that removal is
+  // written through setAll as cookie deletions. When the refresh was only
+  // rate limited or the auth service was down, the session is still valid
+  // there: those deletions must not reach the browser.
+  let checkingSession = true
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      ...(forwardingFetch ? { global: { fetch: forwardingFetch } } : {}),
+      global: {
+        fetch: userSessionFetch(clientIpFromHeaders(request.headers), {
+          watch: authService,
+          replayUser: true,
+        }),
+      },
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
+          if (checkingSession && authService.unavailable) return
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
@@ -212,6 +234,36 @@ async function updateSessionInner(
   // Get the pathname
   const pathname = request.nextUrl.pathname
 
+  // A session that could not be checked (GoTrue rate limited the refresh,
+  // answered 5xx or was unreachable) is not a missing session: its cookies
+  // stay, and where a session is required the answer is "try again", never
+  // the /login bounce (lib/auth/auth-unavailable.ts). With a user in hand
+  // (a refresh that failed while the access token was still valid) the
+  // request carries on as usual.
+  const sessionUnchecked = !user && authService.unavailable
+  checkingSession = sessionUnchecked
+
+  // One line when a session keeps repeating a request, with what the logs
+  // otherwise cannot tell (lib/supabase/request-repeat-report.ts).
+  if (user) {
+    const route = proxyRouteTemplate(pathname)
+    if (reachesRepeatThreshold(`${user.id} ${request.method} ${route}`)) {
+      log.warn('one session keeps repeating a request', {
+        operation: 'request_repeated',
+        userId: user.id,
+        route,
+        ...describeRepeatedRequest({ method: request.method, url: request.nextUrl, headers: request.headers }),
+      })
+    }
+  }
+  if (sessionUnchecked) {
+    log.warn('session could not be checked: auth service unavailable', {
+      operation: 'auth_service_unavailable',
+      route: proxyRouteTemplate(pathname),
+      retryAfterSeconds: authService.retryAfterSeconds,
+    })
+  }
+
   // If the refresh token is stale/invalid, clear the session cookies so the
   // browser stops sending them on every request, INCLUDING /api requests,
   // which previously returned before this cleanup and replayed the dead
@@ -219,7 +271,7 @@ async function updateSessionInner(
   // intact. scope: 'local' only clears cookies: the refresh token is already
   // dead server-side, and the default global-revoke round-trip re-triggers
   // the failed refresh, the exact AuthApiError this cleans up after.
-  if (authError && !user && !pathname.startsWith('/auth')) {
+  if (authError && !user && !sessionUnchecked && !pathname.startsWith('/auth')) {
     try {
       await supabase.auth.signOut({ scope: 'local' })
     } catch (signOutError) {
@@ -236,7 +288,9 @@ async function updateSessionInner(
   const hasAuthorizationHeader = request.headers.get('authorization') !== null
 
   if (!user) {
-    clearSessionTimeoutCookies(request, supabaseResponse)
+    // An unchecked session keeps its timers too: clearing them would restart
+    // the absolute window once the auth service answers again.
+    if (!sessionUnchecked) clearSessionTimeoutCookies(request, supabaseResponse)
   } else if (
     timeoutConfig.enabled &&
     !apiRequestSkipsSessionTimeout(pathname, hasAuthorizationHeader)
@@ -338,6 +392,21 @@ async function updateSessionInner(
       pathname,
       hasAuthorizationHeader,
     )
+    // A cookie session that could not be checked: a route would answer 401,
+    // which the browser reads as "signed out" and follows to /login. Bearer
+    // surfaces (their header is the credential) and the sign-in routes
+    // answer for themselves.
+    if (
+      sessionUnchecked &&
+      !apiPathAnswersWithoutSession(pathname) &&
+      !(hasAuthorizationHeader && skipMfaGate)
+    ) {
+      // A refresh that succeeded before the check failed has its rotated
+      // tokens on supabaseResponse: they travel with the 503.
+      const response = authUnavailableApiResponse(authService.retryAfterSeconds)
+      copyResponseCookies(supabaseResponse, response)
+      return response
+    }
     // `user` is the getUser() result above: server-authenticated, so its
     // factor list is trustworthy. Only a session with something to step up
     // TO is gated here, whatever NEXT_PUBLIC_REQUIRE_MFA says (see
@@ -532,6 +601,14 @@ async function updateSessionInner(
 
   // Protected routes - require authentication
   if (!user) {
+    if (sessionUnchecked) {
+      const response = authUnavailablePageResponse(
+        authService.retryAfterSeconds,
+        request.cookies.get(LOCALE_COOKIE)?.value === 'en' ? 'en' : 'sv',
+      )
+      copyResponseCookies(supabaseResponse, response)
+      return response
+    }
     return bounceToAuth(request, supabaseResponse, '/login')
   }
 

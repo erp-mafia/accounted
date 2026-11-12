@@ -4,7 +4,8 @@ import {
   requestProtocolFromHeaders,
   supabaseAuthCookieOptions,
 } from '@/lib/supabase/cookie-options'
-import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
 import { withActorHeader } from '@/lib/supabase/actor-header'
 import { withEmptyPagePastEnd } from '@/lib/supabase/page-past-end'
 
@@ -40,21 +41,22 @@ const safeKey = isBuildPlaceholder ? 'placeholder' : key
  * client gets a short-lived access token from /api/auth/session-token.
  *
  * Its GoTrue calls carry the end user's IP when IP address forwarding is
- * configured (lib/supabase/auth-forwarding.ts); off, the default fetch. A
- * counted page past the last row reads as an empty page, not a 416
- * (lib/supabase/page-past-end.ts).
+ * configured (lib/supabase/auth-forwarding.ts), and a refresh for the same
+ * refresh token is asked once, not once per request
+ * (lib/supabase/auth-call-budget.ts). A counted page past the last row reads
+ * as an empty page, not a 416 (lib/supabase/page-past-end.ts).
  */
 export async function createClient() {
   const cookieStore = await cookies()
   const requestHeaders = await currentRequestHeaders()
   const requestProtocol = requestProtocolFromHeaders(requestHeaders)
-  const forwardingFetch = authForwardingFetch(clientIpFromHeaders(requestHeaders))
+  const sessionFetch = userSessionFetch(clientIpFromHeaders(requestHeaders))
 
   return createServerClient(
     safeUrl,
     safeKey,
     {
-      global: { fetch: withEmptyPagePastEnd(forwardingFetch) },
+      global: { fetch: withEmptyPagePastEnd(sessionFetch) },
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {

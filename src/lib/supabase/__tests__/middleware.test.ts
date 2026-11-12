@@ -1791,21 +1791,29 @@ describe('updateSession redirect destinations', () => {
       }
     })
 
-    it('hands GoTrue calls the IP-forwarding fetch only when a secret key is configured', async () => {
+    it('always hands the client the budgeted fetch, and forwards the IP to GoTrue only when a secret key is configured', async () => {
       const { createServerClient } = await import('@supabase/ssr')
       const previous = { key: process.env.SUPABASE_SECRET_KEY, url: process.env.NEXT_PUBLIC_SUPABASE_URL }
+      const sent = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{}'))
+      vi.stubGlobal('fetch', sent)
+      // What the client's fetch puts on a GoTrue call, read off the request that leaves.
+      const forwardedFor = async () => {
+        const options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: typeof fetch } }
+        expect(typeof options.global?.fetch).toBe('function')
+        await options.global!.fetch!('https://project.supabase.co/auth/v1/settings', { method: 'GET' })
+        return new Headers(sent.mock.calls.at(-1)?.[1]?.headers).get('sb-forwarded-for')
+      }
       try {
         process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
         delete process.env.SUPABASE_SECRET_KEY
         await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
-        let options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
-        expect(options.global).toBeUndefined()
+        expect(await forwardedFor()).toBeNull()
 
         process.env.SUPABASE_SECRET_KEY = 'sb_secret_test-key'
         await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
-        options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
-        expect(typeof options.global?.fetch).toBe('function')
+        expect(await forwardedFor()).toBe('203.0.113.7')
       } finally {
+        vi.unstubAllGlobals()
         if (previous.key === undefined) delete process.env.SUPABASE_SECRET_KEY
         else process.env.SUPABASE_SECRET_KEY = previous.key
         if (previous.url === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
