@@ -25,6 +25,8 @@ vi.mock('../lib/provider-client', () => ({
   listConsents: vi.fn(),
   generateOtc: vi.fn(),
   consumeOAuthState: vi.fn(),
+  peekOAuthState: vi.fn(),
+  oauthStateRejectionReason: vi.fn(),
   mintHandoff: vi.fn(),
   consumeHandoff: vi.fn(),
   getAuthUrl: vi.fn(),

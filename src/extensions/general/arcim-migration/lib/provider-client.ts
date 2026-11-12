@@ -292,8 +292,51 @@ export async function generateOtc(
   return { code, consentId, expiresAt }
 }
 
+/** What a live OAuth `state` row resolves to: the flow the callback belongs to. */
+type ResolvedOAuthState = {
+  consentId: string
+  provider: ProviderName
+  /** The Accounted company that owns the consent (read server-side, never from the callback). */
+  companyId: string
+  userId: string | null
+  origin: string | null
+}
+
+/**
+ * Resolve a matched provider_otc state row to the flow it was minted for. The
+ * one definition behind consumeOAuthState and peekOAuthState: the provider and
+ * the owning company are read from the consent row (written server-side at
+ * connect time), never from the callback query string.
+ */
+async function resolveOAuthStateRow(
+  supabase: ReturnType<typeof createServiceClient>,
+  row: { consent_id: string; user_id: unknown; origin: unknown },
+): Promise<ResolvedOAuthState | null> {
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('provider, company_id')
+    .eq('id', row.consent_id)
+    .maybeSingle()
+
+  if (!consent?.provider || !consent.company_id) {
+    return null
+  }
+
+  return {
+    consentId: row.consent_id,
+    provider: consent.provider as ProviderName,
+    companyId: consent.company_id as string,
+    userId: typeof row.user_id === 'string' ? row.user_id : null,
+    origin: typeof row.origin === 'string' ? row.origin : null,
+  }
+}
+
 /**
  * Atomically consume an OAuth `state` token and resolve what it was minted for.
+ *
+ * Called for a callback that carries a code. A provider error without a code
+ * (the user pressed cancel) exchanges nothing and reads the row with
+ * peekOAuthState instead, so a cancel leaves the state unspent.
  *
  * The single UPDATE is the entire check: `used_at IS NULL` and
  * `expires_at > now` sit in the WHERE clause, so a replayed callback loses the
@@ -314,14 +357,7 @@ export async function generateOtc(
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{
-  consentId: string
-  provider: ProviderName
-  /** The Accounted company that owns the consent (read server-side, never from the callback). */
-  companyId: string
-  userId: string | null
-  origin: string | null
-} | null> {
+): Promise<ResolvedOAuthState | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -340,22 +376,91 @@ export async function consumeOAuthState(
     return null
   }
 
-  const { data: consent } = await supabase
-    .from('provider_consents')
-    .select('provider, company_id')
-    .eq('id', consumed.consent_id)
+  return resolveOAuthStateRow(supabase, consumed)
+}
+
+/**
+ * Resolve an OAuth `state` token WITHOUT spending it: the same row under the
+ * same predicates as consumeOAuthState (unused, not a handoff row, unexpired),
+ * read with a SELECT instead of the UPDATE.
+ *
+ * For a callback that carries a provider error and no code. Nothing is
+ * exchanged on that path, so there is no replay to lose a race against, and
+ * spending the state there cost real connections: a second delivery of the
+ * same cancelled callback was answered with the session error instead of the
+ * cancel sentence, and a user who cancelled, went Back at the provider and
+ * approved came home with a code for a state the cancel had already used.
+ *
+ * A callback with a code must keep using consumeOAuthState: the state stays
+ * one-time for the token exchange.
+ *
+ * Returns null for every failure mode, exactly like consumeOAuthState, and
+ * callers must not distinguish them either.
+ */
+export async function peekOAuthState(
+  state: string,
+): Promise<ResolvedOAuthState | null> {
+  const supabase = createServiceClient()
+
+  const { data: row, error } = await supabase
+    .from('provider_otc')
+    .select('consent_id, user_id, origin')
+    .eq('code', state)
+    .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
+    .gt('expires_at', new Date().toISOString())
     .maybeSingle()
 
-  if (!consent?.provider || !consent.company_id) {
+  if (error || !row?.consent_id) {
     return null
   }
 
-  return {
-    consentId: consumed.consent_id as string,
-    provider: consent.provider as ProviderName,
-    companyId: consent.company_id as string,
-    userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
-    origin: typeof consumed.origin === 'string' ? consumed.origin : null,
+  return resolveOAuthStateRow(supabase, row)
+}
+
+export type OAuthStateRejectionReason = 'unknown' | 'used' | 'expired' | 'handoff'
+
+/**
+ * Why a token the callback has just rejected was dead, for the SERVER LOG
+ * only. The caller's answer stays the one generic sentence for every reason:
+ * the route is unauthenticated, and telling them apart there is the oracle
+ * consumeOAuthState exists to remove.
+ *
+ * Read after the rejection, so it decides nothing. It only lets a rejected
+ * callback be sorted afterwards, which the row itself cannot do once purged:
+ *   - used: a callback with a code already spent this state (a replay, or a
+ *     second delivery of the same approval).
+ *   - expired: the row outlived its lifetime before the callback arrived.
+ *   - handoff: a live white-label handoff row, presented as a state or
+ *     claimed from another origin than the one it was minted for.
+ *   - unknown: no such row (forged, a handoff already claimed, or purged), or
+ *     the lookup failed. The cleanup cron deletes expired rows within
+ *     minutes, used ones included, so a callback that arrives later than
+ *     that reads unknown. So does an approval for a connect the user started
+ *     over: /connect deletes the pending consent and its state rows with it.
+ *
+ * Never throws: the log line must not change what the callback answers.
+ */
+export async function oauthStateRejectionReason(
+  code: string,
+): Promise<OAuthStateRejectionReason> {
+  try {
+    const { data: row, error } = await createServiceClient()
+      .from('provider_otc')
+      .select('used_at, expires_at, provider_code, provider_error')
+      .eq('code', code)
+      .maybeSingle()
+
+    if (error || !row) return 'unknown'
+    if (row.used_at) return 'used'
+    if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
+    if (row.provider_code || row.provider_error) return 'handoff'
+    return 'unknown'
+  } catch {
+    // Safe to drop: the callback has already rejected the state, this only
+    // labels that rejection in the log, and 'unknown' is the trace it leaves.
+    return 'unknown'
   }
 }
 

@@ -14,6 +14,8 @@ import {
   listConsents,
   generateOtc,
   consumeOAuthState,
+  peekOAuthState,
+  oauthStateRejectionReason,
   mintHandoff,
   consumeHandoff,
   getAuthUrl,
@@ -112,10 +114,11 @@ const STATE_REJECTED_MESSAGE =
   'Ingen giltig migrationssession hittades. Starta om anslutningen.'
 
 /**
- * A valid state reached the callback but the browser carries no session. The
- * state is already spent by then (consumeOAuthState is atomic and runs first),
- * so unlike the bank/Stripe callbacks there is nothing to resume after a
- * login: the user starts the connect again from the wizard.
+ * A valid state reached the callback but the browser carries no session. A
+ * callback with a code has already spent the state by then (consumeOAuthState
+ * is atomic and runs first), and a cancelled one carries nothing to finish, so
+ * unlike the bank/Stripe callbacks there is nothing to resume after a login:
+ * the user starts the connect again from the wizard.
  */
 const SESSION_MISSING_MESSAGE =
   'Ingen inloggad session hittades i det här fönstret. Logga in och starta om anslutningen.'
@@ -829,9 +832,10 @@ export const arcimMigrationExtension: Extension = {
           // does arrive.
           //
           // location.replace, not href: the callback URL carries a one-time
-          // state that is already spent, so a Back or a reload onto it can
-          // only fail. no-store keeps it out of the browser cache for the same
-          // reason.
+          // state that a code has already spent, so a Back or a reload onto it
+          // can only fail (a cancel leaves the state unspent, and a reload of
+          // it repeats the cancel sentence). no-store keeps it out of the
+          // browser cache for the same reason.
           const html = `<!DOCTYPE html><html><body><script nonce="${scriptNonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)}, cancelled: ${cancelled} }, ${jsLiteral(responseOrigin)});
@@ -889,19 +893,31 @@ export const arcimMigrationExtension: Extension = {
           // read from the query string except the opaque state token itself, so
           // an attacker who knows a victim's consent id still cannot steer their
           // own provider tokens onto it.
+          //
+          // A provider error without a code (the user pressed cancel) only
+          // reads the row: nothing is exchanged, and spending the state on it
+          // answered a second delivery of the same cancel with the session
+          // error and threw away an approval made after going Back at the
+          // provider. A callback with a code still consumes: the state stays
+          // one-time for the token exchange.
           const resolvedHandoff = handoff ? await consumeHandoff(handoff, currentOrigin) : null
           const resolvedState = handoff
             ? resolvedHandoff
-            : await consumeOAuthState(stateRaw!)
+            : oauthError && !code
+              ? await peekOAuthState(stateRaw!)
+              : await consumeOAuthState(stateRaw!)
 
           if (!resolvedState) {
             // Unknown/forged state, expired state, replayed state and deleted
             // consent all end here with the SAME message: this route is
             // unauthenticated, so telling the caller which one it was would
-            // disclose whether a given consent exists.
+            // disclose whether a given consent exists. The reason goes to the
+            // server log only, so a dead state can be sorted afterwards
+            // (replay or expiry) once its row is purged.
             log.error('OAuth callback state rejected', {
               hasCode: !!code,
               stateLength: (handoff ?? stateRaw ?? '').length,
+              reason: await oauthStateRejectionReason(handoff || stateRaw!),
             })
             return respondWithError(STATE_REJECTED_MESSAGE)
           }
