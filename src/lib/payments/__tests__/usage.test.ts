@@ -104,6 +104,23 @@ describe('getBankPaymentsUsage', () => {
     expect(db.findCall('company_bank_payment_allowances', 'eq')).toEqual(['company_id', 'c0000000-0000-4000-8000-000000000001'])
   })
 
+  it('does not count a payment the bank refused or that was never signed', async () => {
+    const db = createTableMockSupabase({
+      payment_orders: {
+        data: [
+          { id: 'refused', cash_account_id: 'a1', status: 'rejected', signed_at: null },
+          { id: 'unsigned', cash_account_id: 'a2', status: 'cancelled', signed_at: null },
+          { id: 'signed-then-cancelled', cash_account_id: 'a1', status: 'cancelled', signed_at: '2026-10-05T08:00:00.000Z' },
+          { id: 'sent', cash_account_id: 'a1', status: 'accepted', signed_at: '2026-10-05T08:00:00.000Z' },
+        ],
+      },
+    })
+    const usage = await getBankPaymentsUsage(db.supabase as unknown as SupabaseClient, 'c0000000-0000-4000-8000-000000000001', '2026-10')
+    expect(usage.payments_sent).toBe(2)
+    expect(usage.accounts_used).toBe(1)
+    expect(usage.remaining_payments).toBe(8)
+  })
+
   it('counts a payment in the month it was sent to the bank, not the month it was drafted (#127)', async () => {
     const { supabase } = createPayrollFakeDb({
       payment_orders: [
