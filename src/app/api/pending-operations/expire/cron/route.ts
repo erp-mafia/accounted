@@ -40,6 +40,9 @@ import { runScheduledSuggestions } from '@/lib/suggestions/sweep'
  */
 const EXPIRY_DAYS = 30
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 export const GET = withCronContext('cron.pending_operations_expire', async (_request, ctx) => {
   const supabase = createServiceClient()
 

@@ -18,6 +18,9 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] }
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/invoices/recurring/cron: hourly (top of every hour, UTC).
  *

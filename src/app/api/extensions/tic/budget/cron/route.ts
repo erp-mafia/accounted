@@ -18,6 +18,9 @@ const LOW_REMAINING_SHARE = 0.1
 /** Alert when TIC counts this many more calls than the budget did. */
 const UNATTRIBUTED_ALERT = 100
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 export const GET = withServiceCronContext(
   'cron.tic_budget',
   async (_request, ctx) => {

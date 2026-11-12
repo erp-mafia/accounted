@@ -4,7 +4,11 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   buildCrontab,
+  buildScheduledJobsModule,
+  readScheduledJob,
   readVercelCrons,
+  routeFileFor,
+  SCHEDULED_JOBS_MODULE,
   scheduleFor,
   EXCLUDED_PATHS,
   EXTRA_JOBS,
@@ -254,5 +258,43 @@ describe('every cron route has a schedule', () => {
       expect(routes.has(path), `${path} no longer exists: drop the entry`).toBe(true)
       expect(scheduled.has(path), `${path} is now in vercel.json: drop the entry`).toBe(false)
     }
+  })
+})
+
+describe('the scheduled jobs module (lib/cron/scheduled-jobs.generated.ts)', () => {
+  const routeSource = (cron: VercelCron) => readFileSync(join(ROOT, routeFileFor(cron.path)), 'utf8')
+
+  it('is byte-identical to the generator output: every job in vercel.json with the maxDuration its route declares', () => {
+    // Fails when vercel.json or a route's maxDuration changes without `npm run crontabs:generate`.
+    const jobs = crons.map((cron) => readScheduledJob(cron, routeSource(cron)))
+    expect(readFileSync(join(ROOT, SCHEDULED_JOBS_MODULE), 'utf8')).toBe(buildScheduledJobsModule(jobs))
+  })
+
+  it('refuses a scheduled route that does not run through the cron wrapper: its runs would not be recorded or reported', () => {
+    const bare = "import { verifyCronSecret } from '@/lib/auth/cron'\nexport const maxDuration = 60\nexport async function GET(request: Request) {}\n"
+    expect(() => readScheduledJob({ path: '/api/x/cron', schedule: '* * * * *' }, bare)).toThrow(/withCronContext or withServiceCronContext/)
+  })
+
+  it('refuses a route that only mentions the wrapper: the exported handler itself must be wrapped', () => {
+    const mentioned = [
+      "import { withCronContext } from '@/lib/api/with-cron-context'",
+      '// withCronContext( is what this route should use',
+      'export const maxDuration = 60',
+      'export async function GET(request: Request) {}',
+      '',
+    ].join('\n')
+    expect(() => readScheduledJob({ path: '/api/x/cron', schedule: '* * * * *' }, mentioned)).toThrow(/withCronContext or withServiceCronContext/)
+  })
+
+  it('refuses a scheduled route that declares no time limit', () => {
+    const noLimit = "export const GET = withCronContext('cron.x', async () => NextResponse.json({}))\n"
+    expect(() => readScheduledJob({ path: '/api/x/cron', schedule: '* * * * *' }, noLimit)).toThrow(/export const maxDuration/)
+    const computed = "export const maxDuration = LIMIT\nexport const GET = withServiceCronContext(\n  'cron.x', run)\n"
+    expect(() => readScheduledJob({ path: '/api/x/cron', schedule: '* * * * *' }, computed)).toThrow(/export const maxDuration/)
+  })
+
+  it('reads the limit and keeps the schedule', () => {
+    const source = "export const maxDuration = 120\n\nexport const GET = withServiceCronContext(\n  'cron.x',\n  run,\n)\n"
+    expect(readScheduledJob({ path: '/api/x/cron', schedule: '0 * * * *' }, source)).toEqual({ path: '/api/x/cron', schedule: '0 * * * *', maxDurationSeconds: 120 })
   })
 })

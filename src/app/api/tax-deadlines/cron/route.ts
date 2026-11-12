@@ -6,6 +6,9 @@ import {
 import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/tax-deadlines/cron: daily recovery plus annual horizon extension.
  */

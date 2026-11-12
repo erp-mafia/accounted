@@ -12,6 +12,9 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  */
 const SHADOW_LOG_RETENTION_DAYS = 7
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 export const GET = withCronContext('cron.permission_shadow_log_cleanup', async (_request, ctx) => {
   const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - SHADOW_LOG_RETENTION_DAYS)

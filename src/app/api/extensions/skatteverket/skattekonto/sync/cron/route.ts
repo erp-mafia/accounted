@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { verifyCronSecret } from '@/lib/auth/cron'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { orderByStalestSync } from '@/lib/skatteverket/sync-order'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -89,10 +89,7 @@ const UNAVAILABLE_RECHECK_MS = 3 * 60 * 60 * 1000
  * system-mode entries (one config problem, not fifty) but user-mode entries
  * still run.
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
+export const GET = withCronContext('cron.skatteverket_skattekonto_sync', async () => {
   // Respect the runtime extension toggle. When the integration is disabled
   // the cron should no-op rather than spam Skatteverket with stale tokens.
   if (!isSkatteverketEnabled()) {
@@ -448,4 +445,4 @@ export async function GET(request: Request) {
     errors,
     results,
   })
-}
+})
