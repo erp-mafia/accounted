@@ -492,6 +492,7 @@ import { resolveSupplierInvoiceReverseCharge, resolveSupplierInvoiceReverseCharg
 import { deductStagedLines } from '@/lib/supplier-invoices/limited-deduction'
 import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
+import { customerMatchExpectedLines } from '@/lib/invoices/customer-match-expected-lines'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { supplierDefaultDimensions, tolerateMissingDefaultDimensions } from '@/lib/suppliers/default-dimensions'
@@ -5310,6 +5311,9 @@ async function approveOneOperation(params: {
     if (settledMeanwhile) return settledMeanwhile
   }
 
+  const refusalNext: unknown = result.code === 'DOC_ATTACH_OTHER_VERIFIKAT' ? result.data?.next : undefined
+  const copyLinkNext = isNextActionHint(refusalNext) ? refusalNext : null
+
   return {
     status: result.status,
     operation_id: operationId,
@@ -5321,7 +5325,15 @@ async function approveOneOperation(params: {
     // The commit's Swedish refusal names no field: the warnings are
     // confirmed on a new staging, never on the approval (crm#1714).
     ...(result.code === 'VOUCHER_NEEDS_CONFIRMATION' ? { next: VOUCHER_CONFIRMATION_NEXT } : {}),
+    // The document went to another verifikat between staging and approval
+    // (two attaches of one statement staged together): the refusal's own
+    // next call, a link with copy: true on this row's verifikat (crm#1813).
+    ...(copyLinkNext ? { next: copyLinkNext } : {}),
   }
+}
+
+function isNextActionHint(value: unknown): value is NextActionHint {
+  return typeof value === 'object' && value !== null && typeof (value as { description?: unknown }).description === 'string'
 }
 
 const VOUCHER_CONFIRMATION_NEXT: NextActionHint = {
@@ -15114,6 +15126,19 @@ export const tools: McpTool[] = [
       )
       if (!salePlan.ok) throwOutcomeFailure(salePlan)
 
+      // The rows approval posts, a foreign invoice's kursvinst or
+      // kursförlust included, as match_batch_allocate previews them
+      // (crm#1813). Null when they cannot be built: the staging is the same.
+      const expected = matchPlan
+        ? await customerMatchExpectedLines(
+            { supabase, companyId, log },
+            transaction,
+            invoice as Parameters<typeof customerMatchExpectedLines>[2],
+            matchPlan,
+            salePlan,
+          )
+        : null
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       const duplicateNote =
         duplicate.status === 'overridden'
@@ -15165,14 +15190,18 @@ export const tools: McpTool[] = [
             ? { overpayment_amount: overpayment.amount, overpayment_account: overpayment.account }
             : {}),
           ...(fee ? { fee_amount: fee.amount, fee_account: fee.account } : {}),
+          // The payment verifikat's rows, in SEK.
+          ...(expected ?? {}),
           // The sale verifikat approval books first (defer_invoice_booking).
           ...saleFirstPreview(salePlan),
         },
         actor,
         next: {
-          description: salePlan.required
-            ? 'After approval the invoice\'s sale verifikat is booked first (preview.sale_entry, the Bokför step, dated on the invoice date), then the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.'
-            : 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.',
+          description:
+            (salePlan.required
+              ? 'After approval the invoice\'s sale verifikat is booked first (preview.sale_entry, the Bokför step, dated on the invoice date), then the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.'
+              : 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.') +
+            (expected ? ' preview.expected_lines are the rows the payment verifikat posts (SEK), a kursvinst or kursförlust included: show them before approving.' : ''),
           tool: 'gnubok_get_ar_ledger',
         },
         dateForPeriodCheck: transaction.date,

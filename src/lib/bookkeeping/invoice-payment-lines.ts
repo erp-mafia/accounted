@@ -464,6 +464,31 @@ export interface InvoiceMatchClearingInvoice extends PaymentClearingInvoice {
 }
 
 /**
+ * The invoice half of buildInvoiceMatchClearingLines, read off a stored
+ * invoice row. One reader, so the booking and its preview cannot drift.
+ */
+export function invoiceMatchClearingInvoiceOf(
+  invoice: Pick<InvoiceMatchClearingInvoice, 'currency' | 'total' | 'invoice_number' | 'customer'> & {
+    exchange_rate?: InvoiceMatchClearingInvoice['exchange_rate']
+    remaining_amount?: InvoiceMatchClearingInvoice['remaining_amount']
+    paid_amount?: InvoiceMatchClearingInvoice['paid_amount']
+  },
+  carriedSek: InvoiceMatchClearingInvoice['carried_sek'],
+): InvoiceMatchClearingInvoice {
+  return {
+    currency: invoice.currency,
+    exchange_rate: invoice.exchange_rate ?? null,
+    remaining_amount: invoice.remaining_amount ?? null,
+    total: invoice.total,
+    paid_amount: invoice.paid_amount ?? null,
+    carried_sek: carriedSek,
+    invoice_number: invoice.invoice_number,
+    customer: invoice.customer,
+    default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
+  }
+}
+
+/**
  * The clearing verifikat of a bank-matched customer payment, exactly as the
  * match routes and the agent executor book it and the match preview shows
  * it: buildInvoicePaymentClearingLines under the payment's description, with

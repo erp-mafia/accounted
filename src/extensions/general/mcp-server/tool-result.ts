@@ -46,8 +46,12 @@ export interface AgentToolError {
  * FORBIDDEN carries why: details.code ROLE_READ_ONLY or CONNECTION_READ_ONLY
  * (readOnlyRefusal, the same on every door), details.required_roles for an
  * owner's or admin's write.
+ * DOC_ATTACH_OTHER_VERIFIKAT names the verifikat that holds the document, the
+ * one the row is booked on and, in details.next, the link with copy: true
+ * that puts the same underlag on it (crm#1813).
  */
 const CODES_WITH_DETAILS = new Set([
+  'DOC_ATTACH_OTHER_VERIFIKAT',
   'FORBIDDEN',
   'PREVIEW_STALE',
   'TRANSACTION_ALREADY_STAGED',
