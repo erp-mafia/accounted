@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  attGoraEmptyState,
   canRecordInitialSetup,
+  hasBankFeed,
   checklistNumbers,
   claudeConnectorLink,
   mcpServerUrl,
@@ -226,5 +228,35 @@ describe('RECEIPT_UPLOAD_SOURCES', () => {
     expect(RECEIPT_UPLOAD_SOURCES).toContain('camera')
     expect(RECEIPT_UPLOAD_SOURCES).not.toContain('api')
     expect(RECEIPT_UPLOAD_SOURCES).not.toContain('system')
+  })
+})
+
+describe('hasBankFeed', () => {
+  it('is true with an active bank connection, even before any row has arrived', () => {
+    expect(hasBankFeed({ activeBankConnections: 1, transactionCount: 0 })).toBe(true)
+  })
+
+  it('is true when rows arrived another way, such as a bank file', () => {
+    expect(hasBankFeed({ activeBankConnections: 0, transactionCount: 12 })).toBe(true)
+  })
+
+  it('is false when no connection is active and no row has ever arrived', () => {
+    expect(hasBankFeed({ activeBankConnections: 0, transactionCount: 0 })).toBe(false)
+  })
+})
+
+describe('attGoraEmptyState', () => {
+  it('points at the getting-started steps while they are open and nothing is booked', () => {
+    expect(attGoraEmptyState({ emptyLedger: true, noBankFeed: false })).toBe('new_ledger')
+    // The open steps carry the bank step themselves, so they win.
+    expect(attGoraEmptyState({ emptyLedger: true, noBankFeed: true })).toBe('new_ledger')
+  })
+
+  it('never says all done to a company that has nothing booked and no bank row on its way', () => {
+    expect(attGoraEmptyState({ emptyLedger: false, noBankFeed: true })).toBe('no_bank_feed')
+  })
+
+  it('says all done once the list is empty and rows can arrive', () => {
+    expect(attGoraEmptyState({ emptyLedger: false, noBankFeed: false })).toBe('all_done')
   })
 })

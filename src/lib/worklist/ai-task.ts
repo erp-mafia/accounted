@@ -89,3 +89,15 @@ export function listAiTasks(
   }
   return out
 }
+
+/**
+ * Whether the books act's Klart step shows what the app found without being
+ * asked. Bank rows waiting to be booked are what a first session is for,
+ * and the step kept them behind a folded toggle: of the 83 people who signed
+ * up in the 30 days to 2026-11-12, had rows waiting and never booked one, 57
+ * had finished the act. Anything else on the list stays folded until asked.
+ * A click on the toggle always wins over this.
+ */
+export function foundTasksStartOpen(tasks: readonly AiTask[]): boolean {
+  return tasks.some((task) => task.category === 'book_transaction')
+}

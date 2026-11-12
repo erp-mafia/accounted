@@ -31,7 +31,7 @@ import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
 import type { Notice } from '@/lib/notices/types'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
-import { RECEIPT_UPLOAD_SOURCES, skippedSetupSteps, vatDeadlineLine } from '@/lib/onboarding/checklist'
+import { RECEIPT_UPLOAD_SOURCES, hasBankFeed, skippedSetupSteps, vatDeadlineLine } from '@/lib/onboarding/checklist'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -205,7 +205,7 @@ export async function HemChecklistSection({
   const onboardingProgress: OnboardingProgress = {
     hasCustomers: (customerCount || 0) > 0,
     hasInvoices: (invoiceCount || 0) > 0,
-    hasBankConnected: connections.length > 0 || (transactionCount || 0) > 0,
+    hasBankConnected: hasBankFeed({ activeBankConnections: connections.length, transactionCount: transactionCount || 0 }),
     hasSIEImport: (sieImportCount || 0) > 0,
     hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess,
     hasInboxItems: (inboxItemCount || 0) > 0 || (receiptDocuments ?? []).length > 0,
@@ -384,6 +384,17 @@ export async function HemPanesSection({
   // connected company that no bank is connected, so errors read as connected.
   const hasActiveBankConnection = !!bankConnectionsRes.error || (bankConnections ?? []).length > 0
 
+  // Once the getting-started steps are closed, an empty list on an empty
+  // ledger with no bank row on its way is not "all done": finishing the books
+  // act without a bank lands exactly here. Asked only for that company (no
+  // posted entry, no active connection), so nobody else pays for the count,
+  // and a failed read keeps the ordinary copy, as above.
+  let noBankFeed = false
+  if (!setupOpen && !postedEntries.error && (postedEntries.count || 0) === 0 && !hasActiveBankConnection) {
+    const { count: transactionCount, error: transactionCountError } = await countTransactions(companyId)
+    noBankFeed = !transactionCountError && !hasBankFeed({ activeBankConnections: 0, transactionCount: transactionCount || 0 })
+  }
+
   // Same day-math as the bank_connection_expiring notice predicate
   // (lib/notices/categories.ts): the Bevaka row and the notice can never
   // disagree on the threshold.
@@ -421,6 +432,7 @@ export async function HemPanesSection({
           grantReview={grantReview}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
+          noBankFeed={noBankFeed}
           hasActiveBankConnection={hasActiveBankConnection}
           hasSkatteverketConnection={hasSkatteverketConnected}
           skvOmbudEnabled={skvOmbudEnabled}

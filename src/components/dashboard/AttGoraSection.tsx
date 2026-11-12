@@ -22,6 +22,8 @@ import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import { failedPaymentReasonText, type BankPaymentsTranslator } from '@/lib/payments/orders/failed-payment-reason'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
+import { attGoraEmptyState } from '@/lib/onboarding/checklist'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
 import { SuggestionCards } from './SuggestionCards'
@@ -171,6 +173,13 @@ interface AttGoraSectionProps {
    */
   emptyLedger?: boolean
   /**
+   * True once the checklist is closed while nothing is booked and no bank row
+   * can arrive (no active connection, no row ever imported). The all-clear
+   * state then says how the first rows get here instead of "all done"
+   * (lib/onboarding/checklist attGoraEmptyState).
+   */
+  noBankFeed?: boolean
+  /**
    * False when the company has no active bank connection. The all-clear state
    * then explains that nothing flows in automatically and offers "Anslut bank"
    * instead of a bare "all caught up": for a disconnected company the silence
@@ -308,6 +317,7 @@ export default function AttGoraSection({
   grantReview = null,
   expiringBankConnections = [],
   emptyLedger = false,
+  noBankFeed = false,
   hasActiveBankConnection = true,
   aiConnection = NO_AI_CONNECTION,
   firstTaskClient = null,
@@ -459,6 +469,8 @@ export default function AttGoraSection({
     verificationExpired === null &&
     payeeChanges.length === 0 &&
     paymentsFailed.length === 0
+  const emptyState = attGoraEmptyState({ emptyLedger, noBankFeed })
+  const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -624,9 +636,9 @@ export default function AttGoraSection({
         <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear
-            ? emptyLedger
-              ? t('att_gora_new_status')
-              : t('all_done')
+            ? emptyState === 'all_done'
+              ? t('all_done')
+              : t('att_gora_new_status')
             : t('att_gora_left', { count: displayTotal })}
         </p>
       </div>
@@ -637,11 +649,28 @@ export default function AttGoraSection({
             // an empty list should draw the eye to (founder direction 2026-09-14).
             <div className="flex items-center gap-3 border-b border-border px-1 py-3.5 text-[13px] text-muted-foreground">
               <span className="flex w-[18px] shrink-0 justify-center" aria-hidden>
-                {emptyLedger
-                  ? <BookOpenIcon className="h-[15px] w-[15px]" />
-                  : <CheckCircleIcon className="h-[15px] w-[15px]" />}
+                {emptyState === 'all_done'
+                  ? <CheckCircleIcon className="h-[15px] w-[15px]" />
+                  : <BookOpenIcon className="h-[15px] w-[15px]" />}
               </span>
-              {emptyLedger ? t('att_gora_new_body') : t('att_gora_empty_body')}
+              {emptyState === 'new_ledger' ? (
+                t('att_gora_new_body')
+              ) : emptyState === 'no_bank_feed' ? (
+                // Both ways to a first row to book, in the line itself: this
+                // company finished the books act without a bank.
+                <span>
+                  {t.rich(hasBankingExtension ? 'att_gora_no_bank_body' : 'att_gora_no_bank_file_body', {
+                    connect: (chunks) => (
+                      <Link href="/import?mode=psd2" className="text-foreground underline underline-offset-[3px]">{chunks}</Link>
+                    ),
+                    file: (chunks) => (
+                      <Link href="/import?mode=bank" className="text-foreground underline underline-offset-[3px]">{chunks}</Link>
+                    ),
+                  })}
+                </span>
+              ) : (
+                t('att_gora_empty_body')
+              )}
             </div>
           ) : (
             <div className="pb-2">
