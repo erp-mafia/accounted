@@ -18,7 +18,8 @@ import {
   shouldUseSecureCookies,
   supabaseAuthCookieOptions,
 } from '@/lib/supabase/cookie-options'
-import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
+import { userSessionFetch } from '@/lib/supabase/auth-call-budget'
 
 /**
  * The one `next` destination this callback honours for a fresh session: the
@@ -267,13 +268,13 @@ async function completeCallback(
     requestProtocolFromHeaders(request.headers) ?? new URL(request.url).protocol
   // The code exchange and OTP verify carry the end user's IP when IP address
   // forwarding is configured (lib/supabase/auth-forwarding.ts).
-  const forwardingFetch = authForwardingFetch(clientIpFromHeaders(request.headers))
+  const sessionFetch = userSessionFetch(clientIpFromHeaders(request.headers))
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      ...(forwardingFetch ? { global: { fetch: forwardingFetch } } : {}),
+      global: { fetch: sessionFetch },
       // HttpOnly, Secure over TLS: lib/supabase/cookie-options.ts.
       cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
