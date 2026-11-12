@@ -1,5 +1,6 @@
 'use client'
 
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { SpinnerIcon } from '@/components/icons'
@@ -176,6 +177,8 @@ export function InvoicePaymentAccountsSettings({
   // "Lägg till bankkonto" opened the blank primary instead of a new account.
   const [addingToPrimary, setAddingToPrimary] = useState(false)
   const [newCurrency, setNewCurrency] = useState<Currency>('SEK')
+  // Blank: the next free bank ledger is picked, as before.
+  const [newLedger, setNewLedger] = useState('')
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [extraCurrencies, setExtraCurrencies] = useState<Currency[]>([])
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
@@ -316,6 +319,7 @@ export function InvoicePaymentAccountsSettings({
     setAddingToPrimary(false)
     setIsAdding(true)
     setNewCurrency('SEK')
+    setNewLedger('')
     setForm(EMPTY_FORM)
   }
 
@@ -323,6 +327,7 @@ export function InvoicePaymentAccountsSettings({
     setEditingId(null)
     setIsAdding(false)
     setAddingToPrimary(false)
+    setNewLedger('')
     setForm(EMPTY_FORM)
   }
 
@@ -415,13 +420,25 @@ export function InvoicePaymentAccountsSettings({
       toast({ title: t('validation_title'), description: error, variant: 'destructive' })
       return
     }
+    const ledger = newLedger.trim()
+    // Four digits here; the server owns which accounts a bank account may take.
+    if (ledger && !ACCOUNT_NUMBER_RE.test(ledger)) {
+      toast({ title: t('validation_title'), description: t('validation_ledger'), variant: 'destructive' })
+      return
+    }
     setIsSaving(true)
     try {
       const { name, ...payee } = payeeBody(form)
       const res = await fetch('/api/cash-accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, currency: newCurrency, invoice_payee: true, payee }),
+        body: JSON.stringify({
+          name,
+          currency: newCurrency,
+          ...(ledger ? { ledger_account: ledger } : {}),
+          invoice_payee: true,
+          payee,
+        }),
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
@@ -879,6 +896,18 @@ export function InvoicePaymentAccountsSettings({
                     <option key={currency} value={currency}>{currency}</option>
                   ))}
                 </SettingsSelect>
+              </SettingsRow>
+              <SettingsRow label={t('ledger_label')} htmlFor="payee-new-ledger" align="baseline">
+                <SettingsInput
+                  id="payee-new-ledger"
+                  value={newLedger}
+                  onChange={(event) => setNewLedger(event.target.value)}
+                  placeholder={t('ledger_placeholder')}
+                  inputMode="numeric"
+                  maxLength={4}
+                  className="max-w-32 tabular-nums"
+                />
+                <SettingsRowNote fill>{t('ledger_hint')}</SettingsRowNote>
               </SettingsRow>
               {renderPayeeFields(newCurrency, 'payee-new')}
               <div className="flex justify-end gap-2 px-1 py-3">
