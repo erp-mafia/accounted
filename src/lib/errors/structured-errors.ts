@@ -4959,7 +4959,7 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsåret har ingen färdig SIE-import att lägga till verifikationer i. Importera filen som en vanlig import i stället.',
     message_en: 'The fiscal year has no completed SIE import to add vouchers to. Import the file as an ordinary import instead.',
     retryable: false,
-    remediation: { description: 'Import the file without on_existing_year (or onExistingPeriod=block): the year holds no import yet.', tool: 'gnubok_import_sie' },
+    remediation: { description: 'Import the file without on_existing_year (or onExistingPeriod=block): the year holds no import yet. With details.reason = legacy_import the year is imported, by an import from before import jobs that cannot be appended to: book the file\'s vouchers as ordinary vouchers instead, and do not retry the import.', tool: 'gnubok_import_sie' },
     thrown_message_sv: true,
   },
   SIE_IMPORT_APPEND_CONFLICT: {

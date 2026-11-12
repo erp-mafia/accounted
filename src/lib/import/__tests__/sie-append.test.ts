@@ -53,6 +53,8 @@ const K1 = ver('K', '1', '20260307', 'Kort', [['6110', '30.00'], ['2890', '-30.0
 interface Books {
   period?: Record<string, unknown> | null
   base?: string | null
+  /** The year holds an import from before import jobs (job_state NULL). */
+  legacyImport?: boolean
   verdicts?: Record<string, SIEAppendVerdict>
   series?: string[]
   lockedThrough?: string | null
@@ -70,7 +72,10 @@ function books(config: Books = {}): SupabaseClient {
     fiscal_periods: (calls) => calls.some((c) => c.method === 'gt')
       ? { data: config.nextYear ?? null }
       : { data: config.period === undefined ? OPEN_YEAR : config.period },
-    sie_imports: { data: config.base === null ? null : { id: config.base ?? 'base-import' } },
+    // The legacy reading goes through whereSieImportInPlace (its `or`).
+    sie_imports: (calls) => calls.some((c) => c.method === 'or')
+      ? { data: config.legacyImport ? [{ id: 'legacy-import' }] : [] }
+      : { data: config.base === null ? null : { id: config.base ?? 'base-import' } },
     chart_of_accounts: { data: ACCOUNTS.map((n) => ({ id: `acc-${n}`, account_number: n })) },
     voucher_sequences: { data: (config.series ?? ['A']).map((s) => ({ voucher_series: s })) },
     company_settings: { data: { bookkeeping_locked_through: config.lockedThrough ?? null } },
@@ -175,6 +180,19 @@ describe('planSIEAppend', () => {
   it('refuses a year without an import to add to', async () => {
     const plan = await planSIEAppend(books({ base: null }), 'company-1', parseSIEFile(sie(A2)), mappings)
     expect(plan.refusal?.code).toBe('SIE_IMPORT_APPEND_NO_BASE')
+    expect(plan.refusal?.message).toContain('Importera filen som en vanlig import')
+    expect(planRequests).toHaveLength(0)
+  })
+
+  it('names the way out when the year\'s import is from before import jobs (crm#1816)', async () => {
+    const supabase = books({ base: null, legacyImport: true })
+    const plan = await planSIEAppend(supabase, 'company-1', parseSIEFile(sie(A2)), mappings)
+    // Still a refusal: a legacy import is never an append base.
+    expect(plan.refusal?.code).toBe('SIE_IMPORT_APPEND_NO_BASE')
+    expect(plan.baseImportId).toBeNull()
+    expect(plan.refusal?.details).toEqual({ fiscal_period_id: 'period-2026', reason: 'legacy_import' })
+    expect(plan.refusal?.message).toContain('Bokföring > Ny verifikation')
+    expect(plan.refusal?.message).not.toContain('vanlig import')
     expect(planRequests).toHaveLength(0)
   })
 

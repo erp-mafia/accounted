@@ -5,6 +5,7 @@ import { listVatFilings } from '@/lib/vat/filing-record-store'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { isYearEndAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-status'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 import { mappingsToMap } from './account-mapper'
 import { closedPeriodRefusal, prepareSIEVouchers } from './sie-import'
 import { getEffectiveOpeningBalances } from './sie-parser'
@@ -315,6 +316,23 @@ async function findSIEAppendBase(supabase: SupabaseClient, companyId: string, pe
 }
 
 /**
+ * Whether the year holds an import from before durable import jobs
+ * (job_state NULL, migration 20260911140515) that stands in the books
+ * (crm#1816). Such an import is what makes the wizard offer only "Lägg till"
+ * for a verifikat-only file (checkDuplicatePeriodImport reads the same rows,
+ * by the year's dates), but it is no append base: its verifikat carry no
+ * batch identity, so sie_append_plan cannot tell which file vouchers it
+ * already booked, and start_sie_append_job refuses it.
+ */
+async function hasLegacyImportInPlace(supabase: SupabaseClient, companyId: string, period: PeriodRow): Promise<boolean> {
+  const { data, error } = await whereSieImportInPlace(supabase.from('sie_imports').select('id')
+    .eq('company_id', companyId)).is('job_state', null).is('base_import_id', null)
+    .lte('fiscal_year_start', period.period_end).gte('fiscal_year_end', period.period_start).limit(1)
+  if (error) throw new Error(error.message)
+  return ((data as unknown[] | null) ?? []).length > 0
+}
+
+/**
  * The preview and submit-time verdict for appending `parsed` to the year it
  * belongs to. Read-only. `parsed` must carry its fiscal year (resolveSIEFiscalYear).
  */
@@ -338,6 +356,14 @@ export async function planSIEAppend(
   const fiscalYear = { start: period.period_start, end: period.period_end }
   const baseImportId = await findSIEAppendBase(supabase, companyId, period.id)
   if (!baseImportId) {
+    // "Importera filen som en vanlig import" is no way out here: the year is
+    // imported, and the wizard offers a verifikat-only file nothing else.
+    if (await hasLegacyImportInPlace(supabase, companyId, period)) {
+      return emptyPlan({ code: 'SIE_IMPORT_APPEND_NO_BASE', details: { fiscal_period_id: period.id, reason: 'legacy_import' },
+        message: `Räkenskapsåret ${period.name} importerades med en äldre import, som inte kan fyllas på med verifikationer från en fil. ` +
+          'Bokför filens verifikationer manuellt under Bokföring > Ny verifikation, eller kontakta supporten så hjälper vi dig.' },
+      { fiscalPeriodId: period.id, fiscalYear })
+    }
     return emptyPlan({ code: 'SIE_IMPORT_APPEND_NO_BASE', details: { fiscal_period_id: period.id },
       message: `Räkenskapsåret ${period.name} har ingen färdig SIE-import att lägga till verifikationer i. Importera filen som en vanlig import.` },
     { fiscalPeriodId: period.id, fiscalYear })
