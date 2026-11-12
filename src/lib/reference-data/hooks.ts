@@ -38,6 +38,7 @@ import type {
 import type { DimensionDto } from '@/components/dimensions/types'
 import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
+import { isFirstLoadPending } from './first-load'
 import { missingKeepId, withKeptRow } from './keep-row'
 import {
   fetchAccounts,
@@ -90,7 +91,9 @@ function useReferenceList<T, K extends readonly unknown[] | null>(
   )
   return {
     items: data ?? (EMPTY as T[]),
-    isLoading: key !== null && isLoading,
+    // A seeded key revalidates on mount with the seed already in `data`:
+    // that is not a first load (lib/reference-data/first-load.ts).
+    isLoading: key !== null && isFirstLoadPending(isLoading, data),
     error,
     refresh: mutate,
   }

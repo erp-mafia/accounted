@@ -237,6 +237,10 @@ build:
     SKIP_BUILD_TYPECHECK: "1"
   script:
     - npm run build
+    # The JavaScript each of the most visited pages ships on a hard load,
+    # held to scripts/perf/page-budgets.json (scripts/perf/README.md, "Page
+    # budgets"): a page over its budget fails the job with the numbers.
+    - node scripts/perf/page-js.mjs --check
 
 unit-tests:
   stage: test

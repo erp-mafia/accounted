@@ -10809,7 +10809,10 @@
     "section_unsent": "Not sent ({count})",
     "section_awaiting": "Awaiting payment ({count})",
     "section_settled": "Paid and settled ({count})",
-    "coverage_notice": "Invoices before {date} may exist only as posted journal entries and are not shown in this list."
+    "coverage_notice": "Invoices before {date} may exist only as posted journal entries and are not shown in this list.",
+    "loading_older": "Showing the latest {count}. Older ones are loading and will be counted in a moment.",
+    "older_load_failed": "The older rows could not be loaded. The list shows only the latest {count}.",
+    "older_load_retry": "Try again"
   },
   "notices": {
     "no_fiscal_year": "The company has no fiscal year yet, so nothing can be booked. Import the bookkeeping again or create the fiscal year yourself.",

@@ -346,8 +346,8 @@ export default async function DashboardLayout({
     entitlements,
     allSettingsNames,
     navFlags,
-    { data: seedFiscalPeriods },
-    { data: seedCashAccounts },
+    { data: seedFiscalPeriods, error: seedFiscalPeriodsError },
+    { data: seedCashAccounts, error: seedCashAccountsError },
     hostBrand,
     brandByTeam,
     storedProfile,
@@ -652,8 +652,11 @@ export default async function DashboardLayout({
     <CompanyProvider value={companyContextValue}>
       <ReferenceDataSeed
         companyId={companyId}
-        fiscalPeriods={seedFiscalPeriods ?? []}
-        cashAccounts={seedCashAccounts ?? []}
+        // A read that failed is not seeded: an empty list would stand as the
+        // answer ("no fiscal years") for every consumer until a reload, where
+        // an unseeded key is read by the browser as before.
+        fiscalPeriods={seedFiscalPeriodsError ? undefined : (seedFiscalPeriods ?? [])}
+        cashAccounts={seedCashAccountsError ? undefined : (seedCashAccounts ?? [])}
         settings={settingsError ? undefined : settings}
       >
       <SessionTimeoutController />

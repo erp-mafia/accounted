@@ -15,6 +15,8 @@ import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
+import { AttnLine } from '@/components/ui/attn-line'
+import { IntentLink } from '@/components/ui/intent-link'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DataListEmpty } from '@/components/ui/data-list'
@@ -82,13 +84,17 @@ import {
 } from '@/lib/invoices/invoice-list-sort'
 import { invoiceRowTone, type InvoiceRowTone } from '@/lib/invoices/invoice-list-row-tone'
 import {
+  withDeductionFacts,
+  type InvoiceDeductionFacts,
+  type InvoiceListRow,
+} from '@/lib/invoices/invoice-list-row'
+import {
   ROT_RUT_LIST_FILTERS,
   matchesRotRutListFilter,
   parseRotRutListFilter,
   payoutDialogTypeFor,
   rotRutListStateOf,
   type RotRutListFilter,
-  type RotRutListItem,
   type RotRutListState,
 } from '@/lib/invoices/rot-rut-list-status'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
@@ -112,7 +118,7 @@ import {
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { FiscalPeriod, Invoice } from '@/types'
+import type { FiscalPeriod } from '@/types'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
 import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 
@@ -150,7 +156,7 @@ const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
 type StatusGroup = (typeof STATUS_SECTION_ORDER)[number]
 /** Sections reuse the tab predicates so the two can never drift: what the
  *  Utkast, Ej skickade and Obetalda tabs show is what the sections bucket. */
-function statusGroupOf(invoice: Invoice): StatusGroup {
+function statusGroupOf(invoice: ListInvoice): StatusGroup {
   if (matchesListTab(invoice, 'draft')) return 'drafts'
   if (matchesListTab(invoice, 'unsent')) return 'unsent'
   if (matchesListTab(invoice, 'unpaid')) return 'awaiting'
@@ -192,12 +198,10 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   expired: 'quote_status_expired',
 }
 
-/** A list row: the invoice plus the begäran and deduction-kind embeds the
- *  skattereduktion column reads. */
-type ListInvoice = Invoice & {
-  rot_rut_items?: RotRutListItem[] | null
-  deduction_lines?: Array<{ deduction_type: string | null }> | null
-}
+/** A list row: the columns the list reads, plus the begäran and
+ *  deduction-kind facts the skattereduktion column reads
+ *  (lib/invoices/invoice-list-row.ts). */
+type ListInvoice = InvoiceListRow
 
 const ROT_RUT_STATE_LABEL_KEYS: Record<NonNullable<RotRutListState>, string> = {
   claimable: 'rot_rut_status_claimable',
@@ -267,7 +271,7 @@ export default function InvoicesPage() {
   const collectionsAvailability = useCollectionsAvailability()
   const collectionsShown = !isQuotesList && collectionsEntryShown(collectionsAvailability)
   const collectionsToday = collectionsShown ? todayIsoStockholm() : undefined
-  const matchesTab = (invoice: Invoice, tab: ListTab): boolean =>
+  const matchesTab = (invoice: ListInvoice, tab: ListTab): boolean =>
     isQuotesList
       ? matchesQuoteListTab(invoice, tab as QuoteListTab)
       : matchesInvoiceListTab(invoice, tab as InvoiceListTab, {
@@ -303,6 +307,15 @@ export default function InvoicesPage() {
   const [showBulkBookConfirm, setShowBulkBookConfirm] = useState(false)
   const [isBulkBooking, setIsBulkBooking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  // The newest thousand rows are on screen and the older ones are still
+  // arriving ('loading': a register above one page, first load only), or
+  // their read failed ('failed'): the list then says that it is partial and
+  // offers the read again, because counts, search and Förfallna cover only
+  // what is loaded.
+  const [olderRows, setOlderRows] = useState<'loading' | 'failed' | null>(null)
+  // Bumped by every load and on unmount: a load that is no longer the
+  // newest drops its late pages instead of writing them over a newer list.
+  const loadSeq = useRef(0)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<InvoiceListSort | null>(null)
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
@@ -412,42 +425,134 @@ export default function InvoicesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [company?.id])
 
+  /**
+   * The begäran each invoice sits in and the kinds of its deduction lines, by
+   * invoice id: what the skattereduktion column reads beyond the row. Two
+   * small reads for the company instead of two embeds on every invoice.
+   */
+  async function fetchDeductionFacts(companyId: string): Promise<Map<string, InvoiceDeductionFacts>> {
+    const [requests, deductionInvoices] = await Promise.all([
+      // Every begäran of the company with the invoices in it, whatever the
+      // invoice's deduction is today (a reverted deduction keeps its
+      // begäran history in the column).
+      fetchAllRows<{ id: string; status: string; created_at: string; items: Array<{ invoice_id: string }> | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('rot_rut_payout_requests')
+            .select('id, status, created_at, items:rot_rut_payout_request_items(invoice_id)')
+            .eq('company_id', companyId)
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { dedupeBy: (row) => row.id },
+      ),
+      // The deduction lines (kind only) of the invoices that carry a
+      // deduction: they tell a grön teknik invoice, requested in
+      // Skatteverkets e-tjänst, from one still to put in a file.
+      fetchAllRows<{ id: string; deduction_lines: Array<{ deduction_type: string | null }> | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('invoices')
+            .select('id, deduction_lines:invoice_items(deduction_type)')
+            .eq('company_id', companyId)
+            .gt('deduction_total', 0)
+            .not('deduction_lines.deduction_type', 'is', null)
+            // Ordered the way the partial index on (company_id,
+            // deduction_total) is, with id to make it total. Ordered by id
+            // alone, Postgres walks the primary key across every company
+            // looking for a first page of matches: 3.5 s for a company with
+            // no deduction invoice, against 9 ms this way (production,
+            // 2026-11-12).
+            .order('deduction_total', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { dedupeBy: (row) => row.id },
+      ),
+    ])
+    const facts = new Map<string, InvoiceDeductionFacts>()
+    for (const { items, ...request } of requests) {
+      for (const item of items ?? []) {
+        const entry = facts.get(item.invoice_id) ?? {}
+        entry.rot_rut_items = [...(entry.rot_rut_items ?? []), { request }]
+        facts.set(item.invoice_id, entry)
+      }
+    }
+    for (const invoice of deductionInvoices) {
+      facts.set(invoice.id, { ...facts.get(invoice.id), deduction_lines: invoice.deduction_lines })
+    }
+    return facts
+  }
+
   async function fetchInvoices() {
     if (!company) return
+    const seq = ++loadSeq.current
+    const isCurrent = () => seq === loadSeq.current
     // Skeleton takeover only while nothing is on screen: refetches after an
     // action (bulk Bokför) reconcile BEHIND the rendered table. Collapsing
     // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
     // entrance for a row-scoped action was the "booking feels glitchy" jump.
-    if (invoices.length === 0) setIsLoading(true)
-    const [invoicesResult, peppolFailedResult, collectionsResult, collectionAttentionResult] = await Promise.allSettled([
-      fetchAllRows<Invoice>(
-        ({ from, to }) => {
-          const query = supabase
-            .from('invoices')
-            // The begäran embed feeds the ROT/RUT column and filter; the
-            // items index on invoice_id keeps the reverse join cheap. The
-            // deduction-line embed (kind only, deduction lines only, so
-            // empty on most invoices) tells a grön teknik invoice, requested
-            // in Skatteverkets e-tjänst, from one still to put in a file.
-            .select(
-              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at)), deduction_lines:invoice_items(deduction_type)',
-            )
-            .eq('company_id', company.id)
-          // /quotes asks the database for quotes only instead of paging
-          // through every invoice to keep a handful (document_type is NOT
-          // NULL, default 'invoice'). The invoice list still loads every
-          // kind: its start card shows only for a company with no rows at
-          // all, and a filter here would show it to a quotes-only company.
-          return (isQuotesList ? query.eq('document_type', 'quote') : query)
-            .not('deduction_lines.deduction_type', 'is', null)
-            .order('invoice_date', { ascending: false })
-            .order('id', { ascending: false })
-            .range(from, to)
-        },
-        { dedupeBy: (invoice) => invoice.id },
-      ),
-      // The chip's ids: the same definition as the Att göra row
-      // (peppol_failed_invoice_ids). Quotes are never sent via Peppol.
+    const firstLoad = invoices.length === 0
+    if (firstLoad) setIsLoading(true)
+
+    // The list paints after ONE page. It used to wait for the whole
+    // register, a page of 1000 at a time, each page carrying two embeds per
+    // invoice that Postgres evaluated for every invoice of the company
+    // before sorting: 2.8 s a page and 32 pages for the largest register in
+    // production (31 600 invoices), about 90 s of skeleton. Now the first
+    // page shows the newest thousand rows, the older ones arrive behind
+    // them, and a row carries the list's columns only.
+    let resolveFirstPage: (rows: ListInvoice[] | null) => void = () => {}
+    const firstPagePromise = new Promise<ListInvoice[] | null>((resolve) => {
+      resolveFirstPage = resolve
+    })
+    const allRowsPromise = fetchAllRows<ListInvoice>(
+      ({ from, to }) => {
+        const query = supabase
+          .from('invoices')
+          .select(
+            'id, customer_id, invoice_number, external_invoice_number, is_self_billed, document_type, status, quote_status, invoice_date, due_date, valid_until, subtotal, total, total_sek, currency, ore_rounding, credited_invoice_id, remaining_amount, paid_at, deduction_total, journal_entry_id, customer:customers(name)',
+          )
+          .eq('company_id', company.id)
+        // /quotes asks the database for quotes only instead of paging
+        // through every invoice to keep a handful (document_type is NOT
+        // NULL, default 'invoice'). The invoice list still loads every
+        // kind: its start card shows only for a company with no rows at
+        // all, and a filter here would show it to a quotes-only company.
+        // The cast names the row PostgREST answers with: the client is not
+        // generated from the schema, so it types the to-one customer embed
+        // as an array.
+        return (isQuotesList ? query.eq('document_type', 'quote') : query)
+          .order('invoice_date', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to) as unknown as PromiseLike<{ data: ListInvoice[] | null; error: { message: string } | null }>
+      },
+      {
+        dedupeBy: (invoice) => invoice.id,
+        // A refetch behind a rendered table replaces it in one step: showing
+        // its first page would shrink the list to a thousand rows and back.
+        onFirstPage: firstLoad ? (rows) => resolveFirstPage(rows) : undefined,
+      },
+    )
+    // A register that fits in one page (or a failed read) has no first page
+    // to hand over: the wait below ends when the read itself does.
+    allRowsPromise.then(
+      () => resolveFirstPage(null),
+      () => resolveFirstPage(null),
+    )
+    // Part of the rows, not a chip: without them every paid ROT/RUT invoice
+    // would read "att begära", so a failed read here is a failed list read.
+    // The quotes list has no skattereduktion column. Settled, so a read that
+    // fails while the chips are still on their way is not left unhandled.
+    const firstPaint = Promise.allSettled([
+      firstPagePromise,
+      isQuotesList ? new Map<string, InvoiceDeductionFacts>() : fetchDeductionFacts(company.id),
+    ])
+
+    // The chips beside the rows: a failed one leaves its chips as they were
+    // (they mark an exception, and the Att göra row carries the same count).
+    const chipReads = Promise.allSettled([
+      // The same definition as the Att göra row (peppol_failed_invoice_ids).
+      // Quotes are never sent via Peppol.
       isQuotesList ? Promise.resolve<string[]>([]) : fetchPeppolFailedInvoiceIds(),
       // Open collection cases (an obligation read: shown whatever the start
       // gates say). Quotes never have one.
@@ -458,9 +563,9 @@ export default function InvoicesPage() {
         ? Promise.resolve(null)
         : Promise.resolve(supabase.rpc('collection_attention_case_ids', { p_company_id: company.id })),
     ])
-
-    // A failed read leaves the chips as they were: they mark an exception,
-    // and the Att göra row carries the same count.
+    const [[peppolFailedResult, collectionsResult, collectionAttentionResult], [firstPageResult, factsResult]] =
+      await Promise.all([chipReads, firstPaint])
+    if (!isCurrent()) return
     if (peppolFailedResult.status === 'fulfilled') setPeppolFailedIds(new Set(peppolFailedResult.value))
     if (collectionsResult.status === 'fulfilled' && collectionsResult.value && !collectionsResult.value.error) {
       const rows = (collectionsResult.value.data ?? []) as Array<{
@@ -480,20 +585,39 @@ export default function InvoicesPage() {
         failed: new Set(rows.filter((r) => r.reason === 'submission_failed').map((r) => r.invoice_id)),
       })
     }
-    if (invoicesResult.status === 'rejected') {
+
+    try {
+      if (factsResult.status === 'rejected') throw factsResult.reason
+      const facts = factsResult.value
+      const firstPage = firstPageResult.status === 'fulfilled' ? firstPageResult.value : null
+      if (firstPage) {
+        setInvoices(withDeductionFacts(firstPage, facts))
+        setIsLoading(false)
+        setOlderRows('loading')
+      }
+      const allRows = await allRowsPromise
+      if (!isCurrent()) return
+      setInvoices(withDeductionFacts(allRows, facts))
+      setOlderRows(null)
+    } catch {
+      if (!isCurrent()) return
       toast({
         title: t('load_failed_title'),
         description: t('load_failed_description'),
         variant: 'destructive',
       })
-    } else {
-      setInvoices(invoicesResult.value)
+      // Rows on screen that are only the newest page stay marked as partial.
+      setOlderRows((state) => (state === 'loading' ? 'failed' : state))
     }
     setIsLoading(false)
   }
 
   useEffect(() => {
     fetchInvoices()
+    return () => {
+      // An unmounted list takes no more pages.
+      loadSeq.current += 1
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -691,12 +815,12 @@ export default function InvoicesPage() {
   const showSelection = canWrite && !isQuotesList && (bulkMode !== null || collectionsBulk)
   const [showBulkHandover, setShowBulkHandover] = useState(false)
 
-  const isBulkSelectable = (invoice: Invoice): boolean => {
+  const isBulkSelectable = (invoice: ListInvoice): boolean => {
     if (collectionsBulk && collectionsToday) {
       return bulkSendable(invoice, { today: collectionsToday, openCaseIds: new Set(collectionCases.keys()) })
     }
     if (!bulkMode) return false
-    const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
+    const docType = invoice.document_type || 'invoice'
     if (docType !== 'invoice' || isCreditNoteDocument(invoice)) return false
     if (bulkMode === 'issue') return invoice.status === 'draft'
     return ['sent', 'overdue'].includes(invoice.status) && !invoice.journal_entry_id
@@ -837,7 +961,7 @@ export default function InvoicesPage() {
   // The row's own status line is shared with the customer card
   // (lib/invoices/status-display.ts invoiceRowStatus); the list adds what
   // only it knows: a collection case and a failed Peppol delivery.
-  function statusDescriptor(invoice: Invoice): RowStatusDescriptor {
+  function statusDescriptor(invoice: ListInvoice): RowStatusDescriptor {
     const row = invoiceRowStatus(invoice, today)
     const inPaymentFlow = row.kind === 'partially_paid' || row.kind === 'overdue' || row.kind === 'sent' || row.kind === 'unknown'
     if (inPaymentFlow) {
@@ -1040,6 +1164,19 @@ export default function InvoicesPage() {
         </p>
       )}
 
+      {/* The newest rows are usable at once; say that the counts and a
+          search do not cover the older ones yet, or that they never came. */}
+      {olderRows === 'loading' && (
+        <p className="text-[12.5px] text-muted-foreground" role="status">
+          {t('loading_older', { count: invoices.length })}
+        </p>
+      )}
+      {olderRows === 'failed' && (
+        <AttnLine action={{ label: t('older_load_retry'), onClick: () => void fetchInvoices() }}>
+          {t('older_load_failed', { count: invoices.length })}
+        </AttnLine>
+      )}
+
       {reminders.offerShown && (
         <RemindersOfferRow count={reminders.offerCount} onOpen={reminders.openSheet} onDismiss={reminders.dismiss} />
       )}
@@ -1184,7 +1321,7 @@ export default function InvoicesPage() {
                 const status = statusDescriptor(invoice)
                 const rotRutState = showRotRut ? rotRutListStateOf(invoice) : null
                 const isCreditNote = isCreditNoteDocument(invoice)
-                const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
+                const docType = invoice.document_type || 'invoice'
                 const displayedTotal = getDisplayTotal(
                   { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
                   { ore_rounding: oreRounding },
@@ -1228,6 +1365,11 @@ export default function InvoicesPage() {
                       rememberListContext()
                       router.push(`/invoices/${invoice.id}`)
                     }}
+                    // The whole row opens the invoice, so the press warms its
+                    // route as the number link does on hover: the click that
+                    // follows lands on the skeleton at once.
+                    onMouseDown={() => router.prefetch(`/invoices/${invoice.id}`)}
+                    onTouchStart={() => router.prefetch(`/invoices/${invoice.id}`)}
                   >
                     {/* Hover-revealed selection checkbox (supplier-invoices shape). */}
                     {showSelection && (
@@ -1249,7 +1391,7 @@ export default function InvoicesPage() {
                       </td>
                     )}
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
-                      <Link
+                      <IntentLink
                         href={`/invoices/${invoice.id}`}
                         className="hover:underline"
                         onClick={(e) => {
@@ -1258,7 +1400,7 @@ export default function InvoicesPage() {
                         }}
                       >
                         {number ?? '·'}
-                      </Link>
+                      </IntentLink>
                     </td>
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                       <span className="block truncate">

@@ -1,7 +1,6 @@
 'use client'
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -35,6 +34,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
+import { IntentLink } from '@/components/ui/intent-link'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -1584,9 +1584,9 @@ export default function JournalEntryList({
             trailing={
               <>
                 <span className="text-muted-foreground print:hidden"> · </span>
-                <Link href="/import?history=sie" className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+                <IntentLink href="/import?history=sie" className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
                   {t('import_attn_action')}
-                </Link>
+                </IntentLink>
               </>
             }
           >
@@ -1697,7 +1697,7 @@ export default function JournalEntryList({
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap', cellPad)}>
                         <span className="inline-flex items-center gap-1">
-                          <Link
+                          <IntentLink
                             href={`/bookkeeping/${entry.id}`}
                             className={cn(
                               'font-mono text-[13px] tabular-nums hover:underline',
@@ -1713,7 +1713,7 @@ export default function JournalEntryList({
                             onKeyDown={(e) => e.stopPropagation()}
                           >
                             {formatVoucher(entry)}
-                          </Link>
+                          </IntentLink>
                           <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
                         </span>
                       </td>
@@ -1932,13 +1932,13 @@ export default function JournalEntryList({
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link
+                                <IntentLink
                                   href={`/bookkeeping/${entry.id}`}
                                   className={QUIET_LINK_CLASS}
                                   onClick={rememberListContext}
                                 >
                                   {t('show_details')}
-                                </Link>
+                                </IntentLink>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
                                     {t('create_correction')}

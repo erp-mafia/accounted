@@ -362,9 +362,15 @@ export async function HemPanesSection({
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
-      // Posted entries distinguish "brand-new empty ledger" from "all caught
-      // up" in the Att göra empty state (hits the partial posted/reversed index).
-      supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['posted', 'reversed']),
+      // One posted entry distinguishes "brand-new empty ledger" from "all
+      // caught up" in the Att göra empty state. Asked only while the setup
+      // checklist is open, the one state that reads it, and as "is there
+      // one", not "how many": the exact count walked every verifikat of the
+      // company on each Hem load (154 000 for the largest, 230 ms) for an
+      // answer nothing showed.
+      setupOpen
+        ? supabase.from('journal_entries').select('id').eq('company_id', companyId).in('status', ['posted', 'reversed']).limit(1)
+        : null,
       attestsDuePromise,
       // The several-invoice payments among them get rows of their own.
       suggestedMatchesPromise,
@@ -377,7 +383,7 @@ export async function HemPanesSection({
   // it is completed or dismissed the ordinary all-clear copy applies. A failed
   // count must NOT read as empty: that would tell a company with real
   // bookkeeping that its ledger is blank, so errors degrade to the normal copy.
-  const emptyLedger = setupOpen && !postedEntries.error && (postedEntries.count || 0) === 0
+  const emptyLedger = !!postedEntries && !postedEntries.error && (postedEntries.data ?? []).length === 0
 
   const bankConnections = bankConnectionsRes.data
   // Same degrade-on-error rule as emptyLedger: a failed fetch must NOT tell a
