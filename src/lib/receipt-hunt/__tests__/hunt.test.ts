@@ -21,7 +21,7 @@ function mockSupabase(tables: Record<string, Row[]>, onInsert?: (t: string, rows
       let from = 0
       let to = Number.MAX_SAFE_INTEGER
       const chain: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'is', 'not', 'in', 'lte', 'gte', 'order', 'limit']) {
+      for (const m of ['select', 'eq', 'is', 'not', 'in', 'lt', 'lte', 'gte', 'or', 'order', 'limit']) {
         chain[m] = vi.fn(() => chain)
       }
       chain.range = vi.fn((f: number, t: number) => {

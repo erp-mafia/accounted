@@ -48,6 +48,24 @@ import {
  */
 export const MIN_AMOUNT_SEK = 100
 
+/**
+ * The floor in kronor, as a PostgREST filter: a row's kronor are `amount_sek`
+ * when it carries one, and its own `amount` when it does not.
+ *
+ * On a USD or EUR cash account `amount` is in that currency, so holding it
+ * against 100 skipped a USD 50 card charge (some 500 kr) and let a JPY 150 one
+ * (some 10 kr) through (crm#1785). `amount_sek` is set at ingest on foreign
+ * rows and signed like `amount`; a SEK row leaves it null or holds the same
+ * number, so a SEK row is weighed exactly as before, and a foreign row without
+ * one keeps its old comparison rather than dropping out. The same pick the
+ * agent worklist ranks by (`amount_sek ?? amount`).
+ *
+ * A filter rather than a pass over fetched rows, so the rows under the floor
+ * never leave the database and fetchAllRows pages the set it returns.
+ */
+const SEK_FLOOR_FILTER =
+  `amount_sek.lte.${-MIN_AMOUNT_SEK},and(amount_sek.is.null,amount.lte.${-MIN_AMOUNT_SEK})`
+
 /** How far back a purchase may be and still be hunted. */
 export const LOOKBACK_MONTHS = 12
 
@@ -196,7 +214,8 @@ export interface HuntOptions {
 }
 
 /**
- * Purchases with no receipt that nobody has booked yet, from MIN_AMOUNT_SEK up.
+ * Purchases with no receipt that nobody has booked yet, from MIN_AMOUNT_SEK up
+ * in kronor (SEK_FLOOR_FILTER), whatever the row's own currency.
  * The agent worklist (agent-worklist.ts) does not read this: its mail search
  * runs in the user's own agent, so it takes every purchase without underlag
  * (purchases-without-underlag.ts) and this floor stays the
@@ -214,8 +233,9 @@ export async function fetchCandidateTransactions(
       .select('id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate')
       .eq('company_id', companyId)
       .is('document_id', null)
-      // Outflows only, and amount <= -MIN covers the floor in one filter.
-      .lte('amount', -MIN_AMOUNT_SEK)
+      // Outflows only, then the floor in kronor.
+      .lt('amount', 0)
+      .or(SEK_FLOOR_FILTER)
       .gte('date', sinceDate)
       .order('id', { ascending: true })
       .range(range.from, range.to),
