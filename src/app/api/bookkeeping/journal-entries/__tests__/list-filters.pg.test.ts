@@ -16,7 +16,7 @@ import { insertFiscalPeriod, seedCompany } from '@/tests/pg/fixtures'
 //     one page, breaking pagination, #798).
 // total_count must stay in lockstep with the filtered set so pagination holds.
 //
-// Migration 20261112100000 rewrote the function to count and sort the keys
+// Migration 20261112100013 rewrote the function to count and sort the keys
 // and read the full rows for the page only. The last three tests pin what
 // that rewrite must not change: the cross-year payments and their
 // out_of_period mark, the page cut with its total, and the row payload.
