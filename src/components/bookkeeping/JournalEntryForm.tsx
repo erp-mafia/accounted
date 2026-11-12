@@ -61,6 +61,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { balancingProposalSide } from '@/lib/bookkeeping/kontering-amount-entry'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { bookedEntryOf, type BookedEntry } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
@@ -678,15 +679,22 @@ export default function JournalEntryForm({
     // An account created a moment ago: not in `accounts` as this closure sees it.
     createdAccount?: { account_number: string; account_name?: string },
   ) => {
+    // An amount needs nothing but the row itself, so it is written on the
+    // latest rows: two amount writes in one tick (a minus figure moved to the
+    // other side as the next field proposes its own) both land. A figure on
+    // one side clears the other.
+    if (field === 'debit_amount' || field === 'credit_amount') {
+      const other = field === 'debit_amount' ? 'credit_amount' : 'debit_amount'
+      setLines((current) =>
+        current.map((line, i) =>
+          i === index ? { ...line, [field]: value, ...(value ? { [other]: '' } : {}) } : line,
+        ),
+      )
+      return
+    }
+
     const updated = [...lines]
     updated[index] = { ...updated[index], [field]: value }
-
-    // If entering debit, clear credit and vice versa
-    if (field === 'debit_amount' && value) {
-      updated[index].credit_amount = ''
-    } else if (field === 'credit_amount' && value) {
-      updated[index].debit_amount = ''
-    }
 
     // A new account decides the momskod again (crm#1096), except that a code
     // chosen on an ordinary cost account survives a correction to another one.
@@ -752,9 +760,11 @@ export default function JournalEntryForm({
   // difference, so the closing row of a moms-split voucher fills itself. The
   // proposal is pre-selected: typing replaces it, which keeps a multi-row split
   // exactly as fast as before. Guards: the row must already have an account (so
-  // you can tab through the trailing blank row), both amounts must still be
-  // empty (never overwrite a typed figure), and the difference must belong on
-  // this side.
+  // you can tab through the trailing blank row) and both amounts must still be
+  // empty (never overwrite a typed figure). A difference that belongs in
+  // kredit is proposed there while focus stays in debet, where it lands after
+  // an account is chosen: the figure shows in its own column, a debit typed
+  // instead clears it, and Tab or Enter moves onto it.
   const handleAmountFocus =
     (index: number, side: 'debit' | 'credit') =>
     (e: React.FocusEvent<HTMLInputElement>) => {
@@ -763,11 +773,12 @@ export default function JournalEntryForm({
       if (!line || !line.account_number) return
       if (line.debit_amount || line.credit_amount) return
       const diff = computeBalancingDiff(index)
-      const fill = side === 'debit' ? diff : -diff
-      if (fill <= 0) return
-      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', formatAmountInput(fill, '.'))
+      const focused = side === 'debit' ? 'debit_amount' : 'credit_amount'
+      const proposeIn = balancingProposalSide(focused, diff)
+      if (!proposeIn) return
+      updateLine(index, proposeIn, formatAmountInput(Math.abs(diff), '.'))
       // Select after the controlled re-render has written the value.
-      requestAnimationFrame(() => target.select())
+      if (proposeIn === focused) requestAnimationFrame(() => target.select())
     }
 
   // Move focus to a row's input. Deferred a frame so it runs after any
