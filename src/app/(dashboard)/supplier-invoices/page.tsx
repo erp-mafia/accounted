@@ -747,7 +747,8 @@ export default function SupplierInvoicesPage() {
                 const canApprove =
                   attests && canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isRowSelectable(inv)
-                // What already covers the invoice: a bank payment or a file.
+                // What already covers the invoice: a bank payment, a standing
+                // "I banken" tick, or a file (openPaymentMarker).
                 const openPayment = openPaymentMarker(inv)
                 // "Inlagd i banken" (#2220) shares the trailing slot with
                 // Godkänn, so it appears once attest is done. Viewers see the
@@ -864,7 +865,9 @@ export default function SupplierInvoicesPage() {
                         ) : (
                           <span className="text-xs text-muted-foreground">{chipLabel}</span>
                         )}
-                        {openPayment && (
+                        {/* A standing "I banken" tick is its own mark on the
+                            row (the bock in the trailing cell): no second chip. */}
+                        {openPayment && !(openPayment === 'bank_entered' && showBankEntered) && (
                           <Badge variant="outline" className="font-normal">
                             {t(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}
                           </Badge>

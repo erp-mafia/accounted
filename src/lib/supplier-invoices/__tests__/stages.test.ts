@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countByStage, deriveStage, openPaymentMarker, stageIndex, stagesFor, SUPPLIER_INVOICE_STAGES } from '../stages'
+import { bankEnteredHolds, countByStage, deriveStage, openPaymentMarker, stageIndex, stagesFor, SUPPLIER_INVOICE_STAGES } from '../stages'
 
 const base = { status: 'registered', approved_at: null, is_credit_note: false, in_open_batch: false, reconciled: false }
 
@@ -97,5 +97,56 @@ describe('openPaymentMarker (crm#1243)', () => {
       expect(openPaymentMarker({ status, open_payment: { batch, payment_order: order } })).toBeNull()
     }
     expect(openPaymentMarker({ status: 'registered', is_credit_note: true, open_payment: { batch, payment_order: order } })).toBeNull()
+  })
+})
+
+describe('the "Inlagd i banken" tick as a payment under way (crm#1824)', () => {
+  const TODAY = '2026-11-12'
+  const order = { id: 'order-1', status: 'accepted', created_at: '2026-11-10T13:54:35Z', provider_status: 'ACSP', provider_error_code: null }
+  const batch = { id: 'batch-1', created_at: '2026-11-01T08:00:00Z' }
+  // 12 500 kr due 30 Nov, ticked on 10 Nov.
+  const ticked = { status: 'approved', bank_entered_at: '2026-11-10T09:00:00Z', due_date: '2026-11-30', remaining_amount: 12500 }
+
+  it('marks a ticked invoice that has not fallen due, the due date itself included', () => {
+    expect(openPaymentMarker(ticked, TODAY)).toBe('bank_entered')
+    expect(openPaymentMarker({ ...ticked, due_date: TODAY }, TODAY)).toBe('bank_entered')
+    expect(openPaymentMarker({ ...ticked, status: 'partially_paid', remaining_amount: 2500 }, TODAY)).toBe('bank_entered')
+    expect(openPaymentMarker({ ...ticked, status: 'registered' }, TODAY)).toBe('bank_entered')
+  })
+
+  it('lets go of the tick once the invoice has fallen due and is still unpaid', () => {
+    // The day after the due date, before the nightly flip has stored 'overdue'.
+    expect(openPaymentMarker({ ...ticked, due_date: '2026-11-11' }, TODAY)).toBeNull()
+    // Stored as overdue by the flip.
+    expect(openPaymentMarker({ ...ticked, status: 'overdue', due_date: '2026-11-01' }, TODAY)).toBeNull()
+    // A part-paid invoice is never flipped to 'overdue': the date decides.
+    expect(openPaymentMarker({ ...ticked, status: 'partially_paid', remaining_amount: 2500, due_date: '2026-11-01' }, TODAY)).toBeNull()
+    // A file under the lapsed tick is what is left to say.
+    expect(openPaymentMarker({ ...ticked, due_date: '2026-11-01', open_payment: { batch, payment_order: null } }, TODAY)).toBe('payment_file')
+  })
+
+  it('reads a real bank payment order before the tick, and the tick before a file', () => {
+    expect(openPaymentMarker({ ...ticked, open_payment: { batch: null, payment_order: order } }, TODAY)).toBe('bank_payment')
+    // The order holds past the due date; the tick does not.
+    expect(openPaymentMarker({ ...ticked, status: 'overdue', due_date: '2026-11-01', open_payment: { batch: null, payment_order: order } }, TODAY)).toBe('bank_payment')
+    expect(openPaymentMarker({ ...ticked, open_payment: { batch, payment_order: null } }, TODAY)).toBe('bank_entered')
+  })
+
+  it('says nothing once the tick is taken back, on a settled invoice or on a credit note', () => {
+    expect(openPaymentMarker({ ...ticked, bank_entered_at: null }, TODAY)).toBeNull()
+    expect(openPaymentMarker({ ...ticked, status: 'paid', remaining_amount: 0 }, TODAY)).toBeNull()
+    expect(openPaymentMarker({ ...ticked, is_credit_note: true }, TODAY)).toBeNull()
+  })
+
+  it('answers the same question for the to-pay counts (bankEnteredHolds)', () => {
+    expect(bankEnteredHolds(ticked, TODAY)).toBe(true)
+    expect(bankEnteredHolds({ ...ticked, due_date: '2026-11-11' }, TODAY)).toBe(false)
+    expect(bankEnteredHolds({ ...ticked, bank_entered_at: null }, TODAY)).toBe(false)
+    // Nothing left to pay is not a debt that has fallen due (isOverduePayable).
+    expect(bankEnteredHolds({ ...ticked, due_date: '2026-11-01', remaining_amount: 0.004 }, TODAY)).toBe(true)
+    // A reader that did not fetch the due date or the amount: the stored status decides.
+    expect(bankEnteredHolds({ status: 'approved', bank_entered_at: ticked.bank_entered_at }, TODAY)).toBe(true)
+    expect(bankEnteredHolds({ status: 'approved', bank_entered_at: ticked.bank_entered_at, due_date: '2026-11-01' }, TODAY)).toBe(false)
+    expect(bankEnteredHolds({ status: 'overdue', bank_entered_at: ticked.bank_entered_at }, TODAY)).toBe(false)
   })
 })
