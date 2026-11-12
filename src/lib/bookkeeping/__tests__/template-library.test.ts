@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, templateShareLines } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, templateAccountNames, templateShareLines } from '../template-library'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -346,6 +346,47 @@ describe('deriveTemplateLinesFromBooking', () => {
       { account_number: '5420', debit_amount: '481.80', credit_amount: '' },
     ])
     expect(lines.find((l) => l.account === '2893')!.type).toBe('settlement')
+  })
+})
+
+describe('templateAccountNames (crm#1821)', () => {
+  const catalog = [
+    { account_number: '1930', account_name: 'Företagskonto' },
+    { account_number: '6540', account_name: 'IT-tjänster' },
+  ]
+
+  it("labels a company's own account, which BAS does not know, with its name", () => {
+    const chart = [
+      { account_number: '1930', account_name: 'Företagskonto' },
+      { account_number: '1589', account_name: 'Kortfordran egen' },
+    ]
+    const derived = deriveTemplateLinesFromBooking(
+      [
+        { account_number: '1930', debit_amount: '1000', credit_amount: '' },
+        { account_number: '1589', debit_amount: '', credit_amount: '1000' },
+      ],
+      templateAccountNames(chart, catalog),
+    )
+    expect(derived.map((l) => [l.account, l.label])).toEqual([
+      ['1930', 'Företagskonto'],
+      ['1589', 'Kortfordran egen'],
+    ])
+  })
+
+  it('reads the catalogue for a standard account the company has not activated', () => {
+    expect(templateAccountNames([], catalog)['6540']).toBe('IT-tjänster')
+  })
+
+  it("lets the company's own name for an account win, and ignores a blank one", () => {
+    const names = templateAccountNames(
+      [
+        { account_number: '1930', account_name: 'Bank, vardag' },
+        { account_number: '6540', account_name: '  ' },
+      ],
+      catalog,
+    )
+    expect(names['1930']).toBe('Bank, vardag')
+    expect(names['6540']).toBe('IT-tjänster')
   })
 })
 

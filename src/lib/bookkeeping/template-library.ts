@@ -277,6 +277,25 @@ function fiktivRateFromBasis(
 }
 
 /**
+ * Account number to name for the labels of a template derived from a booking:
+ * the company's own chart first, the BAS catalogue for a standard account the
+ * company has not activated yet. A company's own account (one that is not in
+ * BAS) is only in its chart; read from the catalogue alone its line was
+ * labelled with the bare number (crm#1821).
+ */
+export function templateAccountNames(
+  chart: ReadonlyArray<{ account_number: string; account_name: string }>,
+  catalog: ReadonlyArray<{ account_number: string; account_name: string }>,
+): Record<string, string> {
+  const names: Record<string, string> = {}
+  for (const a of catalog) names[a.account_number] = a.account_name
+  for (const a of chart) {
+    if (a.account_name?.trim()) names[a.account_number] = a.account_name
+  }
+  return names
+}
+
+/**
  * Derive amount-parameterised template lines from a concrete, balanced set of
  * booking rows — the inverse of {@link applyTemplate}, used by "Spara som mall".
  *
