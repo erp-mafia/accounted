@@ -10812,7 +10812,10 @@
     "section_unsent": "Ej skickade ({count})",
     "section_awaiting": "Väntar på betalning ({count})",
     "section_settled": "Betalda och avslutade ({count})",
-    "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan."
+    "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan.",
+    "loading_older": "Visar de {count} senaste. De äldre hämtas och räknas in strax.",
+    "older_load_failed": "De äldre raderna kunde inte hämtas. Listan visar bara de {count} senaste.",
+    "older_load_retry": "Försök igen"
   },
   "notices": {
     "no_fiscal_year": "Företaget har inget räkenskapsår än, så inget kan bokföras. Importera bokföringen igen eller lägg upp räkenskapsåret själv.",

@@ -43,6 +43,46 @@
       "mixed": 1350,
       "note": "Over the 100 ms target: the same id joins without a company filter (document_attachments, supplier_invoice_payments, invoices) scan every company's rows."
     },
+    "page.bookkeeping.list": {
+      "warm": 1500,
+      "mixed": 2500,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.invoices.list": {
+      "warm": 600,
+      "mixed": 1000,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.invoices.payout_requests": {
+      "warm": 50,
+      "mixed": 100,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.invoices.deduction_lines": {
+      "warm": 50,
+      "mixed": 100,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.supplier_invoices.list": {
+      "warm": 250,
+      "mixed": 500,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.transactions.window": {
+      "warm": 500,
+      "mixed": 900,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.transactions.pending": {
+      "warm": 300,
+      "mixed": 600,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
+    "page.hem.overdue_invoices": {
+      "warm": 100,
+      "mixed": 200,
+      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+    },
     "tb.ytd.include": {
       "warm": 50,
       "mixed": 140

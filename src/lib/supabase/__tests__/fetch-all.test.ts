@@ -134,6 +134,41 @@ describe('fetchAllRows', () => {
   })
 })
 
+describe('fetchAllRows onFirstPage', () => {
+  it('hands over the first page before the rest is fetched, and still returns every row', async () => {
+    const seen: Array<{ rows: number; requestedSoFar: number }> = []
+    let requests = 0
+    const pages: Record<number, Row[]> = { 0: makeRows(0, PAGE_SIZE), [PAGE_SIZE]: makeRows(PAGE_SIZE, 5) }
+    const out = await fetchAllRows<Row>(
+      ({ from }) => {
+        requests += 1
+        return Promise.resolve({ data: pages[from] ?? [], error: null })
+      },
+      { onFirstPage: (rows) => seen.push({ rows: rows.length, requestedSoFar: requests }) },
+    )
+    expect(seen).toEqual([{ rows: PAGE_SIZE, requestedSoFar: 1 }])
+    expect(out).toHaveLength(PAGE_SIZE + 5)
+    expect(out[PAGE_SIZE].id).toBe(String(PAGE_SIZE))
+  })
+
+  it('is not called when everything fits in one page', async () => {
+    let calls = 0
+    const out = await fetchAllRows<Row>(pagedQuery({ 0: makeRows(0, 3) }), { onFirstPage: () => (calls += 1) })
+    expect(calls).toBe(0)
+    expect(out).toHaveLength(3)
+  })
+
+  it('is not called when maxRows is met by the first page', async () => {
+    let calls = 0
+    const out = await fetchAllRows<Row>(
+      pagedQuery({ 0: makeRows(0, PAGE_SIZE), [PAGE_SIZE]: makeRows(PAGE_SIZE, PAGE_SIZE) }),
+      { maxRows: PAGE_SIZE, onFirstPage: () => (calls += 1) },
+    )
+    expect(calls).toBe(0)
+    expect(out).toHaveLength(PAGE_SIZE)
+  })
+})
+
 describe('fetchAllRows against PostgREST max-rows (createPagedMockSupabase)', () => {
   it('returns all 1,001 rows where a bare read stops at 1,000', async () => {
     const { supabase } = createPagedMockSupabase({ things: makeRows(0, PAGE_SIZE + 1) })

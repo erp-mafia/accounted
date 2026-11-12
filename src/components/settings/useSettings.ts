@@ -10,6 +10,7 @@ import {
 import useSWR from 'swr'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import { isFirstLoadPending } from '@/lib/reference-data/first-load'
 import type { CompanySettings } from '@/types'
 
 export interface SettingsState {
@@ -76,12 +77,17 @@ export function useCompanySettings(): SettingsState {
     await mutate()
   }, [mutate])
 
+  // The dashboard layout seeds this key, and SWR revalidates a seed on mount
+  // with `isLoading` true: the seeded row is the answer, not a first load
+  // (lib/reference-data/first-load.ts).
+  const firstLoadPending = companyId ? isFirstLoadPending(isLoading, data) : false
+
   return {
     settings: data ?? null,
-    isLoading: companyId ? isLoading : false,
+    isLoading: firstLoadPending,
     // Same contract as before SWR: error means "settled without a row"
     // (query failure or missing company_settings row), never mid-flight.
-    error: companyId ? !isLoading && (Boolean(swrError) || !data) : false,
+    error: companyId ? !firstLoadPending && (Boolean(swrError) || !data) : false,
     updateSettings,
     refetch,
   }

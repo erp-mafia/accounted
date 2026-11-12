@@ -1753,12 +1753,6 @@ export default function ImportPage() {
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
-  // Fetch authenticated user ID (used by the migration wizard)
-  useEffect(() => {
-    fetchSessionUser().then((user) => {
-      if (user) setUserId(user.id)
-    })
-  }, [])
 
   // Sync mode + view from URL search params (reacts to client-side navigation changes)
   const searchParams = useSearchParams()
@@ -1865,6 +1859,18 @@ export default function ImportPage() {
   useEffect(() => {
     if (mode === 'psd2' && openPayments.status === 'available') router.replace('/settings/banking')
   }, [mode, openPayments.status, router])
+  // The signed-in user's id, read when the migration wizard opens: it is the
+  // only reader, and the read is an auth round trip.
+  useEffect(() => {
+    if (mode !== 'migration') return
+    let cancelled = false
+    fetchSessionUser().then((user) => {
+      if (user && !cancelled) setUserId(user.id)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mode])
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')

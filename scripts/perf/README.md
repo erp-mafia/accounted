@@ -69,6 +69,79 @@ Interactions to record every time: `/transactions` soft navigation; open Bokför
 | 2026-08-26 | Route wrapper only (proxy unmeasured) | n/a | n/a | 44 ms (auth 3, company 41) | 100-call sample; handler p50 38 ms, total p50 96 ms, p90 274 ms |
 | 2026-10-24 | Reports on the ledger summaries (!821, !822), opening balances on them (!845), huvudbok page boundary (!848) | ~52/75 ms (100-line sample) | 35/83 ms (n=62, /api/reports) | 30 ms (auth 3, company 27; document.counts n=94) | Prod EXPLAIN as the largest company's user (154 000 verifikat): compute_prior_opening_balances 7 310 ms before, 32 ms warm / 225 ms cold after; a huvudbok page of 2440 2 613 ms cold before, 23 ms warm after. Vercel function p50 the week before: trial-balance 167, kpi 284, balansrapport 315, resultatrapport 341 ms; Hem (/index) 47 ms, p95 904. Speed Insights p75 LCP: Hem 1.8 s, /reports/[slug] 2.5 s. Posting (commit_journal_entry, edge logs) p50 20 -> 22, p95 35 -> 44 ms. |
 
+## Page budgets (the ten most visited pages)
+
+Why this exists: on 2026-11-12 the ten most visited pages were measured for the largest company in production (154 000 verifikat, 464 000 lines, 31 600 invoices, 44 000 customers) against one goal: usable within two seconds. The invoice list took about 90 seconds there, and nothing would have said so: the report benchmark timed report RPCs, and no check looked at a page. This section is the instrument and the checks that came out of it.
+
+### The pages
+
+Ranked from a week of production traffic (5 to 12 November): API calls by the page they came from (`vercel metrics vercel.function_invocation.count --group-by referrerUrl -f 'requestPath:/api/*'`), which counts use and not prefetches. Requests per route alone do not rank pages: a default `<Link>` prefetches its route on sight, so `/bookkeeping/[id]` had 94 000 requests that week against a few thousand views.
+
+| Page | What its first view waits on |
+|---|---|
+| `/` (Hem) | the document: layout and page read on the server, the panes stream in |
+| `/transactions` | session token, then three bank-row reads from the browser, then the match lookups |
+| `/bookkeeping` | session token, then `GET /api/bookkeeping/journal-entries` (the list RPC and three small waves) |
+| `/pending` | `GET /api/pending-operations` |
+| `/inkorg` | `GET /api/extensions/ext/invoice-inbox/items` |
+| `/import` | nothing: the choices are static |
+| `/reports/[slug]` | the report's route (momsdeklaration: its filings, then the declaration) |
+| `/invoices` | session token, then the first page of the register |
+| `/invoices/[id]` | session token, then the invoice row and five side reads in one wave |
+| `/supplier-invoices` | `GET /api/supplier-invoices?status=all` |
+
+### Measuring a page for a large company, read-only
+
+There is no way to load a page as a customer, and there should not be. What can be measured in production without a session:
+
+1. **The page's queries, as the company's user.** Run each read the first view waits on through the Supabase SQL editor or MCP inside a read-only transaction, with the role and claims PostgREST would set, so RLS applies and nothing can be written. Time with `clock_timestamp()` rather than `EXPLAIN` when only the number is wanted; wrap the read in `json_agg` so serialising the answer is included, as PostgREST does:
+
+   ```sql
+   begin transaction read only;
+   set local role authenticated;
+   select set_config('request.jwt.claims', '{"sub":"<a member's user id>","role":"authenticated","aal":"aal2"}', true);
+   select set_config('perf.t0', clock_timestamp()::text, true);
+   select set_config('perf.r1', (select count(*)::text || ' rows ' || length(coalesce(json_agg(t), '[]')::text) from (<the read>) t), true);
+   select set_config('perf.t1', clock_timestamp()::text, true);
+   select round(extract(epoch from current_setting('perf.t1')::timestamptz - current_setting('perf.t0')::timestamptz) * 1000) as ms, current_setting('perf.r1') as answer;
+   rollback;
+   ```
+
+   Write the read the way PostgREST writes it (an embed is a `LEFT JOIN LATERAL`, the order and limit are the call site's): the planner's choice depends on the shape. `pg_stat_statements` holds the exact text of what PostgREST sent.
+2. **Server time per route, all companies**: `vercel metrics vercel.function_invocation.function_duration_ms -a p75 --prod --group-by route --since 7d`, and with `-f 'referrerUrl:"https://app.accounted.se/<page>"'` the API routes a page calls and how often.
+3. **Requests before content**: read off the page's code (which fetches fire on mount, and which wait for another), not off a browser.
+4. **JavaScript shipped**: `node scripts/perf/page-js.mjs --next-dir <a production build>`.
+
+### What 2026-11-12 found (the largest company unless stated)
+
+| Page | Slowest read | Reads before content | JavaScript, brotli (raw) |
+|---|---|---|---|
+| `/` | 228 ms: an exact count of every verifikat, used only while the setup checklist is open | 1 document | 869 kB (3 550) |
+| `/transactions` | 199 ms: the ignored rows, with `is_booked` per row | 4 in series | 913 kB (3 742) |
+| `/bookkeeping` | 782 ms: the list RPC, which counts and sorts the year's 79 000 verifikat to return 20 | 3 in series | 861 kB (3 520) |
+| `/pending` | 2 ms | 1 | 877 kB (3 597) |
+| `/inkorg` | no inbox items in this company | 1 | 889 kB (3 601) |
+| `/import` | none | 0 | 856 kB (3 495) |
+| `/reports/[slug]` | 435 ms cold, 45 ms warm: opening balances; the report RPCs 40 to 56 ms | 2 to 4 in series | 842 kB (3 443) |
+| `/invoices` | 2 788 ms a page, 32 pages in series: 89 s | 33 in series | 869 kB (3 538) |
+| `/invoices/[id]` | not timed: one row by id | 2 in series | 939 kB (3 803) |
+| `/supplier-invoices` | 32 ms (78 ms a page, 9 pages, for the company with 8 500 supplier invoices) | 1 | 844 kB (3 449) |
+
+Three causes covered most of it:
+
+- **A list that waits for its whole table.** `/invoices` read every invoice of the company, 1 000 at a time, before showing 100. Each page carried two embeds per invoice (the ROT/RUT begäran and the deduction lines) that Postgres evaluated for all 31 600 invoices before it sorted and cut the page.
+- **A page that waits for what it already holds.** The dashboard layout seeds fiscal periods, cash accounts and company settings into SWR, and SWR reports `isLoading` while it revalidates a seed. `/transactions`, `/bookkeeping`, the reports and the VAT view gated their first request on that flag: a session-token fetch and a PostgREST read in front of every list.
+- **A link that prefetches on sight.** Every row of the verifikat, invoice and supplier-invoice lists prefetched its detail page through the auth proxy.
+
+`/login` alone ships 479 kB (2 032 kB raw): a motion library pulled in with the icon set, the error-text registry and the PostHog SDK are in every page's first load. That floor is the largest fixed cost of a hard load and is not addressed here.
+
+### The checks
+
+- **JavaScript per page**: `node scripts/perf/page-js.mjs --check` in the `build` job of every merge request pipeline fails when a page ships more than its budget in `scripts/perf/page-budgets.json`, or has none. It counts every script the page's document references before any interaction; chunks behind `next/dynamic` are not counted, which is how a page gets back under its budget.
+- **The read each page waits on**: the `page.*` cases in `bench/cases.ts`, timed nightly with the report benchmark below against the 150 000-verifikat company and held to `bench/budgets.json`. A page whose first read changes shape changes its case in the same merge request.
+
+Not checked: the number of requests a page makes (no browser runs in CI), and anything after the first view.
+
 ## Report benchmark (`scripts/perf/bench`)
 
 Why this exists: the work that brought every report under 200 ms p95 for a company with 50 000 verifikat a year (!821, !822, !823, 2026-10-23) was measured with a harness that lived in a session scratchpad and was lost with it. This is that instrument in the repository, with budgets and a scheduled CI job, so a later change cannot make a report slow again without a red job saying which call.

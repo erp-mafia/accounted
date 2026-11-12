@@ -1,11 +1,30 @@
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
-import type { Invoice, InvoiceStatus } from '@/types'
+import type { InvoiceStatus } from '@/types'
+import type { InvoiceListRow } from './invoice-list-row'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { effectiveInvoiceStatus } from './overdue'
 
 export type InvoiceListSortColumn = 'number' | 'customer' | 'due' | 'amount' | 'status'
 export type InvoiceListSortDirection = 'asc' | 'desc'
+
+/** What the sort reads off a list row: any shape that carries these sorts the same way. */
+type SortableInvoice = Pick<
+  InvoiceListRow,
+  | 'id'
+  | 'invoice_number'
+  | 'external_invoice_number'
+  | 'document_type'
+  | 'status'
+  | 'invoice_date'
+  | 'due_date'
+  | 'valid_until'
+  | 'total'
+  | 'currency'
+  | 'ore_rounding'
+  | 'credited_invoice_id'
+  | 'remaining_amount'
+> & { customer?: { name?: string | null } | null }
 
 export interface InvoiceListSort {
   column: InvoiceListSortColumn
@@ -29,15 +48,15 @@ const statusRank: Record<InvoiceStatus, number> = {
   cancelled: 7,
 }
 
-function displayedNumber(invoice: Invoice): string | null {
+function displayedNumber(invoice: SortableInvoice): string | null {
   return invoice.invoice_number ?? invoice.external_invoice_number ?? null
 }
 
-function displayedCustomer(invoice: Invoice): string | null {
+function displayedCustomer(invoice: SortableInvoice): string | null {
   return invoice.customer?.name ?? null
 }
 
-function displayedDueDate(invoice: Invoice): string | null {
+function displayedDueDate(invoice: SortableInvoice): string | null {
   // The list shows a quote's "Giltig till" in the date column (a quote stays
   // a draft, so the draft rule below would blank it).
   if (invoice.document_type === 'quote') return invoice.valid_until || null
@@ -45,7 +64,7 @@ function displayedDueDate(invoice: Invoice): string | null {
   return invoice.due_date || null
 }
 
-function displayedStatusRank(invoice: Invoice, today: string): number {
+function displayedStatusRank(invoice: SortableInvoice, today: string): number {
   if (invoice.status === 'cancelled') return statusRank.cancelled
   if (isCreditNoteDocument(invoice)) return 5
   if (invoice.status === 'paid') return statusRank.paid
@@ -66,8 +85,8 @@ function compareNullable<T>(
 }
 
 function comparePrimary(
-  left: Invoice,
-  right: Invoice,
+  left: SortableInvoice,
+  right: SortableInvoice,
   sort: InvoiceListSort,
   oreRounding: boolean,
   today: string,
@@ -107,12 +126,12 @@ function comparePrimary(
   }
 }
 
-export function sortInvoiceList(
-  invoices: Invoice[],
+export function sortInvoiceList<T extends SortableInvoice>(
+  invoices: readonly T[],
   sort: InvoiceListSort,
   oreRounding: boolean,
   today: string = todayIsoStockholm(),
-): Invoice[] {
+): T[] {
   return [...invoices].sort((left, right) => {
     const primary = comparePrimary(left, right, sort, oreRounding, today)
     if (primary !== 0) return primary

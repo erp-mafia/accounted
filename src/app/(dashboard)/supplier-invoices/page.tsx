@@ -11,6 +11,7 @@ import { fetchPayeeAlertMarkers, type PayeeAlertMarker } from '@/components/paym
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
+import { IntentLink } from '@/components/ui/intent-link'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS, SortableTh } from '@/components/ui/dry-table'
@@ -31,7 +32,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
@@ -790,6 +790,10 @@ export default function SupplierInvoicesPage() {
                       rememberListContext()
                       router.push(`/supplier-invoices/${inv.id}`)
                     }}
+                    // The whole row opens the invoice, so the press warms its
+                    // route as the number link does on hover.
+                    onMouseDown={() => router.prefetch(`/supplier-invoices/${inv.id}`)}
+                    onTouchStart={() => router.prefetch(`/supplier-invoices/${inv.id}`)}
                   >
                     {/* Hover-revealed selection checkbox (JournalEntryList shape). */}
                     {canWrite && (
@@ -821,7 +825,7 @@ export default function SupplierInvoicesPage() {
                       </span>
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
-                      <Link
+                      <IntentLink
                         href={`/supplier-invoices/${inv.id}`}
                         className="hover:underline"
                         onClick={(e) => {
@@ -832,7 +836,7 @@ export default function SupplierInvoicesPage() {
                         {inv.supplier_invoice_number ?? (
                           <span className="text-muted-foreground">{t('number_missing')}</span>
                         )}
-                      </Link>
+                      </IntentLink>
                       {/* A självfaktura: the number is the company's own (crm#1367). */}
                       {inv.is_self_billed && (
                         <Badge variant="outline" className="ml-2 font-normal">

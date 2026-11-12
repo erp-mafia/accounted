@@ -32,6 +32,17 @@ describe('buildReferenceFallback', () => {
     expect(unstable_serialize(refKeys.companySettings('c1')) in notFetched).toBe(false)
   })
 
+  it('leaves out a list whose read failed, so the browser reads it instead of taking "none" as the answer', () => {
+    const fallback = buildReferenceFallback('c1', { cashAccounts: cash, settings })
+    expect(unstable_serialize(refKeys.fiscalPeriods('c1')) in fallback).toBe(false)
+    expect(fallback[unstable_serialize(refKeys.cashAccounts('c1'))]).toBe(cash)
+
+    const noCash = buildReferenceFallback('c1', { fiscalPeriods: [] })
+    expect(fallback[unstable_serialize(refKeys.fiscalPeriods('c1'))]).toBeUndefined()
+    expect(noCash[unstable_serialize(refKeys.fiscalPeriods('c1'))]).toEqual([])
+    expect(unstable_serialize(refKeys.cashAccounts('c1')) in noCash).toBe(false)
+  })
+
   it('seeds nothing without an active company', () => {
     expect(buildReferenceFallback(null, { fiscalPeriods: periods, cashAccounts: cash, settings })).toEqual({})
   })

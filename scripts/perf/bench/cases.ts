@@ -183,6 +183,172 @@ export function buildCases(ctx: BenchContext): RpcCase[] {
       usedBy: 'Verifikat list behind the Hem row (missing_underlag=true)',
     },
 
+    // ---- the most visited pages: the read each one's first view waits on ----
+    // Written as PostgREST writes them (embeds as lateral joins, the list's
+    // own order and page size), so the planner meets the shape production
+    // sends. scripts/perf/README.md, "Page budgets", lists the pages.
+    {
+      id: 'page.bookkeeping.list',
+      rpc: 'list_fiscal_period_entries_with_related',
+      args: {
+        p_company_id: co,
+        p_period_id: open.id,
+        p_include_related: true,
+        p_status: null,
+        p_date_from: null,
+        p_date_to: null,
+        p_sort_date: 'desc',
+        p_limit: 20,
+        p_offset: 0,
+        p_exclude_draft: true,
+        p_collapse_corrections: true,
+        p_series: null,
+      },
+      usedBy: '/bookkeeping: the first page of the verifikat list',
+    },
+    {
+      id: 'page.invoices.list',
+      rpc: 'invoices',
+      args: {},
+      read: {
+        sql: `SELECT i.id, i.customer_id, i.invoice_number, i.external_invoice_number, i.is_self_billed,
+                     i.document_type, i.status, i.quote_status, i.invoice_date, i.due_date, i.valid_until,
+                     i.subtotal, i.total, i.total_sek, i.currency, i.ore_rounding, i.credited_invoice_id,
+                     i.remaining_amount, i.paid_at, i.deduction_total, i.journal_entry_id,
+                     row_to_json(c.*)::jsonb AS customer
+              FROM public.invoices i
+              LEFT JOIN LATERAL (SELECT cu.name FROM public.customers cu WHERE cu.id = i.customer_id) c ON true
+              WHERE i.company_id = $1
+              ORDER BY i.invoice_date DESC, i.id DESC LIMIT 1000 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/invoices: the page of 1 000 rows the list paints from',
+    },
+    {
+      id: 'page.invoices.payout_requests',
+      rpc: 'rot_rut_payout_requests',
+      args: {},
+      read: {
+        sql: `SELECT r.id, r.status, r.created_at, COALESCE(it.items, '[]') AS items
+              FROM public.rot_rut_payout_requests r
+              LEFT JOIN LATERAL (
+                SELECT json_agg(x) AS items FROM (
+                  SELECT i.invoice_id FROM public.rot_rut_payout_request_items i WHERE i.request_id = r.id
+                ) x
+              ) it ON true
+              WHERE r.company_id = $1
+              ORDER BY r.created_at ASC, r.id ASC LIMIT 1000 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/invoices: every begäran of the company with the invoices in it',
+    },
+    {
+      id: 'page.invoices.deduction_lines',
+      rpc: 'invoices',
+      args: {},
+      read: {
+        sql: `SELECT i.id, COALESCE(dl.lines, '[]') AS deduction_lines
+              FROM public.invoices i
+              LEFT JOIN LATERAL (
+                SELECT json_agg(y) AS lines FROM (
+                  SELECT ii.deduction_type FROM public.invoice_items ii
+                  WHERE ii.invoice_id = i.id AND ii.deduction_type IS NOT NULL
+                ) y
+              ) dl ON true
+              WHERE i.company_id = $1 AND i.deduction_total > 0
+              ORDER BY i.deduction_total ASC, i.id ASC LIMIT 1000 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/invoices: the deduction kinds of the invoices that carry a deduction',
+    },
+    {
+      id: 'page.supplier_invoices.list',
+      rpc: 'supplier_invoices',
+      args: {},
+      read: {
+        sql: `SELECT s.*, row_to_json(su.*)::jsonb AS supplier
+              FROM public.supplier_invoices s
+              LEFT JOIN LATERAL (SELECT x.id, x.name FROM public.suppliers x WHERE x.id = s.supplier_id) su ON true
+              WHERE s.company_id = $1
+              ORDER BY s.due_date ASC, s.id ASC LIMIT 1000 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/supplier-invoices: GET /api/supplier-invoices?status=all, one page of its read',
+    },
+    {
+      id: 'page.transactions.window',
+      rpc: 'transactions',
+      args: {},
+      read: {
+        sql: `SELECT t.*, public.is_booked(t) AS is_booked,
+                     COALESCE(l.links, '[]') AS transaction_voucher_links, COALESCE(pc.parts, '[]') AS parts_count
+              FROM public.transactions t
+              LEFT JOIN LATERAL (
+                SELECT json_agg(x) AS links FROM (
+                  SELECT v.journal_entry_id, v.role, row_to_json(j.*) AS journal_entry
+                  FROM public.transaction_voucher_links v
+                  LEFT JOIN LATERAL (
+                    SELECT je.voucher_series, je.voucher_number FROM public.journal_entries je WHERE je.id = v.journal_entry_id
+                  ) j ON true
+                  WHERE v.transaction_id = t.id
+                ) x
+              ) l ON true
+              LEFT JOIN LATERAL (
+                SELECT json_agg(y) AS parts FROM (
+                  SELECT count(*) AS count FROM public.bank_transaction_parts p WHERE p.transaction_id = t.id
+                ) y
+              ) pc ON true
+              WHERE t.company_id = $1
+              ORDER BY t.date DESC, t.id ASC LIMIT 200 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/transactions: the window of the 200 newest bank rows',
+    },
+    {
+      id: 'page.transactions.pending',
+      rpc: 'transactions',
+      args: {},
+      read: {
+        sql: `SELECT t.*, COALESCE(l.links, '[]') AS transaction_voucher_links, COALESCE(pc.parts, '[]') AS parts_count
+              FROM public.transactions t
+              LEFT JOIN LATERAL (
+                SELECT json_agg(x) AS links FROM (
+                  SELECT v.journal_entry_id, v.role, row_to_json(j.*) AS journal_entry
+                  FROM public.transaction_voucher_links v
+                  LEFT JOIN LATERAL (
+                    SELECT je.voucher_series, je.voucher_number FROM public.journal_entries je WHERE je.id = v.journal_entry_id
+                  ) j ON true
+                  WHERE v.transaction_id = t.id
+                ) x
+              ) l ON true
+              LEFT JOIN LATERAL (
+                SELECT json_agg(y) AS parts FROM (
+                  SELECT count(*) AS count FROM public.bank_transaction_parts p WHERE p.transaction_id = t.id
+                ) y
+              ) pc ON true
+              WHERE t.company_id = $1 AND t.is_business IS NULL AND t.is_ignored = false
+              ORDER BY t.date DESC, t.id ASC LIMIT 1000 OFFSET 0`,
+        values: [co],
+      },
+      usedBy: '/transactions: the rows waiting to be booked, the list the page opens on',
+    },
+    {
+      id: 'page.hem.overdue_invoices',
+      rpc: 'invoices',
+      args: {},
+      read: {
+        sql: `SELECT i.id, i.invoice_number, i.customer_id, i.status, i.due_date, i.total, i.total_sek,
+                     i.remaining_amount, i.currency
+              FROM public.invoices i
+              WHERE i.company_id = $1 AND i.status = ANY('{sent,overdue,partially_paid}')
+                AND i.document_type = 'invoice' AND i.credited_invoice_id IS NULL AND i.total >= 0
+                AND i.remaining_amount > 0 AND i.due_date < $2
+              ORDER BY i.due_date, i.id LIMIT 1000 OFFSET 0`,
+        values: [co, ctx.today],
+      },
+      usedBy: 'Hem: the overdue invoices behind the Att göra row (lib/worklist), one page of its read',
+    },
+
     // ---- statements: the trial balance in its closing modes ----
     {
       id: 'tb.ytd.include',
