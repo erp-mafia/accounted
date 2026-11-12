@@ -14,6 +14,7 @@ import {
   type ConnectionRow,
 } from '@/lib/transactions/bank-sync-chip-state'
 import { chooseAccountsHref } from '@/lib/bank-feed/connection-links'
+import { isSyncedAccount, type MirrorCardCandidate } from '@/lib/bank-sync/mirror-card-account'
 
 export function useAgeFormatter() {
   const t = useTranslations('transactions')
@@ -45,13 +46,17 @@ export default function BankSyncStatusChip() {
     const load = () => {
       supabase
         .from('bank_connections')
-        .select('id, status, last_synced_at, consent_expires, aggregator')
+        .select('id, status, last_synced_at, consent_expires, aggregator, accounts_data')
         .eq('company_id', companyId)
         .then(({ data, error }) => {
           if (cancelled) return
           // On error keep the chip hidden (empty rows) rather than rendering a
           // false "healthy" state from stale data.
-          setRows(error ? [] : (data ?? []))
+          setRows(error ? [] : (data ?? []).map(({ accounts_data, ...row }) => ({
+            ...row,
+            // The crons skip a connection with nothing to fetch: it never syncs, so it is never "stale".
+            fetchesAccounts: ((accounts_data ?? []) as MirrorCardCandidate[]).some(isSyncedAccount),
+          })))
         })
     }
 
@@ -158,7 +163,7 @@ export default function BankSyncStatusChip() {
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {t('bank_sync_stale_warning')}
-          <span className="ml-1 tabular-nums opacity-70">({formatAge(state.mostRecent)})</span>
+          <span className="ml-1 tabular-nums opacity-70">({formatAge(state.lastSynced)})</span>
         </span>
       </Link>
     )

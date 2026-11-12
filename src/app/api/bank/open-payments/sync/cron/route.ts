@@ -5,14 +5,14 @@ import { runOpenPaymentsCron } from '@/lib/bank-feed/cron'
 export const maxDuration = 300
 
 /**
- * GET /api/bank/open-payments/sync/cron, hourly at :20 (vercel.json, the
+ * GET /api/bank/open-payments/sync/cron, every ten minutes (vercel.json, the
  * Docker crontab). Removes abandoned consent attempts, expires consents that
  * have run out, and syncs the Open Payments connections that are due (every
- * 11 hours, four at a time, within a 230 s budget). A truthful no-op without
- * a connector key.
+ * 11 hours, four at a time, within CRON_TIME_BUDGET_MS counted from the
+ * start of this route). A truthful no-op without a connector key.
  */
 export const GET = withServiceCronContext('cron.open_payments_bank_sync', async (_request, ctx) => {
-  const result = await runOpenPaymentsCron(ctx.supabase, ctx.log)
+  const result = await runOpenPaymentsCron(ctx.supabase, ctx.log, { startedAt: ctx.startedAt })
   ctx.log.info('open payments bank sync summary', result)
   return NextResponse.json(result)
 })

@@ -58,6 +58,20 @@ describe('GET /api/pos-sales/cron', () => {
     expect(body).toMatchObject({ success: true, connections: 2, fetched: 2, failed: 0 })
   })
 
+  it('hands each connection the run deadline, and counts the ones it stopped', async () => {
+    const before = Date.now()
+    h.sync.mockImplementation(async (_db: unknown, id: string) => ({
+      connectionId: id, status: 'synced', fetched: [], changed: [], changedAfterBooking: [], stoppedEarly: id === 'due-2',
+    }))
+    const body = await (await GET(request())).json()
+    const deadlines = h.sync.mock.calls.map((c) => (c[2] as { deadlineMs: number }).deadlineMs)
+    expect(new Set(deadlines).size).toBe(1)
+    // 200 s from the start of the run: a day started last (65 s) ends inside maxDuration 300.
+    expect(deadlines[0]).toBeGreaterThanOrEqual(before + 200_000)
+    expect(deadlines[0]).toBeLessThanOrEqual(Date.now() + 200_000)
+    expect(body).toMatchObject({ stoppedEarly: 1, deferred: 0 })
+  })
+
   it('keeps going when one connection throws', async () => {
     h.sync.mockImplementation(async (_db: unknown, id: string) => {
       if (id === 'due') throw new Error('boom')

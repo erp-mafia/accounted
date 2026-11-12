@@ -36,7 +36,12 @@ const LEASE_MS = 5 * 60 * 1000
 const REFRESH_AFTER_MS = 18 * 60 * 60 * 1000
 const MAX_REFRESHES = 3
 // Six days a run, a run an hour: under the provider's ten calls an hour per venue.
-const CATCH_UP_DELAY_MS = 60 * 60 * 1000
+// The next run is the hourly cron's next tick, so the connection must be due
+// by then: an hour from this sync's start lands minutes after that tick (the
+// sync starts some way into its own run), and the connection waited two
+// hours. Ten minutes covers a run (its budget is 200 s) with room to spare;
+// the runs stay an hour apart, one per tick.
+const CATCH_UP_DELAY_MS = 50 * 60 * 1000
 const BACKOFF_BASE_MS = 15 * 60 * 1000
 const BACKOFF_MAX_MS = 6 * 60 * 60 * 1000
 const ACTION_REQUIRED_RETRY_MS = 6 * 60 * 60 * 1000
@@ -58,6 +63,8 @@ export interface PosSyncResult {
   changedAfterBooking: string[]
   errorCode?: string
   retryable?: boolean
+  /** The caller's deadline stopped the run before its plan was done; the next run takes the rest. */
+  stoppedEarly?: boolean
 }
 
 export interface PosSyncOptions {
@@ -67,6 +74,12 @@ export interface PosSyncOptions {
   dates?: string[]
   maxCalls?: number
   connect?: PosConnectDeps
+  /**
+   * Absolute deadline (epoch ms) from the cron's time budget, checked before
+   * each day is fetched: one day can wait 65 s at Connect, and a run is up to
+   * six of them. A stopped run releases the lease with what it fetched.
+   */
+  deadlineMs?: number
 }
 
 type StoreOutcome = 'inserted' | 'updated' | 'unchanged' | 'changed_after_booking' | 'booked_unchanged'
@@ -278,6 +291,15 @@ export async function syncPosConnection(
   let syncedThrough = connection.synced_through
   let failure: PosConnectError | null = null
   for (const step of plan) {
+    if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+      result.stoppedEarly = true
+      log.info('pos sync stopped on the time budget; the rest is fetched next run', {
+        connectionId,
+        fetched: result.fetched.length,
+        planned: plan.length,
+      })
+      break
+    }
     if (!connection.connection_handle) {
       failure = new PosConnectError('The connection has no handle', { code: 'CONNECTOR_CONNECTION_NOT_OWNED', retryable: false })
       break
@@ -301,6 +323,22 @@ export async function syncPosConnection(
     }
   }
 
+  if (result.stoppedEarly && result.fetched.length === 0) {
+    // The deadline came before the first day: nothing was learned about the
+    // connection, so only the lease is released. Its health, failure count
+    // and last success stay what they were; writing "ok" here would clear a
+    // connection that waits for a person without a single fetch succeeding.
+    const { error: releaseError } = await admin
+      .from('pos_connections')
+      .update({
+        lease_until: new Date(0).toISOString(),
+        next_run_at: new Date(now.getTime() + CATCH_UP_DELAY_MS).toISOString(),
+      })
+      .eq('id', connectionId)
+    if (releaseError) log.error('pos connection release failed', releaseError, { connectionId })
+    return result
+  }
+
   const moreMissing = !options.dates && (syncedThrough ?? addDaysIso(connection.sync_from, -1)) < closed
   const failed = failure ? failureHealth(connection, failure, now) : null
   if (failure) {
@@ -308,6 +346,17 @@ export async function syncPosConnection(
     result.errorCode = failure.code
     result.retryable = failure.retryable
     log.warn('pos sync failed', { connectionId, code: failure.code, status: failure.status, retryable: failure.retryable })
+    // From here the connection waits for a person (reconnect, or six failures
+    // in a row), and the days stop arriving until someone acts: report it
+    // once, on the turn, not on every six-hourly retry after it.
+    if (failed?.health === 'action_required' && connection.health !== 'action_required') {
+      log.error('pos connection needs action; days are no longer fetched', {
+        connectionId,
+        companyId: connection.company_id,
+        code: failure.code,
+        failuresInRow: failed.failures_in_row,
+      })
+    }
   }
   // The lease holder is the only writer, so the row read at the claim is current.
   const { error: releaseError } = await admin
@@ -323,7 +372,7 @@ export async function syncPosConnection(
       last_success_at: failed ? connection.last_success_at : now.toISOString(),
       next_run_at: failed
         ? failed.next_run_at
-        : (moreMissing ? new Date(now.getTime() + CATCH_UP_DELAY_MS) : nextMorningRun(now)).toISOString(),
+        : (moreMissing || result.stoppedEarly ? new Date(now.getTime() + CATCH_UP_DELAY_MS) : nextMorningRun(now)).toISOString(),
     })
     .eq('id', connectionId)
   if (releaseError) log.error('pos connection release failed', releaseError, { connectionId })

@@ -85,6 +85,26 @@ export async function takeOverBankFeedHold(
   return (data ?? []).length > 0
 }
 
+/**
+ * Give back a claim this caller holds (`heldUntil`, the value its claim
+ * wrote), so the next caller can read at once. Only while the lease still
+ * carries that value: a hold written meanwhile (a spent budget) stays.
+ */
+export async function releaseBankFeedLease(
+  supabase: SupabaseClient,
+  connectionId: string,
+  heldUntil: string,
+  now: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from('bank_connections')
+    .update({ sync_lease_until: new Date(now).toISOString() })
+    .eq('id', connectionId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .eq('sync_lease_until', heldUntil)
+  if (error) throw error
+}
+
 /** Hold the lease until `until` without checking who has it; only ever extends. */
 export async function holdBankFeedLease(supabase: SupabaseClient, connectionId: string, until: number): Promise<void> {
   const untilIso = new Date(until).toISOString()

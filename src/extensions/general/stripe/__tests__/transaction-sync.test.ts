@@ -38,12 +38,14 @@ import {
   isLedgerCurrency,
   mapBalanceTransaction,
   stripeExternalId,
+  STRIPE_HISTORY_TOO_LARGE_MESSAGE,
   stripeFeeExternalId,
   syncStripeBalanceTransactions,
   type BalanceTxnLike,
 } from '../lib/transaction-sync'
 import type { StripeConnection } from '../types'
 import { PROVIDER_BOOKING_ID_SOURCES } from '@/lib/transactions/external-id'
+import { failureNote } from '@/lib/webshop-orders/order-cron'
 
 const CONNECTION: StripeConnection = {
   id: 'conn-1',
@@ -103,8 +105,9 @@ function makePayoutTxn(overrides: Partial<BalanceTxnLike> = {}): BalanceTxnLike 
 }
 
 function stubList(byWindow: BalanceTxnLike[], byPayout: BalanceTxnLike[] = []) {
-  balanceTransactionsList.mockImplementation((params: Record<string, unknown>) => ({
-    autoPagingToArray: vi.fn().mockResolvedValue('payout' in params ? byPayout : byWindow),
+  balanceTransactionsList.mockImplementation(async (params: Record<string, unknown>) => ({
+    data: 'payout' in params ? byPayout : byWindow,
+    has_more: false,
   }))
 }
 
@@ -732,8 +735,10 @@ describe('syncStripeBalanceTransactions', () => {
     await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
 
     const cursorUpdate = queriesFor('stripe_connections')[0]
+    // Progress also clears a failure the nightly run wrote on the connection.
     expect(op(cursorUpdate, 'update')!.args[0]).toEqual({
       last_balance_txn_synced_at: new Date((CREATED + 3600) * 1000).toISOString(),
+      error_message: null,
     })
     expect(op(cursorUpdate, 'eq')!.args).toEqual(['id', 'conn-1'])
   })
@@ -747,7 +752,7 @@ describe('syncStripeBalanceTransactions', () => {
     await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
 
     const [chunk, watermark] = queriesFor('stripe_connections')
-    expect(op(chunk, 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date(CREATED * 1000).toISOString() })
+    expect(op(chunk, 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date(CREATED * 1000).toISOString(), error_message: null })
     const iso = (op(watermark, 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
     expect(Math.abs(Date.parse(iso) - Date.now())).toBeLessThan(60_000)
   })
@@ -773,7 +778,7 @@ describe('syncStripeBalanceTransactions', () => {
     // Up to just below the failed chunk, and no run-start watermark past it.
     const updates = queriesFor('stripe_connections')
     expect(updates).toHaveLength(1)
-    expect(op(updates[0], 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date((CREATED - 1) * 1000).toISOString() })
+    expect(op(updates[0], 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date((CREATED - 1) * 1000).toISOString(), error_message: null })
     expect(log.warn).toHaveBeenCalledWith('balance-transaction rows not imported; cursor held below them', {
       connectionId: 'conn-1', errors: 1, code: '57014', reason: 'statement timeout',
     })
@@ -818,12 +823,95 @@ describe('syncStripeBalanceTransactions', () => {
     expect(queriesFor('stripe_connections')).toHaveLength(0)
   })
 
+  describe('listing page by page under the deadline', () => {
+    const page = (ids: string[], has_more: boolean) => ({
+      data: ids.map((id, i) => makeCharge({ id, created: CREATED - i })),
+      has_more,
+    })
+
+    it('asks for the next page after the last id, and ingests all pages', async () => {
+      balanceTransactionsList
+        .mockResolvedValueOnce(page(['txn_3', 'txn_2'], true))
+        .mockResolvedValueOnce(page(['txn_1'], false))
+      const { supabase } = createCaptureSupabase({ company_settings: [{ data: null, error: null }] })
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+
+      expect(summary.fetched).toBe(3)
+      expect(balanceTransactionsList).toHaveBeenCalledTimes(2)
+      expect(balanceTransactionsList.mock.calls[0][0]).not.toHaveProperty('starting_after')
+      expect(balanceTransactionsList.mock.calls[1][0]).toMatchObject({ starting_after: 'txn_2', limit: 100 })
+      // No deadline (the button): the client's own timeout and retries.
+      expect(balanceTransactionsList.mock.calls[0][1]).toEqual({ stripeAccount: 'acct_1' })
+    })
+
+    it('stops between pages at the deadline: nothing ingested, the cursor stays, the next run lists again', async () => {
+      // The listed pages are the newest part of the window. Ingesting them and
+      // moving the cursor would skip the older transactions for good.
+      const deadlineMs = Date.now() + 30_000
+      balanceTransactionsList.mockImplementationOnce(async () => {
+        vi.setSystemTime(deadlineMs + 1)
+        return page(['txn_3', 'txn_2'], true)
+      })
+      const { supabase, queriesFor } = createCaptureSupabase({ company_settings: [{ data: null, error: null }] })
+
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION }, undefined, deadlineMs)
+
+      expect(summary).toMatchObject({ deadlineReached: true, fetched: 0, imported: 0 })
+      expect(balanceTransactionsList).toHaveBeenCalledTimes(1)
+      // Under a deadline each page is bounded, so the last one ends inside the route's limit.
+      expect(balanceTransactionsList.mock.calls[0][1]).toEqual({ stripeAccount: 'acct_1', timeout: 25_000, maxNetworkRetries: 1 })
+      expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
+      expect(queriesFor('stripe_connections')).toHaveLength(0)
+    })
+
+    it('stops at its own share of the run, not the run\'s end, and says so in words the connection can show', async () => {
+      // A listing too large for any night used the whole 240 s run every
+      // night: its cursor never moves, so it stayed first, and the runner
+      // stopped at the deadline before any connection behind it.
+      const startMs = Date.now()
+      const deadlineMs = startMs + 240_000
+      balanceTransactionsList.mockImplementationOnce(async () => {
+        vi.setSystemTime(startMs + 120_001)
+        return page(['txn_3', 'txn_2'], true)
+      })
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+      const { supabase, queriesFor } = createCaptureSupabase({ company_settings: [{ data: null, error: null }] })
+
+      const thrown = await syncStripeBalanceTransactions(supabase, { ...CONNECTION }, log as never, deadlineMs).catch((err: unknown) => err)
+
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toBe(STRIPE_HISTORY_TOO_LARGE_MESSAGE)
+      // Well before the run's end: the rest of the run is left to the others.
+      expect(Date.now()).toBeLessThan(deadlineMs - 100_000)
+      expect(balanceTransactionsList).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
+      expect(queriesFor('stripe_connections')).toHaveLength(0)
+      // For us to solve: no night gets through.
+      expect(log.error).toHaveBeenCalledWith('stripe balance-transaction listing does not fit its share of the nightly run', expect.objectContaining({ connectionId: 'conn-1', listed: 2 }))
+      // What the runner then stores on the connection promises no retry.
+      expect(failureNote('Stripe Connect', thrown)).toBe(
+        'Den senaste automatiska hämtningen från Stripe Connect misslyckades. Historiken hos Stripe är för stor för att hämtas automatiskt. Supporten har fått veta det.',
+      )
+    })
+
+    it('pauses instead when the run\'s end comes before its own share: a later night gives it the whole share', async () => {
+      const startMs = Date.now()
+      const deadlineMs = startMs + 90_000
+      balanceTransactionsList.mockImplementationOnce(async () => {
+        vi.setSystemTime(deadlineMs + 1)
+        return page(['txn_3'], true)
+      })
+      const { supabase } = createCaptureSupabase({ company_settings: [{ data: null, error: null }] })
+      const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION }, undefined, deadlineMs)
+      expect(summary).toMatchObject({ deadlineReached: true, fetched: 0 })
+    })
+  })
+
   it('marks a connection revoked upstream as revoked and audits it', async () => {
     // The nightly feed is the only sync that runs: if it only reported the
     // revocation, the connection would stay "active" in settings forever.
-    balanceTransactionsList.mockImplementation(() => ({
-      autoPagingToArray: vi.fn().mockRejectedValue({ type: 'StripePermissionError' }),
-    }))
+    balanceTransactionsList.mockRejectedValue({ type: 'StripePermissionError' })
     const disconnected = vi.fn()
     eventBus.on('stripe.disconnected', disconnected)
     const { supabase, queriesFor, op } = createCaptureSupabase({
@@ -855,9 +943,7 @@ describe('syncStripeBalanceTransactions', () => {
   })
 
   it('still marks the connection revoked when the audit event fails', async () => {
-    balanceTransactionsList.mockImplementation(() => ({
-      autoPagingToArray: vi.fn().mockRejectedValue({ code: 'account_invalid' }),
-    }))
+    balanceTransactionsList.mockRejectedValue({ code: 'account_invalid' })
     eventBus.on('stripe.disconnected', () => {
       throw new Error('audit down')
     })
@@ -874,11 +960,9 @@ describe('syncStripeBalanceTransactions', () => {
   })
 
   it('leaves the connection alone on an error that is not a revocation', async () => {
-    balanceTransactionsList.mockImplementation(() => ({
-      autoPagingToArray: vi.fn().mockRejectedValue(
-        Object.assign(new Error('Invalid API Key provided'), { type: 'StripeAuthenticationError' }),
-      ),
-    }))
+    balanceTransactionsList.mockRejectedValue(
+      Object.assign(new Error('Invalid API Key provided'), { type: 'StripeAuthenticationError' }),
+    )
     const disconnected = vi.fn()
     eventBus.on('stripe.disconnected', disconnected)
     const { supabase, queriesFor } = createCaptureSupabase({

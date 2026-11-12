@@ -18,6 +18,10 @@
  *     error per connection: the sync logs each at warn and holds its cursor
  *     below a failed write, so before this a failing connection read as
  *     synced;
+ *   - a sync that throws is written on its connection (error_message, which
+ *     the settings panel shows also on a connected row) and cleared by the
+ *     next sync that runs through: before, the only trace a user had of a
+ *     feed failing every night was a last-synced date that stopped moving;
  *   - an installation that runs the extension without its credentials
  *     (isConfigured false) answers 200 with nothing processed, as before, and
  *     says why: an error when connections with sync on are left unsynced by
@@ -32,6 +36,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getErrorMessage, looksLikeUserFacingSwedish } from '@/lib/errors/get-error-message'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
@@ -57,7 +62,67 @@ export interface OrderSyncSummary {
   locked?: boolean
 }
 
-export interface WebshopOrderCronSpec<C extends { id: string; company_id: string }> {
+/**
+ * What the runner reads of a connection row. All four connection tables
+ * (shopify, woocommerce, zettle, stripe) carry error_message, the text the
+ * settings panel (FeedConnectorPanel) shows under the connection.
+ */
+export interface CronConnection {
+  id: string
+  company_id: string
+  error_message?: string | null
+}
+
+/** The longest failure text stored on a connection. */
+const FAILURE_NOTE_MAX = 400
+
+/**
+ * The text a failed nightly sync leaves on its connection. Never the raw
+ * exception: the lead sentence is ours, and what follows is the thrown error
+ * through the app's error mapping, kept only when that reads as a Swedish
+ * sentence written for a user (the mapping passes a few keywords through,
+ * "session" among them, that an English provider error can carry).
+ */
+export function failureNote(label: string, error: unknown): string {
+  const retry = 'Vi försöker igen nästa natt.'
+  const mapped = getErrorMessage(error, { fallback: retry })
+  const detail = looksLikeUserFacingSwedish(mapped) ? mapped : retry
+  return `Den senaste automatiska hämtningen från ${label} misslyckades. ${detail}`.slice(0, FAILURE_NOTE_MAX)
+}
+
+/**
+ * Writes (or with null, clears) the failure text on an active connection.
+ * Only active: a sync that found the credentials revoked has flipped the
+ * status and written its own text, which this must not replace. A failed
+ * write is logged and nothing more: the note is a courtesy to the user and
+ * must not turn a synced connection into a failed run.
+ */
+async function writeFailureNote(
+  ctx: WebshopCronContext,
+  table: string,
+  connection: CronConnection,
+  note: string | null,
+): Promise<void> {
+  // Nothing stored, nothing to clear. A failure is always written: the row
+  // read at the start of the run may still carry a text that the sync cleared
+  // on an early page before it threw on a later one.
+  if (note === null && !connection.error_message) return
+  try {
+    const { error } = await ctx.supabase
+      .from(table)
+      .update({ error_message: note })
+      .eq('id', connection.id)
+      .eq('status', 'active')
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    ctx.log.warn('could not write the sync failure text on the connection', {
+      connectionId: connection.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+export interface WebshopOrderCronSpec<C extends CronConnection> {
   /** Registry id, e.g. 'shopify', for logs. */
   extensionId: string
   /** Name in logs and answers, e.g. 'Shopify'. */
@@ -96,7 +161,7 @@ type ConnectionResult = {
  * credentials. Whether that loses anything depends on the connections that
  * expect a sync: count them, and report an error when there are any.
  */
-async function reportNotConfigured<C extends { id: string; company_id: string }>(
+async function reportNotConfigured<C extends CronConnection>(
   ctx: WebshopCronContext,
   spec: WebshopOrderCronSpec<C>,
 ): Promise<void> {
@@ -126,7 +191,7 @@ async function reportNotConfigured<C extends { id: string; company_id: string }>
 }
 
 /** One nightly run. The route's wrapper has checked that the extension is enabled. */
-export async function runWebshopOrderCron<C extends { id: string; company_id: string }>(
+export async function runWebshopOrderCron<C extends CronConnection>(
   ctx: WebshopCronContext,
   spec: WebshopOrderCronSpec<C>,
   now: () => number = Date.now,
@@ -207,6 +272,11 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
           errors: summary.errors,
         })
       }
+      // The sync ran through, so an earlier night's failure is over. The
+      // order syncs clear the text themselves when their cursor moves; this
+      // covers the Stripe feed and a run whose cursor had nothing to move to.
+      // Not a sync the budget stopped: it may not have reached the provider.
+      if (!summary.revoked && !summary.deadlineReached) await writeFailureNote(ctx, spec.table, connection, null)
       results.push({
         connectionId: connection.id,
         inserted: summary.inserted,
@@ -218,6 +288,7 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
         connectionId: connection.id,
         companyId: connection.company_id,
       })
+      await writeFailureNote(ctx, spec.table, connection, failureNote(spec.label, error))
       results.push({ connectionId: connection.id, inserted: 0, updated: 0, status: 'error' })
     }
   }

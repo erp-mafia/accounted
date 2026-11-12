@@ -442,9 +442,19 @@ export async function stageDailyBatch(db: Pick<SupabaseClient, 'from'>, input: S
 // The cron
 // ---------------------------------------------------------------------------
 
+/**
+ * No company is started later than this into the run, counted from the start
+ * of the route (maxDuration 300 s): a minute is left for the company started
+ * last, whose gathering is one bank check per overdue invoice.
+ */
+export const LADDER_RUN_BUDGET_MS = 240_000
+
 export interface LadderCronSummary {
   enabled: boolean
+  /** Companies the run got to. */
   companies: number
+  /** Companies the time budget did not reach; a later run the same day takes them first. */
+  notReached: number
   staged: number
   empty: number
   pendingExists: number
@@ -462,6 +472,34 @@ export interface LadderCronDeps {
   log?: Logger
   loadFacts?: (db: SupabaseClient, companyId: string) => Promise<CollectionsGateFacts>
   providerFeatures?: (connection: CollectionConnectionRow) => Promise<CollectionsFeatures | null>
+  /** Absolute deadline (epoch ms) from the route's time budget; default LADDER_RUN_BUDGET_MS from now. */
+  deadlineMs?: number
+  /** Wall-clock milliseconds for the deadline (default Date.now; independent of `now`, which tests freeze). */
+  clock?: () => number
+}
+
+/**
+ * Companies that need nothing more from today's run: today's batch is staged
+ * (whatever became of it) or one is still waiting. Only used to order the
+ * run, so a failed read answers nobody and the run goes on in plain order.
+ */
+async function companiesDoneToday(db: SupabaseClient, now: Date, logger: Logger): Promise<Set<string>> {
+  const batchDate = todayIsoStockholm(now)
+  const { data, error } = await db
+    .from('pending_operations')
+    .select('company_id, status, params')
+    .eq('operation_type', COLLECTIONS_BATCH_TYPE)
+    .gte('created_at', new Date(now.getTime() - 2 * 86_400_000).toISOString())
+  if (error) {
+    logger.warn('collections batch order lookup failed; companies run in plain order', { error: error.message })
+    return new Set()
+  }
+  const rows = (data ?? []) as Array<{ company_id: string; status: string; params: { batch_date?: unknown } | null }>
+  return new Set(
+    rows
+      .filter((r) => r.params?.batch_date === batchDate || r.status === 'pending' || r.status === 'committing')
+      .map((r) => r.company_id),
+  )
 }
 
 /**
@@ -474,9 +512,12 @@ export interface LadderCronDeps {
 export async function runLadderCron(deps: LadderCronDeps): Promise<LadderCronSummary> {
   const env = deps.env ?? readCollectionsEnv()
   const logger = deps.log ?? log
+  const clock = deps.clock ?? Date.now
+  const deadlineMs = deps.deadlineMs ?? clock() + LADDER_RUN_BUDGET_MS
   const summary: LadderCronSummary = {
     enabled: env.enabled && env.ladderEnabled,
     companies: 0,
+    notReached: 0,
     staged: 0,
     empty: 0,
     pendingExists: 0,
@@ -498,12 +539,33 @@ export async function runLadderCron(deps: LadderCronDeps): Promise<LadderCronSum
     .eq('state', 'active')
     .eq('ladder_mode', 'staged')
   if (error) throw new Error(`collection_connections lookup failed: ${error.message}`)
-  const connections = ((data ?? []) as Record<string, unknown>[]).map(normalizeConnectionRow)
+  // The run had no time limit and no order: past maxDuration it was killed
+  // wherever it stood, and a rerun started over in whatever order the rows
+  // came. Now the companies still without today's batch go first, in a fixed
+  // order (company id), so a rerun the same day does not spend its time on
+  // the ones already staged, and the run stops at the deadline and says how
+  // many it did not reach.
+  const done = await companiesDoneToday(deps.db, deps.now ? deps.now() : new Date(), logger)
+  const connections = ((data ?? []) as Record<string, unknown>[])
+    .map(normalizeConnectionRow)
+    .sort((a, b) =>
+      Number(done.has(a.company_id)) - Number(done.has(b.company_id)) ||
+      (a.company_id < b.company_id ? -1 : a.company_id > b.company_id ? 1 : 0),
+    )
   const loadFacts = deps.loadFacts ?? loadCollectionsGateFacts
   const providerFeatures =
     deps.providerFeatures ?? (async (connection: CollectionConnectionRow) => (await getCollectionsProvider(connection.route))?.features ?? null)
 
-  for (const connection of connections) {
+  for (const [index, connection] of connections.entries()) {
+    if (clock() >= deadlineMs) {
+      summary.notReached = connections.length - index
+      // Their batch is not staged today unless the run is started again.
+      logger.error('collections ladder ran out of time before every company was reached', {
+        notReached: summary.notReached,
+        reached: index,
+      })
+      break
+    }
     summary.companies += 1
     const companyId = connection.company_id
     try {

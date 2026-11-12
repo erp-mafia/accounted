@@ -82,6 +82,31 @@ const CURSOR_OVERLAP_SECONDS = 24 * 60 * 60
 const INGEST_CHUNK_SIZE = 200
 /** Hard cap per run; the cursor resumes where a truncated run stopped. */
 const MAX_TXNS_PER_RUN = 10_000
+/** Balance transactions per list call: Stripe's largest page. */
+const LIST_PAGE_SIZE = 100
+/**
+ * The longest one connection's listing may take of the nightly run, counted
+ * from its own start. A listing that runs out of it does not fit any night:
+ * its cursor never moves, so it stays first in the cron's order, and without
+ * a share of its own it used the whole run every night and left nothing for
+ * the connections behind it. That is a failure, not a pause.
+ */
+const FAIR_LIST_BUDGET_MS = 120_000
+/**
+ * What the connection says when its history does not fit (the cron's runner
+ * stores it after its lead sentence, lib/webshop-orders/order-cron.ts). No
+ * later night gets through either, so it promises no retry: this is for us
+ * to solve, and the error log is how we hear of it.
+ */
+export const STRIPE_HISTORY_TOO_LARGE_MESSAGE =
+  'Historiken hos Stripe är för stor för att hämtas automatiskt. Supporten har fått veta det.'
+/**
+ * Bound on one list call under a deadline: 25 s and one retry, so a page
+ * started at the last moment ends within the minute the cron's budget leaves
+ * inside maxDuration. The client's defaults (80 s, two retries) allow four
+ * minutes for one page.
+ */
+const DEADLINE_PAGE_OPTIONS = { timeout: 25_000, maxNetworkRetries: 1 } as const
 /**
  * Longest time Stripe holds a charge before it can be paid out (a payout
  * schedule's delay_days stays within 30). A charge still on the balance when
@@ -284,7 +309,11 @@ export function isLedgerCurrency(txn: Pick<BalanceTxnLike, 'currency'>): boolean
   return txn.currency.toUpperCase() === STRIPE_LEDGER_CURRENCY
 }
 
-/** Moves the cursor forward to `ms`, never back. */
+/**
+ * Moves the cursor forward to `ms`, never back. Progress also clears
+ * error_message, as in the webshop order syncs: a failure the nightly run
+ * wrote on the connection is over once a sync (the button's too) gets through.
+ */
 async function advanceWatermark(
   supabase: SupabaseClient,
   connection: StripeConnection,
@@ -297,9 +326,49 @@ async function advanceWatermark(
   const iso = new Date(ms).toISOString()
   await supabase
     .from('stripe_connections')
-    .update({ last_balance_txn_synced_at: iso })
+    .update({ last_balance_txn_synced_at: iso, error_message: null })
     .eq('id', connection.id)
   connection.last_balance_txn_synced_at = iso
+}
+
+/**
+ * Lists the window's balance transactions page by page (newest first, as
+ * Stripe returns them), up to MAX_TXNS_PER_RUN, checking the caller's
+ * deadline before each page. One awaited autoPagingToArray could not be
+ * stopped: up to 100 requests ran to the end whatever was left of the cron's
+ * budget, and a kill at the route's maxDuration takes the rest of the run's
+ * connections with it.
+ *
+ * `cut` means the deadline stopped the listing early. What was listed is then
+ * the newest part of the window only, so the caller must not ingest it and
+ * move the cursor: the older transactions behind it would be skipped for good.
+ */
+async function listBalanceTransactions(
+  stripe: Pick<Stripe, 'balanceTransactions'>,
+  gte: number,
+  requestOptions: Stripe.RequestOptions,
+  deadlineMs: number | undefined,
+): Promise<{ listed: BalanceTxnLike[]; cut: boolean }> {
+  const listed: BalanceTxnLike[] = []
+  // The button's sync passes no deadline and keeps the client's defaults.
+  const pageOptions = deadlineMs === undefined ? requestOptions : { ...requestOptions, ...DEADLINE_PAGE_OPTIONS }
+  let startingAfter: string | undefined
+  while (listed.length < MAX_TXNS_PER_RUN) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return { listed, cut: true }
+    const page = await stripe.balanceTransactions.list(
+      {
+        created: { gte },
+        limit: LIST_PAGE_SIZE,
+        expand: ['data.source'],
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      },
+      pageOptions,
+    )
+    listed.push(...page.data)
+    if (!page.has_more || page.data.length === 0) break
+    startingAfter = page.data[page.data.length - 1].id
+  }
+  return { listed: listed.slice(0, MAX_TXNS_PER_RUN), cut: false }
 }
 
 /** The cursor-window view of a connection (see lib/feed-sync/cursor-window). */
@@ -528,11 +597,15 @@ export async function syncStripeBalanceTransactions(
 
   let listed: BalanceTxnLike[]
   let plan: FetchPlan
+  let cut: boolean
+  let listStartMs: number
   try {
     plan = await planFetch(supabase, connection, stripe, requestOptions, log)
-    listed = await stripe.balanceTransactions
-      .list({ created: { gte: plan.gte }, limit: 100, expand: ['data.source'] }, requestOptions)
-      .autoPagingToArray({ limit: MAX_TXNS_PER_RUN })
+    listStartMs = Date.now()
+    // Under the run's deadline the listing also has a share of its own, so
+    // one account too large for any night cannot take the whole run.
+    const listDeadlineMs = deadlineMs === undefined ? undefined : Math.min(deadlineMs, listStartMs + FAIR_LIST_BUDGET_MS)
+    ;({ listed, cut } = await listBalanceTransactions(stripe, plan.gte, requestOptions, listDeadlineMs))
   } catch (err) {
     if (isRevokedConnectionError(err)) {
       await markConnectionRevokedUpstream(supabase, connection, log)
@@ -540,6 +613,30 @@ export async function syncStripeBalanceTransactions(
       return summary
     }
     throw err
+  }
+
+  if (cut) {
+    // Nothing is ingested and the cursor stays, so the connection keeps the
+    // front of the cron's oldest-cursor-first order and gets its share again
+    // next run. Unless it was its own share that ran out: then no run will
+    // get through, so it is an error for us, and the cron's runner writes the
+    // message on the connection instead of leaving a date that never moves.
+    if (deadlineMs !== undefined && listStartMs + FAIR_LIST_BUDGET_MS <= deadlineMs) {
+      log.error('stripe balance-transaction listing does not fit its share of the nightly run', {
+        connectionId: connection.id,
+        companyId: connection.company_id,
+        listed: listed.length,
+        listedFrom: new Date(plan.gte * 1000).toISOString(),
+        shareMs: FAIR_LIST_BUDGET_MS,
+      })
+      throw new Error(STRIPE_HISTORY_TOO_LARGE_MESSAGE)
+    }
+    summary.deadlineReached = true
+    log.info('time budget exhausted while listing; nothing ingested, the cursor stays', {
+      connectionId: connection.id,
+      listed: listed.length,
+    })
+    return summary
   }
 
   const txns = listed.filter(plan.keep)

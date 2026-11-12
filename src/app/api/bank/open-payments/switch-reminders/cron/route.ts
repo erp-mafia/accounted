@@ -14,7 +14,7 @@ export const maxDuration = 300
  * count-only answer while the campaign is off or the mails are not.
  */
 export const GET = withServiceCronContext('cron.open_payments_switch_reminders', async (_request, ctx) => {
-  const result = await runBankSwitchReminderCron(ctx.supabase, ctx.log)
+  const result = await runBankSwitchReminderCron(ctx.supabase, ctx.log, { startedAt: ctx.startedAt })
   ctx.log.info('bank switch reminders summary', result)
   return NextResponse.json(result)
 })

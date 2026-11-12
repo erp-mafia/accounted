@@ -64,6 +64,17 @@ export const NOTICE_CATEGORIES = [
    */
   'skv_disconnected',
   /**
+   * A point-of-sale connection has stopped fetching its day reports and
+   * waits for a person.
+   * Pending:  pos_connections.status = 'active' AND health =
+   *           'action_required' (the provider closed the access, or six
+   *           fetches in a row failed; lib/pos-sales/sync.ts). Same predicate
+   *           as the Kassa page's stuck line and the Kassa settings.
+   * Done:     a fetch succeeds (health back to 'ok') or the venue is
+   *           disconnected.
+   */
+  'pos_connection_action',
+  /**
    * A connected cloud backup is failing (dead token or errored auto-sync).
    * Pending:  a cloud-backup provider connection exists in extension_data
    *           with status = 'needs_reauth', or its schedule's
@@ -120,6 +131,8 @@ export const NOTICE_PRIORITY: readonly NoticeCategory[] = [
   'bank_switch_needed',
   'bank_switch_uncovered',
   'skv_disconnected',
+  // Sales that stop arriving are bookkeeping that goes missing; a backup is a copy.
+  'pos_connection_action',
   'backup_failing',
   'bank_connection_expiring',
   'skv_unexplained',
