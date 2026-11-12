@@ -1,7 +1,7 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
-import { verifyCronSecret } from '@/lib/auth/cron'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
@@ -45,10 +45,7 @@ const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' } as const
  *
  * Time budget: 50s (Vercel default 60s function timeout with 10s margin).
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
+export const GET = withCronContext('cron.skatteverket_agi_kvittenser', async () => {
   if (!isSkatteverketEnabled()) {
     return NextResponse.json(
       { message: 'Skatteverket extension disabled', processed: 0 },
@@ -241,4 +238,4 @@ export async function GET(request: Request) {
     },
     { headers: NO_STORE_HEADERS },
   )
-}
+})

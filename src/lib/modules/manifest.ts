@@ -695,6 +695,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'calendar',
   'composition',
   'connect',
+  // The run ledger of the scheduled jobs and the watch job that reports a
+  // killed, failed or missed run: every job passes through it.
+  'cron',
   'crypto',
   'currency',
   'dashboard',

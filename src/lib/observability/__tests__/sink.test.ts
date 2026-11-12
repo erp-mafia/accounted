@@ -221,4 +221,17 @@ describe('observability sink', () => {
     })
     expect(await flushObservability()).toBe(false)
   })
+
+  it('gives up on an adapter that does not answer inside the timeout, whatever the adapter does with it', async () => {
+    // The PostHog adapter ignores the timeout it is handed: its client retries for most of a minute.
+    vi.useFakeTimers()
+    try {
+      registerObservabilitySink({ name: 'hanging', captureException() {}, captureMessage() {}, flush: () => new Promise(() => {}) })
+      const flushed = flushObservability(2000)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(await flushed).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

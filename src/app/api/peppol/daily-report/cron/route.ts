@@ -3,6 +3,9 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { sendPeppolDailyReport } from '@/lib/invoices/peppol-daily-report'
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/peppol/daily-report/cron: once a day, in the morning.
  *

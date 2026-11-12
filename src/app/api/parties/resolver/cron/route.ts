@@ -14,6 +14,9 @@ import { resolveCompanyCounterparts, resolverMode, type RunSummary } from '@/lib
  */
 const ACTIVE_WINDOW_DAYS = 30
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 export const GET = withCronContext('cron.counterparty_resolver', async (_request, ctx) => {
   if (resolverMode() === 'off') {
     ctx.log.info('counterparty resolver skipped: mode off')

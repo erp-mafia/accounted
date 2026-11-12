@@ -6,6 +6,9 @@ import { sealLegacyConsentTokens } from '@/lib/providers/consent-tokens'
 // Purge abandoned OAuth states and handoffs even when their consent is retained.
 // Then seal a batch of provider tokens still stored in plaintext from before
 // accounted#58; once none remain that step is two empty reads.
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 export const GET = withCronContext('cron.provider_oauth_cleanup', async (_request, ctx) => {
   const supabase = createServiceClient()
   const { count, error } = await supabase

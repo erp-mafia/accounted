@@ -257,6 +257,10 @@
     {
       "path": "/api/supplier-invoices/attest-mail/follow-up/cron",
       "schedule": "15 6 * * *"
+    },
+    {
+      "path": "/api/health/cron-runs/cron",
+      "schedule": "7-59/10 * * * *"
     }
   ]
 }

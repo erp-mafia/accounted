@@ -7,6 +7,9 @@ import { mailByraStatements } from '@/lib/usage/byra-billing'
 import { closeUsagePeriod, previousUsagePeriod } from '@/lib/usage/close-period'
 import { billedUsageKinds } from '@/lib/usage/kinds'
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/billing/usage/cron: the 1st of every month, 06:00 UTC. Closes
  * the month that just ended (or ?period=YYYY-MM, a closed month, for a rerun):

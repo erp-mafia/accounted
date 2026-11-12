@@ -7,6 +7,9 @@ import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
+/** The limit these runs already had as the platform default, now declared: a scheduled route states its own (scripts/generate-crontabs.ts). */
+export const maxDuration = 300
+
 /**
  * GET /api/bookkeeping/accruals/post-due/cron, daily 05:15 UTC.
  *

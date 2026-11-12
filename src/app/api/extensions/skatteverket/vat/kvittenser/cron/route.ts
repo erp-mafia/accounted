@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { verifyCronSecret } from '@/lib/auth/cron'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { auditUserIdFor } from '@/extensions/general/skatteverket/lib/audit'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
@@ -40,10 +40,7 @@ const log = createLogger('vat-kvittenser-cron')
  * Per-row errors are logged and skipped: one expired token must not block
  * other companies' reconciliation.
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
+export const GET = withCronContext('cron.skatteverket_vat_kvittenser', async () => {
   if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
@@ -331,4 +328,4 @@ export async function GET(request: Request) {
     errors,
     results,
   })
-}
+})
