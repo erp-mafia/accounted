@@ -484,6 +484,43 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     })
   })
 
+  it('commits oldest staged first, whatever order the ids arrive in (crm#1815)', async () => {
+    // The list shows the newest proposal first by default, and the page sends
+    // the ids in that order: a chain staged register, book, pay must still run
+    // in that order, and voucher numbers follow the commit order.
+    enqueue({
+      data: [
+        makeOp({ id: VALID_ID_3, created_at: '2026-03-02T10:00:03.000000+00:00' }),
+        makeOp({ id: VALID_ID_1, created_at: '2026-03-02T10:00:01.000000+00:00' }),
+        makeOp({ id: VALID_ID_2, created_at: '2026-03-02T10:00:02.000000+00:00' }),
+      ],
+    })
+    mockCommit.mockResolvedValue({ status: 'committed', data: {} })
+
+    const request = createMockRequest('/api/pending-operations/bulk-commit', {
+      method: 'POST',
+      body: { ids: [VALID_ID_3, VALID_ID_2, VALID_ID_1, VALID_ID_4] },
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{
+      data: { results: Array<{ id: string; status: string }> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(mockCommit.mock.calls.map((call) => (call[3] as { id: string }).id)).toEqual([
+      VALID_ID_1,
+      VALID_ID_2,
+      VALID_ID_3,
+    ])
+    // An id without a row is still reported, after the ones that ran.
+    expect(body.data.results.map((r) => [r.id, r.status])).toEqual([
+      [VALID_ID_1, 'committed'],
+      [VALID_ID_2, 'committed'],
+      [VALID_ID_3, 'committed'],
+      [VALID_ID_4, 'failed'],
+    ])
+  })
+
   it('routes auto_rejected results into the rejected bucket', async () => {
     enqueue({ data: [makeOp({ id: VALID_ID_1 })] })
 

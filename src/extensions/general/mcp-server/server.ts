@@ -189,6 +189,7 @@ import {
   PERSON_REJECTION_CATEGORIES,
   type PersonRejectionCategory,
 } from '@/lib/pending-operations/rejection-categories'
+import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
 import {
   canApproveSupplierInvoice,
@@ -28018,7 +28019,7 @@ export const tools: McpTool[] = [
         operation_ids: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Several of one company at once (low/medium risk).',
+          description: 'Several of one company at once (low/medium risk), committed oldest staged first.',
         },
         batch_id: { type: 'string', format: 'uuid', description: 'Approve a whole gnubok_stage_across_companies batch (high-risk members are only listed).' },
         confirmed: {
@@ -28159,7 +28160,9 @@ export const tools: McpTool[] = [
         let committed = 0
         let skipped = 0
         let failed = 0
-        for (const id of operationIds) {
+        // Oldest staged first, like the batch above and the app's bulk approval
+        // (crm#1815): the order the ids were listed in decides nothing.
+        for (const id of oldestStagedFirst(operationIds, byId)) {
           const operation = byId.get(id)
           if (!operation) {
             failed += 1

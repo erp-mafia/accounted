@@ -1,0 +1,1 @@
+[2026-11-12] Proposals approved together commit oldest staged first in every door (app bulk route, pending page chunks, MCP operation_ids), overriding the order the caller listed: staged order is the dependency and voucher order, and both lists show newest first (crm#1815).

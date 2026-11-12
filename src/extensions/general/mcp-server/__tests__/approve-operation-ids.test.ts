@@ -102,6 +102,25 @@ describe('gnubok_approve_pending_operation: operation_ids', () => {
     ])
   })
 
+  it('commits oldest staged first, whatever order the ids are listed in (crm#1815)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        operation(ID.medium, { created_at: '2026-03-02T10:00:02.000000+00:00' }),
+        operation(ID.low, { created_at: '2026-03-02T10:00:01.000000+00:00' }),
+      ],
+      error: null,
+    })
+
+    const result = await run(supabase, { operation_ids: [ID.medium, ID.low] })
+
+    expect(commitSpy.mock.calls.map((call) => (call[3] as { id: string }).id)).toEqual([ID.low, ID.medium])
+    expect(result.results).toEqual([
+      expect.objectContaining({ operation_id: ID.low, status: 'committed' }),
+      expect.objectContaining({ operation_id: ID.medium, status: 'committed' }),
+    ])
+  })
+
   it('settles a repeated id once', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [operation(ID.low)], error: null })
