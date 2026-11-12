@@ -65,16 +65,3 @@ export function remindersAside(input: {
   }
   return { key: 'reminders_none' }
 }
-
-/**
- * Whether an invoice reads as overdue ("Förfallen N d") in the invoice list
- * and in its own header, one rule for both: the status our own reminders
- * set, or, while collections is in play (`collectionsToday` set, the list's
- * InvoiceListTabContext.collectionsToday), a sent invoice still owed past its
- * due date. Partly paid invoices read as partly paid first, in both places.
- */
-export function readsOverdue(invoice: EntryInvoice, collectionsToday: string | undefined): boolean {
-  if (!invoice.due_date) return false
-  if (invoice.status === 'overdue') return true
-  return !!collectionsToday && invoice.status === 'sent' && isOverdueUnpaid(invoice, collectionsToday)
-}

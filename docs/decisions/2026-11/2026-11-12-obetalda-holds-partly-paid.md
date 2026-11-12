@@ -1,0 +1,1 @@
+[2026-11-12] The invoice list's Obetalda view, its count and the section Väntar på betalning hold every invoice still owed (isInvoiceOwed), partly paid with money left included: Att göra, the reminders, the reskontra and the API counted them as owed while the list filed them as settled.

@@ -1,0 +1,1 @@
+[2026-11-12] The onboarding summary counts 26xx and the skattekonto from each account's latest ingående balans (account_ib_floor), not every posting: 133 companies with two imported years read a doubled balance. Its revenue and result still read a resultatavslut as zero; not changed here.

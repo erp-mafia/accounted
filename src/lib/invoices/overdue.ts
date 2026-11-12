@@ -39,14 +39,23 @@ export interface OverdueInvoiceInput {
   total?: number | string | null
 }
 
-/** The invoice has an unpaid remainder past its due date. */
-export function isInvoiceOverdue(invoice: OverdueInvoiceInput, today: string = todayIsoStockholm()): boolean {
+/**
+ * The customer still owes on this invoice, whatever the due date: the row
+ * predicate of filterOwedInvoices below. The list's Obetalda view and its
+ * count, the status sections and the overdue rule all ask it, so a partly
+ * paid invoice with money left is owed on every one of them.
+ */
+export function isInvoiceOwed(invoice: OverdueInvoiceInput): boolean {
   if (!isOwedInvoiceStatus(invoice.status)) return false
   // Proformas, delivery notes and quotes carry a date but no receivable.
   if ((invoice.document_type || 'invoice') !== 'invoice') return false
   if (isCreditNoteDocument(invoice)) return false
-  if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount <= 0) return false
-  return !!invoice.due_date && isPastDue(invoice.due_date, today)
+  return !(typeof invoice.remaining_amount === 'number' && invoice.remaining_amount <= 0)
+}
+
+/** The invoice has an unpaid remainder past its due date. */
+export function isInvoiceOverdue(invoice: OverdueInvoiceInput, today: string = todayIsoStockholm()): boolean {
+  return isInvoiceOwed(invoice) && !!invoice.due_date && isPastDue(invoice.due_date, today)
 }
 
 /** Whole days past the due date, at least 1 (the day after the due date is day 1). */
@@ -98,6 +107,7 @@ function assertIsoDate(today: string): void {
  * whatever the due date: a real faktura in an owed status with an open
  * remainder. A credit note is never owed, even while its status says 'sent'
  * (crm#1435): it has nothing remaining and isCreditNoteDocument says what it is.
+ * isInvoiceOwed above is the same rule for a row already read.
  */
 export function filterOwedInvoices<Q extends FilterableQuery>(query: Q): Q {
   const owed = (query as unknown as InvoiceFilterQuery).in('status', OWED_INVOICE_STATUSES).eq('document_type', 'invoice')

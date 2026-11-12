@@ -23,6 +23,7 @@ import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEdi
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -373,7 +374,9 @@ export default function PaymentBookingDialog({
             )}
           </DialogTitle>
           <DialogDescription>
-            {formatCurrency(invoice.total, invoice.currency)}
+            {/* What the invoice asks for (getAmountToPay): öresavrundning and
+                any ROT/RUT deduction applied, as on the PDF and in the mail. */}
+            {formatCurrency(getAmountToPay(invoice, companySettings).toPay, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}

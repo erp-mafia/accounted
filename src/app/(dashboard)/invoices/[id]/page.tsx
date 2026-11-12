@@ -49,7 +49,7 @@ import {
   fetchInvoicePaymentVouchers,
   type PaymentVoucherRef,
 } from '@/lib/invoices/payment-history-gap'
-import { effectiveQuoteStatus, isQuoteExpired, quoteAwaitsSending, quoteDisplayStatus } from '@/lib/invoices/quote-status'
+import { effectiveQuoteStatus, isQuoteExpired, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import {
   draftDownloadDecision,
   type DraftDownloadDecision,
@@ -145,9 +145,9 @@ import { useCustomerLoss } from '@/components/customer-loss/use-customer-loss'
 import { useCaseWords, useInvoiceCollection } from '@/components/collections/case-client'
 import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { invoiceDaysOverdue, isInvoiceOverdue } from '@/lib/invoices/overdue'
+import { isInvoiceOverdue, isInvoiceOwed } from '@/lib/invoices/overdue'
 import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
-import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { invoiceRowStatus, invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import type { StatusChip } from '@/lib/status-display'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
@@ -486,9 +486,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Reminders on still remind only the invoices the ladder follows (dated
   // after the turn-on, sent from Accounted, nothing stopping it): asked of
   // the policy for this invoice, and read again when its history grows.
+  // Read for every invoice still owed (isInvoiceOwed), partly paid included:
+  // the policy reminds those too.
   const reminderLadder = useInvoiceReminderLadder(
     id,
-    autoRemindersEnabled === true && invoice?.id === id && (invoice.status === 'sent' || invoice.status === 'overdue'),
+    autoRemindersEnabled === true && invoice?.id === id && isInvoiceOwed(invoice),
     reminders.length,
   )
 
@@ -2006,45 +2008,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             ? t('title_invoice', { number: titleNumber })
             : t('title_draft')
 
-  // Offert: open and accepted are the normal states (muted text); declined,
-  // the derived expiry and an open quote that never left ("Ej skickad", not
-  // "Öppen": crm#1202) deviate and get a chip. Same map as the list page.
-  const quoteDisplay = isQuote ? quoteDisplayStatus(invoice) : null
-  const quoteStatusDescriptor: { label: string; exception: boolean; variant?: 'secondary' | 'warning' | 'outline' } | null =
-    quoteDisplay === 'unsent'
-      ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-      : quoteDisplay === 'expired'
-        ? { label: tInvoices('quote_status_expired'), exception: true, variant: 'warning' }
-        : quoteDisplay === 'declined'
-          ? { label: tInvoices('quote_status_declined'), exception: true, variant: 'secondary' }
-          : quoteDisplay === 'accepted'
-            ? { label: tInvoices('quote_status_accepted'), exception: false }
-            : quoteDisplay === 'open'
-              ? { label: tInvoices('quote_status_open'), exception: false }
-              : null
-  // One status element, same rule as the list page (chips mark exceptions):
-  // sent and paid render as muted text, everything that deviates gets a chip.
-  const status: { label: string; exception: boolean; variant?: StatusChip } =
-    invoice.status === 'cancelled'
-      ? baseStatus('cancelled')
-      : quoteStatusDescriptor
-        ? quoteStatusDescriptor
-      : invoice.status === 'draft' && isUnsentNumberedInvoice
-        ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-        : (invoice.status === 'sent' || invoice.status === 'overdue') && isInvoiceOverdue(invoice) && invoice.due_date
-          ? {
-              // Overdue follows the due date and the open remainder, the same
-              // rule and day count as the list (lib/invoices/overdue.ts).
-              ...baseStatus('overdue'),
-              label: tInvoices('status_overdue_days', { days: invoiceDaysOverdue(invoice.due_date) }),
-            }
-          : invoice.status === 'overdue'
-            ? baseStatus('sent')
-          : invoice.status === 'paid' && isCreditNote
-            ? { label: tInvoices('badge_credit'), exception: true, variant: 'destructive' }
-          : invoice.status === 'paid' && invoice.paid_at
-            ? { label: tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
-            : baseStatus(invoice.status)
+  // One status element, the line the invoice list and the customer card show
+  // (lib/invoices/status-display.ts invoiceRowStatus): overdue follows the
+  // due date and the open remainder, a credit note says so whatever its
+  // status, and sent and paid render as muted text while everything that
+  // deviates gets a chip.
+  const rowStatus = invoiceRowStatus(invoice)
+  const rowStatusValues =
+    rowStatus.values && 'date' in rowStatus.values ? { date: formatDate(rowStatus.values.date) } : rowStatus.values
+  const status: { label: string; exception: boolean; variant?: StatusChip } = rowStatus.labelKey
+    ? { label: tInvoices(rowStatus.labelKey, rowStatusValues), exception: rowStatus.chip !== null, variant: rowStatus.chip ?? undefined }
+    : { label: invoice.status, exception: false }
 
   const metaParts = [
     customer?.name,
@@ -3395,7 +3369,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           switch and company toggle, remindersActiveFor) or collections
           speaks for them. A card that only says "avstängda" is noise. */}
       {(reminders.length > 0 ||
-        ((invoice.status === 'sent' || invoice.status === 'overdue') &&
+        (isInvoiceOwed(invoice) &&
           (autoRemindersEnabled === true || collectionRemindersAside !== null))) && (
         <DetailSection
           kicker={t('reminders_card_title')}

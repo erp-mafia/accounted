@@ -1,7 +1,7 @@
 import type { Invoice } from '@/types'
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { effectiveQuoteStatus } from './quote-status'
-import { isInvoiceOverdue } from './overdue'
+import { isInvoiceOverdue, isInvoiceOwed } from './overdue'
 
 /**
  * The invoice list's status views. One predicate for the visible rows, the
@@ -138,7 +138,9 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab,
     case 'all':
       return invoice.status !== 'cancelled'
     case 'unpaid':
-      return ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice'
+      // What the customer still owes (lib/invoices/overdue.ts isInvoiceOwed):
+      // a partly paid invoice with money left is unpaid too.
+      return isInvoiceOwed(invoice)
     case 'overdue':
       // Derived, never the stored status (crm#1084): an owed invoice past its
       // due date, partly paid included. One "Hos inkasso" lists is that

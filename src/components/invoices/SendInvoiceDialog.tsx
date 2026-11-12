@@ -27,6 +27,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { formatCurrency } from '@/lib/utils'
 import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
 import { createClient } from '@/lib/supabase/client'
@@ -595,9 +596,11 @@ export default function SendInvoiceDialog({
               <span data-ph-mask="">{t('title_suffix', { number: invoice.invoice_number })}</span>
             ) : ''}
           </DialogTitle>
-          {/* data-ph-mask: amount and customer email are user data */}
+          {/* data-ph-mask: amount and customer email are user data. The amount
+              is what the mail and the PDF ask for (getAmountToPay):
+              öresavrundning and any ROT/RUT deduction applied. */}
           <DialogDescription data-ph-mask="">
-            {formatCurrency(invoice.total, invoice.currency)}
+            {formatCurrency(getAmountToPay(invoice, companySettings).toPay, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}

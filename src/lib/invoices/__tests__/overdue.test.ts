@@ -6,6 +6,7 @@ import {
   filterOwedInvoices,
   invoiceDaysOverdue,
   isInvoiceOverdue,
+  isInvoiceOwed,
   type OverdueInvoiceInput,
 } from '../overdue'
 
@@ -58,6 +59,48 @@ function recordingQuery() {
   }
   return query
 }
+
+// The row predicate of filterOwedInvoices: 191 partly paid invoices with money
+// left were missing from the list's Obetalda view, which read sent and overdue only.
+describe('isInvoiceOwed', () => {
+  it('is an issued faktura in an owed status with money left, whatever the due date', () => {
+    for (const status of ['sent', 'overdue', 'partially_paid']) {
+      expect(isInvoiceOwed(invoice({ status }))).toBe(true)
+      expect(isInvoiceOwed(invoice({ status, due_date: '2027-01-31' }))).toBe(true)
+      expect(isInvoiceOwed(invoice({ status, due_date: null }))).toBe(true)
+    }
+  })
+
+  it('counts a missing remainder or document type as owed', () => {
+    expect(isInvoiceOwed({ status: 'partially_paid' })).toBe(true)
+    expect(isInvoiceOwed(invoice({ document_type: null, remaining_amount: null }))).toBe(true)
+  })
+
+  it('is never a settled remainder, a credit note, another document or another status', () => {
+    expect(isInvoiceOwed(invoice({ status: 'partially_paid', remaining_amount: 0 }))).toBe(false)
+    expect(isInvoiceOwed(invoice({ remaining_amount: -10 }))).toBe(false)
+    expect(isInvoiceOwed(invoice({ credited_invoice_id: 'orig' }))).toBe(false)
+    expect(isInvoiceOwed(invoice({ total: -500 }))).toBe(false)
+    for (const documentType of ['proforma', 'delivery_note', 'quote']) {
+      expect(isInvoiceOwed(invoice({ document_type: documentType }))).toBe(false)
+    }
+    for (const status of ['draft', 'paid', 'cancelled', 'credited', 'written_off']) {
+      expect(isInvoiceOwed(invoice({ status }))).toBe(false)
+    }
+  })
+
+  it('is what isInvoiceOverdue reads before the due date', () => {
+    const rows = [
+      invoice(),
+      invoice({ status: 'partially_paid' }),
+      invoice({ remaining_amount: 0 }),
+      invoice({ credited_invoice_id: 'orig' }),
+      invoice({ document_type: 'proforma' }),
+      invoice({ status: 'paid' }),
+    ]
+    for (const row of rows) expect(isInvoiceOverdue(row, TODAY)).toBe(isInvoiceOwed(row))
+  })
+})
 
 describe('isInvoiceOverdue (crm#1084)', () => {
   it('is a sent invoice past its due date with money left, no reminder needed', () => {

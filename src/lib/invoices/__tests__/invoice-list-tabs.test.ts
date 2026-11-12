@@ -68,6 +68,41 @@ describe('matchesInvoiceListTab', () => {
     ])
   })
 
+  // Obetalda is the owed population (lib/invoices/overdue.ts isInvoiceOwed).
+  // It read sent and overdue only, and the first consolidation of the owed
+  // statuses pinned that for the founders to settle: a partly paid invoice
+  // with money left was missing from the view and its count, and sat under
+  // the settled section, while Att göra, the reminders and the reskontra
+  // counted it as owed.
+  describe('Obetalda is what the customer still owes', () => {
+    const unpaid = (invoice: Row) => matchesInvoiceListTab(invoice, 'unpaid', { today: TODAY })
+
+    it('lists a partly paid invoice with money left, due or not', () => {
+      expect(tabsFor(row({ status: 'partially_paid', invoice_number: 'F-7', due_date: '2026-10-30', remaining_amount: 200 }))).toEqual([
+        'all',
+        'unpaid',
+      ])
+      expect(tabsFor(row({ status: 'partially_paid', invoice_number: 'F-8', due_date: '2026-09-01', remaining_amount: 200 }))).toEqual([
+        'all',
+        'unpaid',
+        'overdue',
+      ])
+    })
+
+    it('counts a missing remainder as owed', () => {
+      expect(unpaid(row({ status: 'partially_paid', invoice_number: 'F-9' }))).toBe(true)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'F-10', remaining_amount: null }))).toBe(true)
+    })
+
+    it('leaves out an invoice with nothing left, a credit note and a document that is not a faktura', () => {
+      expect(unpaid(row({ status: 'partially_paid', invoice_number: 'F-11', remaining_amount: 0 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'F-12', remaining_amount: 0 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'K-1', credited_invoice_id: 'orig', remaining_amount: 500 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', document_type: 'proforma', remaining_amount: 500 }))).toBe(false)
+      expect(unpaid(row({ status: 'paid', invoice_number: 'F-13', remaining_amount: 0 }))).toBe(false)
+    })
+  })
+
   describe('Förfallna follows the due date, not the stored status (crm#1084)', () => {
     const overdue = (invoice: Row) => matchesInvoiceListTab(invoice, 'overdue', { today: TODAY })
 
@@ -135,6 +170,7 @@ describe('matchesInvoiceListTab', () => {
       row({ status: 'sent', invoice_number: 'F-2' }),
       row({ status: 'overdue', invoice_number: 'F-3' }),
       row({ status: 'paid', invoice_number: 'F-4' }),
+      row({ status: 'partially_paid', invoice_number: 'F-5', remaining_amount: 300 }),
     ]
     const buckets: InvoiceListTab[] = ['unsent', 'draft', 'unpaid', 'paid']
     for (const invoice of rows) {
@@ -292,15 +328,5 @@ describe('matchesInvoiceListTab: a credit note imported without a link', () => {
 
   it('a zero total is no credit note', () => {
     expect(tabsFor(row({ status: 'paid', total: 0 }))).toEqual(['all', 'paid'])
-  })
-})
-
-// Decided for the founders to settle (MR text): Obetalda keeps leaving a part
-// paid invoice out, so one not yet due sits in Alla only. This pins today's
-// view so the consolidation of the owed statuses cannot move it by accident.
-describe('matchesInvoiceListTab: a part paid invoice', () => {
-  it('stays out of Obetalda', () => {
-    const partly = row({ status: 'partially_paid', invoice_number: 'F1', due_date: '2026-12-01', remaining_amount: 400 })
-    expect(tabsFor(partly)).toEqual(['all'])
   })
 })

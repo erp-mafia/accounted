@@ -4209,7 +4209,7 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
         ruta48: { type: 'number', description: 'Total input VAT (2641 + 2645 + 2647)' },
         ruta49: {
           type: 'number',
-          description: '(10+11+12+30+31+32+60+61+62) − 48: positive = pay, negative = refund',
+          description: '(10+11+12+30+31+32+60+61+62) − 48 in öre; net_filed is what is paid',
         },
         ruta50: { type: 'number' },
         ruta60: { type: 'number', description: 'Import VAT 25 % (2615)' },
@@ -11435,7 +11435,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_vat_report',
     keywords: ['moms', 'momsrapport', 'momsdeklaration', 'momsredovisning'],
     title: 'VAT Declaration (Momsdeklaration)',
-    description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
+    description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; net_filed = VAT to pay (+) or refund (-) as filed. Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     inputSchema: {
       type: 'object',

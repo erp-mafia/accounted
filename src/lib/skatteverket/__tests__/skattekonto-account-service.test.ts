@@ -23,7 +23,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 
 // Balance per account through the date, from the IB on: the huvudbok figure.
 const balances = new Map<string, number | null>()
-vi.mock('@/lib/reconciliation/gl-balance', () => ({
+vi.mock('@/lib/bookkeeping/ledger-balance', () => ({
   findOpeningBalanceFloor: vi.fn(async () => null),
   sumAccountBalance: vi.fn(async (_s: unknown, _c: unknown, account: string) =>
     balances.has(account) ? balances.get(account) : 0,

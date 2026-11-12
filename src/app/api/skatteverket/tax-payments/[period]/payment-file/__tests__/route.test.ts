@@ -59,6 +59,14 @@ vi.mock('@/lib/bankgiro/luhn', () => ({
   validateBankgiroNumber: vi.fn().mockReturnValue(true),
 }))
 
+// Today's Stockholm day: a file made after the day before the due day leaves
+// on the first banking day from today, so the tests name the day.
+const mockToday = vi.fn()
+vi.mock('@/lib/dates/iso', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dates/iso')>()),
+  todayIsoStockholm: (...args: unknown[]) => mockToday(...args),
+}))
+
 // The paying-side check (crm#1768): may be paid unless a test says otherwise;
 // the crm#1768 block below runs the real one against queued reads.
 const mockReadConflict = vi.fn()
@@ -79,6 +87,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     requireWriteMock.mockResolvedValue({ ok: true })
     mockReadConflict.mockResolvedValue({ ok: true, conflict: null })
+    mockToday.mockReturnValue('2026-01-02')
     mockGenerateBgLb.mockReturnValue({ content: 'LB-FILE', filename: 'skatt-2026-04.txt' })
     mockGeneratePain001.mockReturnValue('<Document/>')
     mockResolveBatchDebtor.mockResolvedValue({
@@ -125,6 +134,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -140,10 +150,75 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 1500 })
   })
 
+  // The money leaves the banking day before the period's due day
+  // (getAgiPaymentDueDate), the day Betala via banken picks. The file used to
+  // say the 12th for every period.
+  it.each([
+    ['2026-04', false, '2026-05-11', 'due Tuesday 12 May'],
+    ['2026-11', false, '2026-12-11', 'due Monday 14 December: the 12th is a Saturday'],
+    ['2026-12', false, '2027-01-15', 'due Monday 18 January: the 17th is a Sunday'],
+    ['2026-07', false, '2026-08-14', 'due Monday 17 August'],
+    ['2026-07', true, '2026-08-11', 'above 40 MSEK August is due the 12th'],
+  ])('dates the payment of %s (over 40 MSEK: %s) on %s: %s', async (period, over40m, expected) => {
+    mockToday.mockReturnValue('2026-01-02')
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: over40m } }) // company_settings: the due day's inputs
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest(`/api/skatteverket/tax-payments/${period}/payment-file`),
+      createMockRouteParams({ period }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGenerateBgLb.mock.calls[0][2]).toMatchObject({ paymentDate: expected, periodLabel: period })
+  })
+
+  it('a file made after that day leaves on the first banking day from today', async () => {
+    // April's tax was due 12 May; the file is made on Saturday 16 May.
+    mockToday.mockReturnValue('2026-05-16')
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGenerateBgLb.mock.calls[0][2]).toMatchObject({ paymentDate: '2026-05-18' })
+  })
+
+  it('makes no file when the settings that decide the due day cannot be read', async () => {
+    // Read as "a small company", a failed read would date a 40 MSEK
+    // company's August payment five days late.
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: null, error: { message: 'connection reset', code: '08006' } }) // company_settings: the due day's inputs
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-07/payment-file'),
+      createMockRouteParams({ period: '2026-07' }),
+    )
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(mockGenerateBgLb).not.toHaveBeenCalled()
+    expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
   it('reads a number held in settings alone, where the company row is empty', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -177,6 +252,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -197,6 +273,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073.84 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -214,6 +291,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: soleTrader }) // companies
     enqueue({ data: { org_number: '8003740118' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -231,6 +309,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '198003740118', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '198003740118' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
@@ -246,6 +325,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '165566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -263,6 +343,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -301,6 +382,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -380,6 +462,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -401,6 +484,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -421,6 +505,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -453,6 +538,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -482,6 +568,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
       enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
       enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+      enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
       enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
       const response = await GET(
         createMockRequest(`/api/skatteverket/tax-payments/${period}/payment-file`, {
@@ -503,6 +590,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -526,6 +614,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+    enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
@@ -602,6 +691,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       enqueue({ data: [OWN] }) // salary_runs: live runs paid out in April
       enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
       enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+      enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
       enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
       enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -619,6 +709,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       enqueue({ data: { id: 'agi-1', status: 'accepted', salary_run_id: 'run-own', total_tax: 1000, total_avgifter: 500 } }) // agi
       enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
       enqueue({ data: { org_number: '5566778899' } }) // company_settings: the number's reader
+      enqueue({ data: { vat_registered: true, vat_taxable_base_over_40m: false } }) // company_settings: the due day's inputs
       enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
       enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 

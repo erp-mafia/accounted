@@ -50,7 +50,7 @@ import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { isInvoiceOverdue } from '@/lib/invoices/overdue'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
 
 type CreditIntent = { kind: 'send'; channel: EditorChannel } | { kind: 'create' }
 
@@ -74,6 +74,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const { settings: companySettings } = useCompanySettings()
   const locale = useLocale() as ErrorLocale
   const t = useTranslations('invoice_credit')
+  const tInvoices = useTranslations('invoices')
   const tShell = useTranslations('invoice_editor_shell')
   const tSend = useTranslations('invoice_send_dialog')
   const supabase = useMemo(() => createClient(), [])
@@ -340,8 +341,14 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
     treatment: invoice.vat_treatment,
   })
-  const statusLabel =
-    invoice.status === 'paid' ? t('status_paid') : isInvoiceOverdue(invoice) ? t('status_overdue') : t('status_unpaid')
+  // The original's status as the invoice list and its own page show it
+  // (lib/invoices/status-display.ts invoiceRowStatus).
+  const originalStatus = invoiceRowStatus(invoice, today)
+  const originalStatusValues =
+    originalStatus.values && 'date' in originalStatus.values
+      ? { date: formatDate(originalStatus.values.date) }
+      : originalStatus.values
+  const statusLabel = originalStatus.labelKey ? tInvoices(originalStatus.labelKey, originalStatusValues) : invoice.status
   const customerLine = customer
     ? [
         customer.customer_type === 'individual' ? '' : customer.org_number ?? '',
