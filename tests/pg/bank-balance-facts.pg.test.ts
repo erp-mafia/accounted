@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getPool } from './setup'
 import { createPgRest } from './postgrest-over-pg'
+import { mainTreeScans, nestedPlans } from './nested-plans'
 import {
   insertAuthUser,
   insertCashAccount,
@@ -176,6 +177,20 @@ describe('get_bank_balance_facts', () => {
     await bankRow(b, '2026-03-03', 5, { currency: 'EUR' })
     return b
   }
+
+  it('reads the open rows once, not once per bank row', async () => {
+    // The function body runs on a generic plan. Joined to open_bank_rows, that
+    // plan was a nested loop that ran the whole view again for every bank row
+    // (prod 2026-11-12: 1 071 rows took 1.5 s, 4 657 rows timed out). The rows
+    // being summed must be scanned on their own, with no join above them.
+    const b = await seeded()
+    const plans = await nestedPlans(b.userId, `SELECT public.get_bank_balance_facts($1, $2, true, 'SEK', '2026-12-31'::date)`, [b.companyId, b.cash])
+    const own = plans.filter((p) => p.query.includes('open_rows AS MATERIALIZED'))
+    expect(own).toHaveLength(1)
+    const scans = mainTreeScans(own[0].plan, 'transactions')
+    expect(scans.length).toBeGreaterThan(0)
+    expect(scans.filter((scan) => scan.underJoin)).toEqual([])
+  })
 
   it('sums the rows through the day, ignored rows apart, and counts the ones without a verifikat', async () => {
     const b = await seeded()

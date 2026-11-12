@@ -14,7 +14,7 @@ const log = createLogger('documents/locked-period')
  * The pages and the classification are stored beside the row, so readers look
  * there, the way document_integrity_checks keeps the integrity stamp beside
  * the row for the same reason (20260901130000). The folder functions do the
- * same in SQL (arkiv_effective_doc_type), so a folder and its rows agree.
+ * same in SQL (arkiv_document_rows), so a folder and its rows agree.
  */
 
 /**
