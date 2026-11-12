@@ -603,7 +603,7 @@ describe('detectBackupFailing', () => {
 describe('detectOtherAccountHint', () => {
   it('shapes the hint as the lowest-priority notice when the detector fires', async () => {
     otherAccountHintMock.mockResolvedValue(true)
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toMatchObject({
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toMatchObject({
       id: 'other_account_hint',
       category: 'other_account_hint',
       severity: 'warning',
@@ -612,12 +612,12 @@ describe('detectOtherAccountHint', () => {
 
   it('returns null when the detector stays quiet', async () => {
     otherAccountHintMock.mockResolvedValue(false)
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toBeNull()
   })
 
   it('soft-fails to null when the detector throws', async () => {
     otherAccountHintMock.mockRejectedValue(new Error('boom'))
-    await expect(detectOtherAccountHint(supabase, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(supabase, COMPANY, USER)).resolves.toBeNull()
   })
 })
 
@@ -633,7 +633,7 @@ describe('never-throws contract', () => {
     await expect(detectExpiringBankConnections(throwing, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectSkvDisconnected(throwing, USER, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectBackupFailing(throwing, COMPANY)).resolves.toBeNull()
-    await expect(detectOtherAccountHint(throwing, COMPANY)).resolves.toBeNull()
+    await expect(detectOtherAccountHint(throwing, COMPANY, USER)).resolves.toBeNull()
     await expect(detectNoFiscalYear(throwing, COMPANY)).resolves.toBeNull()
   })
 })

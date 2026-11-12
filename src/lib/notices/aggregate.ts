@@ -60,7 +60,7 @@ export async function getCompanyNotices(
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
       detectSkvUnexplained(supabase, companyId),
-      detectOtherAccountHint(supabase, companyId),
+      detectOtherAccountHint(supabase, companyId, userId),
     ]),
     fetchDismissedIds(supabase, companyId, userId),
   ])
