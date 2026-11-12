@@ -413,7 +413,7 @@ async function persistClassification(
   if (docError && !isPeriodLockRefusal(docError.message)) return { status: 'error', reason: `document update failed: ${docError.message}` }
   // A document tied to a closed or locked period cannot take the type on its row (enforce_period_lock_documents,
   // migration 017, refuses every update of it): the current classification carries it, and readers fall back to
-  // that (lib/documents/locked-period.ts, arkiv_effective_doc_type).
+  // that (lib/documents/locked-period.ts, arkiv_document_rows).
   if (docError) log.info('type kept on the classification only', { doc: doc.id, reason: docError.message })
   // What it is decides where it goes: the inbox extension queues or releases it on this.
   await eventBus.emit({

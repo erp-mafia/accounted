@@ -1,0 +1,1 @@
+[2026-11-12] Arkiv reads through arkiv_document_rows; verifikat dates come from one range scan of the company's own entries from 2 000 booked documents, by key below: 15 633 probes cost 550 ms of a 900 ms call. Never a scan across companies.

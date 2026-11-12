@@ -15,6 +15,7 @@
 import { describe, expect, it } from 'vitest'
 import { getPool } from './setup'
 import { insertPostedBankJournalEntry, insertTransaction } from './fixtures'
+import { mainTreeScans, nestedPlans } from './nested-plans'
 import {
   AMOUNT,
   DATE,
@@ -177,5 +178,28 @@ describe('cash_account_booked_rows', () => {
     await reverse(reversed)
     const { rows } = await getPool().query(`SELECT public.cash_account_booked_rows($1, $2) AS n`, [b.companyId, b.cash])
     expect(rows[0].n).toBe(1)
+  }, 30000)
+
+  it('reads the anchors once and probes the lines per anchor, not per bank row', async () => {
+    // On a generic plan the EXISTS over anchors joined to lines ran every
+    // anchor's line probe again for each bank row (prod 2026-11-12: 1 071
+    // rows with 181 anchors took 2 s and 1.5 million buffers). The rows being
+    // counted must be scanned on their own, with no join above them, and a
+    // member gets the same count as the owner of the data.
+    const b = await books()
+    const booked = await insertTransaction({ companyId: b.companyId, userId: b.userId, date: DATE, amount: 700, cashAccountId: b.cash })
+    await link(b, booked, await entry(b, 700), 700)
+    await insertTransaction({ companyId: b.companyId, userId: b.userId, date: DATE, amount: 55, cashAccountId: b.cash })
+
+    const asMember = await b.client.rpc('cash_account_booked_rows', { p_company_id: b.companyId, p_cash_account_id: b.cash })
+    expect(asMember.error).toBeNull()
+    expect(asMember.data).toBe(1)
+
+    const plans = await nestedPlans(b.userId, `SELECT public.cash_account_booked_rows($1, $2)`, [b.companyId, b.cash])
+    const own = plans.filter((p) => p.query.includes('booked AS MATERIALIZED'))
+    expect(own).toHaveLength(1)
+    const scans = mainTreeScans(own[0].plan, 'transactions')
+    expect(scans.length).toBeGreaterThan(0)
+    expect(scans.filter((scan) => scan.underJoin)).toEqual([])
   }, 30000)
 })

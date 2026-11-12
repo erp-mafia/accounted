@@ -10,12 +10,13 @@
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { getPool } from './setup'
+import { getPool, withUserContext } from './setup'
 import {
   insertAuthUser,
   insertCompany,
   insertFiscalPeriod,
   insertPostedJournalEntry,
+  seedCompany,
 } from './fixtures'
 
 async function insertJournalEntry(params: {
@@ -170,6 +171,80 @@ describe('get_account_usage_counts RPC', () => {
     expect(accountsA.has('5410')).toBe(false)
     // Company B's 1930 line must not inflate A's count.
     expect(String(rowsA.find((r) => r.account_number === '1930')?.usage_count)).toBe('1')
+  })
+
+  it('adds the posted lines (from the ledger summaries) and the draft lines on one account, and answers the same from the lines alone', async () => {
+    // Posted and reversed verifikat are counted from ledger_account_days, the
+    // rest from their lines (prod 2026-11-12: every line of the largest
+    // company took 5 s and timed out cold). A company whose summaries are not
+    // built keeps the line path; both must give the same counts.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await insertJournalEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, status: 'posted',
+      lines: [
+        { account: '1930', debit: 300, credit: 0 },
+        { account: '3001', debit: 0, credit: 300 },
+      ],
+    })
+    await insertJournalEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 2, status: 'posted',
+      lines: [
+        { account: '6110', debit: 40, credit: 0 },
+        { account: '1930', debit: 0, credit: 40 },
+      ],
+    })
+    await insertJournalEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 3, status: 'draft',
+      lines: [
+        { account: '6110', debit: 10, credit: 0 },
+        { account: '6570', debit: 5, credit: 0 },
+        { account: '1930', debit: 0, credit: 15 },
+      ],
+    })
+
+    const read = async () => {
+      const { rows } = await getPool().query<{ account_number: string; usage_count: string }>(
+        `SELECT account_number, usage_count FROM public.get_account_usage_counts($1) ORDER BY account_number`,
+        [companyId],
+      )
+      return rows.map((r) => [r.account_number, Number(r.usage_count)])
+    }
+
+    const fromSummaries = await read()
+    expect(fromSummaries).toEqual([
+      ['1930', 3],
+      ['3001', 1],
+      ['6110', 2],
+      ['6570', 1],
+    ])
+
+    const { rows: listed } = await getPool().query(`SELECT 1 FROM public.ledger_account_days_companies WHERE company_id = $1`, [companyId])
+    expect(listed).toHaveLength(1)
+    await getPool().query(`DELETE FROM public.ledger_account_days_companies WHERE company_id = $1`, [companyId])
+    try {
+      expect(await read()).toEqual(fromSummaries)
+    } finally {
+      await getPool().query(`INSERT INTO public.ledger_account_days_companies (company_id) VALUES ($1) ON CONFLICT DO NOTHING`, [companyId])
+    }
+  })
+
+  it('counts for a member and shows a stranger nothing', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await insertJournalEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, status: 'posted',
+      lines: [
+        { account: '1930', debit: 100, credit: 0 },
+        { account: '3001', debit: 0, credit: 100 },
+      ],
+    })
+    const sql = `SELECT account_number, usage_count FROM public.get_account_usage_counts($1) ORDER BY account_number`
+
+    const own = await withUserContext(userId, async (client) => (await client.query<{ account_number: string }>(sql, [companyId])).rows)
+    expect(own.map((r) => r.account_number)).toEqual(['1930', '3001'])
+
+    const stranger = await insertAuthUser()
+    const other = await withUserContext(stranger, async (client) => (await client.query(sql, [companyId])).rows)
+    expect(other).toEqual([])
   })
 
   it('returns no rows for a company without entries', async () => {
