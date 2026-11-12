@@ -1581,6 +1581,7 @@ Every document staged for the Peppol network for this invoice, newest first, wit
 
 **Pitfalls:**
 - submission_accepted means the access point took the document, not that the buyer received it; transport_succeeded and business_accepted come later.
+- outcome_unreported=true (submission_accepted for over 24 hours) means the access point has not reported an outcome back. It is not a failed delivery: do not resend, and ask the buyer when certainty is needed.
 - A delivery in retryable_failure, failed or no_route can be resent with POST /invoices/{id}/send-peppol (a failed one as a new delivery that replaces its submission); a business_rejected one cannot: the buyer refused the invoice.
 
 | Parameter | In | Type | Required | Notes |
@@ -1593,7 +1594,7 @@ Response `200`:
 {
   data: {
     invoice_id: string,
-    deliveries: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null }[],
+    deliveries: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null, outcome_unreported?: true, outcome_hint?: string }[],
     transport: { available: boolean, provider: string | null, reason: string | null },
     access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null }
   },
@@ -1881,7 +1882,7 @@ Response `200`:
     invoice_status: string,
     network_submitted: true,
     already_submitted: boolean,
-    delivery: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null },
+    delivery: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null, outcome_unreported?: true, outcome_hint?: string },
     recipient: { scheme: string, identifier: string } | null,
     journal_entry_id: string | null,
     issuance: { ok: true, partial_failures: unknown[] } | { ok: false, error_code: string } | null

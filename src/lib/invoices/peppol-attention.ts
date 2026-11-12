@@ -36,3 +36,21 @@ export function peppolDeliveryAttention(
   if (heldFor > PEPPOL_UNCONFIRMED_AFTER_MS) return 'unconfirmed'
   return null
 }
+
+/**
+ * The 'unreported' state for a reader that is not the invoice page: the v1 API
+ * and the MCP tools, where an agent otherwise sees only the raw
+ * `submission_accepted` and reads a delivery held for days as one that did not
+ * happen (crm#1803). Same rule as the page, never a second one.
+ */
+export const PEPPOL_OUTCOME_UNREPORTED_HINT =
+  'The access point accepted the invoice but has not reported whether it was delivered. This is not a failure: do not resend. The buyer can confirm receipt.'
+
+export function peppolOutcomeUnreported(
+  delivery: { status: string; status_at: string },
+  readAt: number,
+): { outcome_unreported: true; outcome_hint: string } | null {
+  return peppolDeliveryAttention(delivery, readAt) === 'unreported'
+    ? { outcome_unreported: true, outcome_hint: PEPPOL_OUTCOME_UNREPORTED_HINT }
+    : null
+}

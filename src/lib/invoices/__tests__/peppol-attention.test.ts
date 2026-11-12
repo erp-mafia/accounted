@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { peppolDeliveryAttention } from '../peppol-attention'
+import { PEPPOL_OUTCOME_UNREPORTED_HINT, peppolDeliveryAttention, peppolOutcomeUnreported } from '../peppol-attention'
 
 const HOUR = 60 * 60 * 1000
 const acceptedAt = '2026-11-04T10:00:00.000Z'
@@ -36,5 +36,21 @@ describe('peppolDeliveryAttention', () => {
     for (const status of ['transport_succeeded', 'recipient_acknowledged', 'business_accepted', 'business_rejected', 'staged']) {
       expect(peppolDeliveryAttention({ status, status_at: acceptedAt }, after(HOUR * 48))).toBeNull()
     }
+  })
+})
+
+describe('peppolOutcomeUnreported', () => {
+  it('carries the flag and the hint exactly when the page rule says unreported', () => {
+    const delivery = { status: 'submission_accepted', status_at: acceptedAt }
+    expect(peppolOutcomeUnreported(delivery, after(HOUR * 24 + 1))).toEqual({
+      outcome_unreported: true,
+      outcome_hint: PEPPOL_OUTCOME_UNREPORTED_HINT,
+    })
+  })
+
+  it('adds nothing for a delivery still inside the day, a failed one or one with an outcome', () => {
+    expect(peppolOutcomeUnreported({ status: 'submission_accepted', status_at: acceptedAt }, after(HOUR * 24))).toBeNull()
+    expect(peppolOutcomeUnreported({ status: 'failed', status_at: acceptedAt }, after(HOUR * 48))).toBeNull()
+    expect(peppolOutcomeUnreported({ status: 'transport_succeeded', status_at: acceptedAt }, after(HOUR * 48))).toBeNull()
   })
 })

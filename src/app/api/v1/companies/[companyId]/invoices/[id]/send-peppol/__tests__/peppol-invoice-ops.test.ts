@@ -56,6 +56,7 @@ vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as readinessRoute } from '../../peppol/route'
 import { GET as deliveriesRoute } from '../../peppol/deliveries/route'
+import { PEPPOL_OUTCOME_UNREPORTED_HINT } from '@/lib/invoices/peppol-attention'
 import { POST as sendRoute } from '../route'
 import { invoicesSendPeppol } from '@/lib/operations/peppol'
 import { createLogger } from '@/lib/logger'
@@ -924,5 +925,28 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/peppol/deliveries', () =
     expect(body.data.transport).toEqual({ available: true, provider: 'test-ap', reason: null })
     expect(client.calls).toContainEqual({ table: 'peppol_deliveries', method: 'eq', args: ['company_id', COMPANY_ID] })
     expect(client.calls).toContainEqual({ table: 'peppol_deliveries', method: 'eq', args: ['invoice_id', INV_ID] })
+    // A delivery with an outcome carries no unreported flag.
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_unreported')
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_hint')
+  })
+
+  it('flags a delivery the access point has held over a day without an outcome, and not a fresh one (crm#1803)', async () => {
+    const accepted = { ...delivery, provider: 'test-ap', provider_submission_id: 'int-1', status: 'submission_accepted' }
+    const fresh = { ...accepted, id: '99999999-9999-4999-8999-999999999999', status_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() }
+    mockServiceClient.mockReturnValue(makeClient({
+      company_members: MEMBER,
+      invoices: { data: { id: INV_ID }, error: null },
+      peppol_deliveries: { data: [fresh, accepted], error: null },
+      peppol_access: ACCESS,
+    }))
+    const res = await deliveries()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deliveries[0]).not.toHaveProperty('outcome_unreported')
+    expect(body.data.deliveries[1]).toMatchObject({
+      status: 'submission_accepted',
+      outcome_unreported: true,
+      outcome_hint: PEPPOL_OUTCOME_UNREPORTED_HINT,
+    })
   })
 })
