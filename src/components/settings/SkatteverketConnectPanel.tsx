@@ -224,6 +224,17 @@ function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: ()
           {t('system_org_label')}: <span className="font-mono tabular-nums">{state.ombud_org_number}</span>
         </p>
       )}
+      {/* The way round a deep link Skatteverket turns down ("Felaktig länk"):
+          the same appointment made by hand in the e-service (crm#1814). */}
+      {state.ombud_org_number && (
+        <p>
+          {t('system_manual', {
+            appName,
+            lasombud: t('system_behorighet_lasombud'),
+            moms: t('system_behorighet_moms'),
+          })}
+        </p>
+      )}
       {state.grant_url && (
         <p>
           <a
