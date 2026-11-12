@@ -31,6 +31,34 @@ export function vatDeadlineLine(input: {
 }
 
 /**
+ * Whether bank rows can reach the company: an active bank connection, or rows
+ * that already arrived another way (a bank file, an import). The setup
+ * checklist's bank step and the empty Att göra list on Hem read this one
+ * answer, so the two can never disagree on whether the bank is in.
+ */
+export function hasBankFeed(input: { activeBankConnections: number; transactionCount: number }): boolean {
+  return input.activeBankConnections > 0 || input.transactionCount > 0
+}
+
+/**
+ * What an empty Att göra list says.
+ *
+ * - 'new_ledger': the getting-started steps are still open and nothing is
+ *   booked: the steps above the list are what fills it.
+ * - 'no_bank_feed': the steps are closed, nothing is booked and no bank row
+ *   can arrive. Finishing the books act without a bank lands here, and
+ *   "all done" would tell a brand-new company that its bookkeeping is in
+ *   hand when it has no way to get a first row to book.
+ * - 'all_done': everything on the list is handled.
+ */
+export type AttGoraEmptyState = 'new_ledger' | 'no_bank_feed' | 'all_done'
+
+export function attGoraEmptyState(input: { emptyLedger: boolean; noBankFeed: boolean }): AttGoraEmptyState {
+  if (input.emptyLedger) return 'new_ledger'
+  return input.noBankFeed ? 'no_bank_feed' : 'all_done'
+}
+
+/**
  * Display ordinals for the setup checklist steps. Books and bank are always
  * present; Skatteverket and the receipts/inbox step render only when their
  * extensions are enabled; the assistant (Claude) step renders only where the

@@ -418,6 +418,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
         <h1 className="jny-qtitle"><InkText text={title} /></h1>
         {phase === 'authed' ? <p className="jny-qsub">{t('bank_sub_authed')}</p> : null}
+        {/* What connecting gives, before the choice: the way out below says what it costs. */}
+        {phase === 'pick' && !alreadyConnected && (flags.hasBanking || openPayments.status === 'available') ? <p className="jny-qsub">{t('bank_sub')}</p> : null}
         {attn ? <p className="jny-attn" style={{ margin: '0 0 16px' }}>{attn}</p> : null}
       </div>
 

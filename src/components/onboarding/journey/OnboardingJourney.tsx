@@ -834,8 +834,12 @@ export default function OnboardingJourney({
                     registered: one not registered yet, or a test company,
                     takes the manual path without it. Not offered right
                     after a VAT yes sent the user here for the number. */}
+                {/* A sole trader has a number and often does not know it is
+                    this one: without the line, "no organisation number yet"
+                    reads as their case. */}
+                <p className="jny-more">{t('journey_orgnr_ef_hint')}</p>
                 {state.serverError === 'vat_needs_org_number' ? null : (
-                  <p className="jny-more">
+                  <p className="jny-more jny-more-next">
                     {t('journey_no_orgnr_pre')}{' '}
                     <button
                       type="button"

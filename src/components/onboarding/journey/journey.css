@@ -160,7 +160,9 @@
   font-size: 26px; letter-spacing: 0.04em; font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.jny-biginput input::placeholder { color: hsl(var(--muted-foreground) / 0.45); }
+/* The placeholder is a sentence, the value a number: at the value's size and
+   spacing a text that names both things the field takes is cut off at 360px. */
+.jny-biginput input::placeholder { color: hsl(var(--muted-foreground) / 0.45); font-size: 19px; letter-spacing: 0.01em; }
 .jny-biginput.is-err { animation: jnyShake 300ms var(--ease-out); }
 @keyframes jnyShake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
 /* Search-as-you-type picker under the orgnr field: an 8px surface on the
@@ -276,6 +278,7 @@
 
 /* ── form picker: the quiet line for the forms the lookup normally settles ── */
 .jny-more { margin-top: 18px; font-size: 12.5px; color: hsl(var(--muted-foreground)); }
+.jny-more-next { margin-top: 6px; }
 .jny-link { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; color: hsl(var(--foreground)); text-decoration: underline; text-underline-offset: 3px; }
 
 /* ── done scene: profile card + notes ────────────────────────────── */

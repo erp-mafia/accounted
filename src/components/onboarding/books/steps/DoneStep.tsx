@@ -10,7 +10,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFormat } from '@/lib/hooks/use-format'
 import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
-import { AI_TASK_LABEL_KEY, aiTaskHref, listAiTasks } from '@/lib/worklist/ai-task'
+import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
 import { InkText } from '@/components/onboarding/journey/ink'
@@ -40,9 +40,9 @@ async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> 
 
 /**
  * Klart: a few flecks let go, the card of what got connected, the three
- * agent chips, then what the app already found to do (folded until asked;
- * each row opens the page in the app or hands the row to a connected
- * agent), and the door to Hem.
+ * agent chips, then what the app already found to do (open when bank rows
+ * wait to be booked, otherwise folded until asked; each row opens the page
+ * in the app or hands the row to a connected agent), and the door to Hem.
  */
 export function DoneStep({ ctx, onLeave, leaving }: {
   ctx: BooksCtx
@@ -59,7 +59,8 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const hasAi = useCapability(CAPABILITY.ai)
   const [preferredClient, setPreferredClient] = useState<AiClient>()
   const [polled, setPolled] = useState<AiConnection | null>(null)
-  const [open, setOpen] = useState(false)
+  // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
+  const [toggled, setToggled] = useState<boolean | null>(null)
   const { data: worklist, isValidating, error, mutate } = useSWR(
     ['worklist-counts', company?.id ?? null] as const,
     fetchWorklistCounts,
@@ -71,6 +72,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const connected = connection.clients
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
+  const open = toggled ?? foundTasksStartOpen(tasks)
 
   // Refresh the same queue Hem uses when OAuth finishes or the user returns
   // from their agent (SWR revalidates on focus). Do not keep offering work
@@ -149,7 +151,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </p>
       ) : tasks.length > 0 && (
         <div className="found">
-          <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setToggled(!open)}>
             {t('tasks_found', { count: tasks.length })}
             <ChevronDownIcon aria-hidden="true" className="size-3.5 chev" />
           </Button>
