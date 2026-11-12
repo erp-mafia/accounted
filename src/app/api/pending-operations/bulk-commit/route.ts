@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
 import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { sharedAcknowledgmentGroup } from '@/lib/pending-operations/shared-acknowledgment'
 import { createAttestDecisionBatch } from '@/lib/supplier-invoices/attest-decision-notify'
@@ -63,7 +64,8 @@ export const POST = withRouteContext(
     // The answers already stored are told even when an approval throws: the
     // flush is in a finally, one mail per company and attester.
     try {
-      for (const id of ids) {
+      // Oldest staged first, not the order the list happened to show (crm#1815).
+      for (const id of oldestStagedFirst(ids, opsById)) {
         const op = opsById.get(id)
         if (!op) {
           results.push({ id, status: 'failed', error: 'Åtgärden kunde inte hittas.' })

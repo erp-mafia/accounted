@@ -86,6 +86,7 @@ import {
   summarizeSharedAcknowledgment,
   type SharedAcknowledgmentGroup,
 } from '@/lib/pending-operations/shared-acknowledgment'
+import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
@@ -1641,7 +1642,12 @@ export default function PendingOperationsPage() {
             ? [...new Set(selectedGroupOps.map(sharedAcknowledgmentGroup).filter((g): g is SharedAcknowledgmentGroup => g != null))]
             : []
           const groupIds = new Set(selectedGroupOps.map((op) => op.id))
-          const ids = Array.from(selectedIds).filter((id) => groupAcknowledged || !groupIds.has(id))
+          // Oldest staged first across the request-sized chunks too, whatever
+          // the list is sorted by (crm#1815).
+          const ids = oldestStagedFirst(
+            Array.from(selectedIds).filter((id) => groupAcknowledged || !groupIds.has(id)),
+            new Map(bulkEligible.map((op) => [op.id, op])),
+          )
           void handleBulkCommit(ids, groups)
         }}
       >
