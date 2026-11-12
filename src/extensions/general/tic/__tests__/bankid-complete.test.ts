@@ -1480,6 +1480,54 @@ describe('POST /bankid/poll', () => {
     expect(active.body.data.user).toEqual({ givenName: 'Anna', surname: 'Andersson' })
   })
 
+  it('answers a mount probe that finds no flow with 200 and nothing to resume', async () => {
+    // Every mount of the login and signup panels asks this. "No" is the
+    // normal answer, not a failed request.
+    const { status, body } = await parseJsonResponse<{ data: unknown; error?: string }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          body: { mode: 'login', probe: true },
+        })
+      )
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
+    expect(body.error).toBeUndefined()
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('answers a mount probe that finds another mode\'s flow with 200 and nothing to resume', async () => {
+    const { status, body } = await parseJsonResponse<{ data: unknown }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers: await flowCookie('login'),
+          body: { mode: 'signup', probe: true },
+        })
+      )
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('still answers an active poll without a flow with the terminal 404', async () => {
+    const { status, body } = await parseJsonResponse<{ error?: string }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          body: { mode: 'login' },
+        })
+      )
+    )
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('no_session')
+  })
+
   it('refuses to poll a flow whose mode does not match the panel asking', async () => {
     // A login session started on /login must not be pollable by the signup
     // panel: the client would render the signup e-mail step and /complete

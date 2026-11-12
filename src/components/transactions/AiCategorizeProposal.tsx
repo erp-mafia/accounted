@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
+import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
@@ -118,6 +119,7 @@ export default function AiCategorizeProposal({
 }: Props) {
   const t = useTranslations('tx_quick_review')
   const { identity } = useAgentSheet()
+  const canAsk = useAssistantReadsAvailable()
   const [state, setState] = useState<State>(() => (initial ? { status: 'ready', read: initial } : { status: 'loading' }))
   const [expanded, setExpanded] = useState(false)
   // The pick is handed to the dialog once per read, so the person's later
@@ -125,7 +127,7 @@ export default function AiCategorizeProposal({
   const takenRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!open || initial) return
+    if (!open || initial || !canAsk) return
     let alive = true
     takenRef.current = null
     ;(async () => {
@@ -146,7 +148,7 @@ export default function AiCategorizeProposal({
     return () => {
       alive = false
     }
-  }, [open, transactionId, initial])
+  }, [open, transactionId, initial, canAsk])
 
   const reportedRef = useRef(false)
   useEffect(() => {
@@ -169,6 +171,9 @@ export default function AiCategorizeProposal({
   const mark = <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
 
   if (state.status === 'silent') return null
+  // A company the route refuses is never asked, and shows what a refusal
+  // shows: nothing.
+  if (!canAsk && state.status === 'loading') return null
   if (state.status === 'loading') {
     return <AiStatusLine text={hasUnderlag ? t('ai_reading') : t('ai_looking')} />
   }

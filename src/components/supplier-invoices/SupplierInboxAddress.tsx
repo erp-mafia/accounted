@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { tagInboxAddress } from '@/lib/documents/inbox-address'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 /**
  * The address suppliers mail invoices to, in the Leverantörsfakturor top bar.
@@ -16,17 +18,20 @@ import { tagInboxAddress } from '@/lib/documents/inbox-address'
  * The `+lev` variant is shown so a forwarded invoice arrives already declared
  * as a supplier invoice.
  *
- * The invoice-inbox route is the single gate: it answers non-OK when the
- * extension is off, the plan lacks the capability, the install has no inbound
- * domain or the company has no active inbox, and in every one of those cases
- * there is no address to give out, so nothing renders.
+ * The invoice-inbox route is the gate: it answers non-OK when the extension
+ * is off, the install has no inbound domain or the company has no active
+ * inbox, and in every one of those cases there is no address to give out, so
+ * nothing renders. A company whose plan lacks the capability is not asked at
+ * all: the answer is known here, and the request was 200 refusals a week.
  */
 export function SupplierInboxAddress() {
   const t = useTranslations('supplier_invoices')
   const { toast } = useToast()
   const [address, setAddress] = useState<string | null>(null)
+  const hasInbox = useCapability(CAPABILITY.ai)
 
   useEffect(() => {
+    if (!hasInbox) return
     let cancelled = false
     fetch('/api/extensions/ext/invoice-inbox/inbox/address')
       .then((res) => (res.ok ? res.json() : null))
@@ -38,7 +43,7 @@ export function SupplierInboxAddress() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [hasInbox])
 
   if (!address) return null
   const shown = address

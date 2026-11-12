@@ -23,11 +23,32 @@ interface PaymentBankListProps {
 class BankListError extends Error {
   constructor(
     message: string,
+    readonly status: number,
     readonly code: string | null,
     readonly overpaid: OverpaidEmployee[],
+    /** Which setting is missing (details.problem), for SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS. */
+    readonly problem: string | null,
+    /** The employees without bank details, for SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING. */
+    readonly employees: string[],
   ) {
     super(message)
   }
+}
+
+/**
+ * The missing settings PaymentFilePanel does not already point at with its
+ * own attention line (it covers IBAN, BIC and bankgiro): the bank's file ids.
+ */
+const SETTINGS_PROBLEMS_NAMED_HERE = new Set(['swedbank_ids_missing', 'nordea_signer_id_missing', 'nordea_agreement_id_missing'])
+
+/** Where a refused bank list is fixed, when this row is the only place that says so. */
+function refusalFix(error: BankListError | undefined): 'settings' | 'employees' | null {
+  if (!error) return null
+  if (error.code === 'SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING') return 'employees'
+  if (error.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS' && error.problem && SETTINGS_PROBLEMS_NAMED_HERE.has(error.problem)) {
+    return 'settings'
+  }
+  return null
 }
 
 /** "Anna Andersson (1 290,75 kr), Bertil Berg (300,00 kr)": who a correction overpaid, and by how much. */
@@ -53,20 +74,44 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
   // DOM text reaches the fetch or the link attribute as is.
   const listUrl = salaryBankListUrl(salaryRunId, format)
   const pdfUrl = salaryBankListUrl(salaryRunId, format, 'pdf')
-  const { data, error, isLoading } = useSWR<SalaryBankList, BankListError>(listUrl, async (url: string) => {
-    const res = await fetch(url)
-    const json = await res.json().catch(() => null)
-    if (!res.ok) {
-      const envelope = json as { error?: { code?: unknown; details?: { correction?: { overpaid?: OverpaidEmployee[] } } } } | null
-      const overpaid = envelope?.error?.details?.correction?.overpaid
-      throw new BankListError(
-        getErrorMessage(json, { context: 'salary', statusCode: res.status, locale }),
-        typeof envelope?.error?.code === 'string' ? envelope.error.code : null,
-        Array.isArray(overpaid) ? overpaid : [],
-      )
-    }
-    return (json as { data: SalaryBankList }).data
-  })
+  const { data, error, isLoading } = useSWR<SalaryBankList, BankListError>(
+    listUrl,
+    async (url: string) => {
+      const res = await fetch(url)
+      const json = await res.json().catch(() => null)
+      if (!res.ok) {
+        const envelope = json as {
+          error?: {
+            code?: unknown
+            details?: { correction?: { overpaid?: OverpaidEmployee[] }; problem?: unknown; employees?: Array<{ name?: unknown }> }
+          }
+        } | null
+        const details = envelope?.error?.details
+        const overpaid = details?.correction?.overpaid
+        const employees = details?.employees
+        throw new BankListError(
+          getErrorMessage(json, { context: 'salary', statusCode: res.status, locale }),
+          res.status,
+          typeof envelope?.error?.code === 'string' ? envelope.error.code : null,
+          Array.isArray(overpaid) ? overpaid : [],
+          typeof details?.problem === 'string' ? details.problem : null,
+          Array.isArray(employees)
+            ? employees.map((employee) => employee?.name).filter((name): name is string => typeof name === 'string' && name !== '')
+            : [],
+        )
+      }
+      return (json as { data: SalaryBankList }).data
+    },
+    {
+      // A refusal (a missing bank id, an employee without an account) stays a
+      // refusal until someone fills the detail in, so asking again every few
+      // seconds only repeats it: SWR's default retry made 46 such requests
+      // from 9 people in a week (2026-11). Coming back to the tab still asks
+      // again, which is when the detail may have been filled in. A server
+      // failure is retried as before.
+      shouldRetryOnError: (failure: unknown) => !(failure instanceof BankListError) || failure.status >= 500,
+    },
+  )
 
   if (isLoading) {
     return (
@@ -87,6 +132,31 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
         {error.overpaid.length > 0 && (
           <AttnLine>{tc('overpaid', { list: overpaidList(error.overpaid), count: error.overpaid.length })}</AttnLine>
         )}
+      </>
+    )
+  }
+
+  // Missing bank file ids and employees without an account are named only
+  // here, so they get an attention line with the way to the fix, not a muted
+  // note beside a download button that fails the same way.
+  const fix = refusalFix(error)
+  if (error && fix) {
+    return (
+      <>
+        <DefRow label={t('bank_list_label')}>
+          <span className="text-[12.5px] text-muted-foreground">{t('bank_list_unavailable', { reason: '' }).trim()}</span>
+        </DefRow>
+        <AttnLine
+          action={
+            fix === 'employees'
+              ? { label: t('employee_bank_link'), href: '/salary/employees' }
+              : { label: t('missing_account_link'), href: '/settings/invoicing' }
+          }
+        >
+          {fix === 'employees' && error.employees.length > 0
+            ? t('employee_bank_missing_named', { names: error.employees.join(', '), count: error.employees.length })
+            : error.message}
+        </AttnLine>
       </>
     )
   }

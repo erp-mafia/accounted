@@ -22,12 +22,14 @@ export function knowledgeViewHref(view: KnowledgeView): string {
   return view === 'knowledge' ? '/agent-knowledge' : `/agent-knowledge?view=${view}`
 }
 
-export function AgentKnowledgeViews() {
+/** `facts`: whether the company is inside the Arkiv rollout, where Fakta has something to show. */
+export function AgentKnowledgeViews({ facts }: { facts: boolean }) {
   const t = useTranslations('agentKnowledge')
   const searchParams = useSearchParams()
   const router = useRouter()
   const raw = searchParams.get('view')
-  const view: KnowledgeView = raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : raw === 'facts' ? 'facts' : 'knowledge'
+  const view: KnowledgeView =
+    raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : raw === 'facts' && facts ? 'facts' : 'knowledge'
 
   return (
     <div className="space-y-6">
@@ -36,7 +38,7 @@ export function AgentKnowledgeViews() {
         onChange={(next) => router.replace(knowledgeViewHref(next), { scroll: false })}
         options={[
           { value: 'knowledge', label: t('view_knowledge') },
-          { value: 'facts', label: t('view_facts') },
+          ...(facts ? [{ value: 'facts' as const, label: t('view_facts') }] : []),
           { value: 'memory', label: t('view_memory') },
           { value: 'skills', label: t('view_skills') },
         ]}

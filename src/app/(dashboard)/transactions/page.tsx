@@ -105,7 +105,7 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/bookkeeping/matchable-statuses'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useAssistantReadsAvailable, useCompany } from '@/contexts/CompanyContext'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
@@ -473,6 +473,7 @@ interface QuickReviewState {
 export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
+  const canAskAssistant = useAssistantReadsAvailable()
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const errorLocale = useLocale() as ErrorLocale
@@ -1721,7 +1722,7 @@ export default function TransactionsPage() {
   }, [companyId, transactions])
 
   useEffect(() => {
-    if (!companyId || !warmKey) return
+    if (!companyId || !warmKey || !canAskAssistant) return
     if (warmedReadsRef.current.companyId !== companyId) {
       warmedReadsRef.current = { companyId, ids: new Set() }
       assistantReadsRef.current = {}
@@ -1762,7 +1763,7 @@ export default function TransactionsPage() {
     // The key already encodes the rows; re-running on the list's identity
     // would walk the backlog on every realtime echo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, warmKey])
+  }, [companyId, warmKey, canAskAssistant])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return

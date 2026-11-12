@@ -698,11 +698,21 @@ export const ticExtension: Extension = {
       handler: async (request: Request) => {
         try {
           const flow = await readBankIdFlow(request)
+          const pollBody = await request.json().catch(() => ({}))
+          const isProbe = pollBody?.probe === true
+          // The login and signup panels ask on every mount whether this
+          // browser is mid-flow (the probe). "No" is the normal answer to
+          // that question, so it is a 200 with nothing in it: as a 404 it was
+          // the largest group of failed requests in production (about 330 a
+          // day in November 2026) for a page that had done nothing wrong. An
+          // active poll that has lost its flow still gets the 404 below.
+          const nothingToResume = () => NextResponse.json({ data: null })
           if (!flow) {
             // No live flow in this browser: the tab is polling something that
             // has finished, expired, or never belonged to it. Terminal, not an
             // error, so the client can settle instead of spinning.
-            log.info('poll no_session', { reason: 'no_flow' })
+            log.info('poll no_session', { reason: 'no_flow', probe: isProbe })
+            if (isProbe) return nothingToResume()
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
@@ -711,12 +721,11 @@ export const ticExtension: Extension = {
           // picked up by the signup panel (or the reverse) whenever the user
           // navigates between them. Deliberately NOT clearing: the flow is
           // still legitimate for the page that started it.
-          const pollBody = await request.json().catch(() => ({}))
           if (!isBankIdFlowMode(pollBody?.mode) || pollBody.mode !== flow.mode) {
-            log.info('poll no_session', { reason: 'mode_mismatch', session: flow.sessionId.slice(0, 8) })
+            log.info('poll no_session', { reason: 'mode_mismatch', probe: isProbe, session: flow.sessionId.slice(0, 8) })
+            if (isProbe && isBankIdFlowMode(pollBody?.mode)) return nothingToResume()
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
-          const isProbe = pollBody?.probe === true
 
           // The cookie is shared by every tab. A newer same-mode /start can
           // replace it while an older tab is still polling, so mode alone is

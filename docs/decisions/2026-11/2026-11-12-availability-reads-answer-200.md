@@ -1,0 +1,1 @@
+[2026-11-12] A read a page sends on load to ask whether a feature is available answers 200 with an explicit no (available: false, null or an empty list), never 403/404: such refusals were about 2,370 of 5,365 failed requests a week and hid the real ones. Writes still refuse.

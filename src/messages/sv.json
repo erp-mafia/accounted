@@ -3373,6 +3373,8 @@
     "deactivated_instead": "Regeln finns på en lönespecifikation och har stängts av i stället för att tas bort."
   },
   "salary_payments": {
+    "employee_bank_link": "Öppna Anställda",
+    "employee_bank_missing_named": "{count, plural, one {{names} saknar clearingnummer eller kontonummer, så betalfilen kan inte skapas.} other {{names} saknar clearingnummer eller kontonummer, så betalfilen kan inte skapas.}}",
     "title": "Betalfil till bank",
     "last_generated": "Senast genererad",
     "format_label": "Format",
@@ -5333,6 +5335,9 @@
     "reverse_charge_seller_vat_skipped": "{count} där säljaren har debiterat moms"
   },
   "inbox_workspace": {
+    "upload_queue_stopped_title": "Uppladdningen stannade",
+    "upload_queue_stopped_description": "{count, plural, one {# fil laddades inte upp.} other {# filer laddades inte upp.}} Försök igen om en stund.",
+    "upload_waiting": "Väntar {seconds} s på uppladdningsgränsen…",
     "pipe_missing": "Saknas",
     "pipe_missing_help": "Köp på kort eller konto utan kvitto eller faktura. Efterlys underlaget eller hämta det från leverantörens portal.",
     "pipe_errors": "{count, plural, =1 {1 fel} other {# fel}}",

@@ -5,6 +5,7 @@ import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-se
 import { addArsredovisningSignatory } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { loadRoles } from '@/lib/bolaget/roles'
 import { rosterFromRoles } from '@/lib/bolaget/roster'
+import { bolagetGate } from '@/lib/bolaget/gate'
 import { bolagetGateResponse, operationContext } from '@/lib/bolaget/session'
 
 async function candidates(ctx: Parameters<typeof operationContext>[0], periodId: string) {
@@ -18,12 +19,14 @@ async function candidates(ctx: Parameters<typeof operationContext>[0], periodId:
 /**
  * GET /api/bookkeeping/fiscal-periods/{id}/arsredovisning/signatures/from-roles:
  * the board members and VD in office (Styrelse och firmateckning) who are
- * not yet on the signer roster. 404 outside the Bolaget rollout.
+ * not yet on the signer roster. Outside the Bolaget rollout there is no
+ * register to read, so nobody is missing: an empty list. The årsredovisning
+ * page asks on every load and after every signer change, and as a 404 that
+ * was 120 failed requests a week (2026-11). The POST below still refuses.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>('period.arsredovisning_signatures_from_roles', async (_request, ctx, { params }) => {
   const { id } = await params
-  const gate = await bolagetGateResponse(ctx)
-  if (gate) return gate
+  if (await bolagetGate(ctx.supabase, ctx.companyId)) return NextResponse.json({ data: { candidates: [] } })
   return NextResponse.json({ data: { candidates: await candidates(ctx, id) } })
 })
 

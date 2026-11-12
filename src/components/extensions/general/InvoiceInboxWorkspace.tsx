@@ -103,6 +103,7 @@ import {
 } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { sendPacedUpload } from '@/lib/documents/upload-pacing'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
@@ -502,6 +503,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // sequential progress through a batch ({ total, done }) so the button can
   // show "Laddar X av N…".
   const [uploadQueue, setUploadQueue] = useState<{ total: number; done: number } | null>(null)
+  // Seconds the upload is waiting for the per-minute upload limit to reset
+  // (lib/documents/upload-pacing.ts). Null while nothing waits.
+  const [uploadWaitSec, setUploadWaitSec] = useState<number | null>(null)
+  // A file that waits for the limit is not sent once the page is gone.
+  const unmountedRef = useRef(false)
+  useEffect(() => {
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+    }
+  }, [])
+  // Set when an upload ends refused by the upload limit even after waiting
+  // (the daily limit, or another source keeping the minute full): the queue
+  // stops there instead of walking every remaining file into the same wait.
+  const uploadLimitHitRef = useRef(false)
   const [selected, setSelected] = useState<InboxItem | null>(null)
   const [docUrl, setDocUrl] = useState<string | null>(null)
   const [docMime, setDocMime] = useState<string | null>(null)
@@ -1103,17 +1119,20 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
     setIsUploading(true)
     try {
-      let res: Response
-      if (directToStorage) {
-        res = await uploadViaSignedUrl(file)
-      } else {
-        const fd = new FormData()
-        fd.append('file', file)
-        res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-          method: 'POST',
-          body: fd,
-        })
-      }
+      // A large drop outruns the per-minute upload limit: the file waits for
+      // the limit to reset and is sent again, instead of being refused.
+      const res = await sendPacedUpload(
+        () => {
+          if (directToStorage) return uploadViaSignedUrl(file)
+          const fd = new FormData()
+          fd.append('file', file)
+          return fetch('/api/extensions/ext/invoice-inbox/upload', {
+            method: 'POST',
+            body: fd,
+          })
+        },
+        { onWait: setUploadWaitSec, shouldContinue: () => !unmountedRef.current },
+      )
       if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
       if (json.data?.extraction_skipped) {
@@ -1140,6 +1159,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         setSelected((prev) => (prev?.id === tempId ? null : prev))
       }
       const reason = failureText(err)
+      if (err instanceof ResolvedFailure && err.status === 429) uploadLimitHitRef.current = true
       reportUploadFailure({
         status: err instanceof ResolvedFailure ? err.status : 0,
         size: file.size,
@@ -1218,15 +1238,29 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       return
     }
     setUploadQueue({ total: files.length, done: 0 })
+    uploadLimitHitRef.current = false
     try {
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         await uploadFile(file, { autoSelect: false })
         setUploadQueue((q) => (q ? { ...q, done: q.done + 1 } : null))
+        // Still refused by the upload limit after waiting: the rest would
+        // meet the same refusal, so say once how many are left and stop.
+        if (uploadLimitHitRef.current || unmountedRef.current) {
+          const left = files.length - index - 1
+          if (left > 0 && !unmountedRef.current) {
+            toast({
+              title: t('upload_queue_stopped_title'),
+              description: t('upload_queue_stopped_description', { count: left }),
+              variant: 'destructive',
+            })
+          }
+          break
+        }
       }
     } finally {
       setUploadQueue(null)
     }
-  }, [uploadFile])
+  }, [uploadFile, toast, t])
 
   const handleFileInputChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
@@ -1489,7 +1523,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             loading={isUploading}
           >
             {!isUploading && <PlusIcon className="h-3.5 w-3.5 mr-1.5" />}
-            {uploadQueue
+            {uploadWaitSec !== null
+              ? t('upload_waiting', { seconds: uploadWaitSec })
+              : uploadQueue
               ? `Laddar ${Math.min(uploadQueue.done + 1, uploadQueue.total)} av ${uploadQueue.total}…`
               : isUploading
                 ? 'Laddar…'

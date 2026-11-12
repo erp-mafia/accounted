@@ -301,13 +301,14 @@ export function createOpenPaymentsApi(base: string): OpenPaymentsApi {
   return {
     /**
      * Whether the company may read its bank through Open Payments, and the
-     * banks when it may. The banks route answers 403 OPEN_BANKING_NOT_AVAILABLE
-     * for a company that is not switched on; any other failure also hides the
-     * entry points, since a button that leads to an error is worse than none.
+     * banks when it may. The banks route answers `available: false` for a
+     * company that is not switched on; a failure also hides the entry points,
+     * since a button that leads to an error is worse than none.
      */
     async fetchAvailability(signal) {
       try {
-        const { banks } = await send<{ banks: OpenPaymentsBank[] }>(`${base}/banks`, { signal })
+        const { banks, available } = await send<{ banks: OpenPaymentsBank[]; available?: boolean }>(`${base}/banks`, { signal })
+        if (available === false) return { available: false, banks: null }
         return { available: true, banks }
       } catch (error) {
         if (error instanceof OpenPaymentsClientError) return { available: false, banks: null }

@@ -81,6 +81,11 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         return
       }
       const json = await res.json()
+      // The read answers `available: false` for a company without the grant.
+      if (json.available === false) {
+        setAvailable(false)
+        return
+      }
       setAvailable(true)
       applyRow(json.data ?? null)
     } catch {
