@@ -15,7 +15,7 @@ import {
   findMatchingVouchersForSupplierInvoice,
   linkSupplierInvoiceToVoucher,
 } from '../supplier-voucher-matching'
-import { reconcileSupplierInvoiceVouchers, voucherNamesSupplier } from '../bulk-reconcile-supplier-vouchers'
+import { citesOtherInvoice, reconcileSupplierInvoiceVouchers, voucherNamesSupplier } from '../bulk-reconcile-supplier-vouchers'
 
 const mFetchAll = vi.mocked(fetchAllRows)
 const mFind = vi.mocked(findMatchingVouchersForSupplierInvoice)
@@ -31,6 +31,7 @@ interface InvOver {
   invoiceDate?: string
   isCredit?: boolean
   supplierName?: string
+  fortnoxNumber?: string
 }
 
 function inv(over: InvOver) {
@@ -45,6 +46,7 @@ function inv(over: InvOver) {
     paid_amount: 0,
     remaining_amount: over.remaining ?? total,
     ...(over.invoiceDate ? { invoice_date: over.invoiceDate } : {}),
+    ...(over.fortnoxNumber ? { fortnox_number: over.fortnoxNumber } : {}),
     due_date: over.due ?? '2026-02-01',
     paid_at: null,
     exchange_rate: null,
@@ -405,5 +407,51 @@ describe('voucherNamesSupplier', () => {
     ['no text', 'Leverantör AB', null, false],
   ])('%s', (_case, name, text, expected) => {
     expect(voucherNamesSupplier(name, text)).toBe(expected)
+  })
+})
+
+// PH 264: a recurring supplier's payment of an earlier invoice (same amount,
+// same name, dated after the next invoice arrived) marked that next, unpaid
+// invoice as paid.
+describe('reconcileSupplierInvoiceVouchers: a voucher that cites another invoice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mFind.mockReset()
+    mLink.mockReset()
+  })
+
+  it('is never auto-linked: the invoice goes to review', async () => {
+    queue([inv({ id: 'i1', fortnoxNumber: '493', invoiceDate: '2026-10-20', due: '2026-11-19' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v-487', date: '2026-10-21', confidence: 0.95, desc: 'Levbet Leverantör AB (487)' }),
+    ] as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(0)
+    expect(res.ambiguous).toBe(1)
+    expect(res.review[0]).toMatchObject({ supplier_invoice_id: 'i1', reason: 'names_other_invoice' })
+    expect(mLink).not.toHaveBeenCalled()
+  })
+
+  it('does not block, or tie with, the voucher that cites this invoice', async () => {
+    queue([inv({ id: 'i1', fortnoxNumber: '493', invoiceDate: '2026-10-20', due: '2026-11-19' })])
+    mFind.mockResolvedValueOnce([
+      cand({ je: 'v-487', date: '2026-10-21', confidence: 0.95, desc: 'Levbet Leverantör AB (487)' }),
+      cand({ je: 'v-493', date: '2026-11-18', confidence: 0.95, n: 2, desc: 'Levbet Leverantör AB (493)' }),
+    ] as never)
+    mLink.mockResolvedValueOnce(okLink({ je: 'v-493' }) as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(1)
+    expect(res.links[0]).toMatchObject({ supplier_invoice_id: 'i1', journal_entry_id: 'v-493' })
+  })
+
+  it('decides nothing without a number on both sides', () => {
+    expect(citesOtherInvoice({ description: 'Levbet Leverantör AB (487)' }, {})).toBe(false)
+    expect(citesOtherInvoice({ description: 'Levbet Leverantör AB' }, { fortnox_number: '493' })).toBe(false)
+    expect(citesOtherInvoice({ description: 'Levbet Leverantör AB (493)' }, { fortnox_number: '493' })).toBe(false)
+    expect(citesOtherInvoice({ description: 'Levbet Leverantör AB (487)' }, { fortnox_number: '493' })).toBe(true)
   })
 })
