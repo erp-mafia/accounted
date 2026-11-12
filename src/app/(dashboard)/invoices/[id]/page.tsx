@@ -31,6 +31,7 @@ import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
+import { peppolDeliveryAttention } from '@/lib/invoices/peppol-attention'
 import {
   continueInvoiceSeries,
   readNextNumberPreview,
@@ -176,12 +177,6 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
-// A delivery that ended without reaching the buyer; sending again stages a
-// new delivery that replaces it.
-const PEPPOL_FAILED_DELIVERY_STATUSES = new Set(['failed', 'no_route'])
-// How long the access point may hold a submission without news of delivery
-// before the page says so.
-const PEPPOL_UNCONFIRMED_AFTER_MS = 60 * 60 * 1000
 
 // Why a "Skicka till Kivra/Billo" item is disabled, as invoice_detail keys.
 const MAILBOX_BLOCK_KEYS: Record<MailboxSendBlock, string> = {
@@ -2096,17 +2091,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const latestPeppolDelivery = peppolDeliveries[0] ?? null
   // The page's one Peppol sentence (convention 6), while the invoice can
   // still be sent: the latest delivery failed, or the access point has held
-  // it for over an hour without news of delivery.
-  const peppolAttention: 'failed' | 'unconfirmed' | null =
-    !latestPeppolDelivery || !PEPPOL_SENDABLE_STATUSES.has(invoice.status)
-      ? null
-      : PEPPOL_FAILED_DELIVERY_STATUSES.has(latestPeppolDelivery.status)
-        ? 'failed'
-        : latestPeppolDelivery.status === 'submission_accepted'
-            && peppolReadAt !== null
-            && peppolReadAt - Date.parse(latestPeppolDelivery.status_at) > PEPPOL_UNCONFIRMED_AFTER_MS
-          ? 'unconfirmed'
-          : null
+  // it for over an hour without news of delivery (after a day: without
+  // reporting an outcome at all, which is not the same as not delivered).
+  const peppolAttention = PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+    ? peppolDeliveryAttention(latestPeppolDelivery, peppolReadAt)
+    : null
   // The other way to the buyer. A draft (put back after the failure) can be
   // emailed from here; an issued invoice cannot (the email send issues
   // drafts only), so it offers the PDF to send by hand.
@@ -2800,6 +2789,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </AttnLine>
       )}
       {peppolAttention === 'unconfirmed' && <AttnLine>{t('peppol_unconfirmed_attn')}</AttnLine>}
+      {peppolAttention === 'unreported' && <AttnLine>{t('peppol_unreported_attn')}</AttnLine>}
 
       {/* Kund and Detaljer side by side like an invoice head: who it is for
           on the left, the facts on the right. */}

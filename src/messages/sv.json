@@ -7010,6 +7010,7 @@
     "peppol_failed_resend_action": "Skicka igen via Peppol",
     "peppol_failed_email_action": "Skicka PDF via e-post",
     "peppol_unconfirmed_attn": "Peppol-leveransen är inte bekräftad än.",
+    "peppol_unreported_attn": "Peppol-operatören har tagit emot fakturan men inte rapporterat tillbaka om den är levererad. Det betyder inte att den uteblivit: stäm av med mottagaren om du behöver veta säkert.",
     "pdf_rerender_downloaded_title": "Nyskapad PDF nedladdad",
     "pdf_rerender_preview_title": "Nyskapad PDF visas",
     "pdf_preview_failed_title": "Kunde inte förhandsgranska fakturan",

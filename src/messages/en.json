@@ -7010,6 +7010,7 @@
     "peppol_failed_resend_action": "Send again via Peppol",
     "peppol_failed_email_action": "Send PDF by email",
     "peppol_unconfirmed_attn": "The Peppol delivery is not confirmed yet.",
+    "peppol_unreported_attn": "The Peppol access point accepted the invoice but has not reported back whether it was delivered. That does not mean it failed to arrive: check with the recipient if you need to be sure.",
     "pdf_rerender_downloaded_title": "Freshly generated PDF downloaded",
     "pdf_rerender_preview_title": "Showing a freshly generated PDF",
     "pdf_preview_failed_title": "Could not preview the invoice",
