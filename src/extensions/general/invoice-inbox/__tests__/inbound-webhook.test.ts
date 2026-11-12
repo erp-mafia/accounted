@@ -1982,4 +1982,157 @@ describe('POST /inbound with several recipients (#2181)', () => {
       })
     })
   })
+
+  // crm#1809: a forwarded invoice mail left a "could not be read" row beside
+  // the invoice that was read, one for each part the mail carried for its own
+  // sake.
+  describe('a calendar invite or mail signature next to a document (crm#1809)', () => {
+    const ICS_PART = { id: 'att_ics', filename: 'invite.ics', size: 900, content_type: 'text/calendar; method=REQUEST', content_id: null, content_disposition: 'attachment' }
+    const SMIME_PART = { id: 'att_p7s', filename: 'smime.p7s', size: 4000, content_type: 'application/pkcs7-signature', content_id: null, content_disposition: 'attachment' }
+
+    it('is ignored next to a PDF: no rejection row, no download, and the PDF is filed', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // PDF dup check
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [ICS_PART, PDF_ATTACHMENT, SMIME_PART]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue(PDF_DOWNLOAD)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-pdf', skip_reason: null } as never)
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_1', inbox_item_id: 'item-pdf' }])
+      expect(fetchInboundAttachment).toHaveBeenCalledOnce()
+      expect(vi.mocked(fetchInboundAttachment).mock.calls[0][1]).toBe('att_1')
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      // The mail's history still says what became of every part.
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_ics', outcome: 'ignored', reason: 'mail_part', mime: 'text/calendar' },
+          { id: 'att_1', outcome: 'filed', inbox_item_id: 'item-pdf' },
+          { id: 'att_p7s', outcome: 'ignored', reason: 'mail_part', mime: 'application/pkcs7-signature' },
+        ],
+      })
+    })
+
+    it('keeps the rejection row of a type that may be a document next to the same PDF', async () => {
+      const TIFF_PART = { id: 'att_tif', filename: 'kvitto.tif', size: 30_000, content_type: 'image/tiff', content_id: null, content_disposition: 'attachment' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // PDF dup check
+      enqueue({ data: null }) // TIFF dup check
+      enqueue({ data: { id: 'rejected-tif' } }) // rejection-row insert
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT, TIFF_PART]) as never)
+      vi.mocked(fetchInboundAttachment)
+        .mockResolvedValueOnce(PDF_DOWNLOAD)
+        .mockResolvedValueOnce({ id: 'att_tif', filename: 'kvitto.tif', contentType: 'image/tiff', buffer: new Uint8Array([0x49, 0x49]).buffer as ArrayBuffer })
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-pdf', skip_reason: null } as never)
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      expect(res.status).toBe(200)
+      const insert = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+      expect((insert?.args[0] as { error_message: string }).error_message).toBe('Avvisad: filtypen image/tiff stöds inte')
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_1', outcome: 'filed', inbox_item_id: 'item-pdf' },
+          { id: 'att_tif', outcome: 'rejected', reason: 'unsupported_type', inbox_item_id: 'rejected-tif' },
+        ],
+      })
+    })
+
+    it('is ignored among the parts of a forwarded .eml too', async () => {
+      const emlAttachment = { id: 'att_eml', filename: 'Faktura.eml', size: 4_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [emlAttachment] }) as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // dup check for the .eml's own id
+      enqueue({ data: [] }) // parts already filed: none
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [emlAttachment]) as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-part-0', skip_reason: null } as never)
+      const eml = [
+        'From: Leverantor <faktura@supplier.example>',
+        'To: anna@example.se',
+        'Subject: Faktura',
+        'Date: Thu, 18 Sep 2026 14:03:00 +0200',
+        'Message-ID: <inner-3@supplier.example>',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="B3"',
+        '',
+        '--B3',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'Se bifogad faktura.',
+        '--B3',
+        'Content-Type: application/pdf; name="faktura.pdf"',
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: attachment; filename="faktura.pdf"',
+        '',
+        Buffer.from('%PDF-1.4 faktura').toString('base64'),
+        '--B3',
+        'Content-Type: application/pkcs7-signature; name="smime.p7s"',
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: attachment; filename="smime.p7s"',
+        '',
+        Buffer.from('signature bytes').toString('base64'),
+        '--B3--',
+        '',
+      ].join('\r\n')
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_eml',
+        filename: 'Faktura.eml',
+        contentType: 'message/rfc822',
+        buffer: new Uint8Array(Buffer.from(eml, 'utf8')).buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_eml#0', inbox_item_id: 'item-part-0' }])
+      expect(uploadAndExtract).toHaveBeenCalledOnce()
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_eml#0', outcome: 'filed', inbox_item_id: 'item-part-0' },
+          { id: 'att_eml#1', outcome: 'ignored', reason: 'mail_part', mime: 'application/pkcs7-signature' },
+        ],
+      })
+    })
+
+    it('keeps its rejection row when no part of the mail can be a document', async () => {
+      const TEXT_PART = { id: 'att_txt', filename: null, size: 400, content_type: 'text/plain', content_id: null, content_disposition: 'attachment' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // dup check
+      enqueue({ data: { id: 'rejected-ics' } }) // rejection-row insert
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [TEXT_PART, ICS_PART]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_ics',
+        filename: 'invite.ics',
+        contentType: 'text/calendar',
+        buffer: new TextEncoder().encode('BEGIN:VCALENDAR').buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      expect(res.status).toBe(200)
+      const insert = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+      expect(insert?.args[0]).toMatchObject({ status: 'error', resend_attachment_id: 'att_ics' })
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_txt', outcome: 'ignored', reason: 'text_part' },
+          { id: 'att_ics', outcome: 'rejected', reason: 'unsupported_type', inbox_item_id: 'rejected-ics' },
+        ],
+      })
+    })
+  })
 })

@@ -3,6 +3,7 @@ import {
   extractLocalPartForDomain,
   extractSharedRecipientsForDomain,
   groupSharedRecipientsByInbox,
+  isMailMachineryPart,
   isPlainTextPart,
   kindHintFromTag,
   mayRedeliverOverMinuteCap,
@@ -43,6 +44,26 @@ describe('isPlainTextPart', () => {
     expect(isPlainTextPart('application/pdf')).toBe(false)
     expect(isPlainTextPart(null)).toBe(false)
     expect(isPlainTextPart(undefined)).toBe(false)
+  })
+})
+
+describe('isMailMachineryPart (crm#1809)', () => {
+  it('reads invites, mail signatures, contact cards and delivery reports, with parameters and in any case', () => {
+    expect(isMailMachineryPart('text/calendar')).toBe(true)
+    expect(isMailMachineryPart('Text/Calendar; method=REQUEST; charset=UTF-8')).toBe(true)
+    expect(isMailMachineryPart('application/ics')).toBe(true)
+    expect(isMailMachineryPart('application/pkcs7-signature; name="smime.p7s"')).toBe(true)
+    expect(isMailMachineryPart('application/pgp-signature')).toBe(true)
+    expect(isMailMachineryPart('text/vcard')).toBe(true)
+    expect(isMailMachineryPart('message/delivery-status')).toBe(true)
+  })
+
+  it('leaves anything that can be a document, in a format the inbox takes or not', () => {
+    for (const type of ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/tiff', 'text/html', 'text/plain', 'application/zip', 'application/xml', 'application/octet-stream', 'message/rfc822']) {
+      expect(isMailMachineryPart(type)).toBe(false)
+    }
+    expect(isMailMachineryPart(null)).toBe(false)
+    expect(isMailMachineryPart(undefined)).toBe(false)
   })
 })
 

@@ -227,5 +227,35 @@ export function mayRedeliverOverMinuteCap(receivedAt: string | null | undefined,
  * the same mail it says nothing that part does not.
  */
 export function isPlainTextPart(contentType: string | null | undefined): boolean {
-  return String(contentType ?? '').split(';')[0].trim().toLowerCase() === 'text/plain'
+  return baseContentType(contentType) === 'text/plain'
+}
+
+/** A content type without its parameters, lowercased: "Text/Calendar; method=REQUEST" is "text/calendar". */
+export function baseContentType(contentType: string | null | undefined): string {
+  return String(contentType ?? '').split(';')[0].trim().toLowerCase()
+}
+
+/**
+ * Parts a mail carries for the mail's own sake: a calendar invite, an S/MIME
+ * or PGP signature and its key, a contact card, a delivery report. None is a
+ * document in any form, so none can be underlag. A closed list on purpose:
+ * a type the inbox merely does not take (a TIFF, a ZIP, an XML e-invoice) may
+ * be the receipt in a format to send again, and keeps its rejection row.
+ */
+const MAIL_MACHINERY_TYPES: ReadonlySet<string> = new Set([
+  'text/calendar',
+  'application/ics',
+  'application/pkcs7-signature',
+  'application/x-pkcs7-signature',
+  'application/pgp-signature',
+  'application/pgp-keys',
+  'text/vcard',
+  'text/x-vcard',
+  'message/delivery-status',
+  'message/disposition-notification',
+  'text/rfc822-headers',
+])
+
+export function isMailMachineryPart(contentType: string | null | undefined): boolean {
+  return MAIL_MACHINERY_TYPES.has(baseContentType(contentType))
 }
