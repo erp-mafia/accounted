@@ -37,6 +37,8 @@ import type { BookingTemplateLibrary } from '@/types'
 import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 interface Props {
   open: boolean
@@ -78,6 +80,9 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   const [edits, setEdits] = useState<TemplateLinesEdits<FormLine> | null>(null)
   // Which button's request is in flight: only that one spins, both stay disabled.
   const [submitting, setSubmitting] = useState<'book' | 'draft' | null>(null)
+  // The warnings a refused booking came back with (VOUCHER_NEEDS_CONFIRMATION),
+  // shown for the person to confirm or go back and correct the lines.
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
 
   // Reset per open so yesterday's half-typed amount never leaks into today.
   useEffect(() => {
@@ -137,7 +142,9 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   // and stays editable, matching the "Spara som utkast" affordance the manual
   // JournalEntryForm has always had. Booking from a template previously
   // committed straight away, with no way to review first.
-  const handleBook = async (asDraft = false) => {
+  // `acknowledged`: the warning codes the person confirmed in the warnings
+  // dialog. The server checks again and refuses anything new.
+  const handleBook = async (asDraft = false, acknowledged?: string[]) => {
     if (!selected || !balanced) return
     if (!periodForDate) {
       toast({ title: t('tpl_no_period'), variant: 'destructive' })
@@ -155,11 +162,20 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
           entry_date: entryDate,
           description: selectedName,
           lines: check.postLines,
+          ...(acknowledged ? { acknowledged_warnings: acknowledged } : {}),
         }),
         },
       )
       const result = await res.json()
       if (!res.ok) {
+        // A voucher that deviates is not a failure: show what deviates and
+        // let the person book it anyway, as the manual form does. As a toast
+        // it said "read the warnings and confirm" with neither on screen.
+        const warnings = result?.error?.details?.warnings
+        if (!asDraft && result?.error?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings)) {
+          setVoucherWarnings(warnings as VoucherWarning[])
+          return
+        }
         toast({
           title: asDraft ? t('tpl_toast_draft_failed') : t('toast_post_failed'),
           description: getErrorMessage(result, { context: 'journal_entry' }),
@@ -191,6 +207,17 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   }
 
   return (
+    <>
+    <VoucherWarningsDialog
+      warnings={voucherWarnings}
+      processing={submitting !== null}
+      onCancel={() => setVoucherWarnings(null)}
+      onConfirm={() => {
+        const confirmed = voucherWarnings
+        setVoucherWarnings(null)
+        if (confirmed) void handleBook(false, confirmed.map((warning) => warning.code))
+      }}
+    />
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
       <DialogContent className={cn('sm:min-w-[460px]', selected ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
         <DialogHeader>
@@ -348,5 +375,6 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         )}
       </DialogContent>
     </Dialog>
+    </>
   )
 }

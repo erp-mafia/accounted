@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from 'react'
 import type { Company, CompanyRole, Team } from '@/types'
-import type { CapabilityKey } from '@/lib/entitlements/keys'
+import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntitlementState } from '@/lib/entitlements/has-capability'
 
 /** The user's byrå team membership (teams.kind = 'byra'), when any (WL-08). */
@@ -118,6 +118,19 @@ export function useCapability(key: CapabilityKey): boolean {
   const ctx = useContext(CompanyContext)
   if (!ctx) return true
   return ctx.capabilities.includes(key)
+}
+
+/**
+ * Whether POST /api/agent/categorize can answer for the active company. The
+ * route refuses a sandbox company and one without the AI capability, and its
+ * callers hide the refusal, so asking anyway only spends a request: 480 of
+ * them from 62 companies in the week to 2026-11-12, nearly all on an expired
+ * trial. Fail-open outside a CompanyProvider, like useCapability.
+ */
+export function useAssistantReadsAvailable(): boolean {
+  const ctx = useContext(CompanyContext)
+  if (!ctx) return true
+  return !ctx.isSandbox && ctx.capabilities.includes(CAPABILITY.ai)
 }
 
 /**

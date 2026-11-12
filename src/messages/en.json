@@ -3372,6 +3372,8 @@
     "deactivated_instead": "The rule is on a payslip and was switched off instead of deleted."
   },
   "salary_payments": {
+    "employee_bank_link": "Open Employees",
+    "employee_bank_missing_named": "{count, plural, one {{names} has no clearing number or account number, so the payment file cannot be made.} other {{names} have no clearing number or account number, so the payment file cannot be made.}}",
     "title": "Payment file for your bank",
     "last_generated": "Last generated",
     "format_label": "Format",
@@ -5332,6 +5334,9 @@
     "reverse_charge_seller_vat_skipped": "{count} where the seller charged VAT"
   },
   "inbox_workspace": {
+    "upload_queue_stopped_title": "The upload stopped",
+    "upload_queue_stopped_description": "{count, plural, one {# file was not uploaded.} other {# files were not uploaded.}} Try again in a moment.",
+    "upload_waiting": "Waiting {seconds} s for the upload limit…",
     "pipe_missing": "Missing",
     "pipe_missing_help": "Card or account purchases without a receipt or invoice. Ask for the document or fetch it from the supplier's portal.",
     "pipe_errors": "{count, plural, =1 {1 error} other {# errors}}",

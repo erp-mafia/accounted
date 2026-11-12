@@ -280,6 +280,9 @@ export default function NewSupplierInvoiceForm({
   const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
   const documentFilesRef = useRef<UploadedFile[]>([])
   const createFinishedRef = useRef(false)
+  // The uploads Avbryt has already removed itself, so the unmount cleanup
+  // below does not delete them a second time (each second delete was a 404).
+  const discardedUploadIdsRef = useRef(new Set<string>())
   const invoiceNumberInputRef = useRef<HTMLInputElement | null>(null)
 
   // Dokument-först state: a standalone upload routed through the invoice-inbox
@@ -384,18 +387,19 @@ export default function NewSupplierInvoiceForm({
 
   useEffect(() => () => {
     if (inboxItemId || createFinishedRef.current) return
+    const discarded = discardedUploadIdsRef.current
     // A standalone upload that went through the inbox pipeline created an
     // inbox item alongside the document: clean up both (same orphan-cleanup
     // contract as the plain path; the item DELETE 409s if it was converted).
     const itemId = uploadedInboxItemIdRef.current
-    if (itemId) {
+    if (itemId && !discarded.has(itemId)) {
       void fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, {
         method: 'DELETE',
         keepalive: true,
       })
     }
     for (const file of documentFilesRef.current) {
-      if (file.status === 'uploaded' && file.id) {
+      if (file.status === 'uploaded' && file.id && !discarded.has(file.id)) {
         void fetch(`/api/documents/${file.id}`, { method: 'DELETE', keepalive: true })
       }
     }
@@ -1743,21 +1747,29 @@ export default function NewSupplierInvoiceForm({
     euSupplier,
   })
 
+  // Gone, or never there: nothing is left for the unmount cleanup to remove.
+  // A delete that failed (offline, a server error) is left for it to retry.
+  const deleteSettled = (res: Response) => res.ok || res.status === 404
+
   async function discardUploadedDocument() {
     extractionPollTokenRef.current += 1
     const itemId = uploadedInboxItemId
     if (itemId) {
       try {
-        await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+        if (deleteSettled(res)) discardedUploadIdsRef.current.add(itemId)
       } catch {
-        // Best-effort cleanup.
+        // Best-effort cleanup: the unmount cleanup tries once more.
       }
     }
     const ids = documentFiles
       .filter((file) => file.status === 'uploaded' && file.id)
       .map((file) => file.id as string)
     await Promise.allSettled(
-      ids.map((documentId) => fetch(`/api/documents/${documentId}`, { method: 'DELETE' })),
+      ids.map(async (documentId) => {
+        const res = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' })
+        if (deleteSettled(res)) discardedUploadIdsRef.current.add(documentId)
+      }),
     )
   }
 

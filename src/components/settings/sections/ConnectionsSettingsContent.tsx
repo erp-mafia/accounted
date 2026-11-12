@@ -46,7 +46,8 @@ import {
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useCapability, useCompany } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
@@ -176,7 +177,10 @@ export function ConnectionsSettingsContent() {
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
-  const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox
+  // The inbox needs the AI capability (lib/entitlements/keys.ts): without it
+  // the address route refuses, so the row is left out without asking.
+  const hasInboxCapability = useCapability(CAPABILITY.ai)
+  const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox && hasInboxCapability
   const hasStripe = ENABLED_EXTENSION_IDS.has('stripe')
   const hasShopify = ENABLED_EXTENSION_IDS.has('shopify')
   const hasWooCommerce = ENABLED_EXTENSION_IDS.has('woocommerce')

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
 import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
@@ -186,6 +187,7 @@ export default function QuickReviewDialog({
   // other (pickedToActivate below).
   const { catalog: basCatalog, chart: wholeChart } = useBasCatalog({ includeDeactivated: true })
   const { settings: companySettings } = useCompanySettings()
+  const canAskAssistant = useAssistantReadsAvailable()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
   const [aiProposal, setAiProposal] = useState<AiProposalMeta | null>(null)
@@ -354,7 +356,7 @@ export default function QuickReviewDialog({
   // over is not read again: the template the person picked after attaching
   // it stands.
   useEffect(() => {
-    if (!open || !readDocId || !transaction?.id || carriedDocIds.has(readDocId)) return
+    if (!open || !readDocId || !transaction?.id || carriedDocIds.has(readDocId) || !canAskAssistant) return
     let alive = true
     setDocReading(true)
     ;(async () => {
@@ -388,7 +390,7 @@ export default function QuickReviewDialog({
     return () => {
       alive = false
     }
-  }, [open, readDocId, transaction?.id, takeAssistantPick, carriedDocIds])
+  }, [open, readDocId, transaction?.id, takeAssistantPick, carriedDocIds, canAskAssistant])
   // The person's own VAT choice. It also settles the underlag question: a
   // rate picked by hand is what gets booked, and the moms line below offers
   // the document's figure as the way back. Without this the document's moms

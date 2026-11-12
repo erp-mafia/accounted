@@ -111,13 +111,22 @@ describe('open payments routes validate their bodies', () => {
 })
 
 describe('open payments routes map the service answers', () => {
-  it('GET banks answers 403 OPEN_BANKING_NOT_AVAILABLE in the envelope when the door is closed', async () => {
+  it('GET banks answers available: false (200, no banks) when the door is closed', async () => {
+    // Pages ask this on load to choose which bank entry points to show:
+    // "not available" is the answer to that question, not a refusal.
     service.listBankFeedBanks.mockResolvedValue({ ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'not_in_pilot' } })
+    const { status, body } = await parseJsonResponse<{ data: { available: boolean; banks: unknown[]; reason: string } }>(
+      await banks(createMockRequest('/api/bank/open-payments/banks'), none),
+    )
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ available: false, banks: [], reason: 'not_in_pilot' })
+  })
+
+  it('GET banks still fails when the provider does', async () => {
+    service.listBankFeedBanks.mockResolvedValue({ ok: false, code: 'BANK_PROVIDER_UNAVAILABLE' })
     const { status, body } = await parseJsonResponse<ErrorBody>(await banks(createMockRequest('/api/bank/open-payments/banks'), none))
-    expect(status).toBe(403)
-    expect(body.error.code).toBe('OPEN_BANKING_NOT_AVAILABLE')
-    expect(body.error.message).toMatch(/inte aktiverat/)
-    expect(body.error.message_en).toMatch(/not enabled/)
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('BANK_PROVIDER_UNAVAILABLE')
   })
 
   it('GET banks answers the list when the door is open', async () => {

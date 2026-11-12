@@ -6,7 +6,7 @@ import { registerEmailService } from '@/lib/email/service'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { requireCapability } from '@/lib/entitlements/has-capability'
+import { hasCapability, requireCapability } from '@/lib/entitlements/has-capability'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createEmailService } from './lib/email-provider'
 import {
@@ -118,9 +118,9 @@ async function isCompanyAdmin(
 }
 
 /**
- * Shared preamble for the sending-domain routes: auth context, the opt-in
- * capability grant (403 capability_blocked when missing: the UI hides the
- * section on that), and for writes the owner/admin role plus the sandbox
+ * Shared preamble for the sending-domain writes: auth context, the opt-in
+ * capability grant (403 capability_blocked when missing; the read answers
+ * `available: false` instead), and for writes the owner/admin role plus the sandbox
  * block (anonymous demo accounts must not register domains in our Resend
  * account). Returns the response to send, or null to proceed.
  */
@@ -163,8 +163,15 @@ export const emailExtension: Extension = {
       method: 'GET',
       path: '/sending-domain',
       handler: async (_request: Request, ctx: ExtensionContext) => {
-        const denied = await guardSendingDomainRoute(ctx, { write: false })
-        if (denied) return denied
+        // The settings page asks this on every visit to learn whether to
+        // show the section at all, and the grant is opt-in, so "no" is the
+        // answer for nearly every company. It is a 200 that says so, not a
+        // refusal: the 403 it used to be was 106 failed requests a week
+        // (2026-11) for a page that had done nothing wrong. The writes below
+        // still refuse without the grant.
+        if (!(await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.custom_sender_domain))) {
+          return NextResponse.json({ data: null, available: false })
+        }
         try {
           // null when the company has no sending domain: the UI renders the
           // claim form in that case.

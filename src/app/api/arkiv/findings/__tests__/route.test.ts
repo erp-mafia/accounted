@@ -21,9 +21,11 @@ beforeEach(() => {
 })
 
 describe('GET /api/arkiv/findings', () => {
-  it('is 404 outside the rollout', async () => {
+  it('answers an empty list outside the rollout', async () => {
     process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(await call())
+    expect(status).toBe(200)
+    expect(body.data).toEqual([])
   })
 
   it("lists the company's open findings, warnings first", async () => {

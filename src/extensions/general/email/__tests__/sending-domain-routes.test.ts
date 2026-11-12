@@ -103,14 +103,15 @@ beforeEach(() => {
 describe('GET /sending-domain', () => {
   const route = findRoute('GET', '/sending-domain')
 
-  it('returns 403 capability_blocked without the opt-in grant (the UI hides on this)', async () => {
+  it('answers 200 available: false without the opt-in grant (the UI hides on this)', async () => {
+    // The settings page asks on every visit; "no" is an answer, not a refusal.
     hasCapabilityMock.mockResolvedValue(false)
     const { supabase } = createQueuedMockSupabase()
     const res = await route.handler(createMockRequest('/sending-domain'), buildCtx(supabase))
-    const { status, body } = await parseJsonResponse<{ capability_blocked: boolean; capability: string }>(res)
-    expect(status).toBe(403)
-    expect(body.capability_blocked).toBe(true)
-    expect(body.capability).toBe('custom_sender_domain')
+    const { status, body } = await parseJsonResponse<{ data: null; available: boolean }>(res)
+    expect(status).toBe(200)
+    expect(body.available).toBe(false)
+    expect(body.data).toBeNull()
     expect(getMock).not.toHaveBeenCalled()
   })
 
