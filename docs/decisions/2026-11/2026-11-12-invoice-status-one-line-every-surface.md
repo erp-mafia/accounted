@@ -1,0 +1,1 @@
+[2026-11-12] The invoice page, the sales order, the credit note editor and the v1 customer expand show the status the invoice list shows (invoiceRowStatus, effectiveInvoiceStatus): overdue is derived, and each mapped the stored status by hand. A credit note's own page says Kredit, as its row does.

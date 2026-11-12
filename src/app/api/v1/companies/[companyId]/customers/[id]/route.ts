@@ -1,7 +1,8 @@
 /**
  * /api/v1/companies/{companyId}/customers/{id}: customer detail + writes.
  *
- * GET   : full record. ?expand=invoices embeds open invoices.
+ * GET   : full record. ?expand=invoices embeds open invoices, each with the
+ *          status the invoice endpoints report (effectiveInvoiceStatus).
  * PATCH : partial update. Idempotent (mandatory Idempotency-Key).
  *          Dry-runnable. VIES re-validation on commit if vat_number changes.
  *          Setting archived_at: null un-archives the customer.
@@ -31,9 +32,10 @@ import {
 } from '@/lib/customers/customer-record'
 import { updateCustomer } from '@/lib/customers/customer-commands'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
-import { filterOwedInvoices } from '@/lib/invoices/overdue'
+import { effectiveInvoiceStatus, filterOwedInvoices, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // v1-only extension: allow PATCH to set archived_at back to null to
 // un-archive a customer. Restricted to literal `null` so the caller can't
@@ -65,7 +67,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers/:id',
   summary: 'Retrieve a single customer by id.',
   description:
-    'Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.',
+    'Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response; each carries the status the invoice endpoints report, so a sent invoice past its due_date with remaining_amount > 0 reads overdue. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.',
   useWhen:
     'You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.',
   doNotUseFor:
@@ -197,11 +199,16 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
           const priced = await withAmountToPay(
             ctx.supabase,
             ctx.companyId!,
-            (invs ?? []) as unknown as Array<AmountToPayRow & Record<string, unknown>>,
+            (invs ?? []) as unknown as Array<AmountToPayRow & OverdueInvoiceInput & Record<string, unknown>>,
           )
-          invoices = priced.map(
-            ({ ore_rounding: _oreRounding, deduction_total: _deduction, credited_invoice_id: _credited, ...invoice }) => invoice,
-          )
+          // The status is the one the invoice endpoints report too
+          // (lib/invoices/overdue.ts): overdue follows the due date and the
+          // open remainder, never the stored status alone.
+          const today = todayIsoStockholm()
+          invoices = priced.map((row) => {
+            const { ore_rounding: _oreRounding, deduction_total: _deduction, credited_invoice_id: _credited, ...invoice } = row
+            return { ...invoice, status: effectiveInvoiceStatus(row, today) }
+          })
         } catch (err) {
           ctx.log.warn('customers.get: open-invoices amount to pay failed', {
             errMsg: err instanceof Error ? err.message : String(err),

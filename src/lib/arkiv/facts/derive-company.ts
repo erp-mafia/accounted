@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import { getCompanyGraph, markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 import { listLiveFacts, recordFact, revertFact } from './store'
 
@@ -28,8 +29,14 @@ export interface LedgerLine {
 
 export interface CompanyFactInputs {
   today: string
-  /** Posted lines of the last twelve months on the accounts read here, plus every balance-account line. */
+  /** Posted lines of the last twelve months on the result accounts read here. */
   lines: LedgerLine[]
+  /**
+   * What stands on each loan account today, credit minus debit, read as
+   * every balance is (accountBalanceThrough): the latest ingående balans plus
+   * what is booked after it, never the sum of every posting.
+   */
+  loanBalances: Array<{ account: string; balance: number }>
   accountName: (account: string) => string | null
   activeEmployees: number | null
   accountingMethod: 'accrual' | 'cash' | null
@@ -107,16 +114,11 @@ export function companyFactsFrom(inputs: CompanyFactInputs): FactDraft[] {
   const revenue = recent.filter((l) => inRange(l.account_number, '3000', '3799')).reduce((n, l) => n + l.credit - l.debit, 0)
   if (revenue !== 0) add({ predicate: 'revenue_12m', value: roundOre(revenue), valueText: `${kr(revenue)} (12 mån)`, sourceKind: 'ledger', singleValued: true, evidence: { accounts: '3000-3799', ...period } })
 
-  // Loans: what stands on the balance sheet, from every posting. 2310-2399 is every long-term loan in BAS
+  // Loans: what stands on the balance sheet today. 2310-2399 is every long-term loan in BAS
   // (bonds and convertibles, overdrafts, credit institutions, group and other loans); 2840-2849 the short-term ones.
-  const byLoanAccount = new Map<string, number>()
-  for (const l of inputs.lines) {
-    if (!inRange(l.account_number, '2310', '2399') && !inRange(l.account_number, '2840', '2849')) continue
-    byLoanAccount.set(l.account_number, (byLoanAccount.get(l.account_number) ?? 0) + l.credit - l.debit)
-  }
-  const loanBalance = [...byLoanAccount.values()].reduce((n, v) => n + v, 0)
+  const loanBalance = inputs.loanBalances.reduce((n, l) => n + l.balance, 0)
   if (Math.abs(loanBalance) >= 1) {
-    const accounts = [...byLoanAccount.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([account, balance]) => ({ account, balance: roundOre(balance) }))
+    const accounts = [...inputs.loanBalances].sort((a, b) => a.account.localeCompare(b.account)).map(({ account, balance }) => ({ account, balance: roundOre(balance) }))
     const breakdown = accounts.length > 1 ? accounts.map((a) => `${a.account}: ${kr(a.balance)}`).join('; ') : accounts[0].account
     add({ predicate: 'loan_balance', value: roundOre(loanBalance), valueText: `${kr(loanBalance)} (${breakdown})`, sourceKind: 'ledger', singleValued: true, evidence: { accounts, as_of: inputs.today } })
   }
@@ -214,8 +216,8 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
       // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must the facts.
       .in('journal_entries.status', ['posted', 'reversed'])
   // Literal on purpose: the phantom-column guard can only check what it can read.
-  // Both line reads paged: revenue, salary cost and a loan balance are sums over every posting, and
-  // PostgREST cuts a single read at 1000 rows without saying so.
+  // Both line reads paged: revenue and salary cost are sums over a year of postings, the loan read names
+  // every loan account ever posted on, and PostgREST cuts a single read at 1000 rows without saying so.
   const [recent, balance, employees, settings, company, banks, held] = await Promise.all([
     fetchAllRows((range) =>
       base().gte('journal_entries.entry_date', from).or('and(account_number.gte.3000,account_number.lte.3799),and(account_number.gte.4000,account_number.lte.7999)').order('id', { ascending: true }).range(range.from, range.to),
@@ -238,9 +240,21 @@ export async function deriveCompanyFacts(supabase: SupabaseClient, companyId: st
   // The graph's flow counts both sides of every voucher (debits and credits); the money that moved is half of it.
   const counterparties = graph.nodes.filter((n) => n.kind === 'party' || n.kind === 'merchant').map((n) => ({ name: n.label, flow: Number((n.meta as { flow?: number }).flow ?? 0) / 2, ref: n.ref }))
   const s = (settings.data ?? null) as { accounting_method: 'accrual' | 'cash' | null; fiscal_year_start_month: number | null } | null
+  // A loan's balance is its latest IB plus what came after: the sum of every posting counted the
+  // loan once more for each year-end. A balance that cannot be read stops the run instead of
+  // recording, or retiring, a loan fact on a guess.
+  const loanAccounts = [...new Set((balance as Array<{ account_number: string | number }>).map((r) => String(r.account_number)))]
+  const loanBalances = await Promise.all(
+    loanAccounts.map(async (account) => {
+      const debitMinusCredit = await accountBalanceThrough(supabase, companyId, account, today)
+      if (debitMinusCredit === null) throw new Error(`company facts input failed: balance of ${account}`)
+      return { account, balance: -debitMinusCredit }
+    }),
+  )
   const inputs: CompanyFactInputs = {
     today,
-    lines: [...(recent as unknown[]), ...(balance as unknown[])].map((r) => toLine(r as never)),
+    lines: (recent as unknown[]).map((r) => toLine(r as never)),
+    loanBalances: loanBalances.filter((l) => l.balance !== 0),
     accountName,
     activeEmployees: employees.count ?? null,
     accountingMethod: s?.accounting_method ?? null,

@@ -120,8 +120,8 @@ vi.mock('@/lib/bookkeeping/entry-lines', () => ({
   },
 }))
 
-vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()
+vi.mock('@/lib/bookkeeping/ledger-balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/ledger-balance')>()
   return {
     ...actual,
     // The huvudbok figure for 1630 over posted + reversed entries, by the date options.

@@ -14,8 +14,8 @@ vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
 // below runs the real pair end to end.
 const sumAccountBalanceMock = vi.fn()
 const findOpeningBalanceFloorMock = vi.fn()
-vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()
+vi.mock('@/lib/bookkeeping/ledger-balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/ledger-balance')>()
   return {
     ...actual,
     sumAccountBalance: (...args: unknown[]) => sumAccountBalanceMock(...args),
@@ -468,7 +468,7 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
   // in February cleared it. The floored balance on a later refund is 0 (the
   // unfloored one would still say 3000), so the later refund keeps 2650.
   it('end to end with the real floor and sum: a receivable a refund already cleared is not found again', async () => {
-    const actual = await vi.importActual<typeof import('@/lib/reconciliation/gl-balance')>('@/lib/reconciliation/gl-balance')
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/ledger-balance')>('@/lib/bookkeeping/ledger-balance')
     findOpeningBalanceFloorMock.mockImplementation(actual.findOpeningBalanceFloor)
     sumAccountBalanceMock.mockImplementation(actual.sumAccountBalance)
     const { supabase, enqueue, findCalls } = makeSupabase()

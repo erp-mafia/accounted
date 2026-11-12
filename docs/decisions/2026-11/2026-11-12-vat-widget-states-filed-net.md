@@ -1,0 +1,1 @@
+[2026-11-12] The MCP VAT report carries net_filed and its widget states that amount (whole kronor, as filed), the öre sum as a note: the widget headed 6 140,10 beside a summary of 6 141. The vat_payable measure stays the öre field rutor.ruta49, held equal to the report by its parity test.

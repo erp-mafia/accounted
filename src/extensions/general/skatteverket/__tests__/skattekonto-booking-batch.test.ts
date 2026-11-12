@@ -45,8 +45,8 @@ vi.mock('../lib/skattekonto-direct', async (importOriginal) => {
 
 // The 1650 balance behind the VAT-refund routing (feedback seq 975032).
 // Default: nothing on 1650, so every other test keeps the rule's account.
-vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()
+vi.mock('@/lib/bookkeeping/ledger-balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/ledger-balance')>()
   return { ...actual, sumAccountBalance: vi.fn(), findOpeningBalanceFloor: vi.fn() }
 })
 
@@ -62,7 +62,7 @@ vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal
 })
 
 import { findFiscalPeriod, createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
-import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
+import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/bookkeeping/ledger-balance'
 import {
   getSkattekontoReconciliationStatus,
   skattekontoPlannedHolds,

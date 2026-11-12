@@ -1,0 +1,1 @@
+[2026-11-12] The AGI payment file leaves the bank the banking day before the period's due day (getAgiPaymentDueDate), the day Betala via banken picks, not the 12th of every month: it said Saturday 12 December and, in most months, the due day itself, which our own bank orders call late.

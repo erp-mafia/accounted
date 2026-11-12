@@ -87,6 +87,15 @@ interface VatReportResult {
    * exceed its sales is negative here as it is in the filing.
    */
   rutor: VatDeclarationRutor
+  /**
+   * Moms att betala (positive) or få tillbaka (negative) as it is filed, booked
+   * and paid: buildFiledAmounts(rutor).net, every ruta in whole kronor.
+   * rutor.ruta49 is the same sum before the öre are dropped; a surface that
+   * states the amount reads this one. Not declared in VAT_REPORT_OUTPUT_SCHEMA,
+   * like excluded_settlement_entries below: the schema leaves the top level
+   * open and the tools/list payload has a frozen ceiling.
+   */
+  net_filed: number
   summary: string
   warnings: string[]
   /**
@@ -321,6 +330,7 @@ async function computeVatReportWithRutor(
     rutor,
     // The net as filed (whole kronor per ruta), not the öre sum in ruta49:
     // the same figure the momsverifikat books (crm#1171).
+    net_filed: filedNet,
     summary: filedNet > 0
       ? `Moms att betala: ${filedNet} kr`
       : filedNet < 0

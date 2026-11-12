@@ -33,7 +33,9 @@ import {
   formatQty,
 } from '@/components/sales-orders/labels'
 import type { Invoice, SalesOrder, SalesOrderItem } from '@/types'
-import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 
 type Transition = 'confirm' | 'cancel' | 'reopen'
 
@@ -87,6 +89,8 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   const [isInvoiceOpen, setIsInvoiceOpen] = useState(false)
   // Invoices created from this order (GET /api/invoices?sales_order_id=).
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  // The company's öresavrundning, for an invoice without a choice of its own.
+  const { settings: companySettings } = useCompanySettings()
 
   // The source document (proforma or offert) the order was created from:
   // only its type and number, for the "Skapad från" row.
@@ -417,10 +421,20 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             </thead>
             <tbody>
               {invoices.map((invoice) => {
-                // The same status as the invoice list (lib/invoices/status-display.ts).
-                const statusDisplay = invoiceStatusDisplay(invoice.status)
-                const variant = statusDisplay?.chip ?? undefined
-                const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : invoice.status
+                // The same status line as the invoice list (lib/invoices/status-display.ts):
+                // overdue follows the due date, a credit note and an unsent number say so.
+                const statusDisplay = invoiceRowStatus(invoice)
+                const statusValues =
+                  statusDisplay.values && 'date' in statusDisplay.values
+                    ? { date: formatDate(statusDisplay.values.date) }
+                    : statusDisplay.values
+                const variant = statusDisplay.chip ?? undefined
+                const label = statusDisplay.labelKey ? tInvoices(statusDisplay.labelKey, statusValues) : invoice.status
+                // The amount the invoice list prints (lib/bookkeeping/invoice-rounding.ts): öresavrundning applied.
+                const displayedTotal = getDisplayTotal(
+                  { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
+                  companySettings,
+                ).displayed
                 return (
                   <tr key={invoice.id} className="transition-colors duration-150 hover:bg-secondary/35">
                     <td className={cn(TD_CLASS, 'pl-0 tabular-nums')}>
@@ -436,7 +450,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
                       )}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>
-                      {formatCurrency(invoice.total, invoice.currency)}
+                      {formatCurrency(displayedTotal, invoice.currency)}
                     </td>
                   </tr>
                 )

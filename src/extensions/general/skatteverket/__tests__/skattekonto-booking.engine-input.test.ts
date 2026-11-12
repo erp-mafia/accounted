@@ -43,8 +43,8 @@ vi.mock('../lib/skattekonto-direct', async (importOriginal) => ({
   findDirectLedgerHolders: vi.fn(),
   findDirectLedgerHoldersForIds: vi.fn(),
 }))
-vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/reconciliation/gl-balance')>()),
+vi.mock('@/lib/bookkeeping/ledger-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/ledger-balance')>()),
   sumAccountBalance: vi.fn(),
   findOpeningBalanceFloor: vi.fn(),
 }))
@@ -55,7 +55,7 @@ vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal
 }))
 
 const { findFiscalPeriod, createDraftEntry, commitEntry } = await import('@/lib/bookkeeping/engine')
-const { findOpeningBalanceFloor, sumAccountBalance } = await import('@/lib/reconciliation/gl-balance')
+const { findOpeningBalanceFloor, sumAccountBalance } = await import('@/lib/bookkeeping/ledger-balance')
 const { getSkattekontoReconciliationStatus, skattekontoPlannedHolds } = await import(
   '@/lib/reconciliation/skattekonto-reconciliation'
 )

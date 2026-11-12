@@ -51,6 +51,11 @@ describe('GET /api/customers/[id]: the invoices carry the status line columns', 
       'is_self_billed',
       'quote_status',
       'valid_until',
+      // The amount the card prints is the invoice list's (getDisplayTotal):
+      // the invoice's own öresavrundning choice decides it.
+      'ore_rounding',
+      'total',
+      'currency',
     ]) {
       expect(columns, column).toContain(column)
     }

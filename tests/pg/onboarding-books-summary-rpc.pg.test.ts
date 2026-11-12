@@ -1,9 +1,10 @@
 /**
- * pg-real test for get_onboarding_books_summary (migration 20260920215406).
+ * pg-real test for get_onboarding_books_summary (migration 20260920215406,
+ * balances from the ingående balans on since 20261112181800).
  *
  * The RPC is the SQL side of loadBooksFindings (lib/onboarding/findings.ts):
- * latest-period revenue and result plus the all-time 26xx and 1630 balances,
- * summed from the company's own entries. The sums used to be computed in JS
+ * latest-period revenue and result plus the 26xx and 1630 balances, summed
+ * from the company's own entries. The sums used to be computed in JS
  * from lines downloaded through a PostgREST embed; this suite pins the same
  * semantics against real Postgres:
  *
@@ -13,8 +14,10 @@
  *     empty and future periods are skipped and boundary dates land in exactly
  *     one period;
  *   - revenue is class 3 and result classes 3 to 8, credit minus debit;
- *     26xx is credit minus debit, 1630 debit minus credit, both across all
- *     time and independent of fiscal periods;
+ *     26xx is credit minus debit, 1630 debit minus credit, independent of
+ *     fiscal periods: all history for an account that never had an ingående
+ *     balans, and from the latest one on for an account that has
+ *     (account_ib_floor), so the years an IB restates count once;
  *   - the figures agree with get_trial_balance_aggregates on the same rows;
  *   - more than 1000 lines sum completely (the PostgREST page size the old
  *     path had to paginate around);
@@ -74,6 +77,8 @@ async function insertJournalEntry(params: Ctx & {
   lines: Array<{ account: string; debit: number; credit: number }>
   /** Dated outside its own fiscal period, as only rows from before 20261024140200 can be. */
   misdated?: boolean
+  /** 'opening_balance' for an ingående balans; a manual verifikat otherwise. */
+  sourceType?: 'manual' | 'opening_balance'
 }): Promise<string> {
   const id = randomUUID()
   const status = params.status ?? 'posted'
@@ -89,8 +94,8 @@ async function insertJournalEntry(params: Ctx & {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Books summary RPC test', 'manual', $7)`,
-      [id, params.userId, params.companyId, params.fiscalPeriodId, ++voucherCounter, params.entryDate, status],
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Books summary RPC test', $8, $7)`,
+      [id, params.userId, params.companyId, params.fiscalPeriodId, ++voucherCounter, params.entryDate, status, params.sourceType ?? 'manual'],
     )
     for (const line of params.lines) {
       await client.query(
@@ -277,6 +282,92 @@ describe('get_onboarding_books_summary', () => {
     const fp = await period(ctx, 2026)
     await insertJournalEntry({ ...ctx, fiscalPeriodId: fp, entryDate: '2023-06-01', lines: sale(1000), misdated: true })
     expect(await callRpc(ctx.companyId)).toEqual({ ...EMPTY, vat_balance: 250 })
+  })
+
+  it('counts each account from its latest ingående balans on, so the years it restates count once', async () => {
+    // Two imported years, the detail of both left in the ledger.
+    //   2024: IB 1630 = 5 000, +2 000 paid in; VAT 2611 +3 000, IB 2611 = 1 000.
+    //   2025: IB 1630 = 7 000 (5 000 + 2 000), -1 000 drawn; IB 2611 = 4 000, +500.
+    // Every posting sums to 1630 = 13 000 and 26xx = 8 500. What stands on the
+    // accounts is 6 000 and 4 500, the figures /skattekonto and the balance
+    // sheet show. 2641 never had an IB: all its history counts.
+    const ctx = await seedCompany()
+    const fp2024 = await period(ctx, 2024)
+    const fp2025 = await period(ctx, 2025)
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2024, entryDate: '2024-01-01', sourceType: 'opening_balance',
+      lines: [
+        { account: '1630', debit: 5000, credit: 0 },
+        { account: '2611', debit: 0, credit: 1000 },
+        { account: '2099', debit: 0, credit: 4000 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2024, entryDate: '2024-06-01',
+      lines: [
+        { account: '1630', debit: 2000, credit: 0 },
+        { account: '1930', debit: 0, credit: 2000 },
+      ],
+    })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2024, entryDate: '2024-09-01', lines: sale(12000) })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2025, entryDate: '2025-01-01', sourceType: 'opening_balance',
+      lines: [
+        { account: '1630', debit: 7000, credit: 0 },
+        { account: '2611', debit: 0, credit: 4000 },
+        { account: '2099', debit: 0, credit: 3000 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2025, entryDate: '2025-03-01',
+      lines: [
+        { account: '1930', debit: 1000, credit: 0 },
+        { account: '1630', debit: 0, credit: 1000 },
+      ],
+    })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2025, entryDate: '2025-04-01', lines: sale(2000) })
+    // Input VAT on an account no ingående balans ever named, in both years.
+    for (const [fp, date] of [[fp2024, '2024-10-01'], [fp2025, '2025-05-01']] as const) {
+      await insertJournalEntry({
+        ...ctx, fiscalPeriodId: fp, entryDate: date,
+        lines: [
+          { account: '5010', debit: 400, credit: 0 },
+          { account: '2641', debit: 100, credit: 0 },
+          { account: '1930', debit: 0, credit: 500 },
+        ],
+      })
+    }
+
+    const summary = await callRpc(ctx.companyId)
+    expect(summary.ledger_1630).toBe(6000) // 7 000 - 1 000, not 13 000
+    expect(summary.ledger_skattekonto).toBe(6000)
+    expect(summary.vat_balance).toBe(4300) // 2611: 4 000 + 500; 2641: -100 - 100
+    // The period figures never read an ingående balans: class 3 of 2025.
+    expect(summary.period_name).toBe('2025')
+    expect(summary.revenue).toBe(2000)
+  })
+
+  it('an opening_balance verifikat in mid-year floors nothing', async () => {
+    // account_ib_floor reads a floor only on a fiscal year's first day: a
+    // payment an import labelled opening_balance must not drop the months
+    // before it.
+    const ctx = await seedCompany()
+    const fp = await period(ctx, 2026)
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp, entryDate: '2026-02-01',
+      lines: [
+        { account: '1630', debit: 800, credit: 0 },
+        { account: '1930', debit: 0, credit: 800 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp, entryDate: '2026-06-15', sourceType: 'opening_balance',
+      lines: [
+        { account: '1630', debit: 200, credit: 0 },
+        { account: '1930', debit: 0, credit: 200 },
+      ],
+    })
+    expect((await callRpc(ctx.companyId)).ledger_1630).toBe(1000)
   })
 
   it('agrees with get_trial_balance_aggregates on the same rows', async () => {

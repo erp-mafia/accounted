@@ -11,7 +11,7 @@ import {
 } from '@/lib/skatteverket/skattekonto-account'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { createLogger } from '@/lib/logger'
-import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
+import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import {
   getSkattekontoReconciliationStatus,
   skattekontoPlannedHolds,
@@ -171,17 +171,11 @@ type VatReceivableBalanceReader = (eventDate: string | undefined) => Promise<num
  */
 function readVatReceivableBalance(supabase: SupabaseClient, companyId: string): VatReceivableBalanceReader {
   return async (eventDate) => {
-    const cutoffDate = eventDate ?? todayIsoStockholm()
-    let floorDate: string | null = null
     try {
-      floorDate = (await findOpeningBalanceFloor(supabase, companyId, VAT_REFUND_ACCOUNT, cutoffDate))?.date ?? null
+      return await accountBalanceThrough(supabase, companyId, VAT_REFUND_ACCOUNT, eventDate ?? todayIsoStockholm())
     } catch {
       return null
     }
-    return sumAccountBalance(supabase, companyId, VAT_REFUND_ACCOUNT, {
-      ...(floorDate ? { fromDate: floorDate } : {}),
-      cutoffDate,
-    })
   }
 }
 

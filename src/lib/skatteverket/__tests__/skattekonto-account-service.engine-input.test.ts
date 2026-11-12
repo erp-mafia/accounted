@@ -29,7 +29,7 @@ vi.mock('@/lib/bookkeeping/chart-of-accounts-service', () => ({
   createAccount: vi.fn(async () => ({ ok: true, data: {} })),
 }))
 const balances = vi.hoisted(() => new Map<string, number>())
-vi.mock('@/lib/reconciliation/gl-balance', () => ({
+vi.mock('@/lib/bookkeeping/ledger-balance', () => ({
   findOpeningBalanceFloor: vi.fn(async () => null),
   sumAccountBalance: vi.fn(async (_s: unknown, _c: unknown, account: string) => balances.get(account) ?? 0),
 }))

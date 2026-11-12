@@ -15,7 +15,6 @@
  * (requireCompanyAdmin, same as every company_settings write); the draft is
  * an ordinary draft verifikat (any non-viewer).
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { activateAccounts, createAccount } from '@/lib/bookkeeping/chart-of-accounts-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -29,7 +28,7 @@ import { committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
-import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
+import { accountBalanceThrough } from '@/lib/bookkeeping/account-balance'
 import type { EntityType } from '@/types'
 import {
   SKATTEKONTO_EQUITY_ACCOUNT_NAME,
@@ -67,20 +66,6 @@ const ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan ändr
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 type StateRead = { ok: true; data: SkattekontoAccountState } | Failure
 
-async function balanceThrough(
-  supabase: SupabaseClient,
-  companyId: string,
-  account: SkattekontoLedgerAccount,
-  asOf: string,
-): Promise<number | null> {
-  const floor = await findOpeningBalanceFloor(supabase, companyId, account, asOf)
-  const balance = await sumAccountBalance(supabase, companyId, account, {
-    ...(floor ? { fromDate: floor.date } : {}),
-    cutoffDate: asOf,
-  })
-  return balance === null ? null : roundOre(balance)
-}
-
 async function readState(ctx: OperationContext, asOf: string): Promise<StateRead> {
   const { supabase, companyId } = ctx
   const { data: settings, error } = await supabase
@@ -98,7 +83,7 @@ async function readState(ctx: OperationContext, asOf: string): Promise<StateRead
   ])
   const balances: SkattekontoAccountBalance[] = []
   for (const candidate of choices) {
-    const balance = await balanceThrough(supabase, companyId, candidate, asOf)
+    const balance = await accountBalanceThrough(supabase, companyId, candidate, asOf)
     if (balance === null) {
       return { ok: false, code: 'UNKNOWN_ERROR', messageSv: `Kunde inte läsa saldot på konto ${candidate}.` }
     }

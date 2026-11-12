@@ -88,4 +88,15 @@ describe('gnubok_vat_close_check: net due is ruta 49 as filed', () => {
     )
     expect(report.summary).toBe('Moms att få tillbaka: 6141 kr')
   })
+
+  it('the VAT report carries the filed amount as a number beside the öre sum', async () => {
+    const report = await computeVatReport(
+      { period_type: 'quarterly', year: 2026, period: 3 },
+      'company-1',
+      mockSupabase(SETTINGS),
+    )
+    // What a surface states as the amount, and the sum it is not.
+    expect(report.net_filed).toBe(-6141)
+    expect(report.rutor.ruta49).toBe(-6140.1)
+  })
 })

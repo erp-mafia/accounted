@@ -37,6 +37,8 @@ import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
@@ -63,6 +65,8 @@ interface RelatedInvoice {
   status: InvoiceStatus
   total: number
   currency: string
+  /** The invoice's own öresavrundning choice; null follows the company setting. */
+  ore_rounding: boolean | null
   remaining_amount: number | null
   paid_at: string | null
   document_type: string | null
@@ -91,6 +95,8 @@ export default function CustomerDetailPage({
   const tCommon = useTranslations('common')
   // The Swedish calendar day the invoices' overdue line reads (lib/invoices/overdue.ts).
   const today = todayIsoStockholm()
+  // The company's öresavrundning, for an invoice without a choice of its own.
+  const { settings: companySettings } = useCompanySettings()
   const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
@@ -507,6 +513,11 @@ export default function CustomerDetailPage({
                   ? { date: formatDate(statusDisplay.values.date) }
                   : statusDisplay.values
               const statusLabel = statusDisplay.labelKey ? tInvoices(statusDisplay.labelKey, statusValues) : invoice.status
+              // The amount the invoice list prints (lib/bookkeeping/invoice-rounding.ts): öresavrundning applied.
+              const displayedTotal = getDisplayTotal(
+                { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
+                companySettings,
+              ).displayed
               return (
                 <Link
                   key={invoice.id}
@@ -525,7 +536,7 @@ export default function CustomerDetailPage({
                     {formatDate(invoice.invoice_date)}
                   </span>
                   <span className="ml-auto tabular-nums">
-                    {formatCurrency(invoice.total, invoice.currency)}
+                    {formatCurrency(displayedTotal, invoice.currency)}
                   </span>
                   {/* Chips mark exceptions: sent and paid render as muted text. */}
                   {statusDisplay.chip ? (

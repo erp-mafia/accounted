@@ -284,7 +284,7 @@ Example response `200`:
 **Retrieve a single customer by id.**
 `scope:customers:read · risk:low · idempotent`
 
-Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
+Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response; each carries the status the invoice endpoints report, so a sent invoice past its due_date with remaining_amount > 0 reads overdue. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
 
 **Use when:** You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.
 **Do not use for:** Listing customers (use the list endpoint). Looking up arbitrary supplier or employee records (different resources).

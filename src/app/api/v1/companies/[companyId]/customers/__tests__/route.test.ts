@@ -488,6 +488,55 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.meta.partial_expansions).toBeUndefined()
   })
 
+  // Overdue is derived, never stored (lib/invoices/overdue.ts): the expansion
+  // returned the stored status, so an invoice v1 /invoices reported as overdue
+  // read sent here.
+  it('reports each open invoice with the status the invoice endpoints report', async () => {
+    const open = { invoice_date: '2020-01-01', currency: 'SEK', total: 1000, remaining_amount: 1000, ore_rounding: false, deduction_total: 0, credited_invoice_id: null }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SAMPLE_CUSTOMER, error: null },
+        invoices: {
+          data: [
+            { ...open, id: 'inv-past-due', invoice_number: 'F-1', due_date: '2020-01-31', status: 'sent' },
+            { ...open, id: 'inv-not-due', invoice_number: 'F-2', due_date: '2999-12-31', status: 'sent' },
+            { ...open, id: 'inv-moved', invoice_number: 'F-3', due_date: '2999-12-31', status: 'overdue' },
+            { ...open, id: 'inv-partly', invoice_number: 'F-4', due_date: '2020-01-31', status: 'partially_paid', remaining_amount: 400 },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const statusOf = Object.fromEntries(
+      (body.data.invoices as Array<{ id: string; status: string }>).map((invoice) => [invoice.id, invoice.status]),
+    )
+    expect(statusOf).toEqual({
+      // Stored as sent, past due with money left: overdue, as v1 /invoices says.
+      'inv-past-due': 'overdue',
+      'inv-not-due': 'sent',
+      // A stored overdue whose due date moved is no longer overdue.
+      'inv-moved': 'sent',
+      // Partly paid stays partly paid, overdue or not.
+      'inv-partly': 'partially_paid',
+    })
+    // The response shape is unchanged.
+    expect(Object.keys(body.data.invoices[0]).sort()).toEqual(
+      ['amount_to_pay', 'currency', 'due_date', 'id', 'invoice_date', 'invoice_number', 'ore_rounding_amount', 'remaining_amount', 'status', 'total'],
+    )
+    expect(body.meta.partial_expansions).toBeUndefined()
+  })
+
   it('degrades the expansion, never a guessed figure, when the company setting cannot be read', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

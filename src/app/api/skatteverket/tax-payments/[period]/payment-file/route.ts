@@ -15,6 +15,9 @@ import { roundOre } from '@/lib/money'
 import { fileResponse } from '@/lib/api/file-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { readAgiPaymentPeriodConflict } from '@/lib/deadlines/agi-payable-declaration'
+import { getAgiPaymentDueDate } from '@/lib/tax/deadline-config'
+import { nextBankDayIso, previousBankDayIso } from '@/lib/payments/bank-days'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Generate the payment file for paying skatt + arbetsgivaravgifter for a
@@ -143,9 +146,34 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }
 
-  // Payment date = AGI deadline, which is the 12th of the following month
-  // (17th in Jan/Aug for ≤40 MSEK turnover, but we play safe with 12th here).
-  const paymentDate = computeTaxPaymentDate(periodYear, periodMonth)
+  // The money leaves the bank the banking day before the period's due day
+  // (getAgiPaymentDueDate), so it is booked on the skattekonto when the due
+  // day comes: the day Betala via banken picks for the same payment
+  // (lib/payments/orders/prepare-skattekonto.ts). A file made after that day
+  // leaves on the first banking day from today. The file used to spell out
+  // the 12th of every month itself: a Saturday or Sunday whenever the 12th
+  // was one, and the due day itself, with no margin, in every other month.
+  const { data: taxSettings, error: taxSettingsError } = await supabase
+    .from('company_settings')
+    .select('vat_registered, vat_taxable_base_over_40m')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  // Thrown, not read as "a small company": above 40 MSEK the due day differs
+  // (the wrapper answers the failure).
+  if (taxSettingsError) throw taxSettingsError
+  const dueDate = getAgiPaymentDueDate(periodYear, periodMonth, {
+    vat_registered: taxSettings?.vat_registered === true,
+    vat_taxable_base_over_40m: taxSettings?.vat_taxable_base_over_40m === true,
+  })
+  if (!dueDate) {
+    return NextResponse.json(
+      { error: 'Ogiltig period. Använd YYYY-MM (t.ex. 2026-04).' },
+      { status: 400 }
+    )
+  }
+  const dayBeforeDue = previousBankDayIso(dueDate)
+  const today = todayIsoStockholm()
+  const paymentDate = dayBeforeDue < today ? nextBankDayIso(today) : dayBeforeDue
 
   let fileContent: Buffer
   let filename: string
@@ -280,15 +308,3 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   },
   { requireWrite: true },
 )
-
-/**
- * Tax payment deadline = the 12th of the month *following* the AGI period.
- * (Skatteverket also accepts the 17th in Jan/Aug for turnover ≤40 MSEK, but
- * the conservative date is the 12th: money must be on the Skattekonto by
- * then to avoid kostnadsränta.)
- */
-function computeTaxPaymentDate(periodYear: number, periodMonth: number): string {
-  const deadlineMonth = periodMonth === 12 ? 1 : periodMonth + 1
-  const deadlineYear = periodMonth === 12 ? periodYear + 1 : periodYear
-  return `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`
-}
