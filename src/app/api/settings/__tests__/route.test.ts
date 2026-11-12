@@ -1610,6 +1610,90 @@ describe('PUT /api/settings', () => {
   })
 })
 
+// crm#1790: the Lön settings page sends employer_registered only when the
+// person set the switch (lib/salary/employer-switches.ts). The save must keep
+// an omitted flag out of the write, so an unanswered NULL stays NULL and the
+// AGI rows can still come from a salaried employee (isAgiEmployer).
+describe('PUT /api/settings: employer flags', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+  const unanswered = {
+    company_id: 'company-1',
+    entity_type: 'aktiebolag',
+    onboarding_complete: true,
+    pays_salaries: false,
+    employer_registered: null,
+    employer_seasonal: false,
+  }
+
+  it('a save without employer_registered leaves it out of the write, so an unanswered flag stays NULL', async () => {
+    enqueueMany([
+      { data: unanswered },                                    // oldSettings
+      { data: { id: 's1', ...unanswered, salary_pay_day: 27 } }, // update ... returning
+    ])
+
+    const response = await put({ salary_pay_day: 27, pays_salaries: false, employer_seasonal: false })
+
+    expect(response.status).toBe(200)
+    // What reaches PostgREST: the payload names every column and JSON drops
+    // the ones the request left undefined.
+    const sent = JSON.parse(JSON.stringify(findCall('company_settings', 'update')?.[0]))
+    expect(sent).toMatchObject({ salary_pay_day: 27, pays_salaries: false, employer_seasonal: false })
+    expect(sent).not.toHaveProperty('employer_registered')
+    expect(deadlineMocks.regenerate).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ employer_registered: null }),
+    )
+  })
+
+  it('writes an explicit false, and seasonal goes off with it', async () => {
+    const registered = { ...unanswered, pays_salaries: true, employer_registered: true, employer_seasonal: true }
+    enqueueMany([
+      { data: registered },
+      { data: { id: 's1', ...registered, employer_registered: false, employer_seasonal: false } },
+    ])
+
+    const response = await put({ employer_registered: false, employer_seasonal: true })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toMatchObject({
+      employer_registered: false,
+      employer_seasonal: false,
+    })
+  })
+
+  it('writes an explicit true over an unanswered flag', async () => {
+    enqueueMany([
+      { data: unanswered },
+      { data: { id: 's1', ...unanswered, employer_registered: true } },
+    ])
+
+    const response = await put({ pays_salaries: false, employer_registered: true, employer_seasonal: false })
+    const { body } = await parseJsonResponse<{ data: { employer_registered: boolean | null } }>(response)
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toMatchObject({ employer_registered: true })
+    expect(body.data.employer_registered).toBe(true)
+  })
+
+  it('returns 400 for an employer_registered that is not a boolean, and writes nothing', async () => {
+    const response = await put({ employer_registered: 'yes' })
+
+    expect(response.status).toBe(400)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+})
+
 // crm#1206: the company's own org number is writable while no valid one is
 // stored (either copy), never replaced once one is (lib/company/org-number-rule.ts).
 describe('PUT /api/settings: org number', () => {

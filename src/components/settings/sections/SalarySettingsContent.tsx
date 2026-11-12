@@ -25,6 +25,7 @@ import { useSettings } from '@/components/settings/useSettings'
 import { usePaymentFileAccount } from '@/lib/hooks/use-payment-file-account'
 import { payingAccountDisplay } from '@/lib/payments/paying-account-label'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveEmployerSwitches } from '@/lib/salary/employer-switches'
 import {
   DEFAULT_SALARY_CALCULATION_POLICY,
   SALARY_CALCULATION_POLICY_KEYS,
@@ -88,12 +89,12 @@ export function SalarySettingsContent() {
   const effectiveShowEmployerCost = showEmployerCost ?? settings.salary_payslip_show_employer_cost ?? true
   const effectiveShowBreakdown = showBreakdown ?? settings.salary_payslip_show_breakdown ?? true
   const effectiveRegionalSupport = regionalSupport ?? settings.salary_regional_support ?? false
-  const effectivePays = paysSalaries ?? settings.pays_salaries ?? false
-  // Fall back to pays_salaries for rows saved before the registration flag
-  // existed; saving attests the shown value.
-  const effectiveRegistered =
-    employerRegistered ?? settings.employer_registered ?? settings.pays_salaries ?? false
-  const effectiveSeasonal = employerSeasonal ?? settings.employer_seasonal ?? false
+  // An unanswered employer_registered shows pays_salaries and is saved only
+  // once the person sets it: an untouched NULL stays NULL (crm#1790).
+  const employer = resolveEmployerSwitches(settings, { paysSalaries, employerRegistered, employerSeasonal })
+  const effectivePays = employer.paysSalaries
+  const effectiveRegistered = employer.employerRegistered
+  const effectiveSeasonal = employer.employerSeasonal
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
   // {} on a company that never touched the conventions = every default.
   const currentPolicy: SalaryCalculationPolicy = {
@@ -117,9 +118,7 @@ export function SalarySettingsContent() {
       salary_payslip_show_breakdown: effectiveShowBreakdown,
       salary_regional_support: effectiveRegionalSupport,
       salary_deviation_period: deviationPeriod,
-      pays_salaries: effectivePays,
-      employer_registered: effectiveRegistered,
-      employer_seasonal: effectiveRegistered && effectiveSeasonal,
+      ...employer.updates,
       // All six conventions travel together: the internal settings route
       // stores the object as a whole.
       salary_calculation_policy: readPolicyFromForm(formData),
