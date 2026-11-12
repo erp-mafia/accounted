@@ -1697,6 +1697,10 @@ export interface SupplierInvoicePayment {
   notes: string | null
 
   created_at: string
+
+  /** Set by GET /api/supplier-invoices/[id] on a row that is a plain link to
+   *  an existing verifikat, which "Koppla bort" can take back. */
+  can_unlink_voucher?: boolean
 }
 
 // Invoice Payment (partial payments)

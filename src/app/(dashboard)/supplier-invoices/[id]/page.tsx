@@ -199,7 +199,7 @@ export default function SupplierInvoiceDetailPage() {
   // shows the spinner while the others only disable. A single boolean put
   // identical pending feedback (none) on every button at once.
   const [processingAction, setProcessingAction] = useState<
-    'approve' | 'book' | 'bank_entered' | 'auto_debit' | 'credit' | 'uncredit' | 'delete' | null
+    'approve' | 'book' | 'bank_entered' | 'auto_debit' | 'credit' | 'uncredit' | 'unlink_voucher' | 'delete' | null
   >(null)
   const isProcessing = processingAction !== null
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
@@ -443,6 +443,55 @@ export default function SupplierInvoiceDetailPage() {
       // the route swap instead of re-enabling the button mid-navigation.
       setProcessingAction(null)
     })
+  }
+
+  // "Koppla bort": the undo of a link to an existing verifikat (Markera som
+  // betald, Befintlig verifikation). Only the payment row goes; the verifikat
+  // is not touched and the invoice becomes unpaid again by the row's amount.
+  async function handleUnlinkVoucher(payment: SupplierInvoicePayment) {
+    const amount = formatCurrency(payment.amount, payment.currency)
+    const ok = await confirmAction({
+      title: t('unlink_voucher_confirm_title'),
+      description: t('unlink_voucher_confirm_description', { amount }),
+      confirmLabel: t('unlink_voucher_confirm_label'),
+      variant: 'warning',
+    })
+    if (!ok) return
+    setProcessingAction('unlink_voucher')
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/unlink-voucher`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_id: payment.id }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({
+          title: t('unlink_voucher_failed_title'),
+          description: getErrorMessage(result, { context: 'supplier_invoice' }),
+          variant: 'destructive',
+        })
+        // A refusal usually means the row moved since the page was read.
+        await fetchInvoice()
+      } else {
+        const description = t('unlink_voucher_success_description', { amount })
+        toast({
+          title: t('unlink_voucher_success_title'),
+          description: result?.data?.document_on_voucher
+            ? `${description} ${t('unlink_voucher_success_document_note')}`
+            : description,
+        })
+        await Promise.all([fetchInvoice(), mutateLifecycle()])
+      }
+    } catch (err) {
+      toast({
+        title: t('unlink_voucher_failed_title'),
+        description: getErrorMessage(err, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setProcessingAction(null)
+    }
   }
 
   async function handleUncredit() {
@@ -1121,6 +1170,19 @@ export default function SupplierInvoiceDetailPage() {
                     >
                       {t('view_voucher')}
                     </Link>
+                  )}
+                  {/* Only on a plain link to an existing verifikat (the
+                      server marks the row); a booked payment is undone by a
+                      storno of its verifikat instead. */}
+                  {p.can_unlink_voucher && canWrite && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                      onClick={() => void handleUnlinkVoucher(p)}
+                      disabled={isProcessing}
+                    >
+                      {t('unlink_voucher_action')}
+                    </button>
                   )}
                 </li>
               ))}

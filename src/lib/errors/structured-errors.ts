@@ -8923,6 +8923,74 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Unlink a SUPPLIER invoice from a linked verifikat (the undo of the link
+// above; unlink_supplier_invoice_from_voucher, migration 20261112100000)
+// ─────────────────────────────────────────────────────────────────
+
+const UNLINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
+  UNLINK_SI_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Betalningsraden kunde inte hittas på leverantörsfakturan.',
+    message_en: 'The payment row was not found on this supplier invoice.',
+  },
+  // details.reason: bank_transaction (booked from a bank row) or no_voucher.
+  UNLINK_SI_VOUCHER_NOT_A_LINK: {
+    httpStatus: 409,
+    message_sv:
+      'Den här betalningen är inte en koppling till en befintlig verifikation och kan inte kopplas bort. En betalning som bokförts från en banktransaktion ångras från transaktionen.',
+    message_en:
+      'This payment is not a link to an existing voucher and cannot be unlinked. A payment booked from a bank transaction is undone from the transaction.',
+  },
+  UNLINK_SI_VOUCHER_PAYMENT_VOUCHER: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen är en betalningsverifikation som bokfördes när betalningen registrerades, och kan inte kopplas bort. Makulera verifikationen i stället, då blir fakturan obetald igen.',
+    message_en:
+      'The voucher is a payment voucher posted when the payment was registered and cannot be unlinked. Reverse the voucher instead; that makes the invoice unpaid again.',
+  },
+  UNLINK_SI_VOUCHER_SETOFF: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen är en kvittning mot en kundfaktura och kan inte kopplas bort. Makulera kvittningens verifikation i stället, då får båda fakturorna tillbaka beloppet.',
+    message_en:
+      'This payment is a set-off against a customer invoice and cannot be unlinked. Reverse the set-off voucher instead; both invoices then get the amount back.',
+  },
+  UNLINK_SI_VOUCHER_SETTLEMENT_EVIDENCE: {
+    httpStatus: 409,
+    message_sv:
+      'Raden är ett underlag för en betalning som redan var registrerad på fakturan, inte en koppling som gjorde fakturan betald. Den kan inte kopplas bort här.',
+    message_en:
+      'This row is evidence for a payment the invoice already carried, not a link that made the invoice paid. It cannot be unlinked here.',
+  },
+  UNLINK_SI_VOUCHER_FOREIGN_CURRENCY: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är i utländsk valuta. Kopplingen kan ha bokfört en verifikation för kursdifferensen, och den ångras inte av att kopplingen tas bort. Kopplingen kan därför inte tas bort här. Kontakta supporten så hjälper vi dig.',
+    message_en:
+      'The invoice is in a foreign currency. The link may have posted a voucher for the exchange difference, which removing the link does not undo, so it cannot be removed here. Contact support for help.',
+  },
+  UNLINK_SI_VOUCHER_INVOICE_NOT_SETTLED: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan är inte längre betald eller delbetald (den kan ha krediterats). Kopplingen kan inte tas bort i det läget.',
+    message_en:
+      'The supplier invoice is no longer paid or partially paid (it may have been credited). The link cannot be removed in that state.',
+  },
+  UNLINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED: {
+    httpStatus: 409,
+    message_sv:
+      'Bokslutets periodisering enligt kontantmetoden är redan bokförd för ett år som omfattar både fakturan och betalningen, och den räknade fakturan som betald. Rätta periodiseringen först (storno), ta sedan bort kopplingen och bokför periodiseringen igen.',
+    message_en:
+      'A posted kontantmetod year-end cut-off covers both the invoice and the payment and counted this invoice as paid. Correct the cut-off first (storno), then remove the link and post the cut-off again.',
+  },
+  UNLINK_SI_VOUCHER_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Databasfel när kopplingen skulle tas bort. Ingenting ändrades. Försök igen.',
+    message_en: 'Database error while removing the link. Nothing was changed. Please retry.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Batch allocation (match_batch_allocate RPC)
 // ─────────────────────────────────────────────────────────────────
 
@@ -13094,6 +13162,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...INVOICE_REGISTER_BOOKED,
   ...SI_REGISTER_BOOKED,
   ...LINK_SI_VOUCHER,
+  ...UNLINK_SI_VOUCHER,
   ...MATCH_BATCH,
   ...BULK_BOOK,
   ...MATCH_SI,

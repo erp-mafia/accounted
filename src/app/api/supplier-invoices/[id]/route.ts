@@ -14,6 +14,7 @@ import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { selfBilledLockedFields } from '@/lib/supplier-invoices/self-billing/edit-guard'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { unlinkablePaymentIds, type UnlinkablePaymentRow } from '@/lib/invoices/supplier-voucher-unlink'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -48,7 +49,19 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     creditedOriginal = original ?? null
   }
 
-  return NextResponse.json({ data: { ...invoice, credited_original: creditedOriginal } })
+  // Which payment rows are a plain link to an existing verifikat, the kind
+  // "Koppla bort" takes back (unlink-voucher). A hint for the page: the RPC
+  // behind the action decides.
+  const payments = (invoice.payments ?? []) as Array<UnlinkablePaymentRow & Record<string, unknown>>
+  const unlinkable = new Set(await unlinkablePaymentIds(supabase, companyId, invoice, payments))
+
+  return NextResponse.json({
+    data: {
+      ...invoice,
+      payments: payments.map((p) => (unlinkable.has(p.id) ? { ...p, can_unlink_voucher: true } : p)),
+      credited_original: creditedOriginal,
+    },
+  })
   },
 )
 

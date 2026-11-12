@@ -3205,6 +3205,15 @@ export const LinkSupplierInvoiceToVoucherSchema = z.object({
 })
 
 /**
+ * Undo a link made with LinkSupplierInvoiceToVoucherSchema: `payment_id` is
+ * the supplier_invoice_payments row the link wrote. The row is removed and
+ * the invoice gets its amount back; the verifikat is not touched.
+ */
+export const UnlinkSupplierInvoiceFromVoucherSchema = z.object({
+  payment_id: uuid,
+})
+
+/**
  * Bulk-book N bank transactions on the same date into one combined verifikat
  * (samlingsverifikation per BFL 5 kap 6§). Two flows multiplexed by which
  * field is set:
