@@ -583,6 +583,22 @@ export const RC_BASIS_MISSING_HINT =
   'kontot i kontoplanen först.'
 
 /**
+ * Hint for a pair finding whose moms side is booked but under a krona
+ * (VatDeclarationCheck.belowOneKrona: FK001, FK003 or FK005 by presence,
+ * vat-declaration-checks.ts). The whole-krona rule empties the moms rutor,
+ * the ledger is not short, so the default "review the rutor in the ledger"
+ * would send an agent to correct verifikat that are right, or to add moms the
+ * purchase does not carry. Names no amounts to file instead: that is a tax
+ * judgment the product has not made (crm#1822). Exported so the test can pin
+ * the contract.
+ */
+export const VAT_BELOW_ONE_KRONA_HINT =
+  'Rätta ingenting i bokföringen för det här: momsen är bokförd men under en krona och faller bort när ' +
+  'deklarationen lämnas i hela kronor. Lägg inte till, ändra eller storno verifikat för att få kontrollen ' +
+  'att passera. Perioden kan inte lämnas till Skatteverket från Accounted med de här beloppen: säg det till ' +
+  'användaren och hänvisa till Skatteverket för hur perioden ska redovisas.'
+
+/**
  * Hint for the blocking RC_BASIS_MISSING when the period's fiktiv moms is
  * NEGATIVE (rutor 30-32 below zero, rutor 20-24 empty: FK004 by presence,
  * vat-declaration-checks.ts). The basis is missing on the other side: a credit
@@ -1296,7 +1312,10 @@ export async function computeVatCloseCheck(
       // count used to say at the year end (agent feedback seq 878478, #88).
       check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'
     const baseHint =
-      // Only the blocking variant: the advisory RC_BASIS_MISSING (period
+      // Moms booked but under a krona: nothing in the ledger to review or fix.
+      check.belowOneKrona
+        ? VAT_BELOW_ONE_KRONA_HINT
+        : // Only the blocking variant: the advisory RC_BASIS_MISSING (period
       // consistent per rate) and the scan-unavailable one must not be told to
       // add basis pairs, that would double-count rutor 20-24.
       check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
