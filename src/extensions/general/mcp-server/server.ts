@@ -25700,7 +25700,7 @@ export const tools: McpTool[] = [
       }
 
       const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
-      const { getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
+      const { getMappingStats } = await import('@/lib/import/account-mapper')
       const { suggestSIEMappings, remappedSIEAccounts, remappedSIEAccountsText } = await import('@/lib/import/sie-preview-mappings')
       const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
       const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport, loadMappings } = await import('@/lib/import/sie-import')
@@ -25803,7 +25803,11 @@ export const tools: McpTool[] = [
             ? { kind: 'period', import_id: refusal.importId }
             : null
 
-      const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
+      // A 0xxx account with amounts gets a mapping row to fill in: left out,
+      // the list this returns was refused at staging for an account the
+      // agent was never shown.
+      const { sieAccountsOfferedForMapping } = await import('@/lib/import/sie-amounts-without-target')
+      const bookkeepingAccounts = sieAccountsOfferedForMapping(parsed.accounts, [parsed])
       const storedMappings = await loadMappings(supabase, companyId)
       // The dashboard upload's own decision (#3312), so the mappings an agent
       // passes on to gnubok_import_sie are the ones the job accepts: class 9

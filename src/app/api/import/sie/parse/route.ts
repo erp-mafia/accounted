@@ -106,6 +106,12 @@ export const POST = withRouteContext(
       const validation = validateSIEFile(parsed)
 
       if (!validation.valid) {
+        // The answer carries the errors; the log line of the code does not,
+        // so a refused file could not be sorted by cause afterwards.
+        opLog.warn('sie parse: the file failed validation', {
+          errorCount: validation.errors.length,
+          errors: validation.errors.slice(0, 5),
+        })
         return errorResponseFromCode('SIE_PARSE_VALIDATION_FAILED', opLog, {
           requestId,
           details: { errors: validation.errors, warnings: validation.warnings },

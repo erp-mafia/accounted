@@ -79,6 +79,46 @@ describe('POST /import-sie: job refusals', () => {
     expect(body.error.message).not.toContain('kunde inte bekräftas')
   })
 
+  // 2026-11-11: the same fetched year submitted again after a mapping or an
+  // option changed. As a bare CONFLICT it read "En konflikt uppstod. Ladda om
+  // sidan och försök igen", and a reload never helps.
+  it('409 with its own sentence when the same file is retried with another mapping or other options', async () => {
+    ;(submitSIEJob as Mock).mockRejectedValueOnce(jobDatabaseError({
+      code: '23505', message: 'SIE retry has different mapping or options',
+    }))
+    const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
+    expect(body.error.message).toBe('Den här filen har redan en import för räkenskapsåret, med en annan kontomappning eller andra ' +
+      'inställningar än de du valde nu. Ska filen läsas in med de nya valen: öppna importhistoriken och ångra den tidigare importen först.')
+  })
+
+  it('keeps CONFLICT for any other unique violation', () => {
+    expect(jobDatabaseError({ code: '23505', message: 'duplicate key value violates unique constraint "x"' }).code).toBe('CONFLICT')
+  })
+
+  // 2026-11-12: Fortnox's first year started 2026-09-21, the company's
+  // 2026-10-05. ensureFiscalPeriod's sentence says what to change; wrapped as
+  // SIE_IMPORT_UNEXPECTED the wizard got a 500 "kunde inte bekräftas".
+  it('400 with the sentence when the file\'s fiscal year overlaps a company year without matching it', async () => {
+    const sentence = 'SIE-filens räkenskapsår (2026-09-21 till 2027-12-31) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ' +
+      '(Första räkenskapsåret 2026/2027: 2026-10-05 till 2027-12-31). Justera räkenskapsåret i Inställningar → Företag så att det matchar ' +
+      'SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.'
+    ;(submitSIEJob as Mock).mockRejectedValueOnce(userFacing(new Error(sentence)))
+    const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))
+    expect(status).toBe(400)
+    expect(body.error.message).toBe(sentence)
+    expect(body.error.code).not.toBe('SIE_IMPORT_UNEXPECTED')
+    expect(ctx.log.error).not.toHaveBeenCalled()
+  })
+
+  it('still answers an unexpected failure as SIE_IMPORT_UNEXPECTED', async () => {
+    ;(submitSIEJob as Mock).mockRejectedValueOnce(new Error('socket hang up'))
+    const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SIE_IMPORT_UNEXPECTED')
+  })
+
   it('409 SIE_IMPORT_LEGACY_REVIEW_REQUIRED when the year to replace is a legacy import', async () => {
     ;(submitSIEJob as Mock).mockRejectedValueOnce(jobDatabaseError({
       code: '55000', message: 'Legacy SIE import requires reviewed reconciliation before replacement',

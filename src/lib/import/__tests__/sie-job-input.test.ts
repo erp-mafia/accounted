@@ -252,7 +252,9 @@ describe('SIE durable input boundaries', () => {
     expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings,
       { ...options, importOpeningBalances: true })).not.toThrow()
     const openingVoucher = '#RAR 0 20260101 20261231\n#UB -1 1930\n#VER A 1 20260101 "Ingående balans"\n{\n#TRANS 1930 {} 100\n#TRANS 2091 {} -100\n}'
-    expect(() => validateSIEJobInput(openingVoucher, parseSIEFile(openingVoucher), mappings,
+    // 2091 carries the voucher's other side, so it needs its target too.
+    expect(() => validateSIEJobInput(openingVoucher, parseSIEFile(openingVoucher),
+      [...mappings, { ...mappings[0], sourceAccount: '2091', targetAccount: '2091' }],
       { ...options, importOpeningBalances: true })).not.toThrow()
   })
 
