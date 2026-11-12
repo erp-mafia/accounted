@@ -77,7 +77,7 @@ import type { TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
 import { bankCoveredByOpenPayments } from './bank-coverage'
 import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { openBankFeedDoor, reachesUncoveredBanks } from './door'
-import { consentFailureText, OPEN_BANKING_FAILURE_TEXTS } from './failure-text'
+import { consentFailureText, OPEN_BANKING_FAILURE_TEXTS, refusalNamesReason } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { enableBankingRowsTakenOver, type HandoverCandidate } from './handover'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
@@ -460,6 +460,35 @@ async function partyFor(
 /** Whether the row's attempt is a co-signer's: the consent was partly signed before this BankID. */
 function isCoSigning(attempt: ConsentAttempt | null): boolean {
   return attempt?.state === 'partially_authorised' || attempt?.co_signing === true
+}
+
+/**
+ * The party a consent is created with, for the method it will be signed
+ * with. A bank that signs both ways fixes the flow when the consent is
+ * created (TPP-Redirect-Preferred, the party's redirectPreferred): a consent
+ * created for BankID in our screen refuses a signing on the bank's own page
+ * ("request does not match the SCA flow the resource was created with", SEB,
+ * every "Signera hos banken" from a phone, 2026-10-30 to 2026-11-10). So the
+ * choice of the bank's page is made before the consent exists and goes with
+ * it. A bank with one way to sign ignores the preference.
+ */
+export function consentPartyFor(party: AisParty, method: ConsentMethod): AisParty {
+  return method === 'redirect' ? { ...party, redirectPreferred: true } : party
+}
+
+/**
+ * A restart the bank refused without a reason the person can act on: the
+ * provider gave no code we have a sentence for, or only its catch-all
+ * (refusalNamesReason). What the banks answered there in production was
+ * about the consent, never the person: "Cannot create consent authorisation
+ * when consentStatus is Rejected" (FORMAT_ERROR), "A consent authorisation
+ * already exist for consent ..." (UNEXPECTED_ERROR). Asking again for the
+ * same consent never answers otherwise.
+ */
+function refusedWithoutReason(failure: Failure): boolean {
+  if (failure.code !== 'BANK_PROVIDER_REFUSED') return false
+  const code = failure.details?.provider_code
+  return !refusalNamesReason(typeof code === 'string' ? code : null)
 }
 
 /** Keep the number a consent for the row was just created with (a new consent overwrites). */
@@ -854,7 +883,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   }
 
   const listingOnly = bank.bic === SVEA_BIC
-  const consentInput = { party: party.party, validUntil: validUntilRequested(now) }
+  const consentInput = { party: consentPartyFor(party.party, method), validUntil: validUntilRequested(now) }
   // A renewal names the consent it replaces. Should Connect refuse over the
   // company's one place anyway, the release frees what the company no longer
   // needs (that consent, and the removed rows' unended ones) before asking
@@ -948,26 +977,54 @@ export async function restartBankFeedConsent(
   // "starta om och välj bankens sida" is this restart, so it goes there when
   // the browser said where to come back to, whatever method it asked for.
   const imposed = row.consent_attempt?.state === 'failed' && row.consent_attempt.failure_code === 'SCA_REDIRECT_UNSUPPORTED'
-  const method: ConsentMethod = imposed && ret ? 'redirect' : input.method ?? row.consent_attempt?.method ?? 'qr'
   // A partly signed consent waits for a co-signer: their own BankID, their
   // number. Any other restart is the same consent again, with the PSU-ID it
   // was created with.
   const coSigning = isCoSigning(row.consent_attempt)
+  // The partly signed consent keeps the way it was created to be signed
+  // (consentPartyFor): one first signed on the bank's page is co-signed
+  // there, when the browser said where to come back to, whatever method it
+  // asked for. The co-signer's screen offers BankID here at a bank that
+  // signs both ways, which that consent would refuse.
+  const coSignsAtBank = coSigning && row.consent_attempt?.method === 'redirect'
+  const method: ConsentMethod = (imposed || coSignsAtBank) && ret ? 'redirect' : input.method ?? row.consent_attempt?.method ?? 'qr'
   const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false, { coSigner: coSigning })
   if (!party.ok) return party.outcome
-  // A consent whose signing window closed is created anew; the attempt record
-  // (listing-only, the row a switch replaces, the return) carries over, and
-  // the new consent names the live one it replaces as the first did (a
-  // renewal's, Svea's listing consent): without it, that consent holds the
-  // company's one place at Connect and the new one is refused.
+  // A consent the bank will not sign again is created anew: one whose signing
+  // window closed (over), and one the bank refuses to start a signing on
+  // without a reason for the person (refusedWithoutReason: rejected at the
+  // bank, already holding its one authorisation, created for another way to
+  // sign). The attempt record (listing-only, the row a switch replaces, the
+  // return) carries over, and the new consent names the live one it replaces
+  // as the first did (a renewal's, Svea's listing consent): without it, that
+  // consent holds the company's one place at Connect and the new one is
+  // refused. A co-signer signs the partly signed consent or none: their
+  // refusal stands.
   const started = await startSigning(ctx, connect, row, party.party, method, ret, { coSigning })
-  if (!started.ok && started.code === 'BANK_CONSENT_OVER') {
+  const refused = !started.ok && !coSigning && refusedWithoutReason(started)
+  if (!started.ok && (started.code === 'BANK_CONSENT_OVER' || refused)) {
     const now = input.now ?? Date.now()
+    // The refused consent is not over at the bank and holds the company's
+    // place at Connect (an unsigned one for a quarter of an hour), so it is
+    // ended first. Connect frees the place whatever the bank answers; when
+    // Connect itself did not answer the place may still be held, and a new
+    // consent refused over it would end the live consent a renewal replaces
+    // (createConsentReplacing's release): then the refusal stands instead.
+    if (refused) {
+      const held = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: row.session_id }).then(
+        () => false,
+        (error: unknown) => {
+          ctx.log.warn('refused bank consent not ended before its replacement', { connectionId: row.id, message: error instanceof Error ? error.message : String(error) })
+          return !(error instanceof BankFeedError) || error.retryable
+        },
+      )
+      if (held) return started
+    }
     let created
     try {
       const replaced = await replacedConsentOf(ctx, connect, row, party.party)
       created = await createConsentReplacing(ctx, connect, {
-        party: party.party,
+        party: consentPartyFor(party.party, method),
         validUntil: validUntilRequested(now),
         ...(row.consent_attempt?.selection?.accounts
           ? { accounts: chosenIbans(row) }
@@ -1399,7 +1456,7 @@ export async function selectBankFeedAccounts(
     try {
       const listingConsentId = row.session_id
       created = await createConsentReplacing(ctx, connect, {
-        party: party.party,
+        party: consentPartyFor(party.party, method),
         validUntil: validUntilRequested(now),
         accounts: ibans.map((iban) => ({ iban })),
       }, listingConsentId

@@ -480,6 +480,23 @@ describe('startBankFeedConsent on the bank\'s own page', () => {
     expect(payload('bank_connections', 'update')[0]).toMatchObject({ consent_attempt: expect.objectContaining({ method: 'qr', state: 'pending' }) })
   })
 
+  it('creates the consent for the way it will be signed: the bank\'s page asked for before the consent exists, our screen otherwise', async () => {
+    // SEB refused every "Signera hos banken" from a phone: the consent was
+    // created for BankID in our screen and the signing asked for the bank's
+    // page ("request does not match the SCA flow the resource was created with").
+    const both = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, redirect: true }), startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign')) })
+    mocks.door.mockResolvedValue({ ok: true, connect: both })
+    const page = stub({ ...orgAnswers(), ...company(), bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }] })
+    expect(await startBankFeedConsent({ ...ctx, supabase: page.supabase }, { bic: 'SWEDSESS', method: 'redirect', signer, returnTo: 'connections', returnOrigin: ORIGIN, now: NOW })).toMatchObject({ ok: true, data: { attempt: { method: 'redirect' } } })
+    expect((both.createConsent as ReturnType<typeof vi.fn>).mock.calls[0][1].party).toMatchObject({ bic: 'SWEDSESS', redirectPreferred: true })
+
+    const screen = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, redirect: true }) })
+    mocks.door.mockResolvedValue({ ok: true, connect: screen })
+    const qr = stub({ ...orgAnswers(), ...company(), bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }] })
+    expect(await startBankFeedConsent({ ...ctx, supabase: qr.supabase }, { bic: 'SWEDSESS', method: 'qr', signer, returnTo: 'connections', returnOrigin: ORIGIN, now: NOW })).toMatchObject({ ok: true, data: { attempt: { method: 'qr' } } })
+    expect((screen.createConsent as ReturnType<typeof vi.fn>).mock.calls[0][1].party).not.toHaveProperty('redirectPreferred')
+  })
+
   it('an unknown sparbank is refused before the consent exists', async () => {
     const connect = fakeConnect()
     mocks.door.mockResolvedValue({ ok: true, connect })
@@ -781,6 +798,28 @@ describe('restartBankFeedConsent', () => {
     expect(payload('bank_connections', 'update')[0]).toMatchObject({ authorization_id: 'auth-2', consent_attempt: expect.objectContaining({ state: 'pending' }) })
   })
 
+  it('a consent first signed on the bank\'s page is co-signed there, whatever the co-signer\'s screen asked for', async () => {
+    // The consent was created for the bank's page (consentPartyFor); the
+    // co-signer's screen offers BankID here at a bank that signs both ways.
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/co-sign', 'auth-co')) })
+    mocks.connect.mockReturnValue(connect)
+    mocks.signerOnFile.mockResolvedValue(null)
+    const joint = () => row({ user_id: 'first-signer', consent_attempt: { method: 'redirect', state: 'partially_authorised', sca_status: 'finalised', return_to: 'connections', started_at: '2026-10-10T09:00:00Z' } })
+    const second = { ...signer, personalNumber: '900209-2386' }
+    const { supabase } = stub({ bank_connections: [{ data: joint(), error: null }, { data: null, error: null }], ...orgAnswers() })
+    const result = await restartBankFeedConsent({ ...ctx, userId: 'second-signer', supabase }, { connectionId: CONNECTION, method: 'qr', signer: second, returnOrigin: ORIGIN, now: NOW })
+    expect(result).toMatchObject({ ok: true, data: { attempt: { method: 'redirect', challenge: expect.objectContaining({ redirectUrl: 'https://bank.example/co-sign' }) } } })
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1', method: 'redirect', returnUrl: `${ORIGIN}/settings/connections?bank_connect=${CONNECTION}` }))
+    expect(connect.createConsent).not.toHaveBeenCalled()
+
+    // Nowhere to come back to: the asked-for method stands, as after an imposed page.
+    const qr = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-q', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
+    mocks.connect.mockReturnValue(qr)
+    const bare = stub({ bank_connections: [{ data: joint(), error: null }, { data: null, error: null }], ...orgAnswers() })
+    await restartBankFeedConsent({ ...ctx, userId: 'second-signer', supabase: bare.supabase }, { connectionId: CONNECTION, method: 'qr', signer: second, now: NOW })
+    expect(qr.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1', method: 'qr' }))
+  })
+
   it('after the bank imposed its own page, a restart that knows where to come back goes there whatever method was asked for', async () => {
     const connect = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign-3', 'auth-r3')) })
     mocks.connect.mockReturnValue(connect)
@@ -795,6 +834,134 @@ describe('restartBankFeedConsent', () => {
     mocks.connect.mockReturnValue(qr)
     const bare = stub({ bank_connections: [{ data: imposed(), error: null }, { data: null, error: null }], ...orgAnswers() })
     expect(await restartBankFeedConsent({ ...ctx, supabase: bare.supabase }, { connectionId: CONNECTION, method: 'qr', now: NOW })).toMatchObject({ ok: true, data: { attempt: { method: 'qr' } } })
+  })
+
+  describe('when the bank refuses to sign the same consent again', () => {
+    const STARTED = { providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }
+    const refusal = (providerCode: string | null) => new BankFeedRefusedError('Connector ais.startConsentSigning: The bank or the bank reading provider refused the request', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode })
+    const failed = (attempt: Record<string, unknown> = {}) => row({ consent_attempt: { method: 'qr', state: 'failed', failure_code: 'UNEXPECTED_ERROR', ...attempt } })
+
+    // What the banks answered in production: FORMAT_ERROR "Cannot create
+    // consent authorisation when consentStatus is Rejected" (2026-11-02) and
+    // UNEXPECTED_ERROR "A consent authorisation already exist for consent ..."
+    // (2026-11-09). Both ended in the generic line, on every Försök igen.
+    it.each([['FORMAT_ERROR'], ['UNEXPECTED_ERROR'], [null]])('a refusal with no reason for the person (%s) ends that consent and goes on with a new one', async (providerCode) => {
+      const connect = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValueOnce(refusal(providerCode)).mockResolvedValue(STARTED),
+        createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase, payload } = stub({ bank_connections: [{ data: failed(), error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+      const result = await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })
+      expect(result).toMatchObject({ ok: true, data: { connection_id: CONNECTION, attempt: { authorisation_id: 'auth-2', method: 'qr', state: 'pending' } } })
+      expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1' }))
+      expect(connect.createConsent).toHaveBeenCalledTimes(1)
+      expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-2', authorization_id: null })
+      expect(connect.startConsentSigning).toHaveBeenCalledTimes(2)
+      expect(connect.startConsentSigning).toHaveBeenLastCalledWith('co-1', expect.objectContaining({ consentId: 'consent-2', method: 'qr' }))
+    })
+
+    it('the new consent is created for the bank\'s page when the restart signs there', async () => {
+      const connect = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValueOnce(refusal('FORMAT_ERROR')).mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign-4', 'auth-r4')),
+        createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed({ method: 'redirect', return_to: 'banking' }), error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, returnOrigin: ORIGIN, now: NOW })).toMatchObject({ ok: true, data: { attempt: { method: 'redirect' } } })
+      expect((connect.createConsent as ReturnType<typeof vi.fn>).mock.calls[0][1].party).toMatchObject({ redirectPreferred: true })
+    })
+
+    it('a refusal that tells the person what to do stands: no new consent, the bank\'s sentence', async () => {
+      const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValue(refusal('AUTHENTICATION_SESSION_ONGOING')) })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed(), error: null }], ...orgAnswers() })
+      const result = await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })
+      expect(result).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'AUTHENTICATION_SESSION_ONGOING' }, messageSv: expect.stringContaining('inloggningssession') })
+      expect(connect.createConsent).not.toHaveBeenCalled()
+      expect(connect.revokeConsent).not.toHaveBeenCalled()
+      expect(connect.startConsentSigning).toHaveBeenCalledTimes(1)
+    })
+
+    it('a bank that does not answer is not a refusal: the same consent is there for the next try', async () => {
+      const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502, providerCode: 'TIMEOUT' })) })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed(), error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_UNAVAILABLE' })
+      expect(connect.createConsent).not.toHaveBeenCalled()
+      expect(connect.revokeConsent).not.toHaveBeenCalled()
+    })
+
+    it('a co-signer\'s refusal stands: the partly signed consent is never replaced', async () => {
+      const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValue(refusal('FORMAT_ERROR')) })
+      mocks.connect.mockReturnValue(connect)
+      const joint = row({ user_id: 'first-signer', consent_attempt: { method: 'qr', state: 'partially_authorised', sca_status: 'finalised', started_at: '2026-10-10T09:00:00Z' } })
+      const { supabase } = stub({ bank_connections: [{ data: joint, error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, userId: 'second-signer', supabase }, { connectionId: CONNECTION, method: 'qr', signer: { ...signer, personalNumber: '900209-2386' }, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'FORMAT_ERROR' } })
+      expect(connect.createConsent).not.toHaveBeenCalled()
+      expect(connect.revokeConsent).not.toHaveBeenCalled()
+    })
+
+    it('when Connect did not answer the ending of the refused consent, the refusal stands: its place may still be held', async () => {
+      // A new consent refused over that place would end the live consent a
+      // renewal replaces (createConsentReplacing's release).
+      const connect = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValue(refusal('FORMAT_ERROR')),
+        revokeConsent: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', { code: 'CONNECTOR_UNREACHABLE' })),
+      })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase, payload } = stub({ bank_connections: [{ data: failed(), error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'FORMAT_ERROR' } })
+      expect(connect.createConsent).not.toHaveBeenCalled()
+      expect(payload('bank_connections', 'update')).toEqual([])
+    })
+
+    it('a bank that refuses the ending has still freed the place at Connect: the new consent goes ahead', async () => {
+      const connect = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValueOnce(refusal('FORMAT_ERROR')).mockResolvedValue(STARTED),
+        revokeConsent: vi.fn().mockRejectedValue(refusal('CONSENT_INVALID')),
+        createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed(), error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: true })
+      expect(connect.startConsentSigning).toHaveBeenLastCalledWith('co-1', expect.objectContaining({ consentId: 'consent-2' }))
+    })
+
+    it('a new consent that cannot be created leaves the row as it was, and the next Försök igen creates one: the ended consent is refused without a reason too', async () => {
+      const down = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValue(refusal('FORMAT_ERROR')),
+        createConsent: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502 })),
+      })
+      mocks.connect.mockReturnValue(down)
+      const first = stub({ bank_connections: [{ data: failed(), error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase: first.supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_UNAVAILABLE' })
+      expect(first.payload('bank_connections', 'update')).toEqual([])
+
+      // Connect no longer holds the ended consent: 404 CONNECTOR_NOT_OWNED, no provider code.
+      const notOwned = new BankFeedRefusedError('Consent not found for this company', { code: 'CONNECTOR_NOT_OWNED', status: 404 })
+      const again = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValueOnce(notOwned).mockResolvedValue(STARTED),
+        revokeConsent: vi.fn().mockRejectedValue(notOwned),
+        createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      })
+      mocks.connect.mockReturnValue(again)
+      const second = stub({ bank_connections: [{ data: failed(), error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase: second.supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: true, data: { attempt: { authorisation_id: 'auth-2' } } })
+      expect(second.payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-2' })
+    })
+
+    it('a new consent the bank refuses too is the answer: one new consent per Försök igen, never a loop', async () => {
+      const connect = fakeConnect({
+        startConsentSigning: vi.fn().mockRejectedValue(refusal('FORMAT_ERROR')),
+        createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-2', consentStatus: 'received', validUntil: '2027-04-10' }),
+      })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed(), error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+      expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'FORMAT_ERROR' } })
+      expect(connect.createConsent).toHaveBeenCalledTimes(1)
+      expect(connect.startConsentSigning).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('refuses a connection that is not pending', async () => {
@@ -1204,6 +1371,8 @@ describe('selectBankFeedAccounts', () => {
     const result = await selectBankFeedAccounts({ ...ctx, supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true, ledgerAccount: '1930' }], method: 'qr', returnTo: 'connections', returnOrigin: ORIGIN, signer, now: NOW })
     expect(result).toMatchObject({ ok: true, data: { attempt: { authorisation_id: 'auth-s2', method: 'redirect', state: 'pending', challenge: expect.objectContaining({ redirectUrl: 'https://svea.example/sign' }) } } })
     expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-2', method: 'redirect', returnUrl: `${ORIGIN}/settings/connections?bank_connect=${CONNECTION}`, returnState: CONNECTION }))
+    // The second consent is created for the page it is signed on, as the first is.
+    expect((connect.createConsent as ReturnType<typeof vi.fn>).mock.calls[0][1].party).toMatchObject({ bic: 'SVEASESS', redirectPreferred: true })
     expect(payload('bank_connections', 'update')[0]).toMatchObject({ consent_attempt: expect.objectContaining({ method: 'redirect', return_to: 'connections', listing_consent_id: 'consent-1' }) })
 
     const bare = stub({ bank_connections: [{ data: listing(), error: null }], ...orgAnswers() })

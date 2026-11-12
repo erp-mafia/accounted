@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, OPEN_BANKING_PERMANENT_FAILURES, consentFailureText, isPermanentConsentFailure } from '../failure-text'
+import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, OPEN_BANKING_PERMANENT_FAILURES, consentFailureText, isPermanentConsentFailure, refusalNamesReason } from '../failure-text'
 
 const messages = (lang: 'sv' | 'en') =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../messages/${lang}.json`, import.meta.url)), 'utf8')) as {
@@ -56,6 +56,20 @@ describe('consentFailureText', () => {
     for (const text of Object.values(OPEN_BANKING_FAILURE_TEXTS)) {
       expect(text.sv).not.toMatch(/[\u2013\u2014]/)
       expect(text.en).not.toMatch(/[\u2013\u2014]/)
+    }
+  })
+})
+
+describe('refusalNamesReason', () => {
+  it('is true for a code with a sentence of its own, whatever its case', () => {
+    for (const code of ['AUTHENTICATION_SESSION_ONGOING', 'KYC_INVALID', 'PSU_AUTHORISER_ID_MISSING', ' psu_rights_missing ']) {
+      expect(refusalNamesReason(code), code).toBe(true)
+    }
+  })
+
+  it('is false when the person would only get the generic line: no code, an unknown one, the provider\'s catch-all', () => {
+    for (const code of ['FORMAT_ERROR', 'CONNECTOR_AIS_REFUSED', 'UNEXPECTED_ERROR', ' unexpected_error ', 'toString', '', null, undefined]) {
+      expect(refusalNamesReason(code), String(code)).toBe(false)
     }
   })
 })

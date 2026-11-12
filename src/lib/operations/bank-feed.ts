@@ -367,7 +367,7 @@ export const bankFeedRestart = defineOperation({
   reversible: true,
   docs: {
     summary: 'Start BankID again for a pending bank consent.',
-    description: 'A new authorisation for the same consent (a new consent when the bank says the first is over). Same answer shape as start. A redirect attempt keeps its return_to from the row; return_origin names the app origin to come back to.',
+    description: 'A new authorisation for the same consent (a new consent when the bank says the first is over, or refuses to sign it again without a reason for the person). Same answer shape as start. A redirect attempt keeps its return_to from the row; return_origin names the app origin to come back to.',
     useWhen: 'A BankID attempt failed or timed out and the person tries again.',
     doNotUseFor: 'A connection that is already active.',
     pitfalls: [],
