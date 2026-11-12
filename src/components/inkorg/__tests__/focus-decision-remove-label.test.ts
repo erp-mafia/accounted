@@ -33,3 +33,37 @@ describe('Inkorg removal answer', () => {
     expect(deleteAt).toBeGreaterThan(confirmAt)
   })
 })
+
+// crm#1799: a supplier invoice whose proposed account was wrong (and that belonged on two) had one visible way to
+// "change" it, "Öppna i verifikatredigeraren", which books a verifikat and never a supplier invoice. One click
+// skips the invoice form, where every row has its own account, so nothing led there.
+describe('Inkorg supplier invoice: where the accounts are changed', () => {
+  it('names the roads in both languages', () => {
+    for (const messages of [sv, en]) {
+      for (const key of ['action_change_accounts', 'action_book_without_invoice', 'action_register_as_invoice', 'action_nobody_paid_yet'] as const) {
+        expect(messages.inkorg[key]).toBeTruthy()
+      }
+    }
+    expect(sv.inkorg.action_change_accounts).toBe('Ändra kontering')
+    expect(sv.inkorg.action_book_without_invoice).toBe('Bokför direkt, utan leverantörsfaktura')
+    expect(sv.inkorg.action_nobody_paid_yet).toBe('Ingen, fakturan är obetald')
+  })
+
+  it('Ändra kontering opens the form one click would have spared, before the verifikat editor link', () => {
+    const change = source.indexOf("{t('action_change_accounts')}")
+    const escape = source.indexOf("t('action_book_without_invoice')")
+    expect(change).toBeGreaterThan(-1)
+    expect(escape).toBeGreaterThan(change)
+    expect(source).toMatch(/\{changesAccounts && \(\s*<button type="button" onClick=\{openPlanEditor\}/)
+  })
+
+  it('the verifikat editor link says it makes no supplier invoice whenever the item is on its way to one', () => {
+    expect(source).toMatch(/registersInvoice \? t\('action_book_without_invoice'\) : tWork\('payer_open_editor'\)/)
+    expect(source).toMatch(/const registersInvoice = decision\.actions\.includes\('register_invoice'\) \|\| decision\.actions\.includes\('register_and_settle'\)/)
+  })
+
+  it('"Vem betalade?" answers nobody yet with the invoice form', () => {
+    expect(source).toMatch(/decision\.question === 'who_paid'\s*\? t\('action_nobody_paid_yet'\)/)
+    expect(source).toMatch(/decision\.quietActions\.includes\('register_invoice'\) && \(\s*<button type="button" onClick=\{\(\) => setOpen\('invoice'\)\}/)
+  })
+})

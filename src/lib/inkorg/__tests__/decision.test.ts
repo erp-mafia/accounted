@@ -558,3 +558,48 @@ describe('nothingRead', () => {
     expect(nothingRead(reading({ prominentAmounts: [{ amount: 45 }] as never }))).toBe(false)
   })
 })
+
+// crm#1799: an agency's unpaid invoice, uploaded and read as a letter, asked "Vem betalade?" with the company
+// account, an utlägg or removal as its only answers: nothing said nobody had paid it yet.
+describe('focusDecision: who paid a document not read as an invoice', () => {
+  it.each(['government_letter', 'other'] as const)('offers "nobody yet" as the third answer for a %s, removal as the quiet link', (documentKind) => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ documentKind, totals: { total: 500 } }) }))
+    expect(d.question).toBe('who_paid')
+    expect(d.actions).toEqual(['match_purchase', 'expense', 'register_invoice'])
+    expect(d.quietActions).toEqual(['not_underlag'])
+    expect(d.editorEscape).toBe(true)
+  })
+
+  it('offers it for a document whose kind nobody could tell', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ totals: { total: 99 } }) }))
+    expect(d.actions).toEqual(['match_purchase', 'expense', 'register_invoice'])
+  })
+
+  it('keeps a receipt as it was, with the invoice road as a quiet link for a reading that got it wrong', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'receipt', totals: { total: 120 } }) }))
+    expect(d.actions).toEqual(['match_purchase', 'expense', 'not_underlag'])
+    expect(d.quietActions).toEqual(['register_invoice'])
+  })
+
+  it('never offers it without Leverantörsfakturor: the server would refuse', () => {
+    const off: InkorgStartable = { ...ALL_STARTABLE, supplierInvoices: false }
+    for (const documentKind of ['government_letter', 'receipt'] as const) {
+      const d = focusDecision(makeItem({ extracted_data: reading({ documentKind, totals: { total: 500 } }) }), { startable: off })
+      expect(d.actions).toEqual(['match_purchase', 'expense', 'not_underlag'])
+      expect(d.quietActions).toEqual([])
+    }
+  })
+
+  it('never offers it for the receipt half of a pair: it follows its invoice', () => {
+    const d = focusDecision(
+      makeItem({ extracted_data: reading({ documentKind: 'receipt', totals: { total: 120 } }), pairing: { role: 'receipt', invoice_item_id: 'inv-1', basis: 'invoice_number' } }),
+    )
+    expect(d.actions).not.toContain('register_invoice')
+    expect(d.quietActions).toEqual([])
+  })
+
+  it('stays within three answers', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'government_letter' }) }))
+    expect(d.actions.length).toBeLessThanOrEqual(MAX_DECISION_ACTIONS)
+  })
+})
