@@ -14,10 +14,15 @@
  *
  * A company whose payments door is closed (plan lapsed, pilot narrowed) is
  * skipped, not refreshed: the record keeps its last answer.
+ *
+ * Each refresh is a call to the provider, so the sweep asks the run's budget
+ * (lib/api/run-budget.ts) before each one; a record it does not reach keeps
+ * the oldest answer and is first in the next run.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { UNLIMITED_RUN, type RunBudget } from '@/lib/api/run-budget'
 import { hasPaymentInitiationProviders, PaymentProviderError } from '@/lib/payments/initiation/provider'
 import { companyParty, refreshCompanyVerification } from './availability'
 import { openPaymentsDoor } from './switched-on'
@@ -37,13 +42,20 @@ export interface VerificationSweepResult {
   /** Companies whose verification is expiring or expired after the refresh: the worklist row shows. */
   renewalDue: number
   skipped: { doorClosed: number; noOrgNumber: number }
+  /** Records the run's budget left for the next run. */
+  deferred: number
   errors: number
   /** True when no payments provider is registered: nothing was asked. */
   noProvider?: boolean
 }
 
-export async function sweepPaymentVerifications(writer: SupabaseClient, log: Logger, now: Date = new Date()): Promise<VerificationSweepResult> {
-  const result: VerificationSweepResult = { considered: 0, refreshed: 0, renewalDue: 0, skipped: { doorClosed: 0, noOrgNumber: 0 }, errors: 0 }
+export async function sweepPaymentVerifications(
+  writer: SupabaseClient,
+  log: Logger,
+  now: Date = new Date(),
+  budget: RunBudget = UNLIMITED_RUN,
+): Promise<VerificationSweepResult> {
+  const result: VerificationSweepResult = { considered: 0, refreshed: 0, renewalDue: 0, skipped: { doorClosed: 0, noOrgNumber: 0 }, deferred: 0, errors: 0 }
   if (!(await hasPaymentInitiationProviders())) return { ...result, noProvider: true }
 
   const before = new Date(now.getTime() - VERIFICATION_SWEEP_AFTER_MS).toISOString()
@@ -56,7 +68,11 @@ export async function sweepPaymentVerifications(writer: SupabaseClient, log: Log
   if (error) throw error
   const records = (data ?? []) as VerificationRecord[]
 
-  for (const record of records) {
+  for (const [index, record] of records.entries()) {
+    if (!budget.allows()) {
+      result.deferred = records.length - index
+      break
+    }
     result.considered += 1
     try {
       const door = await openPaymentsDoor({ supabase: writer, companyId: record.company_id })

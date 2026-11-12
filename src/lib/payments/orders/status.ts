@@ -123,6 +123,22 @@ export const SIGNING_FINISHED_BATCH_STATUSES: ReadonlySet<string> = new Set(['si
 export const UNANSWERED_SIGNING_MINUTES = 60
 
 /**
+ * A signed payment the bank will pay on a later day (accepted, its execution
+ * date more than SCHEDULED_PAYMENT_AHEAD_DAYS away) is asked about this
+ * often, not on every status run: nothing happens to it at the bank before
+ * its day unless someone cancels it there. Every other payment at the bank
+ * is asked about on every run (isDueForStatusRead in sync.ts). Read on every
+ * run, the planned payments were 105 of the 122 bank reads of a run on
+ * 2026-11-12, some of them due in 2027, and the run grew by every payment
+ * planned. Well inside the day after which a row says the bank has stopped
+ * answering (BANK_SILENT_AFTER_MS, components/payments/payment-order-status.ts):
+ * a planned payment never reads as silent between two reads. Here, not in
+ * sync.ts, so the browser can read it.
+ */
+export const SCHEDULED_PAYMENT_READ_EVERY_MS = 6 * 60 * 60_000
+export const SCHEDULED_PAYMENT_AHEAD_DAYS = 1
+
+/**
  * The order's payment waits at the bank unsigned in a signing nobody is in
  * ('created'): its BankID never started (the bank refused the start), or it
  * ended before its payments were cancelled at the bank (as every BankID that

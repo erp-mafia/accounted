@@ -58,10 +58,13 @@ export function needsResolution(order: { status: PaymentOrderStatus; outcome_unk
 
 /**
  * How long the bank may go without answering about a payment it holds before
- * the row says so. The status sync asks every 15 minutes and every answer
- * moves provider_status_at, so a day is close to a hundred reads the bank
- * refused or never answered (SEB and Länsförsäkringar refuse one without the
- * signer's IP address, which signings started before 2026-10-31 lack).
+ * the row says so. The status sync asks every 15 minutes, or every
+ * SCHEDULED_PAYMENT_READ_EVERY_MS about a payment planned for a later day
+ * (lib/payments/orders/status.ts), and every answer moves provider_status_at,
+ * so a day is at least four reads, and for most payments close to a hundred,
+ * that the bank refused or never answered (SEB and Länsförsäkringar refuse
+ * one without the signer's IP address, which signings started before
+ * 2026-10-31 lack).
  */
 export const BANK_SILENT_AFTER_MS = 24 * 60 * 60_000
 

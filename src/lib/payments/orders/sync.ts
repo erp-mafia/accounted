@@ -29,6 +29,20 @@
  * Every run, bank or not, clears the signer's IP address of each signing none
  * of whose orders is at the bank any more (forgetIpsOfClosedSignings): it is
  * personal data kept only for the reads and cancels above.
+ *
+ * Bounded three ways, because every read is a call to a bank that may take
+ * 30 s to fail. The run asks its budget (lib/api/run-budget.ts) before each
+ * bank read and leaves the rest for the next run, oldest answer first, so
+ * the platform never kills it mid-run with the mails and sweeps after it
+ * undone. The banks take turns (readingOrder), and one whose read goes
+ * unanswered goes last: asked again only once every other bank's payments
+ * are read, so a bank that is down, or a payment whose read always fails,
+ * costs the others one timeout, and that bank's other payments are still
+ * reached while time is left. Abandoned signings are worked in the first
+ * half of the budget and by the same rule. The two debit
+ * sweeps make no bank call and have a budget of their own. And a payment
+ * planned for a later day is read every few hours, not every run
+ * (isDueForStatusRead).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -45,6 +59,7 @@ import {
   type SigningProgress,
 } from '@/lib/payments/initiation/provider'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { UNLIMITED_RUN, type RunBudget } from '@/lib/api/run-budget'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Transaction } from '@/types'
 import { applyProviderState } from './apply-state'
@@ -63,7 +78,7 @@ import {
 } from './debit-match'
 import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, endFailedSigning, unpayableOrders } from './release'
-import { UNANSWERED_SIGNING_MINUTES, type PaymentOrderStatus } from './status'
+import { SCHEDULED_PAYMENT_AHEAD_DAYS, SCHEDULED_PAYMENT_READ_EVERY_MS, UNANSWERED_SIGNING_MINUTES, type PaymentOrderStatus } from './status'
 import { logPaymentOrderEvents, signingTargetOf, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
 
 /**
@@ -77,6 +92,23 @@ export const ABANDONED_SIGNING_MINUTES = 15
 /** How long the sync keeps asking about a BankID it cannot see end (defined in status.ts). */
 export { UNANSWERED_SIGNING_MINUTES }
 const BATCH_LIMIT = 200
+/**
+ * Reads in a row one bank may leave unanswered in a run (unreachable, a 5xx,
+ * a throttle, a timeout) before its payments go last: each may take the
+ * provider's whole timeout, and the bank is no better a second later. One:
+ * at two, three banks down together were six timeouts, the whole budget,
+ * before a fourth bank was asked twice. Going last costs a bank that only
+ * hiccuped nothing but its place in the run.
+ */
+export const UNANSWERED_READS_PER_BANK = 1
+/**
+ * Abandoned signings are started only while this much of the read budget is
+ * left: a signing is several bank calls and cannot be picked up half way, so
+ * a large or slow one must not take the time of every payment read after it.
+ */
+export const SIGNING_PASS_RESERVE_MS = 90_000
+/** A planned payment someone asked the bank to cancel this recently is read on every run (cancelAskedRecently). */
+export const CANCEL_FOLLOW_DAYS = 7
 /** An executed order is swept for its debit this long after the bank executed it. */
 export const EXECUTED_ORDER_SWEEP_DAYS = 14
 /** The bank feeds whose unbooked debits the sweep may book. */
@@ -123,6 +155,10 @@ export interface PaymentStatusSyncResult {
   linkedByDebit: number
   /** Signings none of whose orders is at the bank any more whose signer's IP address was cleared. */
   forgottenIps: number
+  /** Orders and signings the run's budget left for the next run: not asked, nothing lost. */
+  deferred: number
+  /** Banks that left UNANSWERED_READS_PER_BANK reads in a row unanswered in this run: their payments were asked about last. */
+  banksNotAnswering: number
   errors: number
   /** True when no payments provider is registered: only the stale-claim pass ran. */
   noProvider?: boolean
@@ -192,6 +228,111 @@ function isRefusedRead(err: unknown): boolean {
 }
 
 /**
+ * A read the bank (or the service in front of it) never answered: unreachable,
+ * a 5xx, a throttle, a timeout. The provider calls those retryable; a refusal
+ * is an answer.
+ */
+function isUnansweredRead(err: unknown): boolean {
+  return err instanceof PaymentProviderError ? err.retryable : false
+}
+
+/**
+ * Which banks are answering in this run. A bank is the BIC the money leaves
+ * from and, behind a shared BIC, its sparbank: the provider reaches each
+ * through its own connection.
+ */
+interface BankHealth {
+  /** Whether the order's bank has answered since its last UNANSWERED_READS_PER_BANK reads. */
+  answers(order: PaymentOrderRow): boolean
+  /** A read of the order's bank that went unanswered. */
+  unanswered(order: PaymentOrderRow): void
+  /** A read of the order's bank that was answered, a refusal included: it is there. */
+  answered(order: PaymentOrderRow): void
+  /** Banks that at some point in the run were not answering. */
+  notAnswering(): number
+}
+
+function bankKey(order: PaymentOrderRow): string {
+  return `${order.debtor_snapshot.bic}:${order.debtor_snapshot.affiliated_aspsp_id ?? ''}`
+}
+
+function bankHealth(): BankHealth {
+  const inARow = new Map<string, number>()
+  const silent = new Set<string>()
+  return {
+    answers: (order) => (inARow.get(bankKey(order)) ?? 0) < UNANSWERED_READS_PER_BANK,
+    unanswered: (order) => {
+      const key = bankKey(order)
+      const count = (inARow.get(key) ?? 0) + 1
+      inARow.set(key, count)
+      if (count >= UNANSWERED_READS_PER_BANK) silent.add(key)
+    },
+    answered: (order) => {
+      inARow.delete(bankKey(order))
+    },
+    notAnswering: () => silent.size,
+  }
+}
+
+/**
+ * The order one run reads its payments in: the banks take turns, each
+ * handing over its payment with the oldest answer, and a bank that is not
+ * answering (BankHealth) is passed over until every other bank's payments
+ * are read. So no bank waits behind another's slow or failing reads, and a
+ * bank with two payments whose read always fails still gets its other
+ * payments read, after everyone else's. Asked for one payment at a time,
+ * since a read changes which banks answer.
+ */
+function readingOrder(orders: readonly PaymentOrderRow[], banks: BankHealth): () => PaymentOrderRow | null {
+  const queues = new Map<string, PaymentOrderRow[]>()
+  for (const order of orders) {
+    const queue = queues.get(bankKey(order))
+    if (queue) queue.push(order)
+    else queues.set(bankKey(order), [order])
+  }
+  const turns = [...queues.values()]
+  let turn = 0
+  return () => {
+    for (const answering of [true, false]) {
+      for (let step = 0; step < turns.length; step++) {
+        const queue = turns[(turn + step) % turns.length]
+        if (queue.length > 0 && banks.answers(queue[0]) === answering) {
+          turn = (turn + step + 1) % turns.length
+          return queue.shift() ?? null
+        }
+      }
+    }
+    return null
+  }
+}
+
+/** What bounds the bank reads of one run: its time and which banks are answering. */
+interface RunLimits {
+  budget: RunBudget
+  banks: BankHealth
+}
+
+/**
+ * Whether a payment at the bank is asked about in this run. One planned for
+ * a later day (accepted, more than SCHEDULED_PAYMENT_AHEAD_DAYS ahead on the
+ * Swedish calendar) only when its last answer is SCHEDULED_PAYMENT_READ_EVERY_MS
+ * old; every other one, and one never answered about, on every run. So is a
+ * planned payment someone asked the bank to cancel (cancelAsked): the bank
+ * may want the cancel signed in the online bank, and the person who did that
+ * is waiting to see it here (lifecycle.ts, crm#1699).
+ */
+export function isDueForStatusRead(
+  order: Pick<PaymentOrderRow, 'status' | 'requested_execution_date' | 'provider_status_at'>,
+  now: Date = new Date(),
+  cancelAsked = false,
+): boolean {
+  if (order.status !== 'accepted' || cancelAsked) return true
+  if (!(order.requested_execution_date > addDaysIso(todayIsoStockholm(now), SCHEDULED_PAYMENT_AHEAD_DAYS))) return true
+  const answered = order.provider_status_at ? Date.parse(order.provider_status_at) : Number.NaN
+  return !Number.isFinite(answered) || now.getTime() - answered >= SCHEDULED_PAYMENT_READ_EVERY_MS
+}
+
+/**
  * A signing started more than ABANDONED_SIGNING_MINUTES ago and never seen to
  * finish. The bank is asked first: the person may have signed and closed the
  * dialog before its next poll, and then the payments are accepted, not
@@ -208,6 +349,7 @@ async function settleAbandonedSignings(
   result: PaymentStatusSyncResult,
   orgNumbers: Map<string, string | null>,
   psuOf: BatchPsuOf,
+  limits: RunLimits,
 ): Promise<void> {
   const abandonedBefore = new Date(Date.now() - ABANDONED_SIGNING_MINUTES * 60_000).toISOString()
   const { data: batches, error } = await writer
@@ -218,7 +360,16 @@ async function settleAbandonedSignings(
     .limit(BATCH_LIMIT)
   if (error) throw error
 
-  for (const batch of (batches ?? []) as PaymentOrderBatchRow[]) {
+  // A signing whose bank is not answering goes to the back of the list once,
+  // as a payment does (readingOrder): the signings of every other bank first.
+  const signings = ((batches ?? []) as PaymentOrderBatchRow[]).map((batch) => ({ batch, postponed: false }))
+  for (let index = 0; index < signings.length; index++) {
+    const { batch, postponed } = signings[index]
+    // Out of time for another signing: it and the ones after it wait for the next run, as an unreadable one does.
+    if (!limits.budget.allows(SIGNING_PASS_RESERVE_MS)) {
+      result.deferred += signings.length - index
+      break
+    }
     const attempt = batch.provider_authorisation_id
     if (!attempt) continue
     const { data: orderData, error: ordersError } = await writer
@@ -235,6 +386,10 @@ async function settleAbandonedSignings(
     // Not knowing is not the same as abandoned: without a bank to ask, the
     // signing is left for a run that can ask.
     if (!provider || !orgNumber) continue
+    if (!postponed && orders.some((order) => order.status === 'awaiting_signature' && !limits.banks.answers(order))) {
+      signings.push({ batch, postponed: true })
+      continue
+    }
 
     const statuses: PaymentOrderStatus[] = []
     let unknown = false
@@ -251,15 +406,24 @@ async function settleAbandonedSignings(
         unknown = true
         break
       }
+      // Not asked is not known either: out of time leaves the signing for the next run.
+      if (!limits.budget.allows()) {
+        result.deferred += 1
+        unknown = true
+        break
+      }
       result.checked += 1
       try {
         const state = await provider.getPaymentState(statusParty(order, orgNumber, await psuOf(batch.id)), order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+        limits.banks.answered(order)
         const next = await applyProviderState(writer, order, state, null, log)
         if (next !== order.status) result.moved += 1
         statuses.push(next)
       } catch (err) {
         result.errors += 1
         log.warn('payment status sync failed for one order', { orderId: order.id, code: errorCode(err) })
+        if (isUnansweredRead(err)) limits.banks.unanswered(order)
+        else if (err instanceof PaymentProviderError) limits.banks.answered(order)
         // Not knowing is not the same as abandoned: a read that failed on the
         // way leaves the batch for the next run.
         if (isRefusedRead(err)) refused = true
@@ -290,6 +454,11 @@ async function settleAbandonedSignings(
     // The BankID itself is asked.
     const signedPayment = statuses.some((s) => SIGNED.has(s))
     const party = orders[0] ? statusParty(orders[0], orgNumber, await psuOf(batch.id)) : null
+    // The BankID read is one more call to the bank: out of time, the signing waits for the next run.
+    if (!signedPayment && party && !limits.budget.allows()) {
+      result.deferred += 1
+      continue
+    }
     const bankId = signedPayment || !party ? null : await bankIdProgress(provider, party, batch, attempt, orders, log, result)
 
     if (signedPayment || bankId?.state === 'finalised') {
@@ -325,6 +494,13 @@ async function settleAbandonedSignings(
     // that cannot be read, is not known to be abandoned: the signing is left
     // for the next run, as an unreadable payment status is.
     if (bankId?.state === 'failed' && party) {
+      // Ending it is one cancel at the bank per payment: not started once the
+      // reads' budget is spent. An ending the platform cut short would leave
+      // payments under a signing already failed, for a person.
+      if (!limits.budget.allows()) {
+        result.deferred += 1
+        continue
+      }
       const failure = { reason: 'SIGNING_ABANDONED', detail: { code: 'SIGNING_ABANDONED', provider_code: bankId.failureCode } }
       const stopped = await endFailedSigning(writer, { companyId: batch.company_id, userId: null, log }, provider, party, { batchId: batch.id, authorisationId: attempt }, orders, failure)
       if (stopped) result.abandoned += 1
@@ -412,7 +588,13 @@ async function closedInvoiceCancelsAsked(writer: SupabaseClient, orders: Payment
   return asked
 }
 
-export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logger): Promise<PaymentStatusSyncResult> {
+export async function syncPaymentOrderStatuses(
+  writer: SupabaseClient,
+  log: Logger,
+  budget: RunBudget = UNLIMITED_RUN,
+  /** The two debit sweeps call no bank, so they may run past the reads' budget, on their own. */
+  sweepBudget: RunBudget = budget,
+): Promise<PaymentStatusSyncResult> {
   const result: PaymentStatusSyncResult = {
     checked: 0,
     moved: 0,
@@ -425,6 +607,8 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     settledByDebit: 0,
     linkedByDebit: 0,
     forgottenIps: 0,
+    deferred: 0,
+    banksNotAnswering: 0,
     errors: 0,
   }
 
@@ -447,24 +631,46 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
 
   const orgNumbers = new Map<string, string | null>()
   const psuOf = batchPsuReader()
-  await settleAbandonedSignings(writer, log, result, orgNumbers, psuOf)
+  const limits: RunLimits = { budget, banks: bankHealth() }
+  await settleAbandonedSignings(writer, log, result, orgNumbers, psuOf, limits)
 
-  const { data, error } = await writer
-    .from('payment_orders')
-    .select('*')
-    .in('status', [...AT_THE_BANK])
-    .not('provider_payment_id', 'is', null)
-    .order('provider_status_at', { ascending: true, nullsFirst: true })
-    .limit(BATCH_LIMIT)
-  if (error) throw error
-  const orders = (data ?? []) as PaymentOrderRow[]
+  // Every payment at the bank, oldest answer first, then the ones due a read
+  // (isDueForStatusRead: all but those planned for a later day and answered
+  // about within SCHEDULED_PAYMENT_READ_EVERY_MS), at most BATCH_LIMIT of
+  // them. What a run does not reach keeps the oldest answer and is first in
+  // the next. The rule is applied here and not in the query, so it has one
+  // definition: the rows it leaves out are read from the database, which is
+  // cheap, and not from the bank, which is what the run's time goes to.
+  const now = new Date()
+  const atTheBank = await fetchAllRows<PaymentOrderRow>(({ from, to }) =>
+    writer
+      .from('payment_orders')
+      .select('*')
+      .in('status', [...AT_THE_BANK])
+      .not('provider_payment_id', 'is', null)
+      .order('provider_status_at', { ascending: true, nullsFirst: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  const cancelAsked = await cancelAskedRecently(writer, log, atTheBank.filter((order) => !isDueForStatusRead(order, now)), now)
+  const due = atTheBank.filter((order) => isDueForStatusRead(order, now, cancelAsked.has(order.id)))
+  const orders = due.slice(0, BATCH_LIMIT)
+  result.deferred += due.length - orders.length
 
   // Unsigned payments whose invoice no longer needs paying, and those already asked about once.
   const unsigned = orders.filter((o) => o.status === 'submitted')
   const unpayable = await unpayableOrders(writer, unsigned)
   const asked = await closedInvoiceCancelsAsked(writer, unsigned.filter((o) => unpayable.has(o.id)))
 
-  for (const order of orders) {
+  const nextToRead = readingOrder(orders, limits.banks)
+  let read = 0
+  for (let order = nextToRead(); order; order = nextToRead()) {
+    // Out of time: the rest keep their place at the front of the next run.
+    if (!budget.allows()) {
+      result.deferred += orders.length - read
+      break
+    }
+    read += 1
     const provider = await getPaymentInitiationProvider(order.company_id)
     if (!provider || !order.provider_payment_id) continue
     if (!orgNumbers.has(order.company_id)) orgNumbers.set(order.company_id, await companyOrgNumber(writer, order.company_id))
@@ -475,11 +681,14 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     let next: PaymentOrderStatus
     try {
       const state = await provider.getPaymentState(party, order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+      limits.banks.answered(order)
       next = await applyProviderState(writer, order, state, null, log)
       if (next !== order.status) result.moved += 1
     } catch (err) {
       result.errors += 1
       log.warn('payment status sync failed for one order', { orderId: order.id, code: errorCode(err) })
+      if (isUnansweredRead(err)) limits.banks.unanswered(order)
+      else if (err instanceof PaymentProviderError) limits.banks.answered(order)
       continue
     }
     if (next !== 'submitted' || !unpayable.has(order.id) || asked.has(`${order.id}:${order.provider_payment_id}`)) continue
@@ -488,10 +697,39 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     else if (outcome === 'held') result.heldForPerson += 1
   }
 
-  await settleExecutedOrdersByDebit(writer, log, result)
-  await linkOrdersWithoutInvoiceByDebit(writer, log, result)
+  result.banksNotAnswering = limits.banks.notAnswering()
+  await settleExecutedOrdersByDebit(writer, log, result, sweepBudget)
+  await linkOrdersWithoutInvoiceByDebit(writer, log, result, sweepBudget)
   await forgetIpsOfClosedSignings(writer, log, result)
+  if (result.deferred > 0 || result.banksNotAnswering > 0) {
+    log.warn('payment status sync left payments for the next run', { deferred: result.deferred, banksNotAnswering: result.banksNotAnswering })
+  }
   return result
+}
+
+/**
+ * The planned payments, of those given, that someone asked the bank to
+ * cancel within CANCEL_FOLLOW_DAYS (a cancel_requested event). Read only
+ * when a run has planned payments it would otherwise skip.
+ */
+async function cancelAskedRecently(writer: SupabaseClient, log: Logger, planned: readonly PaymentOrderRow[], now: Date): Promise<Set<string>> {
+  if (planned.length === 0) return new Set()
+  const since = new Date(now.getTime() - CANCEL_FOLLOW_DAYS * 86_400_000).toISOString()
+  const { data, error } = await writer
+    .from('payment_order_events')
+    .select('payment_order_id')
+    .eq('event_type', 'cancel_requested')
+    .gte('occurred_at', since)
+    .not('payment_order_id', 'is', null)
+    .order('occurred_at', { ascending: false })
+    .limit(1000)
+  // The lookup only makes some reads earlier: failing, it must not stop the reads themselves.
+  if (error) {
+    log.error('cancel requests of planned payments could not be read', error)
+    return new Set()
+  }
+  const waiting = new Set(planned.map((order) => order.id))
+  return new Set(((data ?? []) as Array<{ payment_order_id: string | null }>).flatMap((row) => (row.payment_order_id && waiting.has(row.payment_order_id) ? [row.payment_order_id] : [])))
 }
 
 /** The signings whose kept IP address the sweep looks at per run. */
@@ -587,7 +825,7 @@ async function unbookedDebitFor(
  * debit are read again right before booking (settleOrderWithDebit), and a
  * settled order leaves the read's filter.
  */
-async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult): Promise<void> {
+async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult, budget: RunBudget): Promise<void> {
   let orders: PaymentOrderRow[]
   try {
     const since = new Date(Date.now() - EXECUTED_ORDER_SWEEP_DAYS * 86_400_000).toISOString()
@@ -615,7 +853,12 @@ async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, 
     return
   }
 
-  for (const order of orders) {
+  for (const [index, order] of orders.entries()) {
+    // Idempotent and read oldest first: what is left is settled by the next run.
+    if (!budget.allows()) {
+      result.deferred += orders.length - index
+      break
+    }
     try {
       const debit = await unbookedDebitFor(writer, order)
       if (!debit) continue
@@ -707,7 +950,7 @@ async function linkableDebitFor(
  * Idempotent: linkOrderToDebit reads the order, its signing and the debit
  * again, and a linked order leaves the read's filter.
  */
-async function linkOrdersWithoutInvoiceByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult): Promise<void> {
+async function linkOrdersWithoutInvoiceByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult, budget: RunBudget): Promise<void> {
   let orders: PaymentOrderRow[]
   try {
     const today = todayIsoStockholm()
@@ -732,7 +975,11 @@ async function linkOrdersWithoutInvoiceByDebit(writer: SupabaseClient, log: Logg
     return
   }
 
-  for (const order of orders) {
+  for (const [index, order] of orders.entries()) {
+    if (!budget.allows()) {
+      result.deferred += orders.length - index
+      break
+    }
     try {
       const debit = await linkableDebitFor(writer, order, orders.filter((o) => o.company_id === order.company_id))
       if (!debit) continue
