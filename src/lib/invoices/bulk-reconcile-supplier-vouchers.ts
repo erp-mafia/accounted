@@ -107,6 +107,7 @@ export type ReconcileReviewReason =
   | 'amount_exceeds_remaining' // best candidate would overpay the invoice
   | 'voucher_contested' // one voucher is the top pick for >1 invoice, or RPC rejected
   | 'paid_before_invoice' // every candidate is dated before the invoice (PH 241)
+  | 'names_other_invoice' // every candidate cites another invoice's number (PH 264)
 
 export interface ReconcileLink {
   supplier_invoice_id: string
@@ -157,7 +158,7 @@ export interface ReconcileOptions {
 }
 
 const SELECT_COLUMNS =
-  'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, invoice_date, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
+  'id, supplier_invoice_number, fortnox_number, arrival_number, status, currency, total, paid_amount, remaining_amount, invoice_date, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
 
 /**
  * A voucher dated before the invoice cannot be its payment: the debt did not
@@ -172,6 +173,29 @@ export function paidBeforeInvoice(
   invoice: { invoice_date?: string | null },
 ): boolean {
   return !!invoice.invoice_date && candidate.entry_date < invoice.invoice_date
+}
+
+/** The number a Fortnox payment voucher cites last in its text: "Levbet Leverantör AB (487)". */
+const CITED_INVOICE_NUMBER = /\((\d+)\)\s*$/
+
+/**
+ * Whether the voucher text cites another invoice than this one. Fortnox ends
+ * a payment voucher's text with its own number for the invoice it paid, and an
+ * invoice imported from Fortnox keeps that number (fortnox_number). A
+ * recurring supplier's payment of an earlier invoice, same amount and same
+ * name, dated after this invoice arrived, passes every other check and marked
+ * an unpaid invoice as paid (PH 264). A voucher that cites another number is
+ * that invoice's payment; an unattended link never takes it, a person still
+ * can, from the review list. No number on either side decides nothing.
+ */
+export function citesOtherInvoice(
+  candidate: Pick<SupplierVoucherCandidate, 'description'>,
+  invoice: { fortnox_number?: string | null },
+): boolean {
+  const own = invoice.fortnox_number?.trim()
+  if (!own) return false
+  const cited = CITED_INVOICE_NUMBER.exec(candidate.description ?? '')?.[1]
+  return !!cited && cited !== own
 }
 
 /**
@@ -315,8 +339,21 @@ export async function reconcileSupplierInvoiceVouchers(
       continue
     }
 
-    const top = datable[0]
-    const runnerUp = datable[1]
+    // Nor can a voucher that cites another invoice's number.
+    const citing = datable.filter((c) => !citesOtherInvoice(c, invoice))
+    if (citing.length === 0) {
+      result.ambiguous++
+      result.review.push({
+        supplier_invoice_id: invoice.id,
+        supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+        reason: 'names_other_invoice',
+        candidates: fresh,
+      })
+      continue
+    }
+
+    const top = citing[0]
+    const runnerUp = citing[1]
     const remaining = remainingOf(invoice)
 
     // Below a reference hit, what cleared the bar is the exact amount with the
