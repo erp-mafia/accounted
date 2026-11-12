@@ -22,18 +22,28 @@ function mockUserClient(opts: {
   user: { id: string; app_metadata?: AuthMetadata } | null
   updateUserError?: { message: string; status?: number; code?: string } | null
   signOutError?: { message: string; status?: number; code?: string } | null
+  // Returned-error from verifyOtp on the link that restores the session.
+  verifyOtpError?: { message: string; status?: number; code?: string } | null
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     data: {},
     error: opts.updateUserError ?? null,
   })
   const signOut = vi.fn().mockResolvedValue({ error: opts.signOutError ?? null })
+  const verifyOtp = vi.fn().mockResolvedValue(
+    opts.verifyOtpError
+      ? { data: { session: null, user: null }, error: opts.verifyOtpError }
+      : { data: { session: { access_token: 'new' }, user: { id: opts.user?.id } }, error: null },
+  )
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase = { auth: { updateUser, signOut } } as any
+  const supabase = { auth: { updateUser, signOut, verifyOtp } } as any
 
   if (opts.user) {
-    requireAuthMock.mockResolvedValue({ user: opts.user, supabase, error: null })
+    // The token's address is deliberately not the auth server's: the route
+    // must never mint a session for what the token says.
+    const user = { email: 'stale-in-token@example.com', ...opts.user }
+    requireAuthMock.mockResolvedValue({ user, supabase, error: null })
   } else {
     requireAuthMock.mockResolvedValue({
       user: null,
@@ -42,7 +52,7 @@ function mockUserClient(opts: {
     })
   }
 
-  return { updateUser, signOut }
+  return { updateUser, signOut, verifyOtp }
 }
 
 function mockService(opts: {
@@ -51,6 +61,12 @@ function mockService(opts: {
   passwordSetError?: { message: string; status?: number; code?: string } | null
   // Thrown error from admin.updateUserById when called with { app_metadata }
   flagFlipError?: Error | null
+  // Returned-error from admin.generateLink (the link that restores the session)
+  generateLinkError?: { message: string; status?: number; code?: string } | null
+  // The address the auth server holds for the user (null: none).
+  currentEmail?: string | null
+  // The user GoTrue says the link belongs to (default: the user asked for).
+  linkUserId?: string
 }) {
   const updateUserById = vi
     .fn()
@@ -65,16 +81,28 @@ function mockService(opts: {
       return Promise.resolve({ data: {}, error: null })
     })
 
-  const getUserById = vi.fn().mockResolvedValue({
-    data: { user: { app_metadata: opts.priorAppMetadata ?? {} } },
-  })
+  const currentEmail = opts.currentEmail === undefined ? 'current@example.com' : opts.currentEmail
+  const getUserById = vi.fn().mockImplementation((id: string) =>
+    Promise.resolve({
+      data: { user: { id, email: currentEmail, app_metadata: opts.priorAppMetadata ?? {} } },
+    }),
+  )
+
+  const generateLink = vi.fn().mockResolvedValue(
+    opts.generateLinkError
+      ? { data: null, error: opts.generateLinkError }
+      : {
+          data: { properties: { hashed_token: 'hashed-token-1' }, user: { id: opts.linkUserId ?? 'user-1' } },
+          error: null,
+        },
+  )
 
   mockCreateServiceClient.mockReturnValue({
-    auth: { admin: { getUserById, updateUserById } },
+    auth: { admin: { getUserById, updateUserById, generateLink } },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
 
-  return { getUserById, updateUserById }
+  return { getUserById, updateUserById, generateLink }
 }
 
 const STRONG_PASSWORD = 'StrongP@ssword1'
@@ -341,7 +369,7 @@ describe('POST /api/account/password', () => {
 
       expect(status).toBe(200)
       expect(signOut).toHaveBeenCalledWith({ scope: 'others' })
-      expect(body.data).toEqual({ ok: true, otherSessionsEnded: true })
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: true, sessionKept: true })
     })
 
     it('also ends other sessions on a first-time set (the recovery and BankID paths)', async () => {
@@ -392,7 +420,109 @@ describe('POST /api/account/password', () => {
       }>(await POST(req))
 
       expect(status).toBe(200)
-      expect(body.data).toEqual({ ok: true, otherSessionsEnded: false })
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: false, sessionKept: true })
+    })
+  })
+
+  // The admin password write ends every session of the user, the one making
+  // the request included: 13 BankID users in two weeks were bounced to /login
+  // seconds after choosing their first password.
+  describe('the session after a first-time set', () => {
+    const bankIdUser = { id: 'user-1', app_metadata: { has_password: false, bankid_linked: true } }
+
+    function post() {
+      return POST(createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD } }))
+    }
+
+    it('is replaced by a new one, minted for the user and written on this request', async () => {
+      const { verifyOtp, signOut } = mockUserClient({ user: bankIdUser })
+      const { generateLink, updateUserById } = mockService({
+        priorAppMetadata: bankIdUser.app_metadata,
+        currentEmail: 'anna@example.com',
+      })
+
+      const { status, body } = await parseJsonResponse<{
+        data?: { ok: boolean; otherSessionsEnded: boolean; sessionKept: boolean }
+      }>(await post())
+
+      expect(status).toBe(200)
+      expect(generateLink).toHaveBeenCalledWith({ type: 'magiclink', email: 'anna@example.com' })
+      expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'hashed-token-1', type: 'magiclink' })
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: true, sessionKept: true })
+      // After the flag write, so the new token already says has_password; and
+      // the other sessions are ended with the session that exists now.
+      const flagWrite = updateUserById.mock.invocationCallOrder.at(-1)!
+      expect(generateLink.mock.invocationCallOrder[0]).toBeGreaterThan(flagWrite)
+      expect(signOut.mock.invocationCallOrder[0]).toBeGreaterThan(verifyOtp.mock.invocationCallOrder[0])
+    })
+
+    it('is not touched by a password change: that session survives the write', async () => {
+      const { verifyOtp } = mockUserClient({ user: { id: 'user-1', app_metadata: { has_password: true } } })
+      const { generateLink } = mockService({ priorAppMetadata: { has_password: true } })
+
+      await post()
+
+      expect(generateLink).not.toHaveBeenCalled()
+      expect(verifyOtp).not.toHaveBeenCalled()
+    })
+
+    it('is reported as lost when the link cannot be minted, and the password stands', async () => {
+      const { verifyOtp, signOut } = mockUserClient({ user: bankIdUser })
+      mockService({
+        priorAppMetadata: bankIdUser.app_metadata,
+        generateLinkError: { message: 'upstream down', status: 500 },
+      })
+
+      const { status, body } = await parseJsonResponse<{
+        data?: { ok: boolean; otherSessionsEnded: boolean; sessionKept: boolean }
+      }>(await post())
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({ ok: true, otherSessionsEnded: false, sessionKept: false })
+      expect(verifyOtp).not.toHaveBeenCalled()
+      // No session to call GoTrue's logout with.
+      expect(signOut).not.toHaveBeenCalled()
+    })
+
+    it('is reported as lost when the link is refused', async () => {
+      mockUserClient({ user: bankIdUser, verifyOtpError: { message: 'expired', status: 403, code: 'otp_expired' } })
+      mockService({ priorAppMetadata: bankIdUser.app_metadata })
+
+      const { body } = await parseJsonResponse<{ data?: { sessionKept: boolean } }>(await post())
+
+      expect(body.data?.sessionKept).toBe(false)
+    })
+
+    it('is reported as lost for a user with no e-mail address, without asking for a link', async () => {
+      mockUserClient({ user: bankIdUser })
+      const { generateLink } = mockService({ priorAppMetadata: bankIdUser.app_metadata, currentEmail: null })
+
+      const { body } = await parseJsonResponse<{ data?: { sessionKept: boolean } }>(await post())
+
+      expect(body.data?.sessionKept).toBe(false)
+      expect(generateLink).not.toHaveBeenCalled()
+    })
+
+    it('is never minted for the address in the token, only for the one the auth server holds', async () => {
+      mockUserClient({ user: bankIdUser })
+      const { generateLink } = mockService({
+        priorAppMetadata: bankIdUser.app_metadata,
+        currentEmail: 'changed-an-hour-ago@example.com',
+      })
+
+      await post()
+
+      expect(generateLink).toHaveBeenCalledWith({ type: 'magiclink', email: 'changed-an-hour-ago@example.com' })
+    })
+
+    it('is not taken from a link that came back for another user', async () => {
+      const { verifyOtp } = mockUserClient({ user: bankIdUser })
+      mockService({ priorAppMetadata: bankIdUser.app_metadata, linkUserId: 'someone-else' })
+
+      const { body } = await parseJsonResponse<{ data?: { sessionKept: boolean } }>(await post())
+
+      expect(body.data?.sessionKept).toBe(false)
+      expect(verifyOtp).not.toHaveBeenCalled()
     })
   })
 })
