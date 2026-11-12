@@ -1,0 +1,1 @@
+[2026-11-12] The payment status cron asks the bank about a payment planned for a later day every 6 h, not every 15 min, and stops starting bank reads 120 s before its limit: 105 of 122 reads per run were planned payments, and a slow bank took the whole 300 s on 10 Nov.

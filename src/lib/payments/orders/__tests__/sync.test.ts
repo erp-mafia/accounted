@@ -25,7 +25,9 @@ const mockStoredBatchSigner = vi.fn()
 vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchSigner: (...args: unknown[]) => mockStoredBatchSigner(...args) }))
 const NO_SIGNER = { psuId: null, ipAddress: null }
 
-import { syncPaymentOrderStatuses, UNANSWERED_SIGNING_MINUTES } from '../sync'
+import { isDueForStatusRead, SIGNING_PASS_RESERVE_MS, syncPaymentOrderStatuses, UNANSWERED_READS_PER_BANK, UNANSWERED_SIGNING_MINUTES } from '../sync'
+import { SCHEDULED_PAYMENT_READ_EVERY_MS } from '../status'
+import { runBudget } from '@/lib/api/run-budget'
 import { skattekontoPaymentsCovering } from '../skattekonto-underway'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
 import { ARCIM, arcimDebit, arcimInvoice, arcimOrder, fakeProvider, holdSigning, RCVD_TAX, rcvdTaxBatch, rcvdTaxDebit, rcvdTaxOrder } from './fixtures'
@@ -507,6 +509,8 @@ describe('syncPaymentOrderStatuses', () => {
       settledByDebit: 0,
       linkedByDebit: 0,
       forgottenIps: 0,
+      deferred: 0,
+      banksNotAnswering: 0,
       errors: 0,
       noProvider: true,
     })
@@ -833,5 +837,371 @@ describe('the signer\'s IP address once the signing is closed', () => {
     result = await run()
     expect(result).toMatchObject({ forgottenIps: 0, errors: 1 })
     expect(log.error).toHaveBeenCalledWith('signer IP addresses of closed signings could not be cleared', expect.anything())
+  })
+})
+
+describe('syncPaymentOrderStatuses: what bounds a run', () => {
+  const RCVD = { providerStatus: 'RCVD', status: 'submitted' as const, messages: [] }
+  const atBank = (bic: string) => ({ ...order('x').debtor_snapshot, bic })
+  const unsigned = (id: string, bic = 'ESSESESS') => order(id, { status: 'submitted', debtor_snapshot: atBank(bic) })
+  const down = () => new PaymentProviderError('the bank did not answer', 'CONNECTOR_PAYMENTS_PROVIDER_FAILED', true, 502)
+  const refusal = () => new PaymentProviderError('refused', 'FORMAT_ERROR', false, 400)
+  const reads = (getPaymentState: ReturnType<typeof vi.fn>) => getPaymentState.mock.calls.map(([, paymentId]) => String(paymentId).replace('pay-', ''))
+  /** A bank that leaves the named payments unanswered and answers RCVD about every other. */
+  const unansweredFor = (...ids: string[]) =>
+    vi.fn().mockImplementation(async (_party: unknown, paymentId: string) => {
+      if (ids.includes(paymentId.replace('pay-', ''))) throw down()
+      return RCVD
+    })
+  const withBudget = (budget: { deadline: number; allows: (ms?: number) => boolean }, sweeps?: { deadline: number; allows: (ms?: number) => boolean }) =>
+    syncPaymentOrderStatuses(db.supabase as unknown as SupabaseClient, log, budget, sweeps)
+
+  it('asks its budget before each bank read and leaves the rest, counted, for the next run', async () => {
+    // Production, 2026-11-10 04:30: twelve unanswered reads took the whole 300 s and the platform killed the run.
+    const getPaymentState = vi.fn().mockResolvedValue(RCVD)
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [{ data: [unsigned('o1'), unsigned('o2'), unsigned('o3')] }, { data: [{ id: 'o1' }] }])
+    const allows = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+
+    const result = await withBudget({ deadline: 0, allows })
+
+    expect(reads(getPaymentState)).toEqual(['o1'])
+    expect(result).toMatchObject({ checked: 1, deferred: 2, banksNotAnswering: 0, errors: 0 })
+    expect(log.warn).toHaveBeenCalledWith('payment status sync left payments for the next run', { deferred: 2, banksNotAnswering: 0 })
+  })
+
+  it('reads at most 200 payments in a run, oldest answer first with the id as tie-break, and counts the rest as left', async () => {
+    const getPaymentState = vi.fn().mockResolvedValue(RCVD)
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [{ data: Array.from({ length: 201 }, (_, i) => unsigned(`o${i}`)) }, { data: [{ id: 'o0' }] }])
+
+    const result = await run()
+
+    expect(getPaymentState).toHaveBeenCalledTimes(200)
+    expect(result).toMatchObject({ checked: 200, deferred: 1 })
+    expect(db.findCalls('payment_orders', 'order').slice(0, 2)).toEqual([
+      ['provider_status_at', { ascending: true, nullsFirst: true }],
+      ['id', { ascending: true }],
+    ])
+  })
+
+  describe('an abandoned signing', () => {
+    const bankId = (state: 'failed' | 'pending') => vi.fn().mockResolvedValue({ state, challenge: null, failureCode: state === 'failed' ? 'SIGNING_SESSION_EXPIRED' : null, step: null })
+    function held(orders: PaymentOrderRow[]) {
+      const signing = { ...SIGNING, provider_batch_id: 'basket-at-bank', signing_method: 'same_device' } as PaymentOrderBatchRow
+      holdSigning(db, signing, orders)
+      db.setTable('supplier_invoices', { data: orders.map((o) => ({ id: o.supplier_invoice_id, ...UNPAID })) })
+      return signing
+    }
+
+    it('waits for the next run, as one that could not be read, when the budget is spent before it', async () => {
+      const getPaymentState = vi.fn()
+      const pollSigning = vi.fn()
+      registerPaymentInitiationProvider({ ...provider(getPaymentState), pollSigning } as unknown as PaymentInitiationProvider)
+      db.setTable('payment_order_batches', { data: [SIGNING, { ...SIGNING, id: 'batch-2' }] })
+      db.setTable('payment_orders', { data: [] })
+
+      const result = await withBudget({ deadline: 0, allows: () => false })
+
+      expect(result).toMatchObject({ checked: 0, abandoned: 0, deferred: 2 })
+      expect(getPaymentState).not.toHaveBeenCalled()
+      expect(pollSigning).not.toHaveBeenCalled()
+      expect(patches('payment_order_batches')).toEqual([])
+    })
+
+    it('is never called abandoned on half its payments: out of time between two reads, nothing is asked of the BankID and nothing cancelled', async () => {
+      const fake = fakeProvider({ pollSigning: bankId('failed') })
+      registerPaymentInitiationProvider(fake)
+      const orders = [order('o1'), order('o2')]
+      const signing = held(orders)
+      // Time for the signing and its first read, none for the second.
+      const allows = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValue(false)
+
+      const result = await withBudget({ deadline: 0, allows })
+
+      expect(fake.getPaymentState).toHaveBeenCalledTimes(1)
+      expect(fake.pollSigning).not.toHaveBeenCalled()
+      expect(fake.cancelPayment).not.toHaveBeenCalled()
+      expect(signing.status).toBe('awaiting_signature')
+      expect(orders.map((o) => o.status)).toEqual(['awaiting_signature', 'awaiting_signature'])
+      expect(result).toMatchObject({ abandoned: 0, checked: 1 })
+      expect(result.deferred).toBeGreaterThanOrEqual(1)
+    })
+
+    it('is not ended once the budget is spent: its cancels wait for the next run, where it ends as before', async () => {
+      const fake = fakeProvider({ pollSigning: bankId('failed') })
+      registerPaymentInitiationProvider(fake)
+      const orders = [order('o1')]
+      const signing = held(orders)
+      // Time for the signing, its read and the BankID read; none left to start the cancels.
+      const allows = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValue(false)
+
+      const result = await withBudget({ deadline: 0, allows })
+
+      expect(fake.pollSigning).toHaveBeenCalledTimes(1)
+      expect(fake.cancelPayment).not.toHaveBeenCalled()
+      expect(signing.status).toBe('awaiting_signature')
+      expect(result).toMatchObject({ abandoned: 0 })
+      // A signing is started only in the first half of the read budget.
+      expect(allows.mock.calls[0]).toEqual([SIGNING_PASS_RESERVE_MS])
+
+      expect(await run()).toMatchObject({ abandoned: 1 })
+      expect(fake.cancelPayment).toHaveBeenCalledTimes(1)
+      expect(signing.status).toBe('failed')
+    })
+
+    it('is not asked about its BankID once the budget is spent', async () => {
+      const fake = fakeProvider({ pollSigning: bankId('failed') })
+      registerPaymentInitiationProvider(fake)
+      const signing = held([order('o1')])
+      const allows = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValue(false)
+
+      const result = await withBudget({ deadline: 0, allows })
+
+      expect(fake.getPaymentState).toHaveBeenCalledTimes(1)
+      expect(fake.pollSigning).not.toHaveBeenCalled()
+      expect(signing.status).toBe('awaiting_signature')
+      expect(result.deferred).toBeGreaterThanOrEqual(1)
+    })
+
+    describe('at a bank that is not answering', () => {
+      const signingAt = (id: string) => ({ ...SIGNING, id }) as PaymentOrderBatchRow
+      const awaiting = (id: string, bic: string, batchId: string) => order(id, { batch_id: batchId, debtor_snapshot: atBank(bic) })
+      /** Each signing's orders, then the main read, answered by the batch the query names. */
+      function seed(byBatch: Record<string, PaymentOrderRow[]>, atTheBank: PaymentOrderRow[]) {
+        db.setTable('payment_order_batches', { data: Object.keys(byBatch).map(signingAt) })
+        db.setTable('payment_orders', (chain) => {
+          if (chain.some(({ method }) => method === 'update')) return { data: [{ id: 'moved' }] }
+          const batch = chain.find(({ method, args }) => method === 'eq' && args[0] === 'batch_id')
+          if (batch) return { data: byBatch[batch.args[1] as string] ?? [] }
+          return chain.some(({ method }) => method === 'range') ? { data: atTheBank } : { data: [] }
+        })
+      }
+
+      it('goes last: the signings of every other bank are worked first, and the bank goes last for the payments read after', async () => {
+        const getPaymentState = unansweredFor('a1', 'c1')
+        registerPaymentInitiationProvider({ ...provider(getPaymentState), pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: null, failureCode: null, step: null }) } as unknown as PaymentInitiationProvider)
+        seed(
+          { 'batch-a': [awaiting('a1', 'HANDSESS', 'batch-a')], 'batch-c': [awaiting('c1', 'HANDSESS', 'batch-c')], 'batch-b': [awaiting('b1', 'ESSESESS', 'batch-b')] },
+          [unsigned('h1', 'HANDSESS'), unsigned('s1')],
+        )
+
+        const result = await run()
+
+        // a1 goes unanswered: the next Handelsbanken signing waits until SEB's is worked, then is asked; SEB's payment is read before Handelsbanken's.
+        expect(reads(getPaymentState)).toEqual(['a1', 'b1', 'c1', 's1', 'h1'])
+        expect(result).toMatchObject({ banksNotAnswering: 1, abandoned: 0 })
+      })
+
+      it('gives the bank its turn back as soon as it answers', async () => {
+        const getPaymentState = unansweredFor('a1')
+        registerPaymentInitiationProvider({ ...provider(getPaymentState), pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: null, failureCode: null, step: null }) } as unknown as PaymentInitiationProvider)
+        seed({ 'batch-a': [awaiting('a1', 'HANDSESS', 'batch-a')], 'batch-c': [awaiting('c1', 'HANDSESS', 'batch-c')] }, [unsigned('h1', 'HANDSESS'), unsigned('s1')])
+
+        await run()
+
+        // c1 is answered, so Handelsbanken is answering again when the payments are read: h1 keeps its place ahead of s1.
+        expect(reads(getPaymentState)).toEqual(['a1', 'c1', 'h1', 's1'])
+      })
+    })
+  })
+
+  it('lets the banks take turns, each with its oldest answer first', async () => {
+    const getPaymentState = vi.fn().mockResolvedValue(RCVD)
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [{ data: [unsigned('h1', 'HANDSESS'), unsigned('h2', 'HANDSESS'), unsigned('h3', 'HANDSESS'), unsigned('s1'), unsigned('s2')] }, { data: [{ id: 'h1' }] }])
+
+    await run()
+
+    expect(reads(getPaymentState)).toEqual(['h1', 's1', 'h2', 's2', 'h3'])
+  })
+
+  it('still reads the other payments of a bank where two always go unanswered, after every other bank', async () => {
+    // Two payments whose read fails on every run keep the oldest answer and are first in every run.
+    const getPaymentState = unansweredFor('h1', 'h2')
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [{ data: [unsigned('h1', 'HANDSESS'), unsigned('h2', 'HANDSESS'), unsigned('h3', 'HANDSESS'), unsigned('s1'), unsigned('s2')] }, { data: [{ id: 's1' }] }])
+
+    const result = await run()
+
+    expect(UNANSWERED_READS_PER_BANK).toBe(1)
+    expect(reads(getPaymentState)).toEqual(['h1', 's1', 's2', 'h2', 'h3'])
+    expect(result).toMatchObject({ checked: 5, errors: 2, banksNotAnswering: 1, deferred: 0 })
+  })
+
+  it('reads every answering bank before going back to one that is down', async () => {
+    const getPaymentState = unansweredFor('h1', 'h2', 'h3', 'h4')
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [
+      { data: [unsigned('h1', 'HANDSESS'), unsigned('h2', 'HANDSESS'), unsigned('h3', 'HANDSESS'), unsigned('h4', 'HANDSESS'), unsigned('s1'), unsigned('s2'), unsigned('s3')] },
+      { data: [{ id: 's1' }] },
+    ])
+
+    const result = await run()
+
+    expect(reads(getPaymentState)).toEqual(['h1', 's1', 's2', 's3', 'h2', 'h3', 'h4'])
+    expect(result).toMatchObject({ checked: 7, errors: 4, banksNotAnswering: 1 })
+  })
+
+  it('reads a fourth bank in full when three are down at once, on the clock: each unanswered read is a 30 s timeout', async () => {
+    // Swedbank and two sparbanker behind its BIC down together: each is its own connection at the provider.
+    const sparbank = (id: string, aspsp: string | null) => order(id, { status: 'submitted', debtor_snapshot: { ...atBank('SWEDSESS'), affiliated_aspsp_id: aspsp } })
+    let clock = 0
+    const getPaymentState = vi.fn().mockImplementation(async (party: { debtorBic: string }) => {
+      if (party.debtorBic === 'SWEDSESS') {
+        clock += 30_000
+        throw down()
+      }
+      clock += 500
+      return RCVD
+    })
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [
+      {
+        data: [
+          sparbank('a1', null), sparbank('a2', null), sparbank('a3', null),
+          sparbank('b1', '08999'), sparbank('b2', '08999'), sparbank('b3', '08999'),
+          sparbank('c1', '08327'), sparbank('c2', '08327'), sparbank('c3', '08327'),
+          unsigned('d1', 'NDEASESS'), unsigned('d2', 'NDEASESS'), unsigned('d3', 'NDEASESS'),
+        ],
+      },
+      { data: [{ id: 'd1' }] },
+    ])
+
+    // The route's budget: reads start until 180 s into the run.
+    const result = await withBudget(runBudget(0, 180_000, () => clock))
+
+    // One timeout per bank that is down (90 s), then Nordea in full, then the rest of the time on the banks that are down.
+    expect(reads(getPaymentState)).toEqual(['a1', 'b1', 'c1', 'd1', 'd2', 'd3', 'a2', 'b2', 'c2'])
+    expect(result).toMatchObject({ banksNotAnswering: 3, deferred: 3 })
+  })
+
+  it('takes a refusal for an answer: the bank is there, and keeps its turn', async () => {
+    // Production since 2026-10-30: three payments whose read SEB and Länsförsäkringar refuse (FORMAT_ERROR) on every run.
+    const getPaymentState = vi.fn().mockImplementation(async (_party: unknown, paymentId: string) => {
+      if (paymentId === 'pay-o1') throw refusal()
+      return RCVD
+    })
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_orders', [{ data: [unsigned('o1'), unsigned('o2'), unsigned('h1', 'HANDSESS'), unsigned('h2', 'HANDSESS')] }, { data: [{ id: 'o2' }] }])
+
+    const result = await run()
+
+    expect(reads(getPaymentState)).toEqual(['o1', 'h1', 'o2', 'h2'])
+    expect(result).toMatchObject({ checked: 4, errors: 1, banksNotAnswering: 0 })
+  })
+
+  describe('a payment planned for a later day', () => {
+    const now = Date.now()
+    const farAhead = new Date(now + 40 * 86_400_000).toISOString().slice(0, 10)
+    const planned = (id: string, hoursAgo: number) =>
+      order(id, { status: 'accepted', requested_execution_date: farAhead, provider_status_at: new Date(now - hoursAgo * 3_600_000).toISOString() })
+    const ACSP = { providerStatus: 'ACSP', status: 'accepted' as const, messages: [] }
+
+    it('is read when its last answer is six hours old, and skipped before that', async () => {
+      const getPaymentState = vi.fn().mockResolvedValue(ACSP)
+      registerPaymentInitiationProvider(provider(getPaymentState))
+      db.setTable('payment_orders', [{ data: [planned('old', 7), planned('fresh', 1)] }, { data: [{ id: 'old' }] }])
+
+      const result = await run()
+
+      expect(reads(getPaymentState)).toEqual(['old'])
+      expect(result).toMatchObject({ checked: 1, deferred: 0 })
+    })
+
+    it('is read on every run once someone has asked the bank to cancel it: they are waiting to see the cancel here', async () => {
+      const getPaymentState = vi.fn().mockResolvedValue(ACSP)
+      registerPaymentInitiationProvider(provider(getPaymentState))
+      db.setTable('payment_orders', [{ data: [planned('asked', 1), planned('fresh', 1)] }, { data: [{ id: 'asked' }] }])
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'asked' }, { payment_order_id: 'another-company-order' }] })
+
+      await run()
+
+      expect(reads(getPaymentState)).toEqual(['asked'])
+      expect(db.findCalls('payment_order_events', 'eq')).toContainEqual(['event_type', 'cancel_requested'])
+      const [column, since] = db.findCall('payment_order_events', 'gte') as [string, string]
+      expect(column).toBe('occurred_at')
+      expect(Date.now() - Date.parse(since)).toBeGreaterThanOrEqual(7 * 86_400_000 - 5_000)
+    })
+
+    it('is left to its six hours, and every other payment still read, when the cancel requests cannot be read', async () => {
+      const getPaymentState = vi.fn().mockResolvedValue(ACSP)
+      registerPaymentInitiationProvider(provider(getPaymentState))
+      // o1 is signed and due today: read on every run, and no cancel for a closed invoice is weighed for it.
+      const dueToday = order('o1', { status: 'accepted', requested_execution_date: new Date().toISOString().slice(0, 10) })
+      db.setTable('payment_orders', [{ data: [planned('fresh', 1), dueToday] }, { data: [{ id: 'o1' }] }])
+      db.setTable('payment_order_events', { data: null, error: { message: 'canceling statement due to statement timeout' } })
+
+      const result = await run()
+
+      expect(reads(getPaymentState)).toEqual(['o1'])
+      expect(result).toMatchObject({ checked: 1 })
+      expect(log.error).toHaveBeenCalledWith('cancel requests of planned payments could not be read', expect.objectContaining({ message: 'canceling statement due to statement timeout' }))
+    })
+  })
+
+  describe('the debit sweeps', () => {
+    function seedExecutedOrder() {
+      registerPaymentInitiationProvider(provider(vi.fn()))
+      db.setTable('payment_orders', [{ data: [] }, { data: [arcimOrder()] }])
+      db.setTable('open_bank_rows', { data: [] })
+    }
+
+    it('run on a budget of their own: they call no bank, so a run whose reads took all their time still looks for the debits', async () => {
+      seedExecutedOrder()
+
+      const result = await withBudget({ deadline: 0, allows: () => false }, { deadline: 0, allows: () => true })
+
+      expect(db.findCalls('open_bank_rows', 'select')).toHaveLength(1)
+      expect(result).toMatchObject({ deferred: 0, errors: 0 })
+    })
+
+    it('leave their rows, counted, for the next run when their own budget is spent', async () => {
+      seedExecutedOrder()
+
+      const result = await withBudget({ deadline: 0, allows: () => false }, { deadline: 0, allows: () => false })
+
+      expect(db.findCalls('open_bank_rows', 'select')).toHaveLength(0)
+      expect(result.deferred).toBeGreaterThanOrEqual(1)
+    })
+  })
+})
+
+describe('isDueForStatusRead', () => {
+  // 09:00 in Stockholm on 12 November 2026.
+  const NOW = new Date('2026-11-12T08:00:00Z')
+  const answered = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString()
+  const row = (status: PaymentOrderRow['status'], requested_execution_date: string, provider_status_at: string | null) => ({ status, requested_execution_date, provider_status_at })
+
+  it('reads a payment planned for a later day every six hours, not every run', () => {
+    expect(isDueForStatusRead(row('accepted', '2027-04-01', answered(15 * 60_000)), NOW)).toBe(false)
+    expect(isDueForStatusRead(row('accepted', '2026-11-14', answered(SCHEDULED_PAYMENT_READ_EVERY_MS - 1)), NOW)).toBe(false)
+    expect(isDueForStatusRead(row('accepted', '2026-11-14', answered(SCHEDULED_PAYMENT_READ_EVERY_MS)), NOW)).toBe(true)
+    expect(isDueForStatusRead(row('accepted', '2027-04-01', null), NOW)).toBe(true)
+    expect(isDueForStatusRead(row('accepted', '2027-04-01', 'not a date'), NOW)).toBe(true)
+  })
+
+  it('reads a payment the bank pays today or tomorrow, or should have paid, on every run', () => {
+    for (const date of ['2026-11-13', '2026-11-12', '2026-11-01']) {
+      expect(isDueForStatusRead(row('accepted', date, answered(60_000)), NOW)).toBe(true)
+    }
+  })
+
+  it('reads every payment nobody has signed yet on every run, whatever its date', () => {
+    for (const status of ['submitted', 'awaiting_signature', 'awaiting_second_signer'] as const) {
+      expect(isDueForStatusRead(row(status, '2027-04-01', answered(60_000)), NOW)).toBe(true)
+    }
+  })
+
+  it('reads a planned payment on every run while a cancel of it is asked for', () => {
+    expect(isDueForStatusRead(row('accepted', '2027-04-01', answered(15 * 60_000)), NOW, true)).toBe(true)
+    expect(isDueForStatusRead(row('accepted', '2027-04-01', answered(15 * 60_000)), NOW, false)).toBe(false)
+  })
+
+  it('counts the day on the Swedish calendar', () => {
+    // 23:30 UTC on the 12th is 00:30 on the 13th in Stockholm: the 14th is tomorrow there.
+    const late = new Date('2026-11-12T23:30:00Z')
+    expect(isDueForStatusRead(row('accepted', '2026-11-14', new Date(late.getTime() - 60_000).toISOString()), late)).toBe(true)
+    expect(isDueForStatusRead(row('accepted', '2026-11-15', new Date(late.getTime() - 60_000).toISOString()), late)).toBe(false)
   })
 })

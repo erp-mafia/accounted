@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { BANK_SILENT_AFTER_MS, bankSilentSince } from '../payment-order-status'
-import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
+import { SCHEDULED_PAYMENT_READ_EVERY_MS, type PaymentOrderStatus } from '@/lib/payments/orders/status'
 
 const NOW = Date.parse('2026-11-07T08:00:00Z')
 const row = (status: PaymentOrderStatus, provider_status_at: string | null, outcome_unknown_at: string | null = null) => ({
@@ -12,6 +12,10 @@ const row = (status: PaymentOrderStatus, provider_status_at: string | null, outc
 })
 
 describe('a payment the bank has not answered about for a day says so on its Betalningar row', () => {
+  it('never calls a planned payment silent between two of its reads: the sync asks about it at least three times inside the day', () => {
+    expect(SCHEDULED_PAYMENT_READ_EVERY_MS * 3).toBeLessThanOrEqual(BANK_SILENT_AFTER_MS)
+  })
+
   it('names the last answer of a payment the bank still holds, once it is more than a day old', () => {
     // Production, 2026-10-30: a status read refused every 15 minutes for a week.
     const lastAnswer = '2026-10-30T01:31:56.463Z'

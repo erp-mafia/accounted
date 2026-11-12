@@ -53,6 +53,7 @@ describe('sweepPaymentVerifications', () => {
       refreshed: 0,
       renewalDue: 0,
       skipped: { doorClosed: 0, noOrgNumber: 0 },
+      deferred: 0,
       errors: 0,
       noProvider: true,
     })
@@ -76,7 +77,7 @@ describe('sweepPaymentVerifications', () => {
 
     const result = await sweepPaymentVerifications(db.supabase as unknown as SupabaseClient, log, NOW)
 
-    expect(result).toEqual({ considered: 2, refreshed: 2, renewalDue: 1, skipped: { doorClosed: 0, noOrgNumber: 0 }, errors: 0 })
+    expect(result).toEqual({ considered: 2, refreshed: 2, renewalDue: 1, skipped: { doorClosed: 0, noOrgNumber: 0 }, deferred: 0, errors: 0 })
     expect(provider.getCompanyVerification).toHaveBeenCalledTimes(2)
     const before = new Date(NOW.getTime() - VERIFICATION_SWEEP_AFTER_MS).toISOString()
     expect(db.findCall('company_payment_verifications', 'or')).toEqual([`checked_at.is.null,checked_at.lt.${before}`])
@@ -110,10 +111,26 @@ describe('sweepPaymentVerifications', () => {
 
     const result = await sweepPaymentVerifications(db.supabase as unknown as SupabaseClient, log, NOW)
 
-    expect(result).toEqual({ considered: 4, refreshed: 1, renewalDue: 1, skipped: { doorClosed: 1, noOrgNumber: 1 }, errors: 1 })
+    expect(result).toEqual({ considered: 4, refreshed: 1, renewalDue: 1, skipped: { doorClosed: 1, noOrgNumber: 1 }, deferred: 0, errors: 1 })
     expect(provider.getCompanyVerification).toHaveBeenCalledTimes(2)
     expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/sweep failed/), { companyId: C, code: 'TIMEOUT' })
     // The lapsed company's record now reads expired: the worklist row shows from the next read.
     expect(db.payloads('company_payment_verifications', 'upsert')).toEqual([{ company_id: D, status: 'invalid', valid_until: '2026-09-01', checked_at: NOW.toISOString() }])
+  })
+  it('asks the run budget before each provider call and leaves the rest, oldest answer first, for the next run', async () => {
+    const provider = fakeProvider({ getCompanyVerification: vi.fn().mockResolvedValue({ status: 'valid', validUntil: '2027-10-03' }) })
+    registerPaymentInitiationProvider(provider)
+    const C = 'c0000000-0000-4000-8000-000000000003'
+    db.setTable('company_payment_verifications', [
+      { data: [record(A), record(B), record(C)] },
+      { data: null }, // upsert A
+      { data: record(A, { checked_at: NOW.toISOString() }) },
+    ])
+    const allows = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+
+    const result = await sweepPaymentVerifications(db.supabase as unknown as SupabaseClient, log, NOW, { deadline: 0, allows })
+
+    expect(result).toMatchObject({ considered: 1, refreshed: 1, deferred: 2, errors: 0 })
+    expect(provider.getCompanyVerification).toHaveBeenCalledTimes(1)
   })
 })

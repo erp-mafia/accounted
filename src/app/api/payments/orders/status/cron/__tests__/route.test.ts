@@ -12,7 +12,8 @@ import { verifyCronSecret } from '@/lib/auth/cron'
 import { syncPaymentOrderStatuses } from '@/lib/payments/orders/sync'
 import { sweepPaymentVerifications } from '@/lib/payments/orders/verification-sweep'
 import { notifyFailedPayments } from '@/lib/payments/orders/outcome-notify'
-import { GET } from '../route'
+import { PAYMENTS_CONNECT_TIMEOUT_MS } from '@/lib/payments/initiation/connect'
+import { GET, maxDuration } from '../route'
 
 function request(): Request {
   return new Request('https://app.accounted.se/api/payments/orders/status/cron')
@@ -36,9 +37,9 @@ describe('GET /api/payments/orders/status/cron', () => {
   })
 
   it('runs the status sync, then the failed-payment mails, then the verification sweep, and returns every summary', async () => {
-    const summary = { checked: 3, moved: 1, markedUnknown: 0, released: 0, abandoned: 1, signedLate: 0, cancelledForClosedInvoice: 1, heldForPerson: 0, settledByDebit: 0, linkedByDebit: 0, forgottenIps: 0, errors: 0 }
+    const summary = { checked: 3, moved: 1, markedUnknown: 0, released: 0, abandoned: 1, signedLate: 0, cancelledForClosedInvoice: 1, heldForPerson: 0, settledByDebit: 0, linkedByDebit: 0, forgottenIps: 0, deferred: 0, banksNotAnswering: 0, errors: 0 }
     const failedPaymentMails = { considered: 1, mailed: 2, notified: 2, claimRefused: 0, errors: 0 }
-    const verifications = { considered: 2, refreshed: 2, renewalDue: 1, skipped: { doorClosed: 0, noOrgNumber: 0 }, errors: 0 }
+    const verifications = { considered: 2, refreshed: 2, renewalDue: 1, skipped: { doorClosed: 0, noOrgNumber: 0 }, deferred: 0, errors: 0 }
     vi.mocked(syncPaymentOrderStatuses).mockResolvedValueOnce(summary)
     vi.mocked(notifyFailedPayments).mockResolvedValueOnce(failedPaymentMails)
     vi.mocked(sweepPaymentVerifications).mockResolvedValueOnce(verifications)
@@ -51,6 +52,30 @@ describe('GET /api/payments/orders/status/cron', () => {
     const writer = vi.mocked(syncPaymentOrderStatuses).mock.calls[0]![0]
     expect(vi.mocked(notifyFailedPayments).mock.calls[0]![0]).toBe(writer)
     expect(vi.mocked(sweepPaymentVerifications).mock.calls[0]![0]).toBe(writer)
+  })
+
+  it('gives each pass a budget inside maxDuration, counted from the start of the run, with room for the slowest bank call', async () => {
+    vi.mocked(syncPaymentOrderStatuses).mockResolvedValueOnce({ checked: 0 } as never)
+    vi.mocked(notifyFailedPayments).mockResolvedValueOnce({ considered: 0 } as never)
+    vi.mocked(sweepPaymentVerifications).mockResolvedValueOnce({ considered: 0 } as never)
+    const before = Date.now()
+
+    await GET(request())
+
+    const after = Date.now()
+    const syncBudget = vi.mocked(syncPaymentOrderStatuses).mock.calls[0]![2]!
+    const debitSweepBudget = vi.mocked(syncPaymentOrderStatuses).mock.calls[0]![3]!
+    const sweepBudget = vi.mocked(sweepPaymentVerifications).mock.calls[0]![3]!
+    // The status sync may start a read and the cancel after it (30 s each) at its last moment.
+    expect(syncBudget.deadline).toBeGreaterThanOrEqual(before + 180_000)
+    expect(syncBudget.deadline).toBeLessThanOrEqual(after + 180_000)
+    expect(sweepBudget.deadline).toBeGreaterThanOrEqual(before + 240_000)
+    expect(sweepBudget.deadline).toBeLessThanOrEqual(after + 240_000)
+    expect(sweepBudget.deadline + PAYMENTS_CONNECT_TIMEOUT_MS).toBeLessThan(before + maxDuration * 1000)
+    expect(syncBudget.deadline + 2 * PAYMENTS_CONNECT_TIMEOUT_MS).toBeLessThan(sweepBudget.deadline + 1)
+    // The debit sweeps call no bank: they may start rows after the reads stop, and end before the verification sweep's last call.
+    expect(debitSweepBudget.deadline).toBeGreaterThan(syncBudget.deadline)
+    expect(debitSweepBudget.deadline).toBeLessThan(sweepBudget.deadline)
   })
 
   it('keeps the statuses and runs the verification sweep when the mails cannot run', async () => {
