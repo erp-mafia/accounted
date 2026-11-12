@@ -149,7 +149,7 @@ export function useBankSync() {
       const calm = isSyncCooldown(error) || isBankBusy(error)
       toast({
         title: t('bank_sync_button_now'),
-        description: getUserErrorMessage(error instanceof OpenPaymentsClientError ? error.body : error),
+        description: getUserErrorMessage(error instanceof OpenPaymentsClientError ? error.body : error, { locale: errorLocale }),
         ...(calm ? {} : { variant: 'destructive' as const }),
       })
     } finally {

@@ -5309,13 +5309,18 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
   },
   BANK_SYNC_COOLDOWN: {
     httpStatus: 429,
-    message_sv: 'Anslutningen synkades nyligen. Vänta tills next_allowed_at innan du synkar igen.',
+    // Never a field name in the Swedish half: a person reads it. With the
+    // time (details.next_allowed_at) the reader words it exactly; this is
+    // what stands without one. The sentences of the three sync holds
+    // (this one, BANK_RATE_LIMITED, BANK_THROTTLED) are those of
+    // lib/bank-sync/sync-hold-message.ts, kept in step by its test.
+    message_sv: 'En synkning startades nyligen. Vänta en kvart mellan synkningarna.',
     message_en: 'This connection was synced recently. Wait until next_allowed_at before syncing again; the data you have is already fresh.',
     retryable: true,
   },
   BANK_RATE_LIMITED: {
     httpStatus: 429,
-    message_sv: 'Banken begränsar just nu hur ofta transaktioner får hämtas. Vänta tills next_allowed_at. Anslutningen behöver inte förnyas.',
+    message_sv: 'Banken begränsar just nu hur ofta transaktioner får hämtas. Försök igen senare. Anslutningen behöver inte förnyas.',
     message_en: 'The bank is temporarily rate limiting this consent. Do not sync again before next_allowed_at: it is our cooldown (the bank\'s Retry-After when it sent one, bounded backoff otherwise), not a reset time confirmed by the bank. The connection is still valid: do not ask the user to renew it.',
     retryable: true,
   },
