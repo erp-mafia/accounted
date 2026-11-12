@@ -48,6 +48,7 @@ const UNBALANCED_SIE = [
 const COVER_VALID_SIE = [
   { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: '6110', targetName: 'Kontorsmaterial', confidence: 1, matchType: 'exact', isOverride: false },
   { sourceAccount: '1930', sourceName: 'Företagskonto', targetAccount: '1930', targetName: 'Företagskonto', confidence: 1, matchType: 'exact', isOverride: false },
+  { sourceAccount: '2081', sourceName: 'Aktiekapital', targetAccount: '2081', targetName: 'Aktiekapital', confidence: 1, matchType: 'exact', isOverride: false },
 ]
 
 beforeEach(() => {
@@ -77,7 +78,7 @@ describe('gnubok_import_sie: stage-time validation', () => {
     expect(result.preview.fiscal_year).toMatchObject({ start: '2024-01-01', end: '2024-12-31' })
     expect(result.preview.opening_balance).toMatchObject({ total: 0, is_balanced: true })
     // The IB is imported by default, so its 2081 counts (unmapped here).
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 2, total: 3 })
+    expect(result.preview.accounts_mapped).toMatchObject({ covered: 3, total: 3 })
     expect(result.preview.would_skip_all_vouchers).toBe(false)
   })
 
@@ -252,25 +253,26 @@ describe('gnubok_import_sie: stage-time validation', () => {
     ).rejects.toThrow(/targetAccount/)
   })
 
-  it('stages when partial overlap exists (1 of 2 accounts mapped)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { org_number: '5566778899' }, error: null }) // company_settings
-    enqueue({ data: { id: 'op-sie-partial' }, error: null })
-
+  // 2026-11-11: an agent sent 14 of the 47 mappings a file needed. It was
+  // staged (the card showed "accounts_mapped 14 of 47"), approved, and the
+  // job skipped 410 of 411 vouchers and finished as completed.
+  it('refuses a list that leaves out accounts with amounts, naming them, before anything is staged', async () => {
+    const { supabase } = createQueuedMockSupabase()
     const partial = [
       { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: '6110', targetName: 'Kontorsmaterial', confidence: 1, matchType: 'exact', isOverride: false },
     ]
-    const result = (await importSie.execute(
+    const staging = importSie.execute(
       { file_content: VALID_SIE, filename: 'bok.se', mappings: partial },
       'company-1',
       'user-1',
       supabase as never,
       { type: 'api_key' },
-    )) as { staged: boolean; preview: Record<string, unknown> }
-
-    expect(result.staged).toBe(true)
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 1, total: 3 })
-    expect(result.preview.would_skip_all_vouchers).toBe(false)
+    )
+    await expect(staging).rejects.toMatchObject({
+      code: 'SIE_IMPORT_UNMAPPED_ACCOUNTS',
+      details: { accounts_without_target_count: 2 },
+    })
+    await expect(staging).rejects.toThrow(/2 konton med belopp i SIE-filen saknar målkonto: 1930 Företagskonto \(1 verifikation, till exempel A1; ingående balans .*\), 2081 Aktiekapital/)
   })
 })
 
@@ -354,7 +356,7 @@ describe('gnubok_import_sie: update_account_names staging', () => {
     )) as { preview: Record<string, unknown> }
 
     expect((staged[0].params as Record<string, unknown>).only_used_accounts).toBe(true)
-    expect(result.preview.only_used_accounts).toEqual({ mappings_kept: 2, mappings_left_out: 1 })
+    expect(result.preview.only_used_accounts).toEqual({ mappings_kept: 3, mappings_left_out: 1 })
   })
 
   it('leaves only_used_accounts out of the staged params by default', async () => {

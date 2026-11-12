@@ -1,0 +1,1 @@
+[2026-11-12] An SIE import is refused, naming the accounts, when an account with amounts has no target; only vouchers that move no balance (Fortnox 0099) are still skipped: two imports had read completed with 65 and 410 vouchers missing.

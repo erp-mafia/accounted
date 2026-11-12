@@ -68,8 +68,9 @@ import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
-import { getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { getMappingStats } from '@/lib/import/account-mapper'
 import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
+import { sieAccountsOfferedForMapping } from '@/lib/import/sie-amounts-without-target'
 import { applySourceVatCodes } from '@/lib/import/account-vat-treatment'
 import { fortnoxVatCodeToTreatment } from '@/lib/providers/fortnox/vat-codes'
 import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
@@ -83,6 +84,7 @@ import {
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import { SIEIntakeNotFoundError, SIEIntakePathError, SIEJobDatabaseError, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -1369,9 +1371,11 @@ export const arcimMigrationExtension: Extension = {
           const merged = mergeParsedSIEFiles(parsedFiles.map((p) => p.parsed))
 
           // All unique accounts across all files (first file's name wins,
-          // same as the merge's account union).
-          const allAccounts = merged.accounts
-            .filter(a => !isSystemAccount(a.number))
+          // same as the merge's account union). A source-system account
+          // (0xxx, Fortnox 0099) is left out only while it carries no amount
+          // in any year; hidden with amounts on it, its vouchers were skipped
+          // and the import still read completed.
+          const allAccounts = sieAccountsOfferedForMapping(merged.accounts, parsedFiles.map((p) => p.parsed))
             .map(a => ({ number: a.number, name: a.name }))
 
           // The company's remembered mappings, every one of them (paged).
@@ -1668,6 +1672,12 @@ export const arcimMigrationExtension: Extension = {
           if (error instanceof SIEJobDatabaseError && error.code && getErrorEntry(error.code)) {
             return errorResponse(error, moduleLog, { requestId: ctx.requestId })
           }
+          // A sentence written for the reader (the year in the file overlaps
+          // a company year without matching it, ensureFiscalPeriod) is the
+          // answer here as on the upload door. Wrapped as SIE_IMPORT_UNEXPECTED
+          // it was a 500 that said the outcome could not be confirmed, while
+          // nothing had started and the sentence said what to change.
+          if (userFacingCode(error)) return errorResponse(error, moduleLog, { requestId: ctx.requestId })
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }

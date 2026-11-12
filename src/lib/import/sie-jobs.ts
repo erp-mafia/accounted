@@ -11,6 +11,7 @@ import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
 import { onlyUsedSIEMappings } from './sie-preview-mappings'
+import { findSIEAmountsWithoutTarget, sieAmountsWithoutTargetSentence } from './sie-amounts-without-target'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { isVoucherOnlySIE } from './sie-voucher-only'
@@ -204,11 +205,24 @@ const JOB_REFUSALS: Record<string,string> = {
  */
 const PREFIXED_REFUSALS = ['SIE_IMPORT_PERIOD_LOCKED','SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE'] as const
 
+const CHANGED_RETRY_RAISE = 'SIE retry has different mapping or options'
+const CHANGED_RETRY_SENTENCE = 'Den här filen har redan en import för räkenskapsåret, med en annan kontomappning eller andra ' +
+  'inställningar än de du valde nu. Ska filen läsas in med de nya valen: öppna importhistoriken och ångra den tidigare importen först.'
+
 export function jobDatabaseError(error:{code?:string;message:string}):SIEJobDatabaseError {
   const prefixed = error.code === '55000'
     ? PREFIXED_REFUSALS.find(code => error.message.startsWith(`${code}: `)) : undefined
   if (prefixed) {
     return userFacing(new SIEJobDatabaseError(error.message.slice(prefixed.length + 2),prefixed,error.code),prefixed)
+  }
+  // The same file is already imported, or being imported, into this year
+  // with another mapping or other options (23505 from start_sie_import_job
+  // and start_sie_append_job). As a bare CONFLICT the reader got "the request
+  // conflicts" and no way on; the year holds an import, and undoing it is
+  // how the file is read again with the new choices.
+  if (error.code === '23505' && error.message === CHANGED_RETRY_RAISE) {
+    return userFacing(new SIEJobDatabaseError(CHANGED_RETRY_SENTENCE,'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',error.code),
+      'SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
   }
   // 55P03 (lock not available) frees itself: the same request succeeds on a
   // retry, which is what TRANSIENT_ERROR says. It is never an existing import.
@@ -344,6 +358,20 @@ export function validateSIEJobInput(content: string, parsed: ParsedSIEFile, mapp
   if (options.importOpeningBalances) for (const balance of getEffectiveOpeningBalances(parsed).balances) required.add(balance.account)
   if (required.size && ![...required].some(a => mapped.has(a))) throw new SIEJobValidationError('Kontomappningarna täcker inga konton i SIE-filen.')
   if (mappings.some(m => m.targetAccount && !isAccountNumber(m.targetAccount))) throw new SIEJobValidationError('Alla målkonton måste vara giltiga kontonummer.')
+  // Every amount the file states has a target, or the import stops and names
+  // the accounts (sie-amounts-without-target.ts). A voucher that moves no
+  // balance may still go without one: it is skipped and nothing is lost.
+  const withoutTarget = findSIEAmountsWithoutTarget(parsed, mapped, options)
+  if (withoutTarget.length) {
+    throw userFacing(new SIEJobValidationError(sieAmountsWithoutTargetSentence(withoutTarget), 'SIE_IMPORT_UNMAPPED_ACCOUNTS', {
+      // Not `unmappedAccounts`: the wizard lists that key per account under
+      // the sentence, which already names them.
+      accounts_without_target: withoutTarget.slice(0, 200).map(({ account, name, vouchers, firstVoucher, openingBalance }) => ({
+        account, name, vouchers, first_voucher: firstVoucher, opening_balance: openingBalance,
+      })),
+      accounts_without_target_count: withoutTarget.length,
+    }), 'SIE_IMPORT_UNMAPPED_ACCOUNTS')
+  }
   if (/^\s*#VER\b/m.test(content) && !parsed.vouchers.length) throw new SIEJobValidationError('Filens verifikationer kunde inte tolkas.')
 }
 

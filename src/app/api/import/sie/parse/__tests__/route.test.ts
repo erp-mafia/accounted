@@ -224,6 +224,15 @@ describe('POST /api/import/sie/parse', () => {
     expect(shown).not.toContain('skadad')
   })
 
+  it('answers a file that fails validation with its errors, as a 400', async () => {
+    const unbalanced = CLEAN_SIE.replace('#TRANS 4056 {} 100.00', '#TRANS 4056 {} 90.00')
+    const response = await POST(fileRequest(unbalanced), emptyParams)
+    const body = (await response.json()) as { error: { code: string; details: { errors: string[] } } }
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('SIE_PARSE_VALIDATION_FAILED')
+    expect(body.error.details.errors.join(' ')).toContain('balanserar inte')
+  })
+
   it('returns 400 for a file extension that is not SIE', async () => {
     const response = await POST(fileRequest(CLEAN_SIE, 'test.txt'), emptyParams)
     const body = (await response.json()) as { error?: { code?: string; message?: string } }
