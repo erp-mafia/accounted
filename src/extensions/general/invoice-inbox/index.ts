@@ -66,6 +66,8 @@ import {
   splitKnownInboxTags,
   type InboxKindHint,
   isEmailReceivedEvent,
+  baseContentType,
+  isMailMachineryPart,
   isPlainTextPart,
   mayRedeliverOverMinuteCap,
   ResendSignatureError,
@@ -1537,8 +1539,9 @@ export const invoiceInboxExtension: Extension = {
          * What became of one attachment, for the mail's history event. Codes
          * only: the free-text error and the filename stay out of
          * processing_history (append-only, outside the erasure path).
-         * 'ignored' is a signature image or a text/plain part next to other
-         * parts (reason says which): never downloaded, never a row.
+         * 'ignored' is a signature image, or a text/plain part or a part the
+         * mail carries for its own sake (an invite, a mail signature) next to
+         * other parts (reason says which): never downloaded, never a row.
          */
         type AttachmentOutcome = {
           id: string
@@ -1824,10 +1827,23 @@ export const invoiceInboxExtension: Extension = {
           // own (filed, duplicate, rejected or failed), so the mail stays
           // visible; a text/plain part alone keeps its rejection row.
           const hasNonTextPart = documentAttachments.some((att) => !isPlainTextPart(att.content_type))
+          // The same for the parts a mail carries for its own sake (a calendar
+          // invite, an S/MIME signature, a contact card): never a document,
+          // and next to a part that can be one, their rejection row was a
+          // "could not be read" line beside the invoice that was read
+          // (crm#1809). That other part leaves a row whatever becomes of it,
+          // so the mail stays visible; alone, they keep their rejection row.
+          const hasDocumentPart = documentAttachments.some(
+            (att) => !isPlainTextPart(att.content_type) && !isMailMachineryPart(att.content_type),
+          )
 
           for (const att of documentAttachments) {
             if (hasNonTextPart && isPlainTextPart(att.content_type)) {
               attachmentOutcomes.push({ id: att.id, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
+              continue
+            }
+            if (hasDocumentPart && isMailMachineryPart(att.content_type)) {
+              attachmentOutcomes.push({ id: att.id, outcome: 'ignored', reason: 'mail_part', mime: sanitiseMime(baseContentType(att.content_type)) })
               continue
             }
             let replacedItemId: string | undefined
@@ -1967,6 +1983,10 @@ export const invoiceInboxExtension: Extension = {
                 const innerHasNonTextPart = innerAttachments.some(
                   (inner, i) => !innerIsSignature[i] && !isPlainTextPart(inner.contentType),
                 )
+                const innerHasDocumentPart = innerAttachments.some(
+                  (inner, i) =>
+                    !innerIsSignature[i] && !isPlainTextPart(inner.contentType) && !isMailMachineryPart(inner.contentType),
+                )
                 for (let i = 0; i < innerAttachments.length; i++) {
                   const inner = innerAttachments[i]
                   const innerType = sanitiseMime(inner.contentType)
@@ -1980,6 +2000,10 @@ export const invoiceInboxExtension: Extension = {
                   }
                   if (innerHasNonTextPart && isPlainTextPart(inner.contentType)) {
                     attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'text_part', mime: 'text/plain' })
+                    continue
+                  }
+                  if (innerHasDocumentPart && isMailMachineryPart(inner.contentType)) {
+                    attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'mail_part', mime: sanitiseMime(baseContentType(inner.contentType)) })
                     continue
                   }
                   const filedPartId = filedParts.get(innerId)
