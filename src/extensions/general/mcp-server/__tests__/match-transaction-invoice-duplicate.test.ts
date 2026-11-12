@@ -34,6 +34,14 @@ vi.mock('@/lib/invoices/book-customer-bank-match', async (importOriginal) => ({
   refuseCustomerBankMatch: vi.fn(async () => null),
 }))
 
+// The payment verifikat's rows on the preview have their own suites
+// (match-transaction-invoice-expected-lines.test.ts and
+// lib/invoices/__tests__/customer-match-expected-lines.test.ts) and take no
+// slot in the queue.
+vi.mock('@/lib/invoices/customer-match-expected-lines', () => ({
+  customerMatchExpectedLines: vi.fn(async () => null),
+}))
+
 import { tools } from '../server'
 
 const match = tools.find((t) => t.name === 'gnubok_match_transaction_to_invoice')!

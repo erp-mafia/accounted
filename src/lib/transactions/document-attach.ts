@@ -102,6 +102,38 @@ async function previousDocumentStays(
 }
 
 /**
+ * What the DOC_ATTACH_OTHER_VERIFIKAT refusal carries (crm#1813): the
+ * verifikat that holds the document (journal_entry_id, as before), the one
+ * the row is booked on, and, when the row is booked, the one call that puts
+ * the same underlag on it: a link with copy: true, which archives a
+ * byte-identical copy there and leaves the original where it is. An agent
+ * without the row's verifikat id re-uploaded the file and then altered a byte
+ * to get past the content dedupe. An unbooked row has no verifikat to link
+ * yet, so it gets no call, only the ids.
+ */
+export function otherVerifikatDetails(
+  documentId: string,
+  heldByJournalEntryId: string,
+  transactionJournalEntryId: string | null,
+): Record<string, unknown> {
+  return {
+    journal_entry_id: heldByJournalEntryId,
+    document_id: documentId,
+    transaction_journal_entry_id: transactionJournalEntryId,
+    ...(transactionJournalEntryId
+      ? {
+          next: {
+            description:
+              'If this row needs the same underlag too (one statement or invoice covering several payments), link a copy to the row\'s verifikat: approval archives a byte-identical copy there and the original stays where it is. Do not re-upload or alter the file. On the v1 API: POST /documents/{document_id}/link with the same journal_entry_id and copy: true.',
+            tool: 'gnubok_link_document_to_voucher',
+            args: { document_id: documentId, journal_entry_id: transactionJournalEntryId, copy: true },
+          },
+        }
+      : {}),
+  }
+}
+
+/**
  * Pin document_id to the transaction. Idempotent: attaching the document
  * already pinned is a no-op success; attaching another replaces the pin
  * (logged as a rättelse) unless the current one is räkenskapsinformation.
@@ -183,7 +215,15 @@ export async function attachDocumentToTransaction(
   if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
     const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [transactionId])
     if (docJournalEntryId !== voucherLinked.get(transactionId)) {
-      return { ok: false, code: 'DOC_ATTACH_OTHER_VERIFIKAT', details: { journal_entry_id: docJournalEntryId } }
+      return {
+        ok: false,
+        code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+        details: otherVerifikatDetails(
+          documentId,
+          docJournalEntryId,
+          (tx.journal_entry_id as string | null) ?? voucherLinked.get(transactionId) ?? null,
+        ),
+      }
     }
   }
 

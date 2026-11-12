@@ -43,7 +43,7 @@ import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/e
 import { invoicePaymentBusinessEvent, type InvoicePaymentPostingContext } from '@/lib/bookkeeping/invoice-business-events'
 import { buildInvoiceCashLines, createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { invoiceCashBankSek } from '@/lib/bookkeeping/invoice-lines'
-import { buildInvoiceMatchClearingLines, invoiceMatchPaymentDescription } from '@/lib/bookkeeping/invoice-payment-lines'
+import { buildInvoiceMatchClearingLines, invoiceMatchClearingInvoiceOf, invoiceMatchPaymentDescription } from '@/lib/bookkeeping/invoice-payment-lines'
 import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -452,17 +452,7 @@ export async function bookCustomerBankMatch(
               currency: transaction.currency,
               exchange_rate: transaction.exchange_rate ?? null,
             },
-            {
-              currency: invoice.currency,
-              exchange_rate: invoice.exchange_rate ?? null,
-              remaining_amount: invoice.remaining_amount ?? null,
-              total: invoice.total,
-              paid_amount: invoice.paid_amount ?? null,
-              carried_sek: carriedSek,
-              invoice_number: invoice.invoice_number,
-              customer: invoice.customer,
-              default_dimensions: (invoice as { default_dimensions?: unknown }).default_dimensions,
-            },
+            invoiceMatchClearingInvoiceOf(invoice, carriedSek),
             // Cross-currency: the converted invoice-currency amount, so 1510
             // is credited proportionally and the FX difference is posted.
             fx.required ? fx.paidInInvoiceCurrency : undefined,

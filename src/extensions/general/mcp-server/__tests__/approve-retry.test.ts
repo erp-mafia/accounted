@@ -121,6 +121,55 @@ describe('gnubok_approve_pending_operation: a resent approval', () => {
     expect((result.next as { description: string }).description).toContain('acknowledged_warnings')
   })
 
+  // crm#1813: two attaches of one statement staged together; the first
+  // approval puts the document on its verifikat, the second is refused.
+  it('hands on the copy link when an attach is refused because the document went to another verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: operation({ operation_type: 'attach_document_to_transaction', risk_level: 'medium' }), error: null })
+    const next = {
+      description: 'Link a copy to the row\'s verifikat.',
+      tool: 'gnubok_link_document_to_voucher',
+      args: { document_id: 'doc-1', journal_entry_id: 'je-row', copy: true },
+    }
+    commitSpy.mockResolvedValue({
+      status: 'rejected',
+      auto_rejected: true,
+      error: 'Underlaget är redan kopplat till en annan verifikation.',
+      http_status: 409,
+      code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+      data: { journal_entry_id: 'je-held', document_id: 'doc-1', transaction_journal_entry_id: 'je-row', next },
+      operation_status: 'rejected',
+    })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      error_code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+      data: { transaction_journal_entry_id: 'je-row' },
+      next,
+    })
+  })
+
+  it('adds no next call to that refusal on an unbooked row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: operation({ operation_type: 'attach_document_to_transaction', risk_level: 'medium' }), error: null })
+    commitSpy.mockResolvedValue({
+      status: 'rejected',
+      auto_rejected: true,
+      error: 'Underlaget är redan kopplat till en annan verifikation.',
+      http_status: 409,
+      code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+      data: { journal_entry_id: 'je-held', document_id: 'doc-1', transaction_journal_entry_id: null },
+      operation_status: 'rejected',
+    })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({ status: 'rejected', error_code: 'DOC_ATTACH_OTHER_VERIFIKAT' })
+    expect(result).not.toHaveProperty('next')
+  })
+
   it('adds no voucher hint to any other refusal', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: operation(), error: null })

@@ -6146,7 +6146,7 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en: 'The document is already the underlag of another journal entry.',
     remediation: {
       description:
-        'One document backing two purchases (an order paid in two charges, one agreement for two deposits): book this row, then link a byte-identical copy to its verifikat with copy: true. A receipt for one purchase stays where it is.',
+        'One document backing two purchases (an order paid in two charges, one agreement for two deposits): book this row, then link a byte-identical copy to its verifikat with copy: true. details.journal_entry_id is the verifikat that holds the document and details.transaction_journal_entry_id the one this row is booked on (null while unbooked); when the row is booked, details.next is that call with its arguments. Never re-upload or alter the file. A receipt for one purchase stays where it is.',
       tool: 'gnubok_link_document_to_voucher',
     },
   },

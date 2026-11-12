@@ -3732,7 +3732,7 @@ Pins the document to the transaction. On an unbooked transaction the pin rides a
 
 **Pitfalls:**
 - A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).
-- A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.
+- A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT; details name that verifikat (journal_entry_id) and the one the transaction is booked on (transaction_journal_entry_id, null while unbooked). When one document backs both, link a copy to the transaction's verifikat: POST /documents/{id}/link with copy: true.
 - A pinned document linked to a verifikat other than the transaction's own booking is never replaced: 409 DOC_ATTACH_REPLACES_POSTED. On the transaction's own verifikat the new document is added beside it (preview adds_to_verifikat; answer previous_document_id null).
 - On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED.
 - Check date, amount and counterparty on both sides first: once the transaction is booked the link is immutable.
