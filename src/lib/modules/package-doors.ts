@@ -413,6 +413,7 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
     'POST /api/supplier-invoices/:id/payee',
     'POST /api/supplier-invoices/:id/reject',
     'POST /api/supplier-invoices/:id/uncredit',
+    'POST /api/supplier-invoices/:id/unlink-voucher',
     'PUT /api/supplier-invoices/attest-policy',
     'PUT /api/supplier-invoices/attest-policy/mail',
     'POST /api/supplier-invoices/attest-policy/substitutes',
