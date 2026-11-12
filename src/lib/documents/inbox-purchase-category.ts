@@ -110,7 +110,7 @@ export async function setInboxItemPurchaseCategory(
   if (!UUID_RE.test(inboxItemId)) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, extracted_data, matched_supplier_id, channel_context, created_supplier_invoice_id, updated_at')
+    .select('id, document_id, extracted_data, matched_supplier_id, channel_context, created_supplier_invoice_id, updated_at')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -118,6 +118,7 @@ export async function setInboxItemPurchaseCategory(
   if (!item) return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
   const row = item as {
     id: string
+    document_id?: string | null
     extracted_data: Record<string, unknown> | null
     matched_supplier_id: string | null
     channel_context?: unknown
@@ -160,6 +161,8 @@ export async function setInboxItemPurchaseCategory(
       dryRun: true,
       preview: {
         inbox_item_id: row.id,
+        // The underlag itself, so the approver can open it from the proposal.
+        ...(row.document_id ? { document_id: row.document_id } : {}),
         purchase_category_code: code,
         ...readingLabel(row.extracted_data),
         ...(everyTime
