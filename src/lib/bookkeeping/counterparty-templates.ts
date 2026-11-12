@@ -785,9 +785,40 @@ export interface PatternReverseChargePair {
 export interface PatternReplayPlan {
   /** The VAT, business and tax entries of the pattern, without the basis pair. */
   entries: LinePatternEntry[]
-  /** Scales each business/tax ratio so the remaining ones sum to one again; 1 without a pair. */
+  /**
+   * Scales each business/tax ratio so the remaining ones net to one again: 1
+   * for a one-sided pattern without a pair.
+   */
   ratioScale: number
   rcPair: PatternReverseChargePair | null
+  /**
+   * The side the business and tax lines net on when they sit on both sides
+   * (twoSidedNet), null for a one-sided pattern.
+   */
+  netSide: 'debit' | 'credit' | null
+}
+
+/**
+ * The net of a pattern's business and tax ratios when they sit on both
+ * sides. Ratios are stored normalized over every line whichever side it is on
+ * (normalizeRatios), so a pattern with an offsetting pair beside its cost,
+ * such as tjänstepension on 7412 with its särskild löneskatt on 7533 against
+ * 2514, shared the payment over the pair too: replayed at those ratios the
+ * pension took two thirds of the payment and the entry did not balance. The
+ * payment is what the larger side covers beyond the other, so a replay scales
+ * by that net (crm#1746). null for a one-sided pattern, which replays exactly
+ * as before.
+ */
+function twoSidedNet(entries: readonly LinePatternEntry[]): { net: number; side: 'debit' | 'credit' } | null {
+  let debit = 0
+  let credit = 0
+  for (const e of entries) {
+    if ((e.type !== 'business' && e.type !== 'tax') || e.ratio === undefined) continue
+    if (e.side === 'debit') debit += e.ratio
+    else credit += e.ratio
+  }
+  if (debit === 0 || credit === 0) return null
+  return debit >= credit ? { net: debit - credit, side: 'debit' } : { net: credit - debit, side: 'credit' }
 }
 
 export function patternReplayPlan(pattern: readonly LinePatternEntry[]): PatternReplayPlan {
@@ -807,14 +838,22 @@ export function patternReplayPlan(pattern: readonly LinePatternEntry[]): Pattern
     )
     if (!offset) continue
     const entries = pattern.filter((e) => e !== basis && e !== offset)
-    const shared = entries
-      .filter((e) => e.type === 'business' || e.type === 'tax')
-      .reduce((sum, e) => sum + (e.ratio ?? 0), 0)
+    const twoSided = twoSidedNet(entries)
+    const shared = twoSided
+      ? twoSided.net
+      : entries
+        .filter((e) => e.type === 'business' || e.type === 'tax')
+        .reduce((sum, e) => sum + (e.ratio ?? 0), 0)
     // A pair with no cost line beside it has nothing to book the payment on.
     if (shared <= 0) break
-    return { entries, ratioScale: 1 / shared, rcPair: { basis, offset, ...kindAndRate } }
+    return { entries, ratioScale: 1 / shared, rcPair: { basis, offset, ...kindAndRate }, netSide: twoSided?.side ?? null }
   }
-  return { entries: [...pattern], ratioScale: 1, rcPair: null }
+  const twoSided = twoSidedNet(pattern)
+  // Lines that cancel out entirely book nothing for the payment: left as stored.
+  if (twoSided && twoSided.net > 0) {
+    return { entries: [...pattern], ratioScale: 1 / twoSided.net, rcPair: null, netSide: twoSided.side }
+  }
+  return { entries: [...pattern], ratioScale: 1, rcPair: null, netSide: null }
 }
 
 /**
@@ -1146,7 +1185,9 @@ function buildMultiLineMappingResult(
   for (const entry of plan.entries) {
     if ((entry.type === 'business' || entry.type === 'tax') && entry.ratio !== undefined) {
       const amount = Math.round(nonVatAmount * entry.ratio * plan.ratioScale * 100) / 100
-      nonVatAllocated += amount
+      // On a two-sided pattern a line against the net side offsets the
+      // others: the lines net to the payment (twoSidedNet).
+      nonVatAllocated += plan.netSide && entry.side !== plan.netSide ? -amount : amount
       allLines.push({
         account_number: entry.account,
         debit_amount: side(entry.side) === 'debit' ? amount : 0,
@@ -1187,7 +1228,7 @@ function buildMultiLineMappingResult(
     // 0.3334 ratios on 100.00 kr give 3 x 33.34 = 100.02): 3740 offsets on
     // the OPPOSITE side so the non-settlement lines net to absAmount (#1898).
     // businessSide is already mirror-applied via side(), so flip after it.
-    const businessSide = side(plan.entries.find(e => e.type === 'business')?.side ?? 'credit')
+    const businessSide = side(plan.netSide ?? plan.entries.find(e => e.type === 'business')?.side ?? 'credit')
     const roundingSide: 'debit' | 'credit' =
       roundingDiff > 0 ? businessSide : (businessSide === 'debit' ? 'credit' : 'debit')
     allLines.push({
@@ -1250,7 +1291,7 @@ export interface TemplateUpsertParams {
  * keeps re-approvals landing on the renamed row instead of inserting a
  * second template under the bank-derived name.
  */
-async function findTemplateByKey(
+export async function findTemplateByKey(
   supabase: SupabaseClient,
   companyId: string,
   counterpartyName: string
@@ -2006,6 +2047,120 @@ function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePattern
 }
 
 /**
+ * The template fields a group of same-shaped verifikat teaches: the averaged
+ * line pattern, and the legacy debit/credit/VAT fields the simple builder
+ * reads. A simple shape (one business line, at most one VAT line, no tax
+ * line) is stored on the legacy fields alone; any other keeps its
+ * line_pattern. The settlement leg is the first verifikat's. One rule for the
+ * SIE learner and the bank-link learner (lib/transactions/link-learning.ts).
+ */
+function templateFieldsFromVoucherPatterns(
+  voucherPatterns: VoucherLinePattern[],
+): Pick<TemplateUpsertParams, 'debitAccount' | 'creditAccount' | 'vatTreatment' | 'vatAccount'> & {
+  linePattern: LinePatternEntry[] | null
+} {
+  // Average the line patterns from all vouchers in the group
+  const avgPattern = averageLinePatterns(voucherPatterns)
+  const { settlementAccount, settlementSide } = voucherPatterns[0]
+
+  // Decide: simple (1 business + 0-1 VAT) → legacy fields; otherwise → line_pattern
+  const businessEntries = avgPattern.filter(e => e.type === 'business')
+  const vatEntries = avgPattern.filter(e => e.type === 'vat')
+  const taxEntries = avgPattern.filter(e => e.type === 'tax')
+  const isSimple = businessEntries.length === 1 && taxEntries.length === 0 && vatEntries.length <= 1
+
+  // Determine primary business account and settlement for debit/credit fields
+  const primaryBusiness = businessEntries.sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0))[0]
+
+  let debitAccount: string
+  let creditAccount: string
+  if (settlementSide === 'debit') {
+    debitAccount = settlementAccount
+    creditAccount = primaryBusiness?.account ?? settlementAccount
+  } else {
+    debitAccount = primaryBusiness?.account ?? settlementAccount
+    creditAccount = settlementAccount
+  }
+
+  // VAT info from first VAT entry (for legacy fields). The learned rate is
+  // authoritative: for 2641 it was inferred from the voucher amounts, so
+  // mapping it back through the account table would re-hardcode 25%.
+  const firstVat = vatEntries[0]
+  let vatAccount = firstVat?.account ?? null
+  let vatTreatment = firstVat?.vat_rate !== undefined
+    ? treatmentForRate(firstVat.vat_rate)
+    : (vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null)
+
+  // Reverse-charge counterparty (fiktiv moms in every source voucher, no
+  // deductible VAT): the simple builder regenerates the RC legs from the
+  // treatment, so record it on the legacy fields.
+  if (
+    isSimple &&
+    !vatAccount &&
+    voucherPatterns.every(vp => vp.hasReverseCharge)
+  ) {
+    vatTreatment = 'reverse_charge'
+    vatAccount = '2645'
+  }
+
+  return { debitAccount, creditAccount, vatTreatment, vatAccount, linePattern: isSimple ? null : avgPattern }
+}
+
+/** The SIE learner's group key: the pattern's accounts, sorted and joined. */
+function patternAccountSet(entries: readonly Pick<LinePatternEntry, 'account'>[]): string {
+  return entries
+    .map(e => e.account)
+    .sort()
+    .join('+')
+}
+
+/** A verifikat's template fields plus its shape key (verifikatTemplateShape). */
+export type VerifikatTemplateShape = ReturnType<typeof templateFieldsFromVoucherPatterns> & {
+  accountSet: string
+}
+
+/**
+ * What one posted verifikat teaches as a counterparty template, read the way
+ * the SIE learner reads an imported voucher (extractVoucherLinePattern):
+ * pension plus särskild löneskatt stays one multi-line template. `lines` are
+ * signed like SIE amounts (debit positive). `accountSet` is the shape's key,
+ * the same one the SIE learner groups vouchers by. null when the verifikat
+ * cannot be a pattern (no business line, no settlement line, more than five
+ * business accounts, nothing left beside the VAT).
+ */
+export function verifikatTemplateShape(
+  lines: { account: string; amount: number; dimensions?: Record<string, string> }[],
+): VerifikatTemplateShape | null {
+  const pattern = extractVoucherLinePattern(lines)
+  if (!pattern) return null
+  return { accountSet: patternAccountSet(pattern.entries), ...templateFieldsFromVoucherPatterns([pattern]) }
+}
+
+/**
+ * A stored template's shape key in verifikatTemplateShape's terms: its line
+ * pattern's accounts, or for a simple template its business leg and its VAT
+ * account. Reverse-charge VAT accounts are left out on both sides, as the
+ * extractor leaves them out of a pattern.
+ */
+export function templateAccountSet(
+  template: Pick<CategorizationTemplate, 'debit_account' | 'credit_account' | 'vat_account' | 'line_pattern'>,
+): string {
+  if (template.line_pattern && template.line_pattern.length > 0) return patternAccountSet(template.line_pattern)
+  const accounts = [template.debit_account, template.credit_account].filter(a => !isSettlementAccount(a))
+  if (template.vat_account && !REVERSE_CHARGE_VAT_ACCOUNTS.has(template.vat_account)) accounts.push(template.vat_account)
+  return patternAccountSet(accounts.map(account => ({ account })))
+}
+
+/**
+ * Bank or voucher text that names a bookkeeping routine, not a counterparty
+ * ("Lön", "Moms", "Skattebetalning"): the SIE learner skips such voucher texts,
+ * and the bank-link learner skips such bank texts by the same list.
+ */
+export function isRoutineVoucherText(normalizedName: string): boolean {
+  return SIE_SKIP_DESCRIPTIONS.has(normalizedName)
+}
+
+/**
  * Analyze SIE voucher history and create counterparty templates.
  *
  * Groups vouchers by normalized description and account set, filters by
@@ -2049,10 +2204,7 @@ export async function populateTemplatesFromSieVouchers(
     if (!linePattern) continue
 
     // Group key: sorted set of non-settlement accounts
-    const accountSet = linePattern.entries
-      .map(e => e.account)
-      .sort()
-      .join('+')
+    const accountSet = patternAccountSet(linePattern.entries)
     const groupKey = `${normalized}|${accountSet}`
 
     let group = groups.get(normalized)
@@ -2081,8 +2233,6 @@ export async function populateTemplatesFromSieVouchers(
     normalizedName: string
     aliases: string[]
     pattern: MultiLinePatternCount
-    settlementAccount: string
-    settlementSide: 'debit' | 'credit'
     confidence: number
   }[] = []
 
@@ -2103,15 +2253,10 @@ export async function populateTemplatesFromSieVouchers(
 
     const confidence = Math.round(Math.min(0.95, dominance * (1 - 1 / dominant.count)) * 100) / 100
 
-    // Get settlement info from the first voucher pattern
-    const firstVp = dominant.voucherPatterns[0]
-
     accepted.push({
       normalizedName: group.normalizedName,
       aliases: [...group.aliases],
       pattern: dominant,
-      settlementAccount: firstVp.settlementAccount,
-      settlementSide: firstVp.settlementSide,
       confidence,
     })
   }
@@ -2138,62 +2283,15 @@ export async function populateTemplatesFromSieVouchers(
   for (const item of accepted) {
     const existing = templateMap.get(item.normalizedName) ?? null
 
-    // Average the line patterns from all vouchers in the dominant group
-    const avgPattern = averageLinePatterns(item.pattern.voucherPatterns)
-
-    // Decide: simple (1 business + 0-1 VAT) → legacy fields; otherwise → line_pattern
-    const businessEntries = avgPattern.filter(e => e.type === 'business')
-    const vatEntries = avgPattern.filter(e => e.type === 'vat')
-    const taxEntries = avgPattern.filter(e => e.type === 'tax')
-    const isSimple = businessEntries.length === 1 && taxEntries.length === 0 && vatEntries.length <= 1
-
-    // Determine primary business account and settlement for debit/credit fields
-    const primaryBusiness = businessEntries.sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0))[0]
-
-    let debitAccount: string
-    let creditAccount: string
-    if (item.settlementSide === 'debit') {
-      debitAccount = item.settlementAccount
-      creditAccount = primaryBusiness?.account ?? item.settlementAccount
-    } else {
-      debitAccount = primaryBusiness?.account ?? item.settlementAccount
-      creditAccount = item.settlementAccount
-    }
-
-    // VAT info from first VAT entry (for legacy fields). The learned rate is
-    // authoritative: for 2641 it was inferred from the voucher amounts, so
-    // mapping it back through the account table would re-hardcode 25%.
-    const firstVat = vatEntries[0]
-    let vatAccount = firstVat?.account ?? null
-    let vatTreatment = firstVat?.vat_rate !== undefined
-      ? treatmentForRate(firstVat.vat_rate)
-      : (vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null)
-
-    // Reverse-charge counterparty (fiktiv moms in every source voucher, no
-    // deductible VAT): the simple builder regenerates the RC legs from the
-    // treatment, so record it on the legacy fields.
-    if (
-      isSimple &&
-      !vatAccount &&
-      item.pattern.voucherPatterns.every(vp => vp.hasReverseCharge)
-    ) {
-      vatTreatment = 'reverse_charge'
-      vatAccount = '2645'
-    }
-
     const written = await insertOrUpdateTemplate(supabase, companyId, {
       counterpartyName: item.normalizedName,
       aliases: item.aliases,
-      debitAccount,
-      creditAccount,
-      vatTreatment,
-      vatAccount,
+      ...templateFieldsFromVoucherPatterns(item.pattern.voucherPatterns),
       category: null,
       occurrenceCount: item.pattern.count,
       confidence: item.confidence,
       lastSeenDate: toDateString(item.pattern.latestDate),
       source: 'sie_import',
-      linePattern: isSimple ? null : avgPattern,
     }, existing)
 
     if (written) count += 1

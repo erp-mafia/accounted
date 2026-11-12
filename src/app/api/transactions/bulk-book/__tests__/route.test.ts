@@ -63,6 +63,12 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: vi.fn().mockResolvedValue(undefined),
 }))
 
+// A row linked onto an existing verifikat teaches its bank text (crm#1746);
+// the learner is tested in lib/transactions/__tests__/link-learning.test.ts.
+vi.mock('@/lib/transactions/link-learning', () => ({
+  learnFromBankLink: vi.fn().mockResolvedValue({ outcome: 'learned' }),
+}))
+
 // The booking-time duplicate guard runs several queries of its own per tx;
 // stubbing it keeps the queued supabase mock aligned with the route's queries.
 // Detection behaviour is covered in
@@ -91,6 +97,7 @@ import { eventBus } from '@/lib/events/bus'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { learnFromBankLink } from '@/lib/transactions/link-learning'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
@@ -245,6 +252,34 @@ describe('POST /api/transactions/bulk-book', () => {
       'company-1',
       TX2,
       JE,
+    )
+    // Two rows on one verifikat are a samlingsverifikat: nothing is learned (crm#1746).
+    expect(learnFromBankLink).not.toHaveBeenCalled()
+  })
+
+  it('one row linked onto an existing verifikat teaches its bank text from it, at once (crm#1746)', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({
+      data: { ok: true, mode: 'link_existing', journal_entry_id: JE, voucher_series: 'A', voucher_number: 12, linked_tx_count: 1, tx_sum: 100 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(learnFromBankLink).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      { transactionId: TX1, journalEntryId: JE },
+      'explicit',
     )
   })
 

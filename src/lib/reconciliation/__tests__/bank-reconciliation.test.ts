@@ -36,6 +36,22 @@ vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
   propagateUnderlagForBookedTransaction: (...args: unknown[]) => propagateUnderlag(...args),
 }))
 
+// A link teaches its bank text (crm#1746). The learner itself is tested in
+// lib/transactions/__tests__/link-learning.test.ts; here only which evidence
+// each door hands it, and that the link stands whatever it answers. The
+// spies call the real learner, so every other test runs as before.
+const { learnSpy, learnManySpy } = vi.hoisted(() => ({ learnSpy: vi.fn(), learnManySpy: vi.fn() }))
+vi.mock('@/lib/transactions/link-learning', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/transactions/link-learning')>()
+  learnSpy.mockImplementation(actual.learnFromBankLink)
+  learnManySpy.mockImplementation(actual.learnFromBankLinks)
+  return {
+    ...actual,
+    learnFromBankLink: (...args: Parameters<typeof actual.learnFromBankLink>) => learnSpy(...args),
+    learnFromBankLinks: (...args: Parameters<typeof actual.learnFromBankLinks>) => learnManySpy(...args),
+  }
+})
+
 import {
   tryReconcileTransaction,
   runReconciliation,
@@ -932,6 +948,35 @@ describe('runReconciliation', () => {
     expect(result.matches).toHaveLength(1)
     expect(result.applied).toBe(0)
   })
+
+  // crm#1746: the applied links teach their bank texts, as the matcher's
+  // evidence, in one batch (lib/transactions/__tests__/link-learning.test.ts).
+  it('hands the applied links to the learner as automatic, in one batch (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    enqueue({ data: [makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })] })
+    enqueue({ data: [tx] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: false })
+
+    expect(result.applied).toBe(1)
+    expect(learnManySpy).toHaveBeenCalledTimes(1)
+    expect(learnManySpy).toHaveBeenCalledWith(supabase, 'company-1', [{ transactionId: 'tx-1', journalEntryId: 'je-1' }], 'automatic')
+  })
+
+  it('teaches nothing from a dry run (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    enqueue({ data: [makeGLLine({ journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })] })
+    enqueue({ data: [tx] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
+
+    expect(result.matches).toHaveLength(1)
+    expect(learnManySpy).not.toHaveBeenCalled()
+  })
+
 })
 
 // ============================================================
@@ -1610,6 +1655,58 @@ describe('manualLink', () => {
 
     expect(result.success).toBe(true)
   })
+
+  // crm#1746: a link teaches its bank text. The learner is tested in
+  // lib/transactions/__tests__/link-learning.test.ts; here which evidence
+  // manualLink hands it, and that the link stands whatever it answers.
+  function enqueueLinkThatLands(enqueue: (...results: { data?: unknown; error?: unknown }[]) => void) {
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }) })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
+    enqueue({ data: [] }, { data: [] }) // bank_line slices, pointers: nobody else holds the verifikat
+    enqueue({ data: [{ id: 'tx-1' }] })
+  }
+
+  it('teaches the bank text at once from a pair the caller chose (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueueLinkThatLands(enqueue)
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
+      anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
+    })
+    expect(result.success).toBe(true)
+    expect(learnSpy).toHaveBeenCalledWith(supabase, 'company-1', { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'explicit')
+  })
+
+  it('waits for a repetition on a pair the system guessed: a confirmed suggestion, the invoice auto-link (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueueLinkThatLands(enqueue)
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
+      linkBasis: { basis: 'rule_amount_date' },
+    })
+    expect(result.success).toBe(true)
+    expect(learnSpy).toHaveBeenCalledWith(supabase, 'company-1', { transactionId: 'tx-1', journalEntryId: 'je-1' }, 'automatic')
+  })
+
+  it('leaves the link standing when learning fails (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueueLinkThatLands(enqueue)
+    enqueue({ error: { message: 'statement timeout' } }) // the learner's first read
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', {
+      anchorUnderlag: true,
+      linkBasis: { basis: 'user_confirmed' },
+    })
+    expect(result).toEqual({ success: true })
+    expect(await learnSpy.mock.results[0].value).toEqual({ outcome: 'failed' })
+  })
+
+  it('teaches nothing when the link did not happen (crm#1746)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: null, error: { message: 'Not found' } })
+    await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930', MANUAL)
+    expect(learnSpy).not.toHaveBeenCalled()
+  })
+
 })
 
 // ============================================================
@@ -3344,3 +3441,4 @@ describe('openAmountByEntry', () => {
     expect(open.get('e-1')).toBeNull()
   })
 })
+

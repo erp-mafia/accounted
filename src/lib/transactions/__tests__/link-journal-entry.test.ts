@@ -11,8 +11,14 @@
  * (app/api/transactions/[id]/link-journal-entry/__tests__/route.test.ts) and
  * the pending-op commit test.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase, enqueueBankLinkLeg } from '@/tests/helpers'
+
+// The learner is tested in ./link-learning.test.ts; here only that this door
+// hands it the pair it linked (crm#1746).
+const { learnSpy } = vi.hoisted(() => ({ learnSpy: vi.fn(async () => ({ outcome: 'learned' })) }))
+vi.mock('@/lib/transactions/link-learning', () => ({ learnFromBankLink: learnSpy }))
+
 import { hasLiveJournalEntryLink, linkTransactionToJournalEntry } from '../link-journal-entry'
 
 describe('hasLiveJournalEntryLink', () => {
@@ -301,6 +307,20 @@ describe("linkTransactionToJournalEntry: the verifikat's bank leg must have room
   it('links the row when nobody else holds the bank leg', async () => {
     const { outcome } = run([])
     expect(await outcome).toMatchObject({ ok: true, result: { journalEntryId: 'je-1', voucherLabel: 'A-17' } })
+  })
+
+  it('teaches the bank text from the verifikat the caller named, at once (crm#1746)', async () => {
+    learnSpy.mockClear()
+    const { outcome } = run([])
+    expect(await outcome).toMatchObject({ ok: true })
+    expect(learnSpy).toHaveBeenCalledWith(expect.anything(), 'company-1', { transactionId: 'tx-b', journalEntryId: 'je-1' }, 'explicit')
+  })
+
+  it('teaches nothing from a dry run (crm#1746)', async () => {
+    learnSpy.mockClear()
+    const { outcome } = run([], { dryRun: true })
+    expect(await outcome).toMatchObject({ ok: true, dryRun: true })
+    expect(learnSpy).not.toHaveBeenCalled()
   })
 })
 

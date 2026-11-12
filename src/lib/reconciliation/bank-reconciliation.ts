@@ -29,6 +29,7 @@ import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from './limits'
 import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 import { linkBasisForReconciliationMethod, type LinkEvidence } from '@/lib/links/link-basis'
 import { linkBasisColumns, type LinkBasisInput } from '@/lib/links/stamp'
+import { learnFromBankLink, learnFromBankLinks, type BankLinkToLearn } from '@/lib/transactions/link-learning'
 
 const log = createLogger('reconciliation.bank')
 
@@ -720,6 +721,7 @@ export async function runReconciliation(
   // Apply matches
   let applied = 0
   let errors = 0
+  const appliedLinks: BankLinkToLearn[] = []
 
   for (const match of toApply) {
     try {
@@ -755,6 +757,7 @@ export async function runReconciliation(
         errors++
       } else {
         applied++
+        appliedLinks.push({ transactionId: match.transaction.id, journalEntryId: match.glLine.journal_entry_id })
         // Behandlingshistorik (BFNAR 2013:2 kap 8, BFL 7:1): every auto-applied
         // link is a match event and must land in the append-only log, exactly
         // like the invoice-match and confirm-suggestion paths. The bus event
@@ -823,6 +826,11 @@ export async function runReconciliation(
       }
     }
   }
+
+  // The applied links teach their bank texts (crm#1746), in one batch. The
+  // matcher chose every pair, a reviewed and ticked dry run included, so a
+  // text is learned only once it repeats. Never fails the run.
+  await learnFromBankLinks(supabase, companyId, appliedLinks, 'automatic')
 
   return {
     matches,
@@ -1480,6 +1488,17 @@ export async function manualLink(
   } catch {
     // Non-critical
   }
+
+  // The row teaches its bank text from this verifikat (crm#1746). A pair
+  // someone chose (anchorUnderlag: a person's or an agent's own choice)
+  // teaches at once; one the system guessed only once it repeats. Never
+  // fails the link: learnFromBankLink logs and returns.
+  await learnFromBankLink(
+    supabase,
+    companyId,
+    { transactionId, journalEntryId },
+    options.anchorUnderlag ? 'explicit' : 'automatic',
+  )
 
   return { success: true }
 }

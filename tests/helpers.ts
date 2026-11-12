@@ -959,7 +959,7 @@ export function createTableMockSupabase(
 
 /**
  * createTableMockSupabase answering from rows: every read applies the chain's
- * eq/neq/in/lt/lte/gt/gte/is/order/limit to the table's rows, so a door gets what
+ * eq/neq/in/lt/lte/gt/gte/is/contains/order/limit to the table's rows, so a door gets what
  * a real query would return whichever way it asks. For a test of a rule across
  * doors, where a queue of answers would pin each door's reads instead of what
  * it concludes. Writes are recorded in `writes` and answer with the row.
@@ -983,7 +983,10 @@ export function createRowsMockSupabase(
       else if (method === 'gt') out = out.filter((row) => String(row[column]) > String(value))
       else if (method === 'gte') out = out.filter((row) => String(row[column]) >= String(value))
       else if (method === 'is') out = out.filter((row) => (row[column] ?? null) === value)
-      else if (method === 'order') {
+      else if (method === 'contains') {
+        const wanted = value as unknown[]
+        out = out.filter((row) => Array.isArray(row[column]) && wanted.every((v) => (row[column] as unknown[]).includes(v)))
+      } else if (method === 'order') {
         const direction = (args[1] as { ascending?: boolean } | undefined)?.ascending === false ? -1 : 1
         out.sort((a, b) => (String(a[column]) < String(b[column]) ? -1 : 1) * direction)
       } else if (method === 'limit') out = out.slice(0, Number(args[0]))
