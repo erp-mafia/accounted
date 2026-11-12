@@ -11,7 +11,7 @@ Write tools stage a pending operation that you confirm before anything is booked
 
 ## Quickstart
 
-1. Mint an API key in the Accounted dashboard at **[/settings/api](https://app.gnubok.se/settings/api)**. Use a `gnubok_sk_test_*` key against the sandbox while you evaluate; switch to `gnubok_sk_live_*` for real data. The key's scopes gate which tools are callable.
+1. Mint an API key in the Accounted dashboard at **[/settings/api](https://app.gnubok.se/settings/api)**. Use a `gnubok_sk_test_*` key while you evaluate: it reaches the same companies as a live key (there is no separate sandbox company), but every write is forced to dry-run, so nothing is booked or sent. Switch to a live key (`gnubok_sk_*`, no `test_` infix) to commit real writes. The key's scopes gate which tools are callable.
 
 2. Run the bridge with the key in the environment:
 
