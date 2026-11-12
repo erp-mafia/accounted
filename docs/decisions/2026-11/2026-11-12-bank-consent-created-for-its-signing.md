@@ -1,0 +1,1 @@
+[2026-11-12] A bank consent is created for the way it will be signed (redirectPreferred with the bank's page), and a restart the bank refuses with no reason for the person goes on with a new consent, once: SEB refused every phone start on its page, two banks every retry, all as the generic line.

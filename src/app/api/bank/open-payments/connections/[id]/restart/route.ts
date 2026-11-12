@@ -30,7 +30,8 @@ async function readOptionalBody(request: Request): Promise<z.infer<typeof Restar
 /**
  * POST /api/bank/open-payments/connections/:id/restart: a new BankID
  * authorisation for the pending consent (a new consent when the bank says
- * the first is over). Same answer shape as creating the connection. A
+ * the first is over, or refuses to sign it again without a reason for the
+ * person). Same answer shape as creating the connection. A
  * redirect attempt comes back to the page it was started from (kept on the
  * row), on the origin this request came to.
  */

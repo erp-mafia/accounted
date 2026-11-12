@@ -172,6 +172,22 @@ export function isPermanentConsentFailure(code: string | null | undefined): bool
   return Boolean(code) && OPEN_BANKING_PERMANENT_FAILURES.has(code!.trim().toUpperCase())
 }
 
+/** The provider's catch-all: a code with a sentence that names no cause ("Okänt felmeddelande från banken"). */
+const OPEN_BANKING_CATCH_ALL = 'UNEXPECTED_ERROR'
+
+/**
+ * Whether a refusal's provider code tells the person something to act on: a
+ * code with a sentence of its own here, the catch-all left out. A refusal
+ * without one ends in the generic line, so a flow that can still do
+ * something itself does that first (a restart creates the consent anew,
+ * service.ts restartBankFeedConsent).
+ */
+export function refusalNamesReason(code: string | null | undefined): boolean {
+  const key = code?.trim().toUpperCase()
+  if (!key || key === OPEN_BANKING_CATCH_ALL) return false
+  return OPEN_BANKING_FAILURE_TEXTS[key] !== undefined
+}
+
 export const OPEN_BANKING_GENERIC_FAILURE: FailureText = {
   sv: 'BankID-signeringen kunde inte slutföras. Försök igen.',
   en: 'The BankID signing could not be completed. Try again.',
