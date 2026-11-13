@@ -9947,6 +9947,7 @@
     "batch_partial_title": "Partially done",
     "batch_categorize_done_description": "{count, plural, one {1 transaction posted} other {# transactions posted}}",
     "batch_categorize_partial_description": "{success, plural, one {1 transaction posted} other {# transactions posted}}, {failed} failed",
+    "batch_categorize_failed_reason": "{count, plural, one {1 transaction} other {# transactions}}: {reason}",
     "batch_categorize_duplicates_held_back": "{count, plural, one {1 transaction was held back as a possible duplicate and is still in the list.} other {# transactions were held back as possible duplicates and are still in the list.}}",
     "batch_undo_all": "Undo all",
     "batch_undo_all_alt": "Undo all posted transactions",

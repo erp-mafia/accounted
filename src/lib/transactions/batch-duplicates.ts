@@ -31,6 +31,18 @@ export interface BatchCategorizeOutcome {
   ok: boolean
   journalEntryId: string | null
   deferredDuplicate?: boolean
+  /**
+   * Why a failed row was refused, in the reader's language (the server's
+   * answer through getErrorMessage). Absent on a row that already told the
+   * person itself (its own dialog or toast) and on a booked row.
+   */
+  failureReason?: string
+}
+
+/** One reason and how many failed rows of the batch share it. */
+export interface BatchFailureReason {
+  reason: string
+  count: number
 }
 
 /** A flagged row, parked with everything needed to book it after the answer. */
@@ -50,6 +62,21 @@ export interface BatchCategorizeTally {
   deferredCount: number
   /** Accepted rows that actually got a verifikat: the "Ångra alla" set. */
   undoableIds: string[]
+  /**
+   * The failed rows grouped by reason, the most common first (ties keep the
+   * order they were met in). Failed rows without a reason are in failedCount
+   * only, so the counts here can add up to less than it.
+   */
+  failureReasons: BatchFailureReason[]
+}
+
+/** Adds `count` rows to the group for `reason`, then keeps the most common reason first. */
+function addFailureReason(groups: BatchFailureReason[], reason: string, count: number): void {
+  const group = groups.find((g) => g.reason === reason)
+  if (group) group.count += count
+  else groups.push({ reason, count })
+  // Array.prototype.sort is stable, so equal counts stay in the order met.
+  groups.sort((a, b) => b.count - a.count)
 }
 
 /**
@@ -70,6 +97,7 @@ export function tallyBatchOutcomes(
     failedCount: 0,
     deferredCount: 0,
     undoableIds: [],
+    failureReasons: [],
   }
   ids.forEach((id, i) => {
     const outcome = outcomes[i]
@@ -80,6 +108,8 @@ export function tallyBatchOutcomes(
       tally.deferredCount++
     } else {
       tally.failedCount++
+      const reason = outcome?.failureReason?.trim()
+      if (reason) addFailureReason(tally.failureReasons, reason, 1)
     }
   })
   return tally
@@ -118,6 +148,15 @@ export async function runDeferredDuplicateRetries(
   )
 }
 
+function mergeFailureReasons(
+  base: readonly BatchFailureReason[],
+  added: readonly BatchFailureReason[],
+): BatchFailureReason[] {
+  const merged = base.map((group) => ({ ...group }))
+  for (const group of added) addFailureReason(merged, group.reason, group.count)
+  return merged
+}
+
 /**
  * Fold a retry pass back into the first pass's tally.
  *
@@ -135,5 +174,6 @@ export function foldDeferredRetries(
     failedCount: base.failedCount + retried.failedCount,
     deferredCount: retried.deferredCount,
     undoableIds: [...base.undoableIds, ...retried.undoableIds],
+    failureReasons: mergeFailureReasons(base.failureReasons, retried.failureReasons),
   }
 }

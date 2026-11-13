@@ -202,4 +202,20 @@ describe('duplicate-guard 409 routing parity', () => {
       }
     }
   })
+
+  it('names why the failed rows of a batch were refused (for #206)', () => {
+    // A silent row hands its reason to the batch instead of a toast of its own,
+    // and the batch toast renders the grouped reasons from the shared reducer.
+    expect(PAGE_SRC).toMatch(
+      /failureReason: getErrorMessage\(result, \{ context: 'transaction', statusCode: response\.status, locale: errorLocale \}\)/,
+    )
+    expect(PAGE_SRC).toMatch(
+      /tally\.failureReasons\.map\(\(group\) =>\s+t\('batch_categorize_failed_reason', \{ count: group\.count, reason: group\.reason \}\)/,
+    )
+    for (const locale of ['sv', 'en'] as const) {
+      const message = readMessages(locale, 'transactions').batch_categorize_failed_reason
+      expect(message, `${locale}.transactions.batch_categorize_failed_reason`).toContain('{reason}')
+      expect(message).toContain('{count, plural,')
+    }
+  })
 })
