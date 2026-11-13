@@ -152,7 +152,7 @@ describe('POST /import-documents', () => {
       locked: 2,
       lockedPeriods: ['2024'],
       dryRun: true,
-      customerInvoicePdfs: { scanned: 2, linked: 1, invoiceOnly: 1, skipped: 0, locked: 0, failed: 0 },
+      customerInvoicePdfs: { scanned: 2, linked: 1, invoiceOnly: 1, skipped: 0, locked: 0, failed: 0, refused: 0 },
       unmatchedSamples: [],
     })
 

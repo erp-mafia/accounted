@@ -2709,6 +2709,10 @@ export function DocumentImportFollowUp({
         (customerInvoicePdfs?.skipped ?? 0) > 0
           ? t('ext_arcim_documents_customer_invoice_pdfs_skipped', { count: customerInvoicePdfs?.skipped ?? 0 })
           : null,
+        // Among "Kunde inte hämtas" below: the ones a retry will not bring.
+        (customerInvoicePdfs?.refused ?? 0) > 0
+          ? t('ext_arcim_documents_customer_invoice_pdfs_refused', { count: customerInvoicePdfs?.refused ?? 0 })
+          : null,
       ].filter((part): part is string => part !== null)
       const customerSummary = customerParts.length > 0
         ? t('ext_arcim_documents_customer_invoice_pdfs', { items: customerParts.join(', ') })

@@ -184,6 +184,12 @@ export function buildSuggestions(input: {
   observed: ObservedParty[]
   evidence: LedgerKeyEvidence[]
   existing: ExistingParty[]
+  /**
+   * Archived parties that still hold an org number. They are out of every
+   * name and alias lookup, but the unique index on (company, org number)
+   * counts them until they are merged away, so the hard key is still theirs.
+   */
+  archivedOrgHolders?: Array<{ id: string; org_number: string | null }>
 }): BuildResult {
   const evidenceByKey = new Map(input.evidence.map((e) => [e.key, e]))
   const byOrg = new Map<string, ExistingParty>()
@@ -207,6 +213,14 @@ export function buildSuggestions(input: {
       if (ac && ac !== c) byCore.set(ac, [...(byCore.get(ac) ?? []), p])
     }
   }
+  // Who holds each org number, archived holders included, and which party an
+  // id is: settleOrgNumbers needs both to keep one org number on one party.
+  const orgHolder = new Map<string, string>()
+  for (const [o, p] of byOrg) orgHolder.set(o, p.id)
+  for (const p of input.archivedOrgHolders ?? []) {
+    if (p.org_number && !orgHolder.has(p.org_number)) orgHolder.set(p.org_number, p.id)
+  }
+  const existingById = new Map(input.existing.map((p) => [p.id, p]))
 
   const items: SuggestionItem[] = []
   const skipped: SuggestionSkip[] = []
@@ -320,7 +334,44 @@ export function buildSuggestions(input: {
       identities,
     })
   }
-  return { items: groupByLegalName(items), skipped }
+  return { items: groupByLegalName(settleOrgNumbers(items, orgHolder, existingById)), skipped }
+}
+
+/**
+ * One org number, one party, settled before anything is written. An item
+ * reaches a party through an alias key or an exact legal name and brings an
+ * org number that party lacks; apply_party_suggestions then writes the number
+ * onto it, and the unique index refuses when another party of the company
+ * holds the number already (an archived one, or one this same run creates
+ * from another key). The org number is the harder key, so:
+ *
+ * - a number somebody holds sends the item to its holder;
+ * - a number nobody holds goes to the first existing party an item brings it
+ *   to, and every other item with that number follows it there;
+ * - an existing party that already has a different number keeps it (the RPC
+ *   never overwrites one), and claims nothing.
+ */
+function settleOrgNumbers(
+  items: SuggestionItem[],
+  orgHolder: Map<string, string>,
+  existingById: Map<string, ExistingParty>,
+): SuggestionItem[] {
+  const holder = new Map(orgHolder)
+  for (const item of items) {
+    if (!item.org_number || !item.party_id || holder.has(item.org_number)) continue
+    const party = existingById.get(item.party_id)
+    if (party && !party.org_number) holder.set(item.org_number, item.party_id)
+  }
+  for (const item of items) {
+    if (!item.org_number) continue
+    const holderId = holder.get(item.org_number)
+    if (!holderId || holderId === item.party_id) continue
+    if (item.party_id && existingById.get(item.party_id)?.org_number) continue
+    item.party_id = holderId
+    item.reason.attach = 'org_number'
+    delete item.reason.similar_to
+  }
+  return items
 }
 
 /**
@@ -394,9 +445,18 @@ export interface DuplicateCandidate {
   created_at: string
 }
 
+/** merge_parties raises this when no id but the survivor's is left to merge. */
+const NOTHING_TO_MERGE = /nothing to merge/i
+
 export function planDuplicateMerges(parties: DuplicateCandidate[]): Array<{ survivorId: string; mergedIds: string[] }> {
   const groups = new Map<string, DuplicateCandidate[]>()
+  // One row per party: the same party listed twice is not its own namesake,
+  // and a plan to merge a party into itself is what merge_parties refuses
+  // with "nothing to merge".
+  const seen = new Set<string>()
   for (const p of parties) {
+    if (seen.has(p.id)) continue
+    seen.add(p.id)
     // Case, whitespace and punctuation are never what tells two names apart:
     // "Anthropic, PBC" and "Anthropic PBC" are one company. Legal forms are
     // kept, since "Anthropic PBC" and "Anthropic Ireland" are two.
@@ -434,18 +494,25 @@ export async function suggestPartiesForCompany(
   if (evidenceError) throw new Error(`get_ledger_key_evidence failed: ${evidenceError.message}`)
   const evidence = (Array.isArray(evidenceData) ? evidenceData : []) as LedgerKeyEvidence[]
 
-  const existing = await fetchAllRows<ExistingParty>(({ from, to }) =>
-    supabase
-      .from('parties')
-      .select('id, display_name, legal_name, org_number, alias_keys, status')
-      .eq('company_id', companyId)
-      .is('merged_into', null)
-      .is('archived_at', null)
-      .order('created_at', { ascending: true })
-      .range(from, to),
+  // created_at alone is not a total order: every party one run creates shares
+  // a timestamp, so pages past the first could repeat one party and skip
+  // another. The id settles it.
+  const unmerged = await fetchAllRows<ExistingParty & { archived_at: string | null }>(
+    ({ from, to }) =>
+      supabase
+        .from('parties')
+        .select('id, display_name, legal_name, org_number, alias_keys, status, archived_at')
+        .eq('company_id', companyId)
+        .is('merged_into', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (p) => p.id },
   )
+  const existing = unmerged.filter((p) => !p.archived_at)
+  const archivedOrgHolders = unmerged.filter((p) => p.archived_at && p.org_number)
 
-  const { items, skipped } = buildSuggestions({ observed, evidence, existing })
+  const { items, skipped } = buildSuggestions({ observed, evidence, existing, archivedOrgHolders })
   const summary: SuggestSummary = {
     observed: observed.length,
     suggested: items.length,
@@ -473,15 +540,18 @@ export async function suggestPartiesForCompany(
   // The same name written the same way is one counterpart: fold the copies
   // into the survivor the way a person would with Slå ihop, undoable in the
   // same way (merge_parties records a decision).
-  const live = await fetchAllRows<DuplicateCandidate>(({ from, to }) =>
-    supabase
-      .from('parties')
-      .select('id, display_name, org_number, status, created_at')
-      .eq('company_id', companyId)
-      .is('merged_into', null)
-      .is('archived_at', null)
-      .order('created_at', { ascending: true })
-      .range(from, to),
+  const live = await fetchAllRows<DuplicateCandidate>(
+    ({ from, to }) =>
+      supabase
+        .from('parties')
+        .select('id, display_name, org_number, status, created_at')
+        .eq('company_id', companyId)
+        .is('merged_into', null)
+        .is('archived_at', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (p) => p.id },
   )
   // Runs only from the explicit refresh (Uppdatera förslag / Läs nya) or
   // the nightly cron, never from a page load; every merge is logged by
@@ -494,6 +564,9 @@ export async function suggestPartiesForCompany(
       p_merged: plan.mergedIds,
       p_note: 'Samma namn',
     })
+    // Nothing left to fold in (another run got there first) is the state this
+    // loop is after, not a failure.
+    if (error && NOTHING_TO_MERGE.test(error.message)) continue
     if (error) throw new Error(`merge_parties failed: ${error.message}`)
     summary.merged += plan.mergedIds.length
   }

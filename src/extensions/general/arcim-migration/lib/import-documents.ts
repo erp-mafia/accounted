@@ -105,6 +105,7 @@ import {
 import {
   FortnoxApiError,
   FortnoxClient,
+  fortnoxApiErrorCode,
   fortnoxErrorMessage,
   isFortnoxPermissionError,
 } from '@/lib/providers/fortnox/client'
@@ -149,6 +150,14 @@ import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { recordDocumentArrival } from '@/lib/intake/arrivals'
 import { continuationCursor, type DocumentImportRunSummary } from './document-import-run'
+import {
+  COPY_REFUSAL_RETRY_AFTER_MS,
+  copyRefusalCauses,
+  keepCopyRefusals,
+  permanentCopyRefusal,
+  readCopyRefusals,
+  type CopyRefusal,
+} from './customer-invoice-copy-refusals'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
 
@@ -297,6 +306,13 @@ export interface CustomerInvoiceCopyCounts {
   locked: number
   /** Could not be fetched or stored (counted, not thrown). */
   failed: number
+  /**
+   * Among `failed`: Fortnox answered that it will not hand this invoice out
+   * (a client error on the one invoice), in this run or in an earlier one
+   * that is still remembered (customer-invoice-copy-refusals.ts). Asking
+   * again does not help, so these are not asked on every run.
+   */
+  refused: number
 }
 
 /** Fortnox scopes behind the document import (Fortnox's scope table). */
@@ -796,6 +812,7 @@ export async function importProviderDocuments(
     skipped: 0,
     locked: 0,
     failed: 0,
+    refused: 0,
   }
   if (provider === 'fortnox') result.customerInvoicePdfs = copyCounts
 
@@ -1047,6 +1064,62 @@ export async function importProviderDocuments(
     })
   }
 
+  // Copies Fortnox would not hand out (customer-invoice-copy-refusals.ts):
+  // the ones an earlier run was told about are counted without a call, the
+  // ones this call is told about are kept for the next run. Best effort both
+  // ways: without the memory every copy is simply asked, as before.
+  const copyRefusalScope = { companyId, userId, accountKey: fortnoxAccountKey }
+  let knownCopyRefusals = new Map<string, CopyRefusal>()
+  if (provider === 'fortnox' && attachments.some((a) => a.customerInvoice && !a.customerInvoice.archived)) {
+    try {
+      knownCopyRefusals = await readCopyRefusals(supabase, companyId, fortnoxAccountKey, now())
+    } catch (error) {
+      log.warn('customer invoice copy refusals not read: every copy is asked', {
+        reason: error instanceof Error ? error.message : 'unknown',
+      })
+    }
+  }
+  const newCopyRefusals = new Map<string, CopyRefusal>()
+  // Invoices that hold their copy by now: a refusal kept for one is dropped.
+  const settledCopies = new Set<string>()
+  let copyRefusalsUnkept = 0
+  const keepNewCopyRefusals = async () => {
+    if (dryRun || newCopyRefusals.size === copyRefusalsUnkept) return
+    try {
+      await keepCopyRefusals(supabase, copyRefusalScope, newCopyRefusals, settledCopies, now())
+      copyRefusalsUnkept = newCopyRefusals.size
+    } catch (error) {
+      log.warn('customer invoice copy refusals not kept: the next run asks them again', {
+        reason: error instanceof Error ? error.message : 'unknown',
+      })
+    }
+  }
+  /**
+   * A failed copy: counted, and when Fortnox's answer is about this one
+   * invoice and final, remembered instead of logged. One line per call names
+   * the answers (below the sweep); an error per invoice per run said nothing
+   * new 297 times in two days.
+   */
+  const copyFailed = async (copy: CustomerInvoiceCopy, error: unknown, what: string, uploadId: string) => {
+    result.failed++
+    copyCounts.failed++
+    const refused = permanentCopyRefusal(error, now())
+    if (!refused) {
+      log.error(what, error as Error, {
+        uploadId,
+        providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+        providerCode: fortnoxApiErrorCode(error),
+        providerMessage: fortnoxErrorMessage(error),
+      })
+      return
+    }
+    copyCounts.refused++
+    newCopyRefusals.set(copy.documentNumber, refused)
+    // Kept in batches too, so a sweep that ends on a refused connection
+    // still leaves most of what it learned.
+    if (newCopyRefusals.size - copyRefusalsUnkept >= 50) await keepNewCopyRefusals()
+  }
+
   /**
    * Remove a copy this call stored before any delivery held it. It is
    * unlinked, so deletable; best effort, because one left behind is only a
@@ -1132,9 +1205,17 @@ export async function importProviderDocuments(
     if (copy.archived) {
       result.skipped++
       copyCounts.skipped++
+      if (knownCopyRefusals.has(copy.documentNumber)) settledCopies.add(copy.documentNumber)
       return
     }
     if (customerInvoiceCopiesRefused) return
+    // Fortnox refused this very invoice lately: counted, not asked again.
+    if (knownCopyRefusals.has(copy.documentNumber)) {
+      result.failed++
+      copyCounts.failed++
+      copyCounts.refused++
+      return
+    }
 
     // Which verifikat the copy may go on: the invoice's own link when the
     // migration made it to a live migrated verifikat (it corroborated the
@@ -1157,9 +1238,7 @@ export async function importProviderDocuments(
           refuseCustomerInvoiceCopies(error)
           return
         }
-        result.failed++
-        copyCounts.failed++
-        log.error('failed to read a customer invoice voucher', error as Error, { uploadId: attachment.id })
+        await copyFailed(copy, error, 'failed to read a customer invoice voucher', attachment.id)
         return
       }
       const resolution = ref
@@ -1285,9 +1364,7 @@ export async function importProviderDocuments(
         refuseCustomerInvoiceCopies(error)
         return
       }
-      result.failed++
-      copyCounts.failed++
-      log.error('failed to import a customer invoice copy', error as Error, { uploadId: attachment.id })
+      await copyFailed(copy, error, 'failed to import a customer invoice copy', attachment.id)
     }
   }
 
@@ -1514,6 +1591,18 @@ export async function importProviderDocuments(
     result.partial = true
     result.nextCursor =
       startIndex < attachments.length ? attachments[attachments.length - 1].id : startCursor
+  }
+
+  await keepNewCopyRefusals()
+  if (newCopyRefusals.size > 0) {
+    // Once per call, with Fortnox's own code and sentence: what is needed to
+    // know the cause. No invoice is named.
+    log.warn('fortnox would not hand out customer invoice copies: kept, not asked again for a while', {
+      companyId,
+      refused: newCopyRefusals.size,
+      retryAfterDays: COPY_REFUSAL_RETRY_AFTER_MS / 86_400_000,
+      causes: copyRefusalCauses(newCopyRefusals.values()),
+    })
   }
 
   result.lockedPeriods = [...lockedPeriodIds]

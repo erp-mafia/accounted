@@ -203,6 +203,8 @@ export function mergeArcimDocumentImportResults(
           skipped: (previousPdfs?.skipped ?? 0) + (nextPdfs?.skipped ?? 0),
           locked: (previousPdfs?.locked ?? 0) + (nextPdfs?.locked ?? 0),
           failed: (previousPdfs?.failed ?? 0) + (nextPdfs?.failed ?? 0),
+          // Absent from a server older than the count.
+          refused: (previousPdfs?.refused ?? 0) + (nextPdfs?.refused ?? 0),
         }
       : undefined,
     unreachableSources: mergeUnreachableSources(accumulated.unreachableSources, next.unreachableSources),
