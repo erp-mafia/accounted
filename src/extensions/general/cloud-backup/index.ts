@@ -7,6 +7,8 @@ import {
   verifyOAuthState,
 } from './lib/crypto'
 import { performSync } from './lib/sync'
+import { patchScheduleRow, readScheduleRow, withManualRunClaim } from './lib/run-claim'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveCallbackOrigin } from '@/lib/auth/callback-origin'
 import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -159,15 +161,26 @@ async function handleOAuthCallback(
     // builds in the background.
     after(async () => {
       try {
-        await performSync({
-          supabase: ctx.supabase,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          origin,
-          includeDocuments: true,
-          allowDocumentFallback: true,
-          provider,
-        })
+        // Under the run claim: a new schedule is due at once, so the hourly
+        // cron can start on the same destination while this first backup is
+        // still uploading, and a first Drive upload has no file to update.
+        const run = await withManualRunClaim(
+          ctx.supabase,
+          { companyId: ctx.companyId, scheduleKey: provider.keys.schedule },
+          () =>
+            performSync({
+              supabase: ctx.supabase,
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              origin,
+              includeDocuments: true,
+              allowDocumentFallback: true,
+              provider,
+            })
+        )
+        if (run.busy) {
+          ctx.log.info(`initial ${provider.id} sync left to the run already in progress`)
+        }
       } catch (err) {
         ctx.log.error(`initial ${provider.id} sync after connect failed`, err)
       }
@@ -362,9 +375,10 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Update one provider's auto-sync schedule. Preserves the fields the cron
-    // writes (`last_auto_sync_*`, failure counter, alert throttle): those are
-    // not user-editable.
+    // Update one provider's auto-sync schedule. Preserves the fields the runs
+    // write (the run claim, `last_auto_sync_*`, failure counter, alert
+    // throttle): those are not user-editable, and the edit is written at the
+    // record's version so a run's write in between is kept.
     {
       method: 'PUT',
       path: '/schedule',
@@ -401,18 +415,45 @@ export const cloudBackupExtension: Extension = {
           }
 
           const key = resolved.provider.keys.schedule
-          const existing = await ctx.settings.get<CloudSchedule>(key)
-          const updated: CloudSchedule = {
-            ...existing,
-            enabled: body.enabled,
+          // Only the fields a person edits. Everything else on the record is
+          // the runs': the claim, the outcome, the failure count and the
+          // alert throttle.
+          const edit = (current: CloudSchedule | null): CloudSchedule => ({
+            ...current,
+            enabled: body.enabled as boolean,
+            // Off to on: the card's stale-backup warning counts from here.
+            ...(body.enabled && !current?.enabled ? { enabled_at: new Date().toISOString() } : {}),
             hour_utc: hourUtc,
             hour_local: hourLocal,
-            last_auto_sync_at: existing?.last_auto_sync_at ?? null,
-            last_auto_sync_status: existing?.last_auto_sync_status ?? null,
-            last_auto_sync_error: existing?.last_auto_sync_error ?? null,
+            last_auto_sync_at: current?.last_auto_sync_at ?? null,
+            last_auto_sync_status: current?.last_auto_sync_status ?? null,
+            last_auto_sync_error: current?.last_auto_sync_error ?? null,
+          })
+          const recordKey = { companyId: ctx.companyId, scheduleKey: key }
+          const row = await readScheduleRow(ctx.supabase, recordKey)
+          if (!row) {
+            // No record yet, so no run to race with.
+            const created = edit(null)
+            await ctx.settings.set(key, created)
+            return NextResponse.json({ data: created })
           }
-          await ctx.settings.set(key, updated)
-          return NextResponse.json({ data: updated })
+          // Written at the version read, and on the record as it is then when
+          // a run wrote in between: a plain read and write put back a claim
+          // its run had released (the next hour then counted a failed night
+          // that never happened) or erased one a run still held (letting a
+          // second run start beside it, and dropping the first one's outcome).
+          // The member who saves becomes the record's owner, as a plain save
+          // always made them: the failure mail goes to them and the backup runs
+          // as them, so a member who has left does not keep the alerts.
+          const saved: { value: CloudSchedule | null } = { value: null }
+          const outcome = await patchScheduleRow(ctx.supabase, recordKey, row, (current) => (saved.value = edit(current)), { user_id: ctx.userId })
+          if (outcome !== 'written' || !saved.value) {
+            // Removed meanwhile (disconnected), or written over on every try.
+            return errorResponseFromCode('CONFLICT', ctx.log, {
+              reason: `schedule edit for ${resolved.provider.id} not saved: ${outcome}`,
+            })
+          }
+          return NextResponse.json({ data: saved.value })
         } catch (err) {
           ctx.log.error('update schedule failed', err)
           return jsonError(
@@ -437,15 +478,25 @@ export const cloudBackupExtension: Extension = {
             allow_document_fallback?: boolean
           }
           const origin = resolveCallbackOrigin(new URL(request.url).origin)
-          const result = await performSync({
-            supabase: ctx.supabase,
-            companyId: ctx.companyId,
-            userId: ctx.userId,
-            origin,
-            includeDocuments: body.include_documents !== false,
-            allowDocumentFallback: body.allow_document_fallback === true,
-            provider: resolved.provider,
-          })
+          // One run per destination at a time (lib/run-claim.ts): while the
+          // nightly backup is uploading, a second run would upload the same
+          // archives next to it.
+          const run = await withManualRunClaim(
+            ctx.supabase,
+            { companyId: ctx.companyId, scheduleKey: resolved.provider.keys.schedule },
+            () =>
+              performSync({
+                supabase: ctx.supabase,
+                companyId: ctx.companyId,
+                userId: ctx.userId,
+                origin,
+                includeDocuments: body.include_documents !== false,
+                allowDocumentFallback: body.allow_document_fallback === true,
+                provider: resolved.provider,
+              })
+          )
+          if (run.busy) return jsonError('sync_in_progress', 409)
+          const result = run.result
 
           if (!result.ok) {
             if (result.reason === 'not_connected') {

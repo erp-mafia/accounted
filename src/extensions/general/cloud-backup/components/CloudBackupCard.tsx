@@ -34,6 +34,7 @@ import type {
   CloudSchedule,
 } from '../types'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { backupIsStale } from '../lib/schedule'
 
 const API_BASE = '/api/extensions/ext/cloud-backup'
 
@@ -54,6 +55,8 @@ export default function CloudBackupCard() {
   const searchParams = useSearchParams()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
+  // When the status was read: what the age of the last backup is judged against.
+  const [statusReadAt, setStatusReadAt] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   const loadStatus = useCallback(async () => {
@@ -62,6 +65,7 @@ export default function CloudBackupCard() {
       if (!res.ok) throw new Error(t('ext_cloud_backup_status_failed'))
       const { data } = (await res.json()) as { data: CloudBackupStatus }
       setStatus(data)
+      setStatusReadAt(Date.now())
     } finally {
       setIsLoading(false)
     }
@@ -141,6 +145,24 @@ export default function CloudBackupCard() {
   // would only bounce off `/connect`, so that row keeps its quiet
   // "not configured" line instead.
   const reauthProviders = providers.filter((p) => p.configured && p.needs_reauth)
+  // Automatic backup is on but nothing has been saved for two days: the row
+  // would otherwise keep showing the last attempt as "lyckades" while every
+  // attempt since ended before it could record anything.
+  const staleProviders =
+    statusReadAt === null
+      ? []
+      : providers.filter(
+          (p) =>
+            p.configured &&
+            p.connected &&
+            !p.needs_reauth &&
+            backupIsStale({
+              schedule: p.schedule,
+              lastSavedAt: p.last_sync?.at,
+              connectedAt: p.connected_at,
+              now: new Date(statusReadAt),
+            })
+        )
 
   // `/status` returns a row for every provider the build knows about, whether
   // or not this deployment has credentials for it, so the note has to filter:
@@ -155,7 +177,12 @@ export default function CloudBackupCard() {
 
   return (
     <div>
-      {reauthProviders.length > 0 && <ReauthAttn providers={reauthProviders} />}
+      {/* One attention sentence per section: a reconnect explains a stale backup too. */}
+      {reauthProviders.length > 0 ? (
+        <ReauthAttn providers={reauthProviders} />
+      ) : (
+        staleProviders.length > 0 && <StaleBackupAttn providers={staleProviders} />
+      )}
 
       <div>
         {providers.map((providerStatus) => (
@@ -257,6 +284,24 @@ function ReauthAttn({ providers }: { providers: CloudProviderStatus[] }) {
   )
 }
 
+/**
+ * Automatic backup is on and the last saved copy is more than two days old.
+ * Names every affected destination and the oldest date, in the section's one
+ * attention sentence.
+ */
+function StaleBackupAttn({ providers }: { providers: CloudProviderStatus[] }) {
+  const t = useTranslations('extensions')
+  const provider = providers.map((p) => PROVIDER_META[p.provider]?.label ?? p.provider).join(' / ')
+  const saved = providers.flatMap((p) => (p.last_sync?.at ? [p.last_sync.at] : [])).sort()
+  return (
+    <AttnLine className="pb-3">
+      {saved.length === providers.length
+        ? t('ext_cloud_backup_stale_warning', { provider, date: formatDateTime(saved[0]) })
+        : t('ext_cloud_backup_stale_never_warning', { provider })}
+    </AttnLine>
+  )
+}
+
 interface ProviderRowProps {
   status: CloudProviderStatus
   onChanged: () => Promise<void> | void
@@ -339,6 +384,9 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                 ? Math.round(body.size_limit_bytes / (1024 * 1024))
                 : null,
             }
+          }
+          if (body.error === 'sync_in_progress') {
+            throw new Error(t('ext_cloud_backup_sync_in_progress', { provider }))
           }
           if (body.error === 'needs_reauth') {
             // Refresh status so the row switches to the reconnect state.

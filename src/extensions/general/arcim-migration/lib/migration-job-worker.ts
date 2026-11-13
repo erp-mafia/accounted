@@ -748,6 +748,18 @@ export async function runProviderMigrationWorker(options: {
     if (error) throw new Error(error.message)
     if (!data?.id) break
     let job = data as ProviderMigrationJob
+    if (job.state !== 'running') {
+      // The claim found the job's lease lapsed for the fifth run in a row
+      // with nothing moved, and parked it instead of handing it out
+      // (20261112192901): its worker is ended every time, which no release
+      // ever recorded. Reported here, once, because the runs that died could
+      // not; the person sees "Importen behöver ses över" with Fortsätt.
+      log.error('migration job parked: its worker was ended five runs in a row without moving it', {
+        jobId: job.id, companyId: job.company_id, provider: job.provider, phase: job.phase,
+        resource: job.resources[job.resource_index - 1], page: job.next_page, failures: job.failures, code: job.error_code })
+      if (options.jobId) break
+      continue
+    }
     jobs++
     let started = Date.now()
     // This claim moved the job: a checkpoint, or records an import batch

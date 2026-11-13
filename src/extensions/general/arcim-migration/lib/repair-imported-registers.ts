@@ -1,5 +1,7 @@
 import { partyOrgKey } from '@/lib/invariants/org-number'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import type { CustomerDto, SupplierDto } from '@/lib/providers/dto'
 import { fetchMigrationPage, hydrateCustomers, hydrateSuppliers } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
@@ -66,6 +68,8 @@ import { consentUnusable, isMigrationResetSource, messageOf } from './repair-for
  * what it held before.
  */
 
+const log = createLogger('register-repair')
+
 export type RepairProvider = 'fortnox' | 'visma' | 'bokio'
 export const REPAIR_PROVIDERS: readonly RepairProvider[] = ['fortnox', 'visma', 'bokio']
 type Resource = 'customers' | 'suppliers'
@@ -115,6 +119,11 @@ export interface CardRepair {
   /** What `correct` replaces, for the revert. A personnummer is never kept here. */
   was: Record<string, unknown>
   kinds: RepairKind[]
+  /**
+   * The key of the record the card was decided from (planRegisterRepair sets
+   * it): where the next run starts when this one stops writing before it.
+   */
+  key?: string
 }
 
 function providerNumber(dto: CustomerDto): string | null {
@@ -311,6 +320,9 @@ export interface RegisterRepairDeps {
 /** The provider refused the token partway through the detail reads; `cause` is its own error. */
 class ConsentRefused extends Error {}
 
+/** The run's deadline passed before any record's detail was read: while listing the registers, or right after. */
+class OutOfTime extends Error {}
+
 /**
  * A Fortnox 401: the token aged out or the grant is gone, and one refresh
  * tells which. Fortnox retires a token a moment before the expiry we stamp,
@@ -321,13 +333,30 @@ function fortnoxTokenRefused(provider: RepairProvider, error: unknown): boolean 
   return provider === 'fortnox' && (cause as { statusCode?: unknown } | null)?.statusCode === 401
 }
 
-async function listRecords(provider: RepairProvider, connection: Connection, fetchPage: typeof fetchMigrationPage): Promise<SourceRecord[]> {
+async function listRecords(provider: RepairProvider, connection: Connection, fetchPage: typeof fetchMigrationPage,
+  deadline: number): Promise<SourceRecord[]> {
   const records: SourceRecord[] = []
   for (const resource of RESOURCES) {
     let pages = 0
     for (let page: number | null = 1; page !== null;) {
+      // Checked before every page: a large register listed by a company that
+      // started late in the run went on long past the cutoff, and the run was
+      // ended at the platform's limit with every company's progress unsaved.
+      if (Date.now() >= deadline) throw new OutOfTime()
       if (pages++ >= MAX_PAGES) throw new Error('PROVIDER_PAGE_LIMIT')
-      const result = await fetchPage(provider, connection.accessToken, connection.providerCompanyId, resource, page)
+      // The page itself runs inside the deadline too, as the migration worker
+      // reads it (fetchRegisterPage): the budget scope reaches the provider
+      // client, its rate limiter and its retries, so a page in flight at the
+      // deadline is aborted instead of running up to three 60 s attempts on.
+      const current = page
+      let result: Awaited<ReturnType<typeof fetchMigrationPage>>
+      try {
+        result = await withExecutionDeadline(deadline, 'register-repair-list',
+          () => fetchPage(provider, connection.accessToken, connection.providerCompanyId, resource, current))
+      } catch (error) {
+        if (error instanceof ExecutionBudgetExceeded) throw new OutOfTime()
+        throw error
+      }
       for (const dto of result.items) {
         const record = sourceRecord(provider, resource, dto as CustomerDto | SupplierDto)
         if (record) records.push(record)
@@ -414,7 +443,12 @@ async function readRecords(provider: RepairProvider, matches: RecordMatch[], con
   return { read, next: null }
 }
 
-export type ProviderReadState = 'fetched' | 'no_consent' | 'consent_expired' | 'failed'
+/**
+ * 'out_of_time': the deadline passed before any record's detail was read
+ * (while listing, or right after it). Nothing was decided and the company
+ * keeps its cursor.
+ */
+export type ProviderReadState = 'fetched' | 'no_consent' | 'consent_expired' | 'failed' | 'out_of_time'
 
 export interface RegisterRepairPlan {
   state: ProviderReadState
@@ -441,13 +475,14 @@ export async function planRegisterRepair(
   if (consents.length === 0) return emptyPlan('no_consent')
 
   const plan = async (connection: Connection): Promise<RegisterRepairPlan> => {
-    const records = await listRecords(provider, connection, deps.fetchMigrationPage ?? fetchMigrationPage)
+    const records = await listRecords(provider, connection, deps.fetchMigrationPage ?? fetchMigrationPage, options.deadline)
     const { rows, cards } = await loadCards(supabase, companyId)
     const matches = matchRecords(records, cards, await loadSourceMap(supabase, companyId, provider), options.from)
     const { read, next } = await readRecords(provider, matches, connection, options.deadline, {
       hydrateCustomers: deps.hydrateCustomers ?? hydrateCustomers,
       hydrateSuppliers: deps.hydrateSuppliers ?? hydrateSuppliers,
     })
+    if (read.size === 0 && next !== null && Date.now() >= options.deadline) throw new OutOfTime()
     const now = options.now ?? new Date().toISOString()
     const repairs: CardRepair[] = []
     // Two records naming one card: the first decides, as the import's own match does.
@@ -460,7 +495,7 @@ export async function planRegisterRepair(
       const repair = match.record.resource === 'customers'
         ? customerRepair(rows.customers.get(match.cardId)!, dto as CustomerDto, match.sourceMapped, now)
         : supplierRepair(rows.suppliers.get(match.cardId)!, dto as SupplierDto, match.sourceMapped, now)
-      if (repair) repairs.push(repair)
+      if (repair) repairs.push({ ...repair, key: match.key })
     }
     return { state: 'fetched', repairs, next }
   }
@@ -483,6 +518,7 @@ export async function planRegisterRepair(
           failure = retryError
         }
       }
+      if (failure instanceof OutOfTime) return { state: 'out_of_time', repairs: [], next: options.from }
       lastError = messageOf(failure)
       if (!(failure instanceof ConsentRefused) && !consentUnusable(failure)) return emptyPlan('failed', lastError)
     }
@@ -512,13 +548,35 @@ async function withInvoices(supabase: SupabaseClient, companyId: string, resourc
   return found
 }
 
+export interface ApplyRegisterRepairsOptions {
+  concurrency?: number
+  /** Epoch ms after which no further card is started; the ones in flight finish. */
+  deadline?: number
+  /**
+   * Called with each changed card as soon as its writes are done, so the
+   * caller can keep the revert trail card by card: a run ended after its
+   * writes used to lose the whole list of what it had changed.
+   */
+  onChanged?: (card: ChangedCard) => Promise<void>
+}
+
+export interface AppliedRegisterRepairs {
+  changed: ChangedCard[]
+  /**
+   * The key of the first card not written because the deadline passed, or
+   * null when every card was. Cards are written in key order, so everything
+   * before it is done and the next run starts there.
+   */
+  stoppedAt: string | null
+}
+
 /** Writes the repairs, each part only while the card still holds what it was decided on. */
 export async function applyRegisterRepairs(
   supabase: SupabaseClient,
   companyId: string,
   repairs: CardRepair[],
-  options: { concurrency?: number } = {},
-): Promise<ChangedCard[]> {
+  options: ApplyRegisterRepairsOptions = {},
+): Promise<AppliedRegisterRepairs> {
   for (const resource of RESOURCES) {
     const archiving = repairs.filter((r) => r.resource === resource && r.kinds.includes('archived'))
     const invoiced = await withInvoices(supabase, companyId, resource, archiving.map((r) => r.id))
@@ -536,33 +594,123 @@ export async function applyRegisterRepairs(
   let failed = false
   const worker = async () => {
     while (!failed && next < repairs.length) {
+      if (options.deadline !== undefined && Date.now() >= options.deadline) return
       const repair = repairs[next++]
       const entry: ChangedCard = { resource: repair.resource, id: repair.id, kinds: [] }
-      if (repair.fill) {
-        const written = repair.resource === 'customers'
-          ? await writeCustomerEnrichment(supabase, companyId, repair.id, repair.fill as CustomerMetadataEnrichment)
-          : await writeSupplierEnrichment(supabase, companyId, repair.id, repair.fill as SupplierEnrichment)
-        if (written.error) { failed = true; throw new Error(`${repair.resource}: ${written.error.message}`) }
-        if (written.data) {
-          entry.kinds.push('filled')
-          entry.filled = Object.keys(repair.fill).filter((column) => (repair.fill as Record<string, unknown>)[column] !== undefined)
+      try {
+        if (repair.fill) {
+          const written = repair.resource === 'customers'
+            ? await writeCustomerEnrichment(supabase, companyId, repair.id, repair.fill as CustomerMetadataEnrichment)
+            : await writeSupplierEnrichment(supabase, companyId, repair.id, repair.fill as SupplierEnrichment)
+          if (written.error) throw new Error(`${repair.resource}: ${written.error.message}`)
+          if (written.data) {
+            entry.kinds.push('filled')
+            entry.filled = Object.keys(repair.fill).filter((column) => (repair.fill as Record<string, unknown>)[column] !== undefined)
+          }
+        }
+        if (Object.keys(repair.correct).length > 0) {
+          let query = supabase.from(repair.resource).update(repair.correct).eq('id', repair.id).eq('company_id', companyId)
+          for (const [column, value] of Object.entries(repair.guard)) query = value === null ? query.is(column, null) : query.eq(column, value)
+          const { data, error } = await query.select('id')
+          if (error) throw new Error(`${repair.resource}: ${error.message}`)
+          if ((data ?? []).length > 0) {
+            entry.kinds.push(...repair.kinds.filter((kind) => kind !== 'filled'))
+            entry.was = repair.was
+          }
+        }
+      } catch (writeError) {
+        // The other writers take no new card, and finish the one in hand.
+        failed = true
+        throw writeError
+      } finally {
+        // A card whose fill landed before its correction failed is changed
+        // too: it goes on the trail with what it got.
+        if (entry.kinds.length > 0) {
+          changed.push(entry)
+          await options.onChanged?.(entry)
         }
       }
-      if (Object.keys(repair.correct).length > 0) {
-        let query = supabase.from(repair.resource).update(repair.correct).eq('id', repair.id).eq('company_id', companyId)
-        for (const [column, value] of Object.entries(repair.guard)) query = value === null ? query.is(column, null) : query.eq(column, value)
-        const { data, error } = await query.select('id')
-        if (error) { failed = true; throw new Error(`${repair.resource}: ${error.message}`) }
-        if ((data ?? []).length > 0) {
-          entry.kinds.push(...repair.kinds.filter((kind) => kind !== 'filled'))
-          entry.was = repair.was
-        }
-      }
-      if (entry.kinds.length > 0) changed.push(entry)
     }
   }
-  await Promise.all(Array.from({ length: options.concurrency ?? 10 }, worker))
-  return changed
+  // Settled, not raced: when one writer fails, the others still have a card
+  // in hand. Rejecting at the first failure let their writes land, and be
+  // handed to onChanged, after the caller had already closed the trail, so
+  // those cards were changed with no record of what they held.
+  const settled = await Promise.allSettled(Array.from({ length: options.concurrency ?? 10 }, worker))
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failure) throw failure.reason
+  // Every worker has returned, so every card before `next` is written.
+  return { changed, stoppedAt: next < repairs.length ? repairs[next].key ?? null : null }
+}
+
+// ── The revert trail ────────────────────────────────────────────────
+
+/** Changed cards per append. */
+const TRAIL_FLUSH_CARDS = 25
+/** Once cards keep coming, none waits longer than this for its append. */
+const TRAIL_FLUSH_MS = 1_000
+
+/**
+ * The company's revert trail, appended as cards are changed
+ * (append_register_repair_changed, 20261112192903). The trail used to be
+ * written once, after the last card: a run the platform ended before that
+ * (27 in 30 days, 2026-11) had changed cards and kept no record of what they
+ * held before. One append per card would queue the company's ten card
+ * writers on its progress row and rewrite the growing array each time, so
+ * cards are appended in batches: at 25 cards, after a second, and when the
+ * company's run ends (flush). A run that is ended loses the cards not yet
+ * appended: under 25 still buffered, plus any batch whose append was in
+ * flight or queued behind it (each card writer waits for the batch it handed
+ * over, so at most one such batch per writer), plus the cards in
+ * `unrecorded` below, which are written only at the end.
+ *
+ * Appends run one at a time. Cards an append did not take (the function is
+ * not deployed yet, or the call failed) are kept in `unrecorded` for the
+ * caller to write at the end of the company's run, as before.
+ */
+export function registerRepairTrail(supabase: SupabaseClient, companyId: string, provider: RepairProvider,
+  now: () => number = Date.now) {
+  let buffer: ChangedCard[] = []
+  let lastFlush = now()
+  let appends: Promise<void> = Promise.resolve()
+  let installed = true
+  const unrecorded: ChangedCard[] = []
+
+  const append = async (cards: ChangedCard[]) => {
+    if (installed) {
+      try {
+        const { error } = await supabase.rpc('append_register_repair_changed',
+          { p_company_id: companyId, p_provider: provider, p_cards: cards })
+        if (!error) return
+        // Code deployed ahead of the migration: no function yet.
+        if (error.code === 'PGRST202' || error.code === '42883') installed = false
+        else log.warn('register repair trail entries kept for the end of the run', { companyId, provider, code: error.code, cards: cards.length })
+      } catch (err) {
+        log.warn('register repair trail entries kept for the end of the run', { companyId, provider, error: messageOf(err), cards: cards.length })
+      }
+    }
+    unrecorded.push(...cards)
+  }
+
+  /** Append every buffered card; resolves once every append so far is done. */
+  const flush = (): Promise<void> => {
+    if (buffer.length > 0) {
+      const cards = buffer
+      buffer = []
+      lastFlush = now()
+      appends = appends.then(() => append(cards))
+    }
+    return appends
+  }
+
+  return {
+    add: async (card: ChangedCard): Promise<void> => {
+      buffer.push(card)
+      if (buffer.length >= TRAIL_FLUSH_CARDS || now() - lastFlush >= TRAIL_FLUSH_MS) await flush()
+    },
+    flush,
+    unrecorded,
+  }
 }
 
 // ── The cron run ────────────────────────────────────────────────────
@@ -583,6 +731,13 @@ const MAX_ATTEMPTS = 3
 const PARALLEL_COMPANIES = 4
 /** A company is not started with less time than this left in the run: listing a large Fortnox register takes most of a minute. */
 const MIN_COMPANY_MS = 60_000
+/**
+ * Cards decided just before the deadline are still written: the writes get
+ * this long after it, and stop where they are when it is over. The route's
+ * 150 s cutoff plus this leaves 90 s of its 300 for the writes in flight and
+ * each company's progress row.
+ */
+const WRITE_GRACE_MS = 60_000
 
 export interface RegisterRepairRunSummary {
   /** Company and provider pairs with a live connection and no outcome yet, before this run. */
@@ -591,6 +746,8 @@ export interface RegisterRepairRunSummary {
   finished: number
   /** Cards this run changed. */
   changed: number
+  /** Companies whose run ended in an error that is not on their progress row (it could not be written). */
+  errors: number
 }
 
 /**
@@ -598,6 +755,11 @@ export interface RegisterRepairRunSummary {
  * connection and no outcome yet, most recently used connection first, each
  * from its stored cursor, until the deadline. Idempotent: every write is
  * guarded, so a run cut short repeats nothing harmful.
+ *
+ * `deadline` ends the reading (listing and detail reads); card writes stop
+ * WRITE_GRACE_MS after it, and each company then saves its cursor at the
+ * first card it did not write. One company's error never ends the run for
+ * the others.
  */
 export async function runRegisterRepair(
   supabase: SupabaseClient,
@@ -613,16 +775,29 @@ export async function runRegisterRepair(
   const rows = new Map(progress.map((row) => [`${row.company_id}:${row.provider}`, row]))
   const queue = [...new Map(consents.map((c) => [`${c.company_id}:${c.provider}`, c])).values()]
     .filter((c) => !rows.get(`${c.company_id}:${c.provider}`)?.outcome)
-  const summary: RegisterRepairRunSummary = { pending: queue.length, worked: 0, finished: 0, changed: 0 }
+  const summary: RegisterRepairRunSummary = { pending: queue.length, worked: 0, finished: 0, changed: 0, errors: 0 }
 
   let next = 0
   const worker = async () => {
     while (next < queue.length && deadline - Date.now() >= MIN_COMPANY_MS) {
+      // The first companies get the whole run; the others start whenever one
+      // before them finishes, with whatever time is left.
+      const hadWholeRun = next < PARALLEL_COMPANIES
       const { company_id: companyId, provider } = queue[next++]
       summary.worked++
-      const result = await repairCompany(supabase, companyId, provider, rows.get(`${companyId}:${provider}`), deadline, deps)
-      summary.changed += result.changed
-      if (result.outcome) summary.finished++
+      try {
+        const result = await repairCompany(supabase, companyId, provider, rows.get(`${companyId}:${provider}`), deadline,
+          hadWholeRun, deps)
+        summary.changed += result.changed
+        if (result.outcome) summary.finished++
+      } catch (err) {
+        // The company's progress row could not be written. One company's
+        // write error used to reject the whole run (HTTP 500 on 22 runs in 30
+        // days, 2026-11) and drop the progress of the three worked beside it.
+        // Its card writes are guarded, so the next run repeats nothing.
+        summary.errors++
+        log.error('register repair could not save a company\'s progress', err as Error, { companyId, provider })
+      }
     }
   }
   await Promise.all(Array.from({ length: PARALLEL_COMPANIES }, worker))
@@ -635,14 +810,22 @@ async function repairCompany(
   provider: RepairProvider,
   previous: RegisterRepairProgress | undefined,
   deadline: number,
+  hadWholeRun: boolean,
   deps: RegisterRepairDeps,
 ): Promise<{ outcome: string | null; changed: number }> {
   const row: RegisterRepairProgress = previous ?? {
     company_id: companyId, provider, next_key: null, outcome: null, attempts: 0, counts: {},
   }
-  let changedCards: ChangedCard[] = []
   let lastError: string | null = null
   let changedNow = 0
+  // Each changed card goes onto the revert trail as it is written, in small
+  // batches (registerRepairTrail).
+  const trail = registerRepairTrail(supabase, companyId, provider)
+  const record = async (card: ChangedCard) => {
+    changedNow++
+    for (const kind of card.kinds) row.counts[kind] = (row.counts[kind] ?? 0) + 1
+    await trail.add(card)
+  }
   try {
     const { data: company, error } = await supabase.from('companies').select('archived_at').eq('id', companyId).maybeSingle()
     if (error) throw new Error(`companies: ${error.message}`)
@@ -653,22 +836,32 @@ async function repairCompany(
       row.outcome = 'migration_reset'
     } else {
       const plan = await planRegisterRepair(supabase, companyId, provider, { from: row.next_key, deadline }, deps)
-      changedCards = await applyRegisterRepairs(supabase, companyId, plan.repairs)
-      changedNow = changedCards.length
-      for (const card of changedCards) for (const kind of card.kinds) row.counts[kind] = (row.counts[kind] ?? 0) + 1
+      const applied = await applyRegisterRepairs(supabase, companyId, plan.repairs,
+        { deadline: deadline + WRITE_GRACE_MS, onChanged: record })
+      // Where the next run starts: the first card left unwritten, else the first record left unread.
+      const next = applied.stoppedAt ?? plan.next
       if (plan.state === 'no_consent' || plan.state === 'consent_expired') {
         row.outcome = plan.state
       } else if (plan.state === 'failed') {
         row.attempts++
         if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'failed'
-      } else if (plan.next === null) {
+      } else if (plan.state === 'out_of_time') {
+        // A company that started late keeps its cursor and its attempts: the
+        // time ran out on the run, not on it. One that had the whole run and
+        // still could not list its registers is counted, or it would be
+        // started first, and cut off, on every run.
+        if (hadWholeRun) {
+          row.attempts++
+          if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'stuck'
+        }
+      } else if (next === null) {
         row.outcome = 'done'
-      } else if (plan.next === row.next_key) {
+      } else if (next === row.next_key) {
         // The run read nothing past where it started: count it as a miss.
         row.attempts++
         if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'stuck'
       } else {
-        row.next_key = plan.next
+        row.next_key = next
         row.attempts = 0
       }
       lastError = plan.error ?? null
@@ -678,6 +871,11 @@ async function repairCompany(
     row.attempts++
     if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'failed'
   }
+  // The cards still buffered, also after a write that failed part-way:
+  // applyRegisterRepairs settles every writer before it answers, so every
+  // card it changed has been handed over by now.
+  await trail.flush()
+  const unrecorded = trail.unrecorded
   const { error } = await supabase.from('register_repair_progress').upsert({
     company_id: companyId,
     provider,
@@ -689,13 +887,20 @@ async function repairCompany(
     updated_at: new Date().toISOString(),
   }, { onConflict: 'company_id,provider' })
   if (error) throw new Error(`register_repair_progress: ${error.message}`)
-  // The changed cards are read only to append to them: every run would
-  // otherwise carry every company's whole revert list.
-  if (changedCards.length > 0) {
+  if (row.outcome === 'failed' || row.outcome === 'stuck') {
+    // Given up on for good: its cards stay as the old import wrote them.
+    // Once, here: the pair has an outcome now and is never queued again.
+    log.error('register repair gave up on a company', undefined,
+      { companyId, provider, outcome: row.outcome, attempts: row.attempts, nextKey: row.next_key, lastError })
+  }
+  // Only the cards the append RPC did not take. The trail is read only to
+  // append to it: every run would otherwise carry every company's whole
+  // revert list.
+  if (unrecorded.length > 0) {
     const { data, error: readError } = await supabase.from('register_repair_progress').select('changed')
       .eq('company_id', companyId).eq('provider', provider).maybeSingle()
     if (readError) throw new Error(`register_repair_progress: ${readError.message}`)
-    const changed = [...(((data as { changed?: ChangedCard[] } | null)?.changed) ?? []), ...changedCards]
+    const changed = [...(((data as { changed?: ChangedCard[] } | null)?.changed) ?? []), ...unrecorded]
     const { error: appendError } = await supabase.from('register_repair_progress').update({ changed })
       .eq('company_id', companyId).eq('provider', provider)
     if (appendError) throw new Error(`register_repair_progress: ${appendError.message}`)

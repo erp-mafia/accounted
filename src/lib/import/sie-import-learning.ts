@@ -107,11 +107,21 @@ export interface SIEImportLearningSummary {
   skipped?: 'not_a_completed_import' | 'no_vouchers'
 }
 
-/** Never throws: the import is final when this runs. */
+/**
+ * Never throws: the import is final when this runs.
+ *
+ * `deadline` (epoch ms): the party suggestions are not started after it. The
+ * templates always run: the file's vouchers exist only in the invocation
+ * that completed the job, so nothing can learn them later. The suggestions
+ * read the ledger, which stays, so they can be run again
+ * (POST /api/parties/suggest); nothing does that on its own, so skipping
+ * them is reported as an error.
+ */
 export async function learnFromCompletedSIEImport(
   supabase: SupabaseClient,
   job: Pick<SIEJob, 'id' | 'company_id' | 'user_id' | 'execution_actor_id' | 'job_state' | 'job_kind'>,
   vouchers: SIEVoucher[],
+  deadline?: number,
 ): Promise<SIEImportLearningSummary> {
   if (job.job_state !== 'completed' || (job.job_kind ?? 'import') !== 'import') {
     return { templates: null, parties: null, skipped: 'not_a_completed_import' }
@@ -132,7 +142,15 @@ export async function learnFromCompletedSIEImport(
   // Suggested parties only: nothing is confirmed on the user's behalf.
   let parties: SuggestSummary | null = null
   try {
-    parties = await suggestPartiesForCompany(supabase, job.company_id, job.execution_actor_id ?? job.user_id)
+    if (deadline !== undefined && Date.now() >= deadline) {
+      log.error('parties were not suggested after the SIE import: the run was out of time', {
+        alert: true,
+        companyId: job.company_id,
+        importId: job.id,
+      })
+    } else {
+      parties = await suggestPartiesForCompany(supabase, job.company_id, job.execution_actor_id ?? job.user_id)
+    }
   } catch (err) {
     log.warn('parties were not suggested after the SIE import; the import is unaffected', {
       companyId: job.company_id,

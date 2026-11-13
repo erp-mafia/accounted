@@ -26,7 +26,7 @@ const log = createLogger('sie-worker')
 
 interface CheckpointRow { phase:string; chunk_no:number; payload_hash:string; result:Record<string,unknown> | SIEChunkResult }
 /** What finalize leaves for the learning after completion (sie-import-learning.ts). */
-interface FinalizeLearning { completed?:boolean; vouchers?:SIEVoucher[] }
+export interface FinalizeLearning { completed?:boolean; vouchers?:SIEVoucher[] }
 
 async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number, learning: FinalizeLearning): Promise<boolean> {
   const { options, mappings } = jobInput(job)
@@ -305,6 +305,69 @@ export function reportRepeatedReclaim(job: SIEJob, logger: Pick<typeof log, 'err
   })
 }
 
+/**
+ * The worker's budget ends 70 s before the platform ends the function (a
+ * 240 s budget less 10 s, against maxDuration 300). What follows a completed
+ * import may use the first 40 of them.
+ */
+export const SIE_AFTER_COMPLETION_GRACE_MS = 40_000
+/** Neither step after completion starts with less time than this left to it. */
+export const SIE_AFTER_COMPLETION_MIN_MS = 30_000
+
+/**
+ * The two steps that follow a completed import, inside the invocation's time.
+ * Both ran after the job loop with no deadline at all, which is how one
+ * invocation reached 274 s of its 300 (2026-11): the loop itself stops at
+ * `deadline`.
+ *
+ * Learning first (counterparty templates and suggested parties,
+ * sie-import-learning.ts): the file's vouchers exist only here, in the
+ * invocation that completed the job, so nothing can run it later. It is
+ * skipped only when even the grace after the deadline is nearly used up, and
+ * that is reported as an error because it is lost for good.
+ *
+ * Then the bank sweep (issue #2835: the import is final and its period hold
+ * released, so bank rows can be matched against the new verifikat). It starts
+ * only with time left inside the budget. A sweep not started leaves no
+ * receipt, and runPendingSIEBankSweeps, on the same cron every minute, runs
+ * it for any import completed in the last 24 hours without one.
+ *
+ * Neither step throws.
+ */
+export async function finishCompletedSIEImport(
+  supabase: SupabaseClient,
+  job: SIEJob,
+  learning: FinalizeLearning,
+  deadline: number,
+  logger: Pick<typeof log, 'info' | 'error'> = log,
+): Promise<{ learned: boolean; swept: boolean }> {
+  let learned = false
+  let swept = false
+  if (learning.completed) {
+    const learnUntil = deadline + SIE_AFTER_COMPLETION_GRACE_MS
+    if (learnUntil - Date.now() < SIE_AFTER_COMPLETION_MIN_MS) {
+      logger.error('SIE import learning skipped: the run was out of time, and nothing runs it later', {
+        alert: true,
+        companyId: job.company_id,
+        importId: job.id,
+        vouchers: learning.vouchers?.length ?? 0,
+      })
+    } else {
+      await learnFromCompletedSIEImport(supabase,job,learning.vouchers ?? [],learnUntil)
+      learned = true
+    }
+  }
+  if (job.job_state === 'completed') {
+    if (deadline - Date.now() < SIE_AFTER_COMPLETION_MIN_MS) {
+      logger.info('post-import bank sweep left to the next cron run',{companyId:job.company_id,importId:job.id})
+    } else {
+      await sweepBankRowsAfterSIEImport(supabase,job)
+      swept = true
+    }
+  }
+  return {learned,swept}
+}
+
 /** after() is only a fast path. Cron owns recovery, independent of the browser. */
 export async function runSIEWorker(options: { importId?:string; budgetMs?:number; supabase?:SupabaseClient } = {}): Promise<{ jobs:number; chunks:number }> {
   if (!runsSIEJobs()) return {jobs:0,chunks:0}
@@ -351,13 +414,7 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
       if (isSIEJobUnresolved(job.job_state) && job.worker_id === worker) {
         await sieJobRPC(supabase,job,'yield_sie_import_job')
       }
-      // Issue #2835: the import is final here and its period hold is released,
-      // so bank rows can be matched against the new verifikat. Never throws;
-      // the receipt lets the cron finish a sweep this invocation cannot.
-      if (job.job_state === 'completed') await sweepBankRowsAfterSIEImport(supabase,job)
-      // Counterparty templates and suggested parties, once, by the invocation
-      // that completed the job (sie-import-learning.ts). Never throws.
-      if (learning.completed) await learnFromCompletedSIEImport(supabase,job,learning.vouchers ?? [])
+      await finishCompletedSIEImport(supabase,job,learning,deadline)
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
       log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})

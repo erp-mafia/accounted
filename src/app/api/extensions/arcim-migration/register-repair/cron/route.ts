@@ -8,13 +8,22 @@ import { runRegisterRepair } from '@/extensions/general/arcim-migration/lib/repa
 // Remove this route, its vercel.json entry and the progress table once every
 // company has an outcome.
 export const maxDuration = 300
-// The cutoff stops new reads, not the ones in flight, a company's listing or
-// its card writes, which can take more than a minute after it; a run the
-// platform ends at maxDuration saves no company it was still working on.
+// The cutoff ends the reading: no company is started and no register page or
+// detail batch is read after it. Card writes go on for a minute more
+// (WRITE_GRACE_MS in the lib) and then stop where they are, so every company
+// saves its cursor well inside maxDuration. Before the listing and the writes
+// had a deadline, 27 runs in 30 days were ended at the limit (2026-11) and
+// saved nothing for the companies they were working on.
 const RUN_BUDGET_MS = 150_000
 
 export const GET = withCronContext('cron.arcim_migration_register_repair', async (_request, ctx) => {
   const summary = await runRegisterRepair(createServiceClientNoCookies(), ctx.startedAt + RUN_BUDGET_MS)
   ctx.log.info('register repair run finished', summary)
+  // No company's progress could be saved: the run did no lasting work, so it
+  // answers as failed. One company's error is logged by the lib and the
+  // others' work stands.
+  if (summary.worked > 0 && summary.errors === summary.worked) {
+    throw new Error(`register repair saved no progress: ${summary.errors} of ${summary.worked} companies failed`)
+  }
   return NextResponse.json({ data: summary })
 }, { requireExtension: 'arcim-migration' })

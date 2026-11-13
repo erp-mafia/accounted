@@ -13,8 +13,13 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
   // absolute window, with headroom below the platform limit.
   const deadline = ctx.startedAt + RUN_BUDGET_MS
   const supabase = createServiceClientNoCookies()
-  const supplierCompletion = await runBokioSupplierCompletion(supabase, Math.min(deadline, Date.now() + 90_000)).catch(() => {
-    ctx.log.warn('Bokio supplier completion deferred')
+  const supplierCompletion = await runBokioSupplierCompletion(supabase, Math.min(deadline, Date.now() + 90_000)).catch((error: unknown) => {
+    // The whole pass failed before any company ran: its queue could not be
+    // read. This was a warning with no error in it, which reaches nobody.
+    // Out of time is the one deferral.
+    const reason = error instanceof Error ? error.message : String(error)
+    if (reason === 'MIGRATION_DEADLINE') ctx.log.warn('Bokio supplier completion deferred: out of time')
+    else ctx.log.error('Bokio supplier completion failed', error as Error, { code: (error as { code?: unknown } | null)?.code ?? reason })
     return { failed: true }
   })
   const summary = await runInvoiceCompletion(supabase, deadline)

@@ -34,6 +34,7 @@ import { createOAuthState, encryptToken, verifyOAuthState } from '../lib/crypto'
 import { googleDriveProvider } from '../lib/google-provider'
 import { dropboxProvider } from '../lib/dropbox-provider'
 import { CloudScopeMissingError } from '../lib/cloud-provider'
+import { scheduleRecordDb } from '../lib/__tests__/schedule-record'
 
 const BASE = 'https://test.local/api/extensions/ext/cloud-backup'
 
@@ -560,6 +561,8 @@ describe('schedule routes are per provider', () => {
   it('writes the schedule under the targeted provider key', async () => {
     const route = findRoute('PUT', '/schedule')
     const { ctx, store } = makeContext()
+    // No schedule record yet: the route creates it through the settings store.
+    Object.assign(ctx, { supabase: scheduleRecordDb(null).supabase })
 
     const res = await route.handler(
       makeRequest('/schedule?provider=dropbox', 'PUT', { enabled: true, hour_local: 4 }),

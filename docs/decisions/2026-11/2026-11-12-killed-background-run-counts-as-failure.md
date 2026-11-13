@@ -1,0 +1,1 @@
+[2026-11-12] A background run the platform ends mid-item (cloud backup, register import, underlag import) is counted as a failed attempt from the claim or lease it left, and stops at the existing cap with a visible state: it left no trace and was retried for good.

@@ -269,6 +269,18 @@ export async function completeInvoiceCompletionWork(
   result.deferred = [...pendingIds].filter(id => !confirmed.has(id) && !uncertain.has(id)).length
   result.uncertain = uncertain.size
   for (const receipt of confirmed.values()) addReceipt(result, receipt)
+  // An invoice's last allowed try: the database parked it for good
+  // (20261028042247) and it stays without rows. That was only a number in the
+  // run's info summary. One error per company and run, on the run that parks
+  // them: a parked invoice is never a candidate again, so it is said once.
+  const parked = [...confirmed].filter(([, receipt]) => receipt.gaveUp)
+  if (parked.length) {
+    const byReason: Record<string, number> = {}
+    for (const [, receipt] of parked) byReason[receipt.status] = (byReason[receipt.status] ?? 0) + 1
+    log.error('invoice lines given up on: the invoices stay without rows', {
+      ...fields, provider: work.provider, count: parked.length, byReason, invoiceIds: parked.slice(0, 20).map(([id]) => id),
+    })
+  }
   try {
     if (block) {
       const blocked = await rpc<boolean>(supabase, 'block_invoice_completion_work', {

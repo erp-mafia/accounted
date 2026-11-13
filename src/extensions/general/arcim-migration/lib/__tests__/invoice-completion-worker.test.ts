@@ -4,6 +4,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SalesInvoiceDto } from '@/lib/providers/dto'
 import { executionBudgetSignal } from '@/lib/http/execution-budget'
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn() }))
+const logError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: logError, child: (): unknown => logger }
+  return { ...actual, createLogger: () => logger }
+})
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchInvoiceCompletionDetail: vi.fn(), fetchInvoiceCompletionPage: vi.fn(),
@@ -160,6 +166,22 @@ describe('resumable invoice completion', () => {
     detail.mockResolvedValueOnce({ ...invoice('1'), lines: [] })
     expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000))
       .toMatchObject({ providerEmpty: 1, gaveUp: 1, completed: 1 })
+  })
+  it('reports a parked invoice as an error, once, with its reason: the count alone reached nobody', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work); db.state.gaveUp = true
+    detail.mockResolvedValueOnce({ ...invoice('1'), lines: [] })
+    logError.mockClear()
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('invoice lines given up on: the invoices stay without rows', expect.objectContaining({
+      companyId: work.company_id, provider: 'fortnox', count: 1, byReason: { provider_empty: 1 }, invoiceIds: [rows[0].id],
+    }))
+  })
+  it('reports nothing for a run that parked no invoice', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    logError.mockClear()
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(logError).not.toHaveBeenCalled()
   })
   it('reports a concurrent winner without counting it as this run\'s completion', async () => {
     const { work, rows } = fixture(); const db = database(rows.slice(0, 1), work); db.state.concurrent = true

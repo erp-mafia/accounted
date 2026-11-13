@@ -1,0 +1,1 @@
+[2026-11-12] Cloud backup: one run per destination (claim on the schedule record; Synka nu answers 'pågår redan' meanwhile), and the card warns when automatic backup is on but nothing was saved for 48 hours: the last 'lyckades' stayed up while every later run died.
