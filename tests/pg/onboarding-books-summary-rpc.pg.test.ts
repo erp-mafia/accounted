@@ -1,6 +1,8 @@
 /**
  * pg-real test for get_onboarding_books_summary (migration 20260920215406,
- * balances from the ingående balans on since 20261112181800).
+ * balances from the ingående balans on since 20261112181800, read from
+ * ledger_account_days since 20261113050911 once the company's summaries are
+ * built; the line path stays for a company whose summaries are not).
  *
  * The RPC is the SQL side of loadBooksFindings (lib/onboarding/findings.ts):
  * latest-period revenue and result plus the 26xx and 1630 balances, summed
@@ -29,6 +31,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import { getPool, withUserContext } from './setup'
 import {
   insertAuthUser,
@@ -79,10 +82,12 @@ async function insertJournalEntry(params: Ctx & {
   misdated?: boolean
   /** 'opening_balance' for an ingående balans; a manual verifikat otherwise. */
   sourceType?: 'manual' | 'opening_balance'
+  /** Write on this connection (the ledger summaries keep one slot per backend); a pooled one otherwise. */
+  client?: PoolClient
 }): Promise<string> {
   const id = randomUUID()
   const status = params.status ?? 'posted'
-  const client = await getPool().connect()
+  const client = params.client ?? await getPool().connect()
   // Insert directly, bypassing commit_journal_entry's voucher sequencing:
   // fine for a read-side RPC that only aggregates lines.
   try {
@@ -119,7 +124,7 @@ async function insertJournalEntry(params: Ctx & {
     await client.query('ROLLBACK').catch(() => {})
     throw error
   } finally {
-    client.release()
+    if (!params.client) client.release()
   }
 }
 
@@ -434,6 +439,116 @@ describe('get_onboarding_books_summary', () => {
       skattekonto_account: '1630',
       ledger_skattekonto: 0,
     })
+  })
+
+  it('reads the same summary from the ledger summaries as from the lines', async () => {
+    // A new company's summaries are built at once, so every case above runs
+    // the summary path (20261113050911). This one also runs the line path, by
+    // taking the company off ledger_account_days_companies, and compares:
+    // IB years, a draft, a reversed sale with its storno and a VAT account no
+    // ingående balans names.
+    const ctx = await seedCompany()
+    const fp2025 = await period(ctx, 2025)
+    const fp2026 = await period(ctx, 2026)
+    for (const [fp, date, ib1630, ib2650] of [[fp2025, '2025-01-01', 3000, 1200], [fp2026, '2026-01-01', 2500, 2200]] as const) {
+      await insertJournalEntry({
+        ...ctx, fiscalPeriodId: fp, entryDate: date, sourceType: 'opening_balance',
+        lines: [
+          { account: '1630', debit: ib1630, credit: 0 },
+          { account: '2650', debit: 0, credit: ib2650 },
+          { account: '2099', debit: 0, credit: ib1630 - ib2650 },
+        ],
+      })
+    }
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2025, entryDate: '2025-05-02', lines: sale(4000) })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-02-10', lines: sale(800) })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-03-10', status: 'draft', lines: sale(5000) })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-04-01', status: 'reversed', lines: sale(300) })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-04-02',
+      lines: sale(300).map((l) => ({ account: l.account, debit: l.credit, credit: l.debit })),
+    })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-05-01',
+      lines: [
+        { account: '6110', debit: 400, credit: 0 },
+        { account: '2641', debit: 100, credit: 0 },
+        { account: '1930', debit: 0, credit: 500 },
+      ],
+    })
+
+    const fromSummaries = await callRpc(ctx.companyId)
+    expect(fromSummaries).toEqual({
+      period_name: '2026',
+      revenue: 800, // the reversed sale and its storno net to zero; the draft never counts
+      result: 400,
+      vat_balance: 3300, // 2650 from its 2026 IB: 2 200; 2611 all history: 1 200; 2641: -100
+      ledger_1630: 2500, // from the 2026 IB on
+      skattekonto_account: '1630',
+      ledger_skattekonto: 2500,
+    })
+
+    const { rows: listed } = await getPool().query(`SELECT 1 FROM public.ledger_account_days_companies WHERE company_id = $1`, [ctx.companyId])
+    expect(listed).toHaveLength(1)
+    await getPool().query(`DELETE FROM public.ledger_account_days_companies WHERE company_id = $1`, [ctx.companyId])
+    try {
+      expect(await callRpc(ctx.companyId)).toEqual(fromSummaries)
+    } finally {
+      await getPool().query(`INSERT INTO public.ledger_account_days_companies (company_id) VALUES ($1) ON CONFLICT DO NOTHING`, [ctx.companyId])
+    }
+  })
+
+  it('a year emptied on another connection has no entries before the summaries are compacted', async () => {
+    // ledger_account_days keeps one row per writer slot (the backend) until
+    // compact_ledger_account_days folds them. A verifikat posted on one
+    // connection and deleted on another, as reset_fiscal_year and
+    // delete_last_voucher do, leaves a +1 and a -1 row for each of its days.
+    // The year it emptied must not be taken for the latest year with entries.
+    const ctx = await seedCompany()
+    const fp2025 = await period(ctx, 2025)
+    const fp2026 = await period(ctx, 2026)
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2025, entryDate: '2025-05-02', lines: sale(4000) })
+
+    const poster = await getPool().connect()
+    const remover = await getPool().connect()
+    try {
+      const id = await insertJournalEntry({ ...ctx, fiscalPeriodId: fp2026, entryDate: '2026-02-10', lines: sale(800), client: poster })
+      await remover.query('BEGIN')
+      await remover.query(`SELECT set_config('gnubok.allow_delete', 'true', true)`)
+      await remover.query('DELETE FROM public.journal_entries WHERE id = $1', [id])
+      await remover.query('COMMIT')
+    } catch (error) {
+      await remover.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      poster.release()
+      remover.release()
+    }
+
+    // Two connections, two slots: the removal is a negative row beside the
+    // positive one, not a change to it.
+    const { rows: split } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.ledger_account_days WHERE company_id = $1 AND line_count < 0`,
+      [ctx.companyId],
+    )
+    expect(split[0].n).toBeGreaterThan(0)
+
+    const expected: Summary = {
+      period_name: '2025',
+      revenue: 4000,
+      result: 4000,
+      vat_balance: 1000, // 2611: 1 000 from 2025; the 2026 sale's 200 came and went
+      ledger_1630: 0,
+      skattekonto_account: '1630',
+      ledger_skattekonto: 0,
+    }
+    expect(await callRpc(ctx.companyId)).toEqual(expected)
+    await getPool().query(`DELETE FROM public.ledger_account_days_companies WHERE company_id = $1`, [ctx.companyId])
+    try {
+      expect(await callRpc(ctx.companyId)).toEqual(expected)
+    } finally {
+      await getPool().query(`INSERT INTO public.ledger_account_days_companies (company_id) VALUES ($1) ON CONFLICT DO NOTHING`, [ctx.companyId])
+    }
   })
 
   it('SECURITY INVOKER: member sees the books, a stranger an empty summary, anon nothing', async () => {
