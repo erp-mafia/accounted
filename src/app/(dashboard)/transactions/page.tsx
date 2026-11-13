@@ -2407,7 +2407,13 @@ export default function TransactionsPage() {
           })
         }
         setProcessingId(null)
-        return { ok: false, journalEntryId: null }
+        // The batch toast names why its failed rows were refused (for #206):
+        // a silent row has no toast of its own to say it.
+        return {
+          ok: false,
+          journalEntryId: null,
+          failureReason: getErrorMessage(result, { context: 'transaction', statusCode: response.status, locale: errorLocale }),
+        }
       }
 
       finishBooking({
@@ -2427,7 +2433,7 @@ export default function TransactionsPage() {
         toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
       }
       setProcessingId(null)
-      return { ok: false, journalEntryId: null }
+      return { ok: false, journalEntryId: null, failureReason: t('booking_failed_description') }
     }
   }
 
@@ -4189,12 +4195,19 @@ export default function TransactionsPage() {
               failed: tally.failedCount,
             })
           : t('batch_categorize_done_description', { count: tally.successCount })
+      // Why the failed rows were refused, one sentence per reason with its
+      // row count (for #206): "2 misslyckades" alone left nothing to act on.
+      const details = [
+        ...tally.failureReasons.map((group) =>
+          t('batch_categorize_failed_reason', { count: group.count, reason: group.reason }),
+        ),
+        ...(tally.deferredCount > 0
+          ? [t('batch_categorize_duplicates_held_back', { count: tally.deferredCount })]
+          : []),
+      ]
       toast({
         title: t('batch_partial_title'),
-        description:
-          tally.deferredCount > 0
-            ? `${booked}. ${t('batch_categorize_duplicates_held_back', { count: tally.deferredCount })}`
-            : booked,
+        description: details.length > 0 ? `${booked}. ${details.join(' ')}` : booked,
         ...(tally.failedCount > 0 ? { variant: 'destructive' as const } : {}),
         action: undoAllAction,
       })

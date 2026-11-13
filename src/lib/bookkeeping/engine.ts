@@ -6,6 +6,7 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { lineBalance, storedLineValues } from './line-balance'
 import { withBankLegCurrency } from './bank-booking-context'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from './cash-account-busy'
 import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   AccountsNotInChartError,
@@ -340,6 +341,23 @@ function buildLineInserts(
 }
 
 /**
+ * Insert a draft's lines. The row trigger on journal_entry_lines
+ * (lock_cash_history_for_journal_line) observes the company with FOR SHARE
+ * NOWAIT, so it refuses with CASH_ACCOUNT_OPERATION_BUSY for as long as
+ * another booking of the same company is being numbered: a batch of parallel
+ * bookings met itself here (for #206). The insert is one statement, so a
+ * refused attempt wrote no line and the draft is exactly what it was; the
+ * same insert is tried again on the shared bounded waits (cash-account-busy.ts)
+ * and the last refusal is returned when they run out.
+ */
+function insertEntryLines(supabase: SupabaseClient, lineInserts: ReturnType<typeof buildLineInserts>) {
+  return retryWhileCashAccountBusy(
+    async () => await supabase.from('journal_entry_lines').insert(lineInserts),
+    (outcome) => isCashAccountBusy(outcome.error),
+  )
+}
+
+/**
  * Options for posting paths whose line bags are not new user input.
  */
 export interface CreateEntryOptions {
@@ -546,9 +564,7 @@ export async function createDraftEntry(
   // Insert journal entry lines with dimensions
   const lineInserts = buildLineInserts(entry.id, lines, accountIdMap)
 
-  const { error: linesError } = await supabase
-    .from('journal_entry_lines')
-    .insert(lineInserts)
+  const { error: linesError } = await insertEntryLines(supabase, lineInserts)
 
   if (linesError) {
     logWriteFailure('insert journal_entry_lines failed', linesError, {
@@ -720,9 +736,9 @@ export async function updateDraftEntry(
   }
 
   const lineInserts = buildLineInserts(entryId, lines, accountIdMap)
-  const { error: linesError } = await supabase
-    .from('journal_entry_lines')
-    .insert(lineInserts)
+  // The old lines are already deleted: a busy refusal that was not tried
+  // again would leave the draft without lines.
+  const { error: linesError } = await insertEntryLines(supabase, lineInserts)
 
   if (linesError) {
     logWriteFailure('update draft: insert journal_entry_lines failed', linesError, {

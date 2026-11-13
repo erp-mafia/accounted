@@ -9952,6 +9952,7 @@
     "batch_partial_title": "Delvis klart",
     "batch_categorize_done_description": "{count, plural, one {1 transaktion bokförd} other {# transaktioner bokförda}}",
     "batch_categorize_partial_description": "{success, plural, one {1 transaktion bokförd} other {# transaktioner bokförda}}, {failed} misslyckades",
+    "batch_categorize_failed_reason": "{count, plural, one {1 transaktion} other {# transaktioner}}: {reason}",
     "batch_categorize_duplicates_held_back": "{count, plural, one {1 transaktion hölls tillbaka som möjlig dubblett och är kvar i listan.} other {# transaktioner hölls tillbaka som möjliga dubbletter och är kvar i listan.}}",
     "batch_undo_all": "Ångra alla",
     "batch_undo_all_alt": "Ångra alla bokförda transaktioner",
