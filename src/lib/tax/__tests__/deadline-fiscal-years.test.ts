@@ -484,7 +484,12 @@ describe('backfillMissingTaxDeadlines: rows for obligations that never existed',
         Promise.resolve({ data: [], error: null }).then(resolve)
       return chain
     })
-    return { supabase: { from } as unknown as SupabaseClient, inserts }
+    // The replacement of a company's set (replace_system_tax_deadlines).
+    const rpc = vi.fn(async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
+      if (args.p_rows.length > 0) inserts.push(args.p_rows)
+      return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
+    })
+    return { supabase: { from, rpc } as unknown as SupabaseClient, inserts }
   }
 
   beforeEach(() => {

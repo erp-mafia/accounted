@@ -56,6 +56,7 @@ export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
 export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
 export const UNATTENDED_COMMIT_LIMIT_EXCEEDED = 'UNATTENDED_COMMIT_LIMIT_EXCEEDED' as const
 export const BOOKING_REVIEW_REQUIRED = 'BOOKING_REVIEW_REQUIRED' as const
+export const ACCRUAL_DRAFT_POSTED_BY_SCHEDULE = 'ACCRUAL_DRAFT_POSTED_BY_SCHEDULE' as const
 export const BOOKING_REVIEW_LIMIT = 'BOOKING_REVIEW_LIMIT' as const
 
 // ============================================================================
@@ -936,6 +937,26 @@ export class UnattendedCommitLimitExceededError extends Error {
 }
 
 /**
+ * A periodisering draft (source_type 'accrual') handed to a generic commit:
+ * the dashboard's, the v1 API's, an agent's. Such a verifikat is posted only
+ * by the periodisering itself, in the transaction that marks the month (or
+ * the rest of the schedule) it books (commit_accrual_installment,
+ * commit_accrual_dissolution). A draft a killed run left behind, posted from
+ * here, would be a verifikat no month points at, and the posting run would
+ * book the month again: the interim account dissolved twice. Nothing is
+ * posted and no number is drawn; the next posting run books the month and
+ * cancels the draft.
+ */
+export class AccrualDraftPostedByScheduleError extends Error {
+  readonly code = ACCRUAL_DRAFT_POSTED_BY_SCHEDULE
+  /** The draft, when one exists: createJournalEntry and createJournalEntries refuse before drafting. */
+  constructor(public readonly journalEntryId: string | null = null) {
+    super('A periodisering verifikat is posted by its schedule, together with the month it books')
+    this.name = 'AccrualDraftPostedByScheduleError'
+  }
+}
+
+/**
  * A booking a booking review rule matches (booking_review_rules, accounted#130
  * step 2) that was about to be posted without a person's review: by a key,
  * an agent, a grant, cron, a bulk path or a one click. commit_journal_entry
@@ -996,6 +1017,10 @@ export type BookkeepingOperation =
   | 'fetch_asset_component_replacement_entry'
   | 'commit_asset_value_adjustment'
   | 'fetch_asset_value_adjustment_entry'
+  | 'commit_accrual_installment'
+  | 'fetch_accrual_installment_entry'
+  | 'commit_accrual_dissolution'
+  | 'fetch_accrual_dissolution_entry'
   | 'commit_deferred_tax'
   | 'fetch_deferred_tax_entry'
   | 'commit_contract_revenue'
@@ -1102,6 +1127,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof TransactionMissingSekValueError ||
     err instanceof UnattendedCommitLimitExceededError ||
     err instanceof BookingReviewRequiredError ||
+    err instanceof AccrualDraftPostedByScheduleError ||
     err instanceof BookingReviewLimitError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||

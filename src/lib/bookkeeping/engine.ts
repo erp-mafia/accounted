@@ -36,6 +36,7 @@ import {
   JournalLineBothSidesNonZeroError,
   JournalEntryNotFoundError,
   UnattendedCommitLimitExceededError,
+  AccrualDraftPostedByScheduleError,
   valueAdjustmentBlockFromRpc,
   type BookkeepingOperation,
 } from '@/lib/bookkeeping/errors'
@@ -887,8 +888,47 @@ export async function cancelDraftEntry(
  * be lost between the commit and the emit. The emit below still drives the
  * webhook fan-out and extension handlers; the event-log handler's own write
  * for this entry hits the same dedupe_key and is a no-op.
+ *
+ * The generic commit of an existing draft, the one every door that commits a
+ * draft by id goes through (the dashboard, the v1 API and so MCP, and the
+ * producers that draft and commit through the posting port). A periodisering
+ * draft (source_type 'accrual') is refused here: it is posted only by its
+ * schedule, through commitAccrualInstallment or commitAccrualDissolution,
+ * which mark the month it books in the same transaction. Committed from here,
+ * a draft a killed accrual run left behind would be a verifikat no month
+ * points at, and the next run would book the month again.
  */
 export async function commitEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string,
+  commitMethod?: string,
+  rubricVersion?: string
+): Promise<JournalEntry> {
+  const { data: header, error: headerError } = await supabase
+    .from('journal_entries')
+    .select('source_type')
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (headerError) {
+    throw new BookkeepingDatabaseError('commit_entry', headerError.message, headerError.code)
+  }
+  // A draft that is not found falls through: the RPC answers it as it always has.
+  if ((header as { source_type?: string | null } | null)?.source_type === 'accrual') {
+    throw new AccrualDraftPostedByScheduleError(entryId)
+  }
+  return postDraftEntry(supabase, companyId, userId, entryId, commitMethod, rubricVersion)
+}
+
+/**
+ * The commit itself, for a draft whose source type is already known to be
+ * allowed: commitEntry's after its check, createJournalEntry's for the draft
+ * it just made, and the accrual doors' when the database does not have their
+ * function yet. Not exported: no other code may skip commitEntry's check.
+ */
+async function postDraftEntry(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
@@ -1746,6 +1786,185 @@ export async function commitContractRevenue(
   return { entry }
 }
 
+/** What an accrual commit did with the draft it was handed. */
+export type AccrualCommit =
+  /** The verifikat is posted and the month (or months) point at it. */
+  | { outcome: 'posted'; entry: JournalEntry }
+  /** Nothing was waiting for this draft any more; it is cancelled, no number drawn. */
+  | { outcome: 'not_pending' }
+  /**
+   * The database does not have the function yet (PGRST202): the verifikat is
+   * posted the way it was before the function, and the month (or months) are
+   * the caller's to claim, in a second statement.
+   */
+  | { outcome: 'posted_unclaimed'; entry: JournalEntry }
+
+/**
+ * PostgREST's answer for a function its schema cache does not hold: the
+ * migration has not run yet. Only this code means "not deployed". 42883 is
+ * also what Postgres raises for any function or operator it cannot resolve
+ * inside the body or a trigger it fires, which is a failure, not a missing
+ * deploy, and is treated as one.
+ */
+const FUNCTION_NOT_DEPLOYED_CODE = 'PGRST202'
+
+/** The accrual functions whose absence was already reported by this process. */
+const reportedMissingAccrualFunctions = new Set<string>()
+
+type AccrualCommitFunction = 'commit_accrual_installment' | 'commit_accrual_dissolution'
+
+/**
+ * Commit an accrual draft through one of the two functions that post the
+ * verifikat and mark what it dissolves in one database transaction. Shared
+ * by commitAccrualInstallment and commitAccrualDissolution: the same
+ * unattended ceiling, the same draft cleanup, the same answers.
+ */
+async function commitAccrualDraft(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draftId: string,
+  fn: AccrualCommitFunction,
+  subject: { entityType: string; entityId: string; params: Record<string, unknown> },
+): Promise<AccrualCommit> {
+  const actor = getActor()
+
+  const overCeiling = await entryUnattendedCeilingRefusal(supabase, draftId, actor)
+  if (overCeiling) {
+    await cancelRefusedSqlDraft(supabase, companyId, draftId, fn)
+    throw overCeiling
+  }
+
+  const { data, error } = await supabase.rpc(fn, {
+    p_company_id: companyId,
+    ...subject.params,
+    p_entry_id: draftId,
+    p_commit_method: defaultCommitMethod(actor),
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    if (pgCode === FUNCTION_NOT_DEPLOYED_CODE) {
+      // Posted the old way, which is not safe against a second run. That is
+      // acceptable for the minutes between a deploy and its migration and not
+      // a day longer, so it is an error, said once per process: a fallback
+      // that keeps happening must be seen.
+      if (!reportedMissingAccrualFunctions.has(fn)) {
+        reportedMissingAccrualFunctions.add(fn)
+        log.error(`${fn} is not in the database; posting falls back to separate statements`, error, {
+          operation: fn,
+          companyId,
+          pgCode,
+        })
+      }
+      // The accrual door's own commit: the one path besides the functions
+      // that may post a periodisering draft (commitEntry refuses it).
+      try {
+        const entry = await postDraftEntry(supabase, companyId, userId, draftId)
+        return { outcome: 'posted_unclaimed', entry }
+      } catch (commitError) {
+        // The commit is atomic: the draft is still a draft and has no number.
+        await cancelRefusedSqlDraft(supabase, companyId, draftId, fn)
+        throw commitError
+      }
+    }
+    // One transaction, so on any error the draft is still a draft.
+    await cancelRefusedSqlDraft(supabase, companyId, draftId, fn)
+    log.error(`${fn} RPC failed`, error, {
+      operation: fn,
+      companyId,
+      userId,
+      entityType: subject.entityType,
+      entityId: subject.entityId,
+      journalEntryId: draftId,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError(fn, error.message, error.code)
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as { outcome?: string } | null | undefined
+  if (row?.outcome === 'not_pending') {
+    await cancelRefusedSqlDraft(supabase, companyId, draftId, fn)
+    return { outcome: 'not_pending' }
+  }
+  if (row?.outcome !== 'posted') {
+    throw new BookkeepingDatabaseError(fn, 'RPC returned no outcome for an accrual draft')
+  }
+
+  const entry = await reloadCommittedSqlEntry(supabase, companyId, userId, draftId, {
+    operation: fn,
+    fetchOperation: fn === 'commit_accrual_installment' ? 'fetch_accrual_installment_entry' : 'fetch_accrual_dissolution_entry',
+    what: fn === 'commit_accrual_installment' ? 'accrual installment' : 'accrual dissolution',
+  })
+  return { outcome: 'posted', entry }
+}
+
+/**
+ * Commit a periodisering month's draft: the verifikat AND the month's row
+ * (accrual_schedule_installments pending to posted) in one database
+ * transaction (commit_accrual_installment, which delegates numbering to
+ * commit_journal_entry and holds the month's row lock). The old shape
+ * committed the verifikat and flipped the month in a second statement, so a
+ * run killed in between booked the month again the next day, and two
+ * overlapping runs both posted.
+ *
+ * A month that is no longer waiting (another run posted it, a credit
+ * cancelled it, a re-plan removed it) is an answer, not an error: the draft,
+ * which has no voucher number, is cancelled and nothing is posted. Any other
+ * refusal leaves the draft cancelled too and throws.
+ *
+ * `posted_unclaimed` is the window right after a deploy, before the
+ * migration has run: the verifikat is posted the way it was before, and the
+ * caller claims the month in a second statement. It is reported as an
+ * error.
+ */
+export async function commitAccrualInstallment(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id'>,
+  installmentId: string,
+): Promise<AccrualCommit> {
+  return commitAccrualDraft(supabase, companyId, userId, draft.id, 'commit_accrual_installment', {
+    entityType: 'accrual_schedule_installment',
+    entityId: installmentId,
+    params: { p_installment_id: installmentId },
+  })
+}
+
+/** The schedule a combined dissolution closes, and the pending months its draft was added up from. */
+export interface AccrualDissolutionLink {
+  scheduleId: string
+  installmentIds: string[]
+}
+
+/**
+ * Commit the one verifikat that dissolves the rest of a periodisering
+ * ("lös upp resten nu"): the verifikat, every pending month of the schedule
+ * and the schedule's completion in one database transaction
+ * (commit_accrual_dissolution, migration 20261112181809). The months are the
+ * ones the draft's amount was added up from: when the schedule's pending
+ * months are no longer exactly those (the posting run booked one, a credit
+ * cancelled them, a re-plan replaced them) the answer is `not_pending`, the
+ * draft is cancelled and nothing is posted, so the caller can start again
+ * from what is pending now. Otherwise as commitAccrualInstallment.
+ */
+export async function commitAccrualDissolution(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  draft: Pick<JournalEntry, 'id'>,
+  link: AccrualDissolutionLink,
+): Promise<AccrualCommit> {
+  return commitAccrualDraft(supabase, companyId, userId, draft.id, 'commit_accrual_dissolution', {
+    entityType: 'accrual_schedule',
+    entityId: link.scheduleId,
+    params: { p_schedule_id: link.scheduleId, p_installment_ids: link.installmentIds },
+  })
+}
+
 export interface K3TransitionPostingInput {
   /** The retained-result account the adjustments are booked against (35.11). */
   equityAccount: string
@@ -1811,7 +2030,7 @@ export async function commitK3Transition(
  * The voucher number is only assigned after lines are successfully inserted,
  * preventing gaps in the voucher sequence (BFL 5 kap. 7§).
  *
- * If commitEntry fails (e.g. balance trigger rejection, period lock, RPC error),
+ * If the commit fails (e.g. balance trigger rejection, period lock, RPC error),
  * the orphan draft is cancelled so callers don't leave an undeletable stuck draft.
  * The commit RPC is atomic: no voucher number is burned on failure.
  */
@@ -1827,9 +2046,16 @@ export async function createJournalEntry(
   // The commit refuses it too; asked first so no draft is written for a
   // verifikat an API key may not post unattended.
   assertLinesWithinUnattendedCeiling(input.lines)
+  // A periodisering verifikat is posted only by its schedule, with the month
+  // it books (commitAccrualInstallment, commitAccrualDissolution): refused
+  // before any write, as commitEntry refuses such a draft.
+  if (input.source_type === 'accrual') {
+    throw new AccrualDraftPostedByScheduleError()
+  }
   const draft = await createDraftEntry(supabase, companyId, userId, input, options)
   try {
-    return await commitEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
+    // The draft was made here from this input: its source type is checked above.
+    return await postDraftEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
   } catch (commitError) {
     // CAS guard: only cancel if still in draft. If the RPC actually posted
     // before failing downstream, immutability trigger blocks draft→cancelled

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  commitAccrualDissolution,
+  commitAccrualInstallment,
   commitAssetComponentReplacement,
   commitAssetValueAdjustment,
   commitContractRevenue,
@@ -137,6 +139,10 @@ function sqlPostingDoor(fn: SqlPostingFunction): SqlPostingDoors[SqlPostingFunct
       return commitContractRevenue
     case 'commit_k3_transition':
       return commitK3Transition
+    case 'commit_accrual_installment':
+      return commitAccrualInstallment
+    case 'commit_accrual_dissolution':
+      return commitAccrualDissolution
     case 'book_counterparty_setoff':
       return commitCounterpartySetoff
     default: {

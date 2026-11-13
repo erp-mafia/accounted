@@ -16,7 +16,7 @@ const { checkReminderBank } = await import('../bank')
 const { dispatchReminder } = await import('../dispatch')
 const { hasCapability } = await import('@/lib/entitlements/has-capability')
 const { createFakeReminderChannel } = await import('../channels/fake')
-const { gatherReminderBatch, stageReminderBatch, runReminderBatchCron } = await import('../gather')
+const { gatherReminderBatch, stageReminderBatch, runReminderBatchCron, reminderBatchStartIndex } = await import('../gather')
 
 // 2026-12-17 at noon in Stockholm: level 1 of an invoice due 2026-12-02 (15 days) is due today.
 const NOW = new Date('2026-12-17T11:00:00Z')
@@ -305,6 +305,25 @@ describe('stageReminderBatch with automatic sending on', () => {
     const outcome = await stageReminderBatch(mock.supabase as unknown as SupabaseClient, { companyId: COMPANY, now: NOW, automatic: automatic() })
     expect(outcome).toEqual({ status: 'staged', operationId: 'op-1', items: 2, excluded: 2, sent: 0 })
   })
+
+  it('past the run deadline starts no reminder and stages none of them for approval: they stay due for the next run', async () => {
+    const mock = world({ pending_operations: [{ data: [] }, { data: [] }, { data: { id: 'op-1' } }] })
+    const onDeferred = vi.fn()
+
+    const outcome = await stageReminderBatch(mock.supabase as unknown as SupabaseClient, {
+      companyId: COMPANY,
+      now: NOW,
+      automatic: { ...automatic(), deadline: Date.now() - 1, onDeferred },
+    })
+
+    expect(dispatchReminder).not.toHaveBeenCalled()
+    expect(onDeferred).toHaveBeenCalledWith(1)
+    // Only the uncertain one waits for a person, as on any day: the sure one
+    // was not handed to approval just because the run was short of time.
+    expect(outcome).toEqual({ status: 'staged', operationId: 'op-1', items: 1, excluded: 2, sent: 0 })
+    const [row] = mock.payloads('pending_operations', 'insert') as Array<{ params: { items: Array<{ invoice_id: string }> } }>
+    expect(row!.params.items.map((item) => item.invoice_id)).toEqual([ids.stale])
+  })
 })
 
 describe('runReminderBatchCron', () => {
@@ -429,6 +448,127 @@ describe('runReminderBatchCron', () => {
       mock.setTable(COMPANIES, { data: [company(COMPANY, { by: 'admin-1' })] })
       expect(await run(mock)).toMatchObject({ sentAutomatically: 0, automaticHeld: 1, staged: 1 })
       expect(dispatchReminder).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('inside a time budget', () => {
+    const COMPANY_IDS = ['company-a', 'company-b', 'company-c', 'company-d', 'company-e']
+    function fiveCompanies() {
+      return createTableMockSupabase({
+        [COMPANIES]: { data: COMPANY_IDS.map((id) => company(id)) },
+        company_settings: { data: SETTINGS },
+        [CANDIDATES]: { data: [] },
+        pending_operations: { data: [] },
+      })
+    }
+    const visited = (mock: ReturnType<typeof fiveCompanies>) =>
+      mock.findCalls(CANDIDATES, 'rpc').map(([args]) => (args as { p_company_id: string }).p_company_id)
+
+    it('visits every company, starting where the day falls and wrapping around', async () => {
+      const mock = fiveCompanies()
+      const summary = await runReminderBatchCron({ db: mock.supabase as unknown as SupabaseClient, now: () => NOW, sendingEnabled: true, log: quiet() as never })
+
+      const start = reminderBatchStartIndex(COMPANY_IDS.length, NOW)
+      expect(visited(mock)).toEqual([...COMPANY_IDS.slice(start), ...COMPANY_IDS.slice(0, start)])
+      expect(summary).toMatchObject({ companies: 5, empty: 5, notReached: 0, automaticDeferred: 0 })
+    })
+
+    it('the start moves from day to day, so a run cut short does not leave the same companies every time', () => {
+      const day = (n: number) => new Date(NOW.getTime() + n * 86_400_000)
+      const starts = Array.from({ length: 10 }, (_, n) => reminderBatchStartIndex(100, day(n)))
+      // No two consecutive days begin within a tenth of the list of each other,
+      // and ten days begin in ten different places.
+      for (let n = 1; n < starts.length; n++) {
+        const gap = Math.abs(starts[n]! - starts[n - 1]!)
+        expect(Math.min(gap, 100 - gap)).toBeGreaterThan(10)
+      }
+      expect(new Set(starts).size).toBe(10)
+      // Later the same day: the same order, so a second run walks past what the first did.
+      expect(reminderBatchStartIndex(100, new Date(NOW.getTime() + 3_600_000))).toBe(starts[0])
+      expect(reminderBatchStartIndex(1, NOW)).toBe(0)
+      expect(reminderBatchStartIndex(0, NOW)).toBe(0)
+    })
+
+    it('starts no company after the deadline, counts the ones left and reports them as an error', async () => {
+      const mock = fiveCompanies()
+      const log = quiet()
+      // The second company's read takes the run past its deadline.
+      const clock = vi.spyOn(Date, 'now')
+      const began = Date.now()
+      let reads = 0
+      mock.setTable(CANDIDATES, () => {
+        reads += 1
+        if (reads === 2) clock.mockReturnValue(began + 10_000)
+        return { data: [] }
+      })
+
+      const summary = await runReminderBatchCron({
+        db: mock.supabase as unknown as SupabaseClient,
+        now: () => NOW,
+        sendingEnabled: true,
+        log: log as never,
+        deadline: began + 5_000,
+      })
+      clock.mockRestore()
+
+      expect(visited(mock)).toHaveLength(2)
+      expect(summary).toMatchObject({ companies: 5, empty: 2, notReached: 3, failed: 0 })
+      // Nothing was written for the three left: the next run simply visits them.
+      expect(mock.payloads('pending_operations', 'insert')).toEqual([])
+      expect(log.error).toHaveBeenCalledWith(
+        expect.stringContaining('stopped at its time budget'),
+        expect.any(Error),
+        { notReached: 3, automaticDeferred: 0, companies: 5 },
+      )
+    })
+
+    it('says nothing when the run finished in time', async () => {
+      const mock = fiveCompanies()
+      const log = quiet()
+      await runReminderBatchCron({
+        db: mock.supabase as unknown as SupabaseClient,
+        now: () => NOW,
+        sendingEnabled: true,
+        log: log as never,
+        deadline: Date.now() + 60_000,
+      })
+      expect(log.error).not.toHaveBeenCalled()
+    })
+
+    it('counts the automatic reminders a company could not start in time', async () => {
+      const mock = createTableMockSupabase({
+        [COMPANIES]: { data: [company(COMPANY, { by: 'admin-1' })] },
+        company_settings: { data: SETTINGS },
+        [CANDIDATES]: { data: [{ id: ids.due }] },
+        company_members: { data: [{ user_id: 'owner-1', role: 'owner' }] },
+        pending_operations: { data: [] },
+      })
+      const log = quiet()
+      // In time when the company starts, out of time when its first reminder would.
+      const clock = vi.spyOn(Date, 'now')
+      const began = Date.now()
+      vi.mocked(hasCapability).mockImplementation(async () => {
+        clock.mockReturnValue(began + 10_000)
+        return true
+      })
+
+      const summary = await runReminderBatchCron({
+        db: mock.supabase as unknown as SupabaseClient,
+        now: () => NOW,
+        sendingEnabled: true,
+        channel: createFakeReminderChannel(),
+        log: log as never,
+        deadline: began + 5_000,
+      })
+      clock.mockRestore()
+
+      expect(dispatchReminder).not.toHaveBeenCalled()
+      expect(summary).toMatchObject({ sentAutomatically: 0, automaticDeferred: 1, notReached: 0 })
+      expect(log.error).toHaveBeenCalledWith(
+        expect.stringContaining('stopped at its time budget'),
+        expect.any(Error),
+        expect.objectContaining({ automaticDeferred: 1 }),
+      )
     })
   })
 

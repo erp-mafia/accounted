@@ -3,7 +3,7 @@
     "name": "a förutbetald kostnad created: January on the posting floor, February and March on the first of the month",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -31,7 +31,18 @@
         }
       ],
       [
-        "createJournalEntry",
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      [
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -59,7 +70,18 @@
         }
       ],
       [
-        "createJournalEntry",
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-2"
+        },
+        "00000000-0000-4000-8000-000000000002"
+      ],
+      [
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -85,6 +107,17 @@
             }
           ]
         }
+      ],
+      [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-3"
+        },
+        "00000000-0000-4000-8000-000000000003"
       ]
     ]
   },
@@ -92,7 +125,7 @@
     "name": "an upplupen kostnad created: each month on its last day, before the invoice",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -120,7 +153,18 @@
         }
       ],
       [
-        "createJournalEntry",
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      [
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -146,6 +190,17 @@
             }
           ]
         }
+      ],
+      [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-2"
+        },
+        "00000000-0000-4000-8000-000000000002"
       ]
     ]
   },
@@ -153,7 +208,7 @@
     "name": "a förutbetald intäkt created on a project: its bag on both lines",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -187,7 +242,18 @@
         }
       ],
       [
-        "createJournalEntry",
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      [
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -219,14 +285,25 @@
             }
           ]
         }
+      ],
+      [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-2"
+        },
+        "00000000-0000-4000-8000-000000000002"
       ]
     ]
   },
   {
-    "name": "the cron posts a month a concurrent runner claimed first: the duplicate stornoed as the schedule's creator",
+    "name": "the cron finds a month another run took first: its draft is not committed and nothing is stornoed",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -254,6 +331,61 @@
         }
       ],
       [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a002",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
+      ]
+    ]
+  },
+  {
+    "name": "before the function exists, the cron posts a month a concurrent runner claimed first: the duplicate stornoed as the schedule's creator",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a002",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-04-01",
+          "description": "Periodisering 2026-04: Företagsförsäkring 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "6310",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            },
+            {
+              "account_number": "1710",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Periodisering 2026-04: Företagsförsäkring 2026"
+            }
+          ]
+        }
+      ],
+      [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a002",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      [
         "reverseEntry",
         4,
         "<supabase>",
@@ -264,10 +396,10 @@
     ]
   },
   {
-    "name": "Bokför förfallna whose claim fails: the month stornoed and left pending",
+    "name": "before the function exists, Bokför förfallna whose claim fails: the month stornoed and left pending",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -293,6 +425,17 @@
             }
           ]
         }
+      ],
+      [
+        "commitAccrualInstallment",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        "00000000-0000-4000-8000-000000000001"
       ],
       [
         "reverseEntry",
@@ -308,7 +451,7 @@
     "name": "the rest dissolved now in one verifikat",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -340,14 +483,31 @@
             }
           ]
         }
+      ],
+      [
+        "commitAccrualDissolution",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        {
+          "scheduleId": "00000000-0000-4000-8000-0000000a5001",
+          "installmentIds": [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002"
+          ]
+        }
       ]
     ]
   },
   {
-    "name": "the rest dissolved now while the cron posted a month: the combined verifikat stornoed",
+    "name": "the rest dissolved now while the cron posted a month: its draft is not committed and nothing is stornoed",
     "calls": [
       [
-        "createJournalEntry",
+        "createDraftEntry",
         4,
         "<supabase>",
         "00000000-0000-4000-8000-00000000c001",
@@ -377,6 +537,79 @@
                 "6": "P-100"
               }
             }
+          ]
+        }
+      ],
+      [
+        "commitAccrualDissolution",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        {
+          "scheduleId": "00000000-0000-4000-8000-0000000a5001",
+          "installmentIds": [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002"
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "before the function exists, the rest dissolved now while the cron posted a month: the combined verifikat stornoed",
+    "calls": [
+      [
+        "createDraftEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f026",
+          "entry_date": "2026-06-10",
+          "description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+          "source_type": "accrual",
+          "source_id": "00000000-0000-4000-8000-0000000a5001",
+          "lines": [
+            {
+              "account_number": "2970",
+              "debit_amount": 8000,
+              "credit_amount": 0,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 8000,
+              "line_description": "Periodisering, slutupplösning: Supportavtal februari till juli 2026",
+              "dimensions": {
+                "6": "P-100"
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "commitAccrualDissolution",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "id": "je-1"
+        },
+        {
+          "scheduleId": "00000000-0000-4000-8000-0000000a5001",
+          "installmentIds": [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002"
           ]
         }
       ],

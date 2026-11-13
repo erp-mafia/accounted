@@ -29,9 +29,10 @@
  *      dissolution (subject the schedule's invoice, dated the month it
  *      belongs to) and for a year-end periodisering (subject the fiscal
  *      period), ledger.storno for a credited invoice's stornos, with the
- *      request's link basis (the cron's as system_derived); a month a
- *      concurrent run claimed first is stornoed with its own system_derived
- *      event; the verifikat the flows book on top of have none;
+ *      request's link basis (the cron's as system_derived); a month whose
+ *      row cannot be marked posted posts nothing (its draft is cancelled
+ *      with no number, and nothing is stornoed: commit_accrual_installment,
+ *      20261113020117); the verifikat the flows book on top of have none;
  *   3. a failed event or link write under shadow still posts; under strict
  *      a catch-up month, the cron, a dissolution now, a credit's storno and
  *      the year-end periodiseringar each stop before a voucher number is
@@ -767,7 +768,7 @@ describe('posting port parity, periodiseringar (pg)', () => {
   )
 
   it(
-    'a month a concurrent run claimed first: its duplicate stornoed, each verifikat with its own event',
+    'a month whose row cannot be marked posted: nothing is posted or stornoed, and no number is drawn',
     { timeout: FLOW_TIMEOUT },
     async () => {
       vi.stubEnv('POSTING_EVENTS', 'shadow')
@@ -775,7 +776,8 @@ describe('posting port parity, periodiseringar (pg)', () => {
       const schedule = await runWithActor({ type: 'user' }, () =>
         createAccrualSchedule(seed.supabase, seed.companyId, seed.userId, INSURANCE(seed), { postingFloorDate: '2026-01-15', today: '2026-01-20' }),
       )
-      // The concurrent runner: April's claim finds the month taken (the update matches nothing).
+      // February's pending to posted does not take (the update matches nothing). Posting used to
+      // commit the verifikat first and storno it here; now the two are one transaction.
       const fn = `pg_test_accruals_claimed_${seed.companyId.replace(/-/g, '')}`
       await getPool().query(`
         CREATE OR REPLACE FUNCTION public.${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -784,27 +786,24 @@ describe('posting port parity, periodiseringar (pg)', () => {
           RETURN NEW;
         END; $$;
         CREATE TRIGGER ${fn} BEFORE UPDATE ON public.accrual_schedule_installments FOR EACH ROW EXECUTE FUNCTION public.${fn}();`)
+      const numbersBefore = await lastVoucherNumber(seed.companyId)
       let result: Awaited<ReturnType<typeof postDueInstallments>>
       try {
         result = await runWithActor({ type: 'cron' }, () => postDueInstallments(seed.supabase, seed.companyId, { today: '2026-02-05' }))
       } finally {
         await getPool().query(`DROP TRIGGER IF EXISTS ${fn} ON public.accrual_schedule_installments; DROP FUNCTION IF EXISTS public.${fn}();`)
       }
-      expect(result).toMatchObject({ posted: 0, failed: 0, skipped: 1 })
+      expect(result).toMatchObject({ posted: 0, failed: 1, skipped: 0 })
+      expect(await lastVoucherNumber(seed.companyId)).toBe(numbersBefore)
       const links = await eventLinks(seed.companyId)
       const february = links.filter((l) => l.kind === 'ledger.accrual' && l.occurred_on === '2026-02-01')
       expect(february).toHaveLength(1)
-      expect(february[0]).toMatchObject({ entry_status: 'reversed', evidence: { link_basis: 'system_derived' }, actor_type: 'cron' })
-      const storno = links.filter((l) => l.kind === 'ledger.storno')
-      expect(storno).toHaveLength(1)
-      expect(storno[0]).toMatchObject({
-        role: 'reversal',
-        entry_status: 'posted',
-        subject_type: 'supplier_invoice',
-        subject_id: seed.insurance,
-        evidence: { link_basis: 'system_derived' },
-      })
-      expect(await installmentsOf(schedule.id).then((rows) => rows[1])).toMatchObject({ period_month: '2026-02-01', status: 'pending' })
+      // The draft the event was linked to never got a number: cancelled, not reversed.
+      expect(february[0]).toMatchObject({ entry_status: 'cancelled', evidence: { link_basis: 'system_derived' }, actor_type: 'cron' })
+      expect(links.filter((l) => l.kind === 'ledger.storno')).toEqual([])
+      const februaryMonth = await installmentsOf(schedule.id).then((rows) => rows[1])
+      expect(februaryMonth).toMatchObject({ period_month: '2026-02-01', status: 'pending' })
+      expect(februaryMonth!.last_error).toMatch(/could not be marked posted/)
       await expectNoVoucherGaps(seed.companyId)
     },
   )

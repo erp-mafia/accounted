@@ -170,6 +170,13 @@ export interface AutomaticSend {
   log: Logger
   /** REMINDERS_SENDING_ENABLED, passed down so tests can pin it. */
   sendingEnabled?: boolean
+  /**
+   * The run's time budget (epoch ms): no reminder is started after it. A
+   * reminder not started is neither sent nor staged for a person; it stays
+   * due, so the next run sends it. `onDeferred` is told how many were left.
+   */
+  deadline?: number
+  onDeferred?: (count: number) => void
 }
 
 /**
@@ -270,6 +277,11 @@ export async function stageReminderBatch(
  * The automatic sends of one company's day; a failure is recorded on its row
  * (an unknown outcome stops that invoice's ladder). handled: every item but
  * those dispatch left for a person (needs_person), which are staged.
+ *
+ * Past the run's deadline no further reminder is started. The ones left are
+ * counted as handled so they are not staged for approval either: nothing has
+ * been reserved for them, they are still due, and tomorrow's run sends them
+ * as it would have today.
  */
 async function sendAutomatically(
   db: Db,
@@ -280,7 +292,13 @@ async function sendAutomatically(
 ): Promise<{ sent: number; handled: Set<string> }> {
   let sent = 0
   const handled = new Set<string>()
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
+    if (automatic.deadline !== undefined && Date.now() >= automatic.deadline) {
+      const left = items.slice(index)
+      for (const later of left) handled.add(later.invoice_id)
+      automatic.onDeferred?.(left.length)
+      break
+    }
     try {
       const outcome = await dispatchReminder(
         { db, channel: automatic.channel, now: () => now, log: automatic.log, sendingEnabled: automatic.sendingEnabled },
@@ -385,6 +403,10 @@ export interface ReminderBatchCronSummary {
   /** Companies with automatic sending on whose batch waits for approval today (see runReminderBatchCron). */
   automaticHeld: number
   failed: number
+  /** Companies the run did not start because its time budget was used up; tomorrow's run starts elsewhere. */
+  notReached: number
+  /** Automatic reminders not started for the same reason; still due, sent by the next run. */
+  automaticDeferred: number
 }
 
 export interface ReminderBatchCronDeps {
@@ -395,6 +417,29 @@ export interface ReminderBatchCronDeps {
   /** REMINDERS_SENDING_ENABLED; a parameter only so tests can pin both states. */
   sendingEnabled?: boolean
   log?: Logger
+  /**
+   * Epoch ms after which no company and no automatic reminder is started
+   * (the route's time budget). What is left is counted in the summary and
+   * logged as an error.
+   */
+  deadline?: number
+}
+
+/**
+ * Where today's run starts in the company list. The list comes in company_id
+ * order; a run cut short at its time budget would cut the same companies off
+ * every day if it always began at the top. The start moves by the golden
+ * ratio of the list each day (the offsets of consecutive days are spread as
+ * evenly as a fixed step can spread them), so a company that fell in the cut
+ * tail one day is near the front on the days after. No state to keep: the
+ * day decides, and a second run on the same day walks the same order, past
+ * the companies already done.
+ */
+export function reminderBatchStartIndex(companyCount: number, now: Date): number {
+  if (companyCount <= 1) return 0
+  const day = Math.floor(now.getTime() / 86_400_000)
+  const turn = (day * 0.6180339887498949) % 1
+  return Math.floor(turn * companyCount) % companyCount
 }
 
 /** One company the daily run visits (list_reminder_batch_companies). */
@@ -409,7 +454,11 @@ interface BatchCompanyRow {
 /**
  * GET /api/reminders/batch/cron: stage the day's batch for every company
  * with reminders on, sending the sure ones at once for a company with
- * automatic sending on (automatic.ts). Off entirely while REMINDERS_SENDING_ENABLED is false:
+ * automatic sending on (automatic.ts). Companies are visited one at a time
+ * from a start that moves every day (reminderBatchStartIndex), and none is
+ * started after deps.deadline: a run cut short says how many were left
+ * (notReached, automaticDeferred, logged as an error) and does not cut the
+ * same companies off every day. Off entirely while REMINDERS_SENDING_ENABLED is false:
  * no query runs. Archived, reset and sandbox companies are not visited
  * (list_reminder_batch_companies, the companyInactive rule of facts.ts);
  * companies whose invoices a collections provider pursues are skipped per
@@ -435,6 +484,8 @@ export async function runReminderBatchCron(deps: ReminderBatchCronDeps): Promise
     sentAutomatically: 0,
     automaticHeld: 0,
     failed: 0,
+    notReached: 0,
+    automaticDeferred: 0,
   }
   if (!(deps.sendingEnabled ?? REMINDERS_SENDING_ENABLED)) return summary
   summary.enabled = true
@@ -456,8 +507,18 @@ export async function runReminderBatchCron(deps: ReminderBatchCronDeps): Promise
   )
   summary.companies = companies.length
 
+  // Today's order: the same companies, starting where today's turn falls.
+  const start = reminderBatchStartIndex(companies.length, now)
+  const ordered = [...companies.slice(start), ...companies.slice(0, start)]
+
   let channel = deps.channel ?? null
-  for (const company of companies) {
+  for (const [index, company] of ordered.entries()) {
+    // Nothing is staged or sent for a company not started: it is simply
+    // visited by the next run, which starts somewhere else.
+    if (deps.deadline !== undefined && Date.now() >= deps.deadline) {
+      summary.notReached = ordered.length - index
+      break
+    }
     const companyId = company.company_id
     try {
       let automatic: AutomaticSend | null = null
@@ -473,7 +534,16 @@ export async function runReminderBatchCron(deps: ReminderBatchCronDeps): Promise
           cronLog.warn('automatic reminders wait for approval: the company has no email_send capability', { companyId })
         } else {
           channel ??= createEmailReminderChannel(await getEmailService())
-          automatic = { actorUserId: company.reminders_automatic_by, channel, log: cronLog, sendingEnabled: deps.sendingEnabled }
+          automatic = {
+            actorUserId: company.reminders_automatic_by,
+            channel,
+            log: cronLog,
+            sendingEnabled: deps.sendingEnabled,
+            deadline: deps.deadline,
+            onDeferred: (count) => {
+              summary.automaticDeferred += count
+            },
+          }
         }
       }
       const outcome = await stageReminderBatch(db, { companyId, now, automatic })
@@ -500,6 +570,13 @@ export async function runReminderBatchCron(deps: ReminderBatchCronDeps): Promise
       summary.failed += 1
       cronLog.error('reminder batch failed for a company', error as Error, { companyId })
     }
+  }
+  if (summary.notReached > 0 || summary.automaticDeferred > 0) {
+    cronLog.error(
+      'reminder batch run stopped at its time budget; what is left waits for the next run',
+      new Error('reminder batch run out of time'),
+      { notReached: summary.notReached, automaticDeferred: summary.automaticDeferred, companies: summary.companies },
+    )
   }
   return summary
 }

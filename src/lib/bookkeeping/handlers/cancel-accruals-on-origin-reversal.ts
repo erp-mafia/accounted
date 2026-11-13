@@ -15,8 +15,10 @@ const log = createLogger('bookkeeping.accruals.origin-reversal')
  *
  * Runs on journal_entry.reversed through EVENT_CONSUMERS
  * (lib/composition/event-consumers.ts). A failure throws to the event bus,
- * which logs it; the posting run then still books no month of a plan whose
- * origin is gone (manualOriginStands in lib/bookkeeping/accruals/service.ts).
+ * which logs it as an error; the posting run then still books no month of a
+ * plan whose origin is gone (manualOriginStands in
+ * lib/bookkeeping/accruals/service.ts). Months that could not be stornoed are
+ * logged as an error here for the same reason: nobody is told otherwise.
  */
 export async function cancelAccrualsOnOriginReversal({
   originalEntry,
@@ -34,10 +36,18 @@ export async function cancelAccrualsOnOriginReversal({
     { reversalDate: reversalEntry.entry_date },
   )
   if (result.failedReversals > 0) {
-    log.warn('manual accrual months could not be reversed with their origin', {
-      companyId,
-      originEntryId: originalEntry.id,
-      failedReversals: result.failedReversals,
-    })
+    // An error, not a warning: this consumer runs once per reversal and
+    // nothing retries it, so a month left standing here stays on the interim
+    // account until a person undoes the plan. The plan stays active with the
+    // reason on its months (cancelSchedules), which is what the user sees.
+    log.error(
+      'manual accrual months could not be reversed with their origin',
+      new Error('accrual months left standing after their origin was reversed'),
+      {
+        companyId,
+        originEntryId: originalEntry.id,
+        failedReversals: result.failedReversals,
+      },
+    )
   }
 }

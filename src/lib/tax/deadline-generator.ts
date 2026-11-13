@@ -680,15 +680,90 @@ export async function generateTaxDeadlinesForUser(
     ).values(),
   )
 
-  // Insert the replacement rows BEFORE deleting the old set. A failed insert
-  // then leaves the previous deadlines intact: the old delete-first order
-  // meant any insert failure (like the 23502 user_id regression) wiped the
-  // company's tax deadlines without replacing them.
+  // The new set replaces the old one in one transaction, under a per-company
+  // lock (replace_system_tax_deadlines, migration 20261113020219): the rows
+  // are inserted, then every other pending system row in the window is
+  // deleted. A failed insert leaves the previous deadlines intact, and two
+  // regenerations that overlap (a settings save racing the nightly repair)
+  // run one after the other, so the company always holds one whole set. As
+  // two separate statements each deleted the other's freshly inserted rows.
   //
-  // Not concurrency-safe: two overlapping regenerations (settings save racing
-  // the cron backfill) can each delete the other's freshly inserted rows and
-  // leave the company with fewer rows than expected. Accepted: the daily
-  // backfill cron detects the missing keys and repairs on its next run.
+  // Dismissed rows survive the delete: deleting one would erase the opt-out
+  // and let the next regeneration recreate the obligation as a fresh pending
+  // row.
+  //
+  // An obligation the settings no longer produce is deleted even when the
+  // user had edited it. Its notes go with it, and that is the right trade:
+  // the settings change is the user's own explicit statement that the
+  // obligation does not apply, and a deadlines page that keeps showing a
+  // momsdeklaration to a company that deregistered from moms is worse than a
+  // lost note. Notes on obligations that still apply survive, which is the
+  // case this preservation is about; anything worth keeping past a settings
+  // change belongs in a manual (source='user') deadline, which the generator
+  // never touches.
+  const { data: replaced, error: replaceError } = await supabase.rpc('replace_system_tax_deadlines', {
+    p_company_id: companyId,
+    p_rows: uniqueDeadlines,
+    p_from: todayIso,
+    p_to: endDate,
+  })
+
+  if (replaceError && (replaceError as { code?: string }).code === REPLACE_FUNCTION_NOT_DEPLOYED_CODE) {
+    // Right after a deploy the database may not have the function yet. The
+    // two statements are not safe against a second regeneration, which is
+    // acceptable for those minutes and no longer: an error, said once per
+    // process, so a fallback that keeps happening is seen.
+    if (!replaceFallbackReported) {
+      replaceFallbackReported = true
+      log.error(
+        'replace_system_tax_deadlines is not in the database; deadlines are replaced in two statements',
+        replaceError,
+        { companyId },
+      )
+    }
+    return replaceDeadlinesInTwoStatements(supabase, companyId, uniqueDeadlines, todayIso, endDate)
+  }
+  if (replaceError) {
+    log.error('Error replacing deadlines:', replaceError)
+    throw replaceError
+  }
+
+  const counts = (Array.isArray(replaced) ? replaced[0] : replaced) as
+    | { created?: number; deleted?: number }
+    | null
+    | undefined
+  return {
+    created: counts?.created ?? uniqueDeadlines.length,
+    deleted: counts?.deleted ?? 0,
+  }
+}
+
+/**
+ * PostgREST's answer for a function its schema cache does not hold: the
+ * migration has not run yet. Only this code means "not deployed": 42883 is
+ * also what Postgres raises for a function or operator it cannot resolve
+ * inside the body or a trigger it fires, and that is a failure to report,
+ * not a reason to run the unsafe path.
+ */
+const REPLACE_FUNCTION_NOT_DEPLOYED_CODE = 'PGRST202'
+
+/** Whether this process already reported the fallback. */
+let replaceFallbackReported = false
+
+/**
+ * The replacement as it was before replace_system_tax_deadlines, kept for a
+ * database that does not have the function yet: insert, then delete the
+ * rest. Insert first, so a failed insert leaves the old set in place. Not
+ * safe against a second regeneration of the same company running at the same
+ * time, which is what the function is for.
+ */
+async function replaceDeadlinesInTwoStatements(
+  supabase: SupabaseClient,
+  companyId: string,
+  uniqueDeadlines: Array<Record<string, unknown>>,
+  todayIso: string,
+  endDate: string,
+): Promise<{ created: number; deleted: number }> {
   let newIds: string[] = []
   if (uniqueDeadlines.length > 0) {
     const { data: insertedData, error: insertError } = await supabase
@@ -703,20 +778,6 @@ export async function generateTaxDeadlinesForUser(
     newIds = (insertedData ?? []).map((d: { id: string }) => d.id)
   }
 
-  // Delete the superseded system-generated deadlines for these years,
-  // excluding the rows just inserted. Dismissed rows survive: deleting one
-  // would erase the opt-out and let the next regeneration recreate the
-  // obligation as a fresh pending row.
-  //
-  // An obligation the settings no longer produce is deleted even when the
-  // user had edited it. Its notes go with it, and that is the right trade:
-  // the settings change is the user's own explicit statement that the
-  // obligation does not apply, and a deadlines page that keeps showing a
-  // momsdeklaration to a company that deregistered from moms is worse than a
-  // lost note. Notes on obligations that still apply survive, which is the
-  // case this preservation is about; anything worth keeping past a settings
-  // change belongs in a manual (source='user') deadline, which the generator
-  // never touches.
   let deleteQuery = supabase
     .from('deadlines')
     .delete()
@@ -985,12 +1046,28 @@ async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<Deadl
   )
 }
 
+/** A time budget for a pass over many companies: no company is started after `deadline` (epoch ms). */
+export interface DeadlinePassOptions {
+  deadline?: number
+}
+
+function pastDeadline(options: DeadlinePassOptions): boolean {
+  return options.deadline !== undefined && Date.now() >= options.deadline
+}
+
 /**
  * Generate tax deadlines for the new year for every company.
+ *
+ * One company at a time, so the pass stops starting companies at
+ * `options.deadline` and counts the rest in `companiesNotReached`. Nothing
+ * records a company as done: one that was not reached still lacks the rows
+ * the horizon expects, so backfillMissingTaxDeadlines finds it on its next
+ * run.
  */
 export async function generateNewYearDeadlines(
-  supabase: SupabaseClient
-): Promise<{ usersProcessed: number; totalCreated: number }> {
+  supabase: SupabaseClient,
+  options: DeadlinePassOptions = {},
+): Promise<{ usersProcessed: number; totalCreated: number; companiesNotReached: number }> {
   const newYear = stockholmYearMonth().year
   const allSettings = await hydrateSalariedEmployeeSince(
     supabase,
@@ -1002,8 +1079,13 @@ export async function generateNewYearDeadlines(
 
   let usersProcessed = 0
   let totalCreated = 0
+  let companiesNotReached = 0
 
-  for (const settings of allSettings) {
+  for (const [index, settings] of allSettings.entries()) {
+    if (pastDeadline(options)) {
+      companiesNotReached = allSettings.length - index
+      break
+    }
     try {
       const result = await generateTaxDeadlinesForUser(
         supabase,
@@ -1018,16 +1100,30 @@ export async function generateNewYearDeadlines(
     }
   }
 
-  return { usersProcessed, totalCreated }
+  return { usersProcessed, totalCreated, companiesNotReached }
 }
 
 /**
  * Repair companies whose upcoming system tax deadlines are missing or carry
  * dates from superseded schedule logic.
+ *
+ * The rolling horizon flags every company with a recurring obligation on the
+ * night a due date enters it, and the repairs run one company at a time
+ * (2026-11-10: 175 s against a 300 s limit, median 6.6 s). So no repair is
+ * started after `options.deadline`; the companies left are counted in
+ * `companiesNotReached` and nothing marks them as done: they still miss rows,
+ * so the next run finds them again, and the ones repaired tonight are no
+ * longer in its way.
  */
 export async function backfillMissingTaxDeadlines(
   supabase: SupabaseClient,
-): Promise<{ companiesScanned: number; companiesRepaired: number; totalCreated: number }> {
+  options: DeadlinePassOptions = {},
+): Promise<{
+  companiesScanned: number
+  companiesRepaired: number
+  totalCreated: number
+  companiesNotReached: number
+}> {
   // Window starts a year back, not today: completed rows with a superseded
   // (already passed) due date must still count as satisfied, otherwise the
   // repair loop flags the company forever while the generator (correctly)
@@ -1070,8 +1166,13 @@ export async function backfillMissingTaxDeadlines(
   }
   let companiesRepaired = 0
   let totalCreated = 0
+  let companiesNotReached = 0
 
-  for (const settings of toRepair.values()) {
+  for (const [index, settings] of Array.from(toRepair.values()).entries()) {
+    if (pastDeadline(options)) {
+      companiesNotReached = toRepair.size - index
+      break
+    }
     try {
       const result = await regenerateTaxDeadlinesForUser(
         supabase,
@@ -1089,5 +1190,6 @@ export async function backfillMissingTaxDeadlines(
     companiesScanned: allSettings.length,
     companiesRepaired,
     totalCreated,
+    companiesNotReached,
   }
 }

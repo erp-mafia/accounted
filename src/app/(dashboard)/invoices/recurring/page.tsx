@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { cn } from '@/lib/utils'
 import {
   DestructiveConfirmDialog,
@@ -258,11 +259,26 @@ export default function RecurringInvoicesPage() {
                       ) : (
                         s.name
                       )}
+                      {/* The warning is what the person acts on (a schedule its
+                          last run left for a person waits for them), so it is
+                          read on hover and on keyboard focus, not only by a
+                          screen reader. A tap reaches the row and opens the
+                          editor, which shows it in full. */}
                       {s.last_run_warning && (
-                        <ExclamationTriangleIcon
-                          className="h-4 w-4 text-attn"
-                          aria-label={s.last_run_warning}
-                        />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span
+                              tabIndex={0}
+                              aria-label={s.last_run_warning}
+                              className="inline-flex shrink-0 cursor-help rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            >
+                              <ExclamationTriangleIcon className="h-4 w-4 text-attn" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" align="start" className="max-w-sm" data-ph-mask="">
+                            {s.last_run_warning}
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </td>

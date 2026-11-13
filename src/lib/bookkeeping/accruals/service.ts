@@ -21,6 +21,20 @@
  * basis is the request's (linkBasisColumns: a person, an approved operation,
  * an API client, or the cron as system_derived).
  *
+ * A month reaches the books at most once, whichever door posts it: its
+ * verifikat and its own row (pending to posted) are committed in one database
+ * transaction. A single month goes through commit_accrual_installment
+ * (postDueInstallments: the cron, Bokför förfallna, the catch-up), the rest
+ * of a schedule in one verifikat through commit_accrual_dissolution
+ * (dissolveScheduleNow), which marks exactly the months its amount was added
+ * up from. A run that finds its month, or its set of months, taken or
+ * changed cancels its draft, which has no voucher number, so overlapping
+ * runs post one verifikat and no storno, and a run killed mid-way leaves
+ * every month either posted or still waiting. While a database lacks the
+ * functions (the minutes between a deploy and its migration) both doors fall
+ * back to the separate statements they used before, which is reported as an
+ * error by the engine.
+ *
  * A deferral posts on max(period_month, posting_floor_date,
  * company lock date + 1) so catch-up months book correctly and the interim
  * account never goes negative. An upplupen kostnad (expense on 29xx) or
@@ -37,7 +51,7 @@ import type {
   AccrualScheduleInstallment,
   CreateJournalEntryLineInput,
 } from '@/types'
-import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cancelDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import {
   CannotReverseNonPostedError,
   EntryAlreadyReversedError,
@@ -101,6 +115,8 @@ export interface PostDueResult {
   failed: number
   skipped: number
   errors: Array<{ installmentId: string; message: string }>
+  /** Due months not started because the caller's deadline came first; the next run posts them. */
+  deferred?: number
 }
 
 type ScheduleRow = AccrualSchedule
@@ -453,6 +469,182 @@ async function manualOriginStands(
 }
 
 /**
+ * How a month was claimed before commit_accrual_installment, kept for the
+ * window right after a deploy in which the database does not have the
+ * function yet: the engine's accrual door has posted the verifikat
+ * (posted_unclaimed), and the month is claimed with a compare-and-set. The
+ * two are separate writes, so the loser of a race stornoes its own verifikat;
+ * the function removes exactly that.
+ */
+async function claimAfterUnclaimedPosting(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  schedule: ScheduleRow,
+  installmentId: string,
+  entry: { id: string },
+): Promise<'posted' | 'not_pending'> {
+  const { data: claimed, error: claimError } = await supabase
+    .from('accrual_schedule_installments')
+    .update({
+      status: 'posted',
+      journal_entry_id: entry.id,
+      posted_at: new Date().toISOString(),
+      last_error: null,
+    })
+    .eq('id', installmentId)
+    .eq('status', 'pending')
+    .select('id')
+
+  if (claimError) {
+    // The verifikat is committed but the month was not marked posted:
+    // without a storno the next run would book the same month twice.
+    let reversalNote = ''
+    try {
+      await stornoDissolution(supabase, companyId, userId, schedule, entry.id, 'system_derived')
+    } catch (reversalError) {
+      log.error('failed to reverse accrual entry after claim error', reversalError, {
+        companyId,
+        installmentId,
+        entryId: entry.id,
+      })
+      reversalNote =
+        `; storno av verifikat ${entry.id} misslyckades också: ` +
+        getErrorMessage(reversalError)
+    }
+    throw new Error(
+      `Failed to mark installment posted: ${claimError.message}${reversalNote}`,
+    )
+  }
+  if (!claimed || claimed.length === 0) {
+    log.warn('accrual installment claimed concurrently; reversing duplicate entry', {
+      companyId,
+      installmentId,
+      entryId: entry.id,
+    })
+    await stornoDissolution(supabase, companyId, userId, schedule, entry.id, 'system_derived')
+    return 'not_pending'
+  }
+  return 'posted'
+}
+
+/**
+ * An accrual draft is committed (or cancelled) within the call that made it,
+ * so one that is still a draft half an hour later was left by a run that was
+ * killed between the two. It has no voucher number and no door will post it;
+ * it is cancelled so it does not sit in the drafts list looking like a month
+ * someone should book by hand.
+ */
+const ABANDONED_DRAFT_MIN_AGE_MS = 30 * 60 * 1000
+/** How long a draft whose cancel keeps failing is tried again (once a day), and then left alone. */
+const ABANDONED_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * A problem with a draft is reported only while the draft is younger than
+ * this: the windows [30 min, 24.5 h) of two daily runs 24 hours apart do not
+ * overlap, so the one daily run whose window a draft falls in reports it and
+ * the runs after it are quiet. Nothing can be written on a draft behind a
+ * lock, so its age is the only memory there is.
+ */
+const ABANDONED_DRAFT_REPORT_AGE_MS = 24.5 * 60 * 60 * 1000
+const ABANDONED_DRAFT_BATCH = 200
+/** The draft with its fiscal year's lock state: enforce_period_lock refuses any write in a closed or locked year. */
+const ABANDONED_DRAFT_SELECT =
+  'id, company_id, user_id, created_at, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(is_closed, locked_at)'
+
+interface AbandonedDraftRow {
+  id: string
+  company_id: string
+  user_id: string
+  created_at: string
+  fiscal_period?: { is_closed: boolean | null; locked_at: string | null } | null
+}
+
+/**
+ * Cancel the accrual drafts killed runs left behind, in every company,
+ * whether or not a month is due today: the daily cron calls this once per
+ * run. Only this service drafts with source_type 'accrual' (the API refuses
+ * the type to its callers), so the query is the whole set: drafts between
+ * half an hour and a week old in a fiscal year that is open, oldest first, at
+ * most ABANDONED_DRAFT_BATCH, the year's lock filtered in the query so drafts
+ * that cannot be cancelled never take the place of ones that can.
+ *
+ * A draft whose year was closed or locked after the killed run drafted it
+ * cannot be cancelled (enforce_period_lock refuses the write) and cannot be
+ * posted either: it is inert and has no number. It is never tried; the daily
+ * run whose window it falls in reports it once as an error, and a person
+ * removes it if the year is opened again. A cancel that fails for another
+ * reason is reported once the same way and tried again quietly each day for
+ * a week (cancelDraftEntry logs its own database refusals).
+ */
+export async function cancelAbandonedAccrualDrafts(
+  supabase: SupabaseClient,
+  options: { now?: Date } = {},
+): Promise<{ cancelled: number; failed: number; locked: number }> {
+  const now = (options.now ?? new Date()).getTime()
+  const olderThan = new Date(now - ABANDONED_DRAFT_MIN_AGE_MS).toISOString()
+  const reportable = (row: AbandonedDraftRow) => now - Date.parse(row.created_at) < ABANDONED_DRAFT_REPORT_AGE_MS
+
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select(ABANDONED_DRAFT_SELECT)
+    .eq('source_type', 'accrual')
+    .eq('status', 'draft')
+    .eq('fiscal_period.is_closed', false)
+    .is('fiscal_period.locked_at', null)
+    .gte('created_at', new Date(now - ABANDONED_DRAFT_MAX_AGE_MS).toISOString())
+    .lt('created_at', olderThan)
+    .order('created_at', { ascending: true })
+    .limit(ABANDONED_DRAFT_BATCH)
+  if (error) {
+    throw new Error(`Failed to look for abandoned accrual drafts: ${error.message}`)
+  }
+
+  let cancelled = 0
+  let failed = 0
+  for (const draft of (data ?? []) as unknown as AbandonedDraftRow[]) {
+    try {
+      await cancelDraftEntry(supabase, draft.company_id, draft.user_id, draft.id)
+      cancelled++
+      log.info('cancelled an accrual draft a killed run left behind', { companyId: draft.company_id, draftId: draft.id })
+    } catch (cancelError) {
+      failed++
+      const context = { companyId: draft.company_id, draftId: draft.id, createdAt: draft.created_at }
+      if (reportable(draft)) {
+        log.error('an abandoned accrual draft could not be cancelled; it has no voucher number and is tried again daily for a week', cancelError, context)
+      } else {
+        log.info('abandoned accrual draft still not cancelled', { ...context, message: getErrorMessage(cancelError) })
+      }
+    }
+  }
+
+  // The drafts the query above leaves out because their year is closed or
+  // locked: reported once, by the run whose window they fall in.
+  const { data: recent, error: recentError } = await supabase
+    .from('journal_entries')
+    .select(ABANDONED_DRAFT_SELECT)
+    .eq('source_type', 'accrual')
+    .eq('status', 'draft')
+    .gte('created_at', new Date(now - ABANDONED_DRAFT_REPORT_AGE_MS).toISOString())
+    .lt('created_at', olderThan)
+    .order('created_at', { ascending: true })
+    .limit(ABANDONED_DRAFT_BATCH)
+  if (recentError) {
+    throw new Error(`Failed to look for abandoned accrual drafts in closed years: ${recentError.message}`)
+  }
+  let locked = 0
+  for (const draft of (recent ?? []) as unknown as AbandonedDraftRow[]) {
+    if (!draft.fiscal_period?.is_closed && !draft.fiscal_period?.locked_at) continue
+    locked++
+    log.error(
+      'an abandoned accrual draft sits in a closed or locked fiscal year: it cannot be cancelled or posted and is left as an unnumbered draft',
+      new Error('abandoned accrual draft behind a period lock'),
+      { companyId: draft.company_id, draftId: draft.id, createdAt: draft.created_at },
+    )
+  }
+  return { cancelled, failed, locked }
+}
+
+/**
  * Post every pending installment whose calendar month has begun.
  * Used by the daily cron, the manual "Bokför förfallna" action, and the
  * synchronous catch-up at schedule creation (scheduleId filter).
@@ -467,6 +659,8 @@ export async function postDueInstallments(
     userId?: string
     scheduleId?: string
     today?: string
+    /** Epoch ms after which no further month is started (the cron's time budget). */
+    deadline?: number
   } = {},
 ): Promise<PostDueResult> {
   const today = options.today ?? todayIsoStockholm()
@@ -502,7 +696,12 @@ export async function postDueInstallments(
   const touchedSchedules = new Set<string>()
   const originStanding = new Map<string, boolean>()
 
-  for (const installment of due) {
+  for (const [index, installment] of due.entries()) {
+    // A month not started stays pending, untouched: the next run takes it.
+    if (options.deadline !== undefined && Date.now() >= options.deadline) {
+      result.deferred = due.length - index
+      break
+    }
     const schedule = installment.schedule as ScheduleRow
     try {
       if (!(await manualOriginStands(supabase, companyId, schedule, originStanding))) {
@@ -517,10 +716,13 @@ export async function postDueInstallments(
         ? `Periodisering ${monthLabel}: ${schedule.description}`
         : `Periodisering ${monthLabel}`
 
-      const entry = await postingPort.postJournalEntry({
+      const userId = options.userId ?? schedule.user_id
+      // Draft first: it holds no voucher number, so a month another run
+      // takes in the meantime costs a cancelled draft and nothing else.
+      const draft = await postingPort.draftJournalEntry({
         supabase,
         companyId,
-        userId: options.userId ?? schedule.user_id,
+        userId,
         // The month the share belongs to: its last day for an upplupen
         // kostnad or intäkt (its entry date, never moved), its first for a
         // deferral.
@@ -541,51 +743,27 @@ export async function postDueInstallments(
         },
       })
 
-      // CAS claim: only the runner that flips pending→posted keeps its entry.
-      // A concurrent runner (cron + manual button) loses the race and stornos
-      // its own entry so the ledger nets to a single dissolution.
-      const { data: claimed, error: claimError } = await supabase
-        .from('accrual_schedule_installments')
-        .update({
-          status: 'posted',
-          journal_entry_id: entry.id,
-          posted_at: new Date().toISOString(),
-          last_error: null,
-        })
-        .eq('id', installment.id)
-        .eq('status', 'pending')
-        .select('id')
-
-      if (claimError) {
-        // The journal entry is already committed but the installment was NOT
-        // flipped to posted: without a storno the next run would book the
-        // same month twice. Mirror the dissolveScheduleNow handling: reverse
-        // our own entry best-effort, then record the failure (the catch below
-        // writes last_error on the installment).
-        let reversalNote = ''
-        try {
-          await stornoDissolution(supabase, companyId, options.userId ?? schedule.user_id, schedule, entry.id, 'system_derived')
-        } catch (reversalError) {
-          log.error('failed to reverse accrual entry after claim error', reversalError, {
+      // The voucher number and the month's pending to posted in one
+      // transaction, under the month's row lock.
+      const committed = await postingPort.commitSqlPosting({
+        supabase,
+        companyId,
+        userId,
+        fn: 'commit_accrual_installment',
+        args: [draft, installment.id],
+      })
+      const outcome =
+        committed.outcome === 'posted_unclaimed'
+          ? await claimAfterUnclaimedPosting(supabase, companyId, userId, schedule, installment.id, committed.entry)
+          : committed.outcome
+      if (outcome === 'not_pending') {
+        if (committed.outcome === 'not_pending') {
+          log.info('accrual installment already taken by another run; draft cancelled, nothing posted', {
             companyId,
             installmentId: installment.id,
-            entryId: entry.id,
+            draftId: draft.id,
           })
-          reversalNote =
-            `; storno av verifikat ${entry.id} misslyckades också: ` +
-            getErrorMessage(reversalError)
         }
-        throw new Error(
-          `Failed to mark installment posted: ${claimError.message}${reversalNote}`,
-        )
-      }
-      if (!claimed || claimed.length === 0) {
-        log.warn('accrual installment claimed concurrently; reversing duplicate entry', {
-          companyId,
-          installmentId: installment.id,
-          entryId: entry.id,
-        })
-        await stornoDissolution(supabase, companyId, options.userId ?? schedule.user_id, schedule, entry.id, 'system_derived')
         result.skipped++
         continue
       }
@@ -698,7 +876,7 @@ export async function dissolveScheduleNow(
     ? `Periodisering, slutupplösning: ${schedule.description}`
     : 'Periodisering, slutupplösning'
 
-  const entry = await postingPort.postJournalEntry({
+  const draft = await postingPort.draftJournalEntry({
     supabase,
     companyId,
     userId,
@@ -715,7 +893,49 @@ export async function dissolveScheduleNow(
     },
   })
 
+  // The voucher number, every pending month and the schedule's completion in
+  // one transaction, for exactly the months the amount was added up from.
   const pendingIds = pending.map((installment) => installment.id)
+  const committed = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'commit_accrual_dissolution',
+    args: [draft, { scheduleId, installmentIds: pendingIds }],
+  })
+  if (committed.outcome === 'posted_unclaimed') {
+    return claimAllAfterUnclaimedPosting(supabase, companyId, userId, schedule, pendingIds, committed.entry, amount)
+  }
+  if (committed.outcome === 'not_pending') {
+    // The posting run booked a month, a credit cancelled them or a re-plan
+    // replaced them since they were read. Nothing was posted: the draft had
+    // no number and is cancelled, and no month was touched.
+    throw new Error('Periodiseringen ändrades samtidigt: försök igen')
+  }
+
+  return { journalEntryId: committed.entry.id, amount }
+}
+
+/**
+ * How the months of a dissolution were claimed before
+ * commit_accrual_dissolution, kept for the window right after a deploy in
+ * which the database does not have the function yet: the engine's accrual
+ * door has posted the combined verifikat (posted_unclaimed), and the months
+ * are claimed with a compare-and-set. The two are separate writes, so a
+ * posting run in between leaves a combined verifikat to storno and months
+ * pointing at it; the function removes exactly that.
+ */
+async function claimAllAfterUnclaimedPosting(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  schedule: ScheduleRow,
+  pendingIds: string[],
+  entry: { id: string },
+  amount: number,
+): Promise<{ journalEntryId: string; amount: number }> {
+  const scheduleId = schedule.id
+
   const { data: claimed, error: claimError } = await supabase
     .from('accrual_schedule_installments')
     .update({

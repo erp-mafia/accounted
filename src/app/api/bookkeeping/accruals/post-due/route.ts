@@ -6,7 +6,8 @@ import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
  * POST /api/bookkeeping/accruals/post-due
  *
  * Manual "Bokför förfallna periodiseringar" for the active company:
- * complements the daily cron (same service, same CAS idempotency), so the
+ * complements the daily cron (same service, so the same one-transaction
+ * posting of a month: a click during the cron's run posts nothing twice), so the
  * user never has to wait for the nightly run after creating a schedule with
  * elapsed months or after fixing a blocked installment.
  */

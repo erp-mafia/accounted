@@ -1,0 +1,1 @@
+[2026-11-12] A periodisering draft is posted only by its schedule's door; the generic commit, createJournalEntry and the batch refuse it (409 ACCRUAL_DRAFT_POSTED_BY_SCHEDULE): a leftover draft posted by hand is a verifikat no month points at, and the month would be dissolved twice.

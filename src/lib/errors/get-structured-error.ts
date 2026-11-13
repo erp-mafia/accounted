@@ -66,6 +66,7 @@ import {
   TargetPeriodLockedError,
   TransactionMissingSekValueError,
   UnattendedCommitLimitExceededError,
+  AccrualDraftPostedByScheduleError,
   BookingReviewRequiredError,
   BookingReviewLimitError,
   isBookkeepingError,
@@ -711,6 +712,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
     return { code: err.code, details: { attempted: err.attempted, limit: err.limit } }
   }
   if (err instanceof BookingReviewRequiredError) {
+    return { code: err.code, ...(err.journalEntryId ? { details: { journal_entry_id: err.journalEntryId } } : {}) }
+  }
+  if (err instanceof AccrualDraftPostedByScheduleError) {
     return { code: err.code, ...(err.journalEntryId ? { details: { journal_entry_id: err.journalEntryId } } : {}) }
   }
   if (err instanceof BookingReviewLimitError) {
