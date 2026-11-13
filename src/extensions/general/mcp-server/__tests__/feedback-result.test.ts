@@ -32,6 +32,54 @@ describe('gnubok_feedback result: tell the user when the report goes to the team
     expect(result.message).toContain('e-mail to the address of the Accounted user this connection belongs to')
   })
 
+  it('answers only after the report was handed over: a kill after the answer cannot lose it', async () => {
+    let delivered = false
+    eventBus.on('agent.feedback', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      delivered = true
+    })
+    const result = await call({ context: 'A tool returned an empty list for a period that has sales.' })
+    expect(result.recorded).toBe(true)
+    expect(delivered).toBe(true)
+  })
+
+  it('answers after 10 s at most when a handler hangs (a mail provider that never answers), and lets the emit finish after', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish: () => void = () => {}
+      let delivered = false
+      eventBus.on('agent.feedback', () => new Promise<void>((resolve) => {
+        finish = () => {
+          delivered = true
+          resolve()
+        }
+      }))
+      let answered = false
+      const pending = call({ context: 'A tool returned an empty list for a period that has sales.' }).then((result) => {
+        answered = true
+        return result
+      })
+
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(answered).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      // Not confirmed: the answer says the send is under way, never that it was sent.
+      const result = await pending
+      expect(result.recorded).toBe(false)
+      expect(result.message).toContain('Being sent to the Accounted team')
+      expect(result.message).not.toContain('Sent to the Accounted team')
+      expect(result.message).toContain('Tell the user')
+      expect(delivered).toBe(false)
+
+      // Still running after the answer, and finishing.
+      finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(delivered).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('also for praise that carries a suggestion (it is relayed too)', async () => {
     const result = await call({ context: 'Worked well.', sentiment: 'positive', suggestion: 'Add a dry run to X.' })
     expect(result.message).toContain('Tell the user')

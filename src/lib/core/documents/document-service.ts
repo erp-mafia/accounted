@@ -170,22 +170,24 @@ type StorageErrorLike = { message?: string } | null
  * Returns the resolved key alongside the blob so callers can log or repair
  * a stale `document_attachments.storage_path` pointer. When every candidate
  * fails, the FIRST error is returned: it refers to the stored pointer, which
- * is the actionable one.
+ * is the actionable one. `errors` holds every candidate's error, in order:
+ * a caller that concludes the object is gone (the integrity check) needs
+ * every key to have answered "not found", not only the first.
  */
 export async function downloadDocumentObject(
   supabase: SupabaseClient,
   storagePath: string,
   companyId: string | null | undefined
-): Promise<{ blob: Blob | null; error: StorageErrorLike; resolvedPath: string | null }> {
-  let firstError: StorageErrorLike = null
+): Promise<{ blob: Blob | null; error: StorageErrorLike; errors: NonNullable<StorageErrorLike>[]; resolvedPath: string | null }> {
+  const errors: NonNullable<StorageErrorLike>[] = []
   for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
     const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(candidate)
     if (!error && data) {
-      return { blob: data as Blob, error: null, resolvedPath: candidate }
+      return { blob: data as Blob, error: null, errors: [], resolvedPath: candidate }
     }
-    firstError ??= (error as StorageErrorLike) ?? { message: 'download returned no data' }
+    errors.push((error as StorageErrorLike) ?? { message: 'download returned no data' })
   }
-  return { blob: null, error: firstError, resolvedPath: null }
+  return { blob: null, error: errors[0] ?? null, errors, resolvedPath: null }
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB

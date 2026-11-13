@@ -18,6 +18,7 @@ import { NextResponse, after } from 'next/server'
 import {
   TASKS_EXTENSION_ID,
   isTaskCapableClient,
+  abandonMcpTaskIfStale,
   createMcpTask,
   resolveMcpTask,
   taskToWire,
@@ -1669,6 +1670,8 @@ const OPERATION_BY_TOOL = new Map(ALL_OPERATIONS.flatMap((op) => (op.mcp ? [[op.
 // gnubok_feedback rate limit: 1 per 60s per actor. In-memory single-process;
 // no Redis dependency. See the gnubok_feedback tool definition below.
 const FEEDBACK_RATE_LIMIT_MS = 60_000
+/** How long gnubok_feedback waits for its event's handlers before it answers (the rest finishes after the answer). */
+const FEEDBACK_EMIT_WAIT_MS = 10_000
 const feedbackRateLimit = new Map<string, number>()
 
 const VALID_CATEGORIES = [
@@ -7866,16 +7869,51 @@ export const tools: McpTool[] = [
         userId,
         companyId,
       }
-      emitAfterResponse(() => eventBus
-        .emit({ type: 'agent.feedback', payload })
-        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err)))
+      // Waited for before the answer, up to FEEDBACK_EMIT_WAIT_MS: emitted
+      // after the response (after()) only, an invocation killed in between
+      // lost the report although the agent had just been told it was sent.
+      // The handlers (the event_log row, the relay mail to the team) normally
+      // finish well inside the wait. The relay's send has no timeout of its
+      // own, so a provider that hangs must not hold the tool call: past the
+      // wait the answer says the send is under way (recorded: false) and
+      // after() keeps the emit alive until it settles. If the emit itself fails
+      // inside the wait the agent is told, and may send it again at once.
+      const emitted = eventBus.emit({ type: 'agent.feedback', payload })
+      let waitTimer: ReturnType<typeof setTimeout> | undefined
+      let settled = false
+      try {
+        settled = await Promise.race([
+          emitted.then(() => true),
+          new Promise<false>((resolve) => {
+            waitTimer = setTimeout(() => resolve(false), FEEDBACK_EMIT_WAIT_MS)
+          }),
+        ])
+        if (!settled) {
+          emitAfterResponse(() => emitted.catch((err) => log.error('agent.feedback emit failed after the answer', err as Error)))
+        }
+      } catch (err) {
+        feedbackRateLimit.delete(rateKey)
+        throw err
+      } finally {
+        if (waitTimer) clearTimeout(waitTimer)
+      }
 
       // A relayed report becomes a support ticket answered by e-mail to the
       // user this connection acts as (the relay's replyTo), so a person who
       // never heard of the report got our reply out of the blue (crm#1336).
       // The result tells the agent to say so; the description stays as it
       // is, since it ships in every tools/list.
-      if (agentFeedbackRecipient() !== null && isRelayWorthy(payload)) {
+      const relayed = agentFeedbackRecipient() !== null && isRelayWorthy(payload)
+      if (!settled) {
+        // Not confirmed yet: under way, never "sent".
+        return {
+          recorded: false,
+          message: relayed
+            ? 'Being sent to the Accounted team: it was not confirmed within 10 seconds and finishes on its own, so do not send it again. Tell the user you reported this: the team may reply by e-mail to the address of the Accounted user this connection belongs to.'
+            : 'Being recorded for product-team triage: it was not confirmed within 10 seconds and finishes on its own, so do not send it again.',
+        }
+      }
+      if (relayed) {
         return {
           recorded: true,
           message: 'Sent to the Accounted team as a support ticket. Tell the user now that you reported this: the team may reply by e-mail to the address of the Accounted user this connection belongs to.',
@@ -31777,7 +31815,8 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
       if (!taskRow) {
         return NextResponse.json(jsonRpcError(id ?? null, -32602, `Task not found: "${taskId}"`))
       }
-      const row = taskRow as McpTaskRow
+      // A task whose invocation was killed is answered as failed, not as working forever.
+      const row = await abandonMcpTaskIfStale(supabase, taskRow as McpTaskRow)
       const wire: Record<string, unknown> = { resultType: 'complete', ...taskToWire(row) }
       if (row.status === 'completed' && row.result) wire.result = row.result
       if (row.status === 'failed' && row.error) wire.error = row.error

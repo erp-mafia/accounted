@@ -25,7 +25,7 @@ beforeEach(() => {
     { id: 'doc-1', company_id: COMPANY, storage_path: 'company-1/u/a.pdf', file_name: 'Avrakning.pdf', mime_type: 'application/pdf', sha256_hash: SHA, journal_entry_id: 'je-d1' },
     { id: 'doc-free', company_id: COMPANY, journal_entry_id: null },
   ])
-  vi.mocked(downloadDocumentObject).mockResolvedValue({ blob: new Blob([BYTES]), error: null, resolvedPath: 'company-1/u/a.pdf' })
+  vi.mocked(downloadDocumentObject).mockResolvedValue({ blob: new Blob([BYTES]), error: null, errors: [], resolvedPath: 'company-1/u/a.pdf' })
 })
 
 describe('linkDocumentOnce', () => {
@@ -59,7 +59,7 @@ describe('copyDocumentToVoucher', () => {
   })
 
   it('refuses bytes that do not match the recorded hash', async () => {
-    vi.mocked(downloadDocumentObject).mockResolvedValue({ blob: new Blob(['tampered']), error: null, resolvedPath: 'x' })
+    vi.mocked(downloadDocumentObject).mockResolvedValue({ blob: new Blob(['tampered']), error: null, errors: [], resolvedPath: 'x' })
     await expect(
       copyDocumentToVoucher(mem.client as SupabaseClient, { companyId: COMPANY, userId: 'u-1', documentId: 'doc-1', journalEntryId: 'je-c1', scope: 's' }),
     ).rejects.toThrow('does not match its recorded hash')

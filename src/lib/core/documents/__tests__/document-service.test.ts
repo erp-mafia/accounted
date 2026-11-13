@@ -1578,6 +1578,8 @@ describe('dual-layout read helpers', () => {
     expect(result.blob).toBeNull()
     expect(result.resolvedPath).toBeNull()
     expect(result.error?.message).toBe(`missing:${legacy}`)
+    // Every key's answer, for a caller that must know all of them said "not found".
+    expect(result.errors.map((e) => e.message)).toEqual([`missing:${legacy}`, `missing:${scoped}`])
   })
 })
 

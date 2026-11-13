@@ -1,8 +1,8 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { withServiceCronContext } from '@/lib/api/with-cron-context'
+import { withServiceCronContext, type CronItemContext } from '@/lib/api/with-cron-context'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
  * GET /api/documents/verify/cron: nightly 03:00 UTC (schedule in vercel.json).
@@ -30,9 +30,73 @@ export const maxDuration = 300
 // tail of the queue was never reached.
 const DEFAULT_VERIFY_BATCH_SIZE = 200
 
+/**
+ * No document is started after this long. The batch size above is an
+ * estimate; the median run is 106 s, and a night of slow downloads has no
+ * other bound before the run is cut at the route's 300 s (declared above). A
+ * document not reached has no ledger row, so it is still first in tomorrow's
+ * queue.
+ */
+const VERIFY_TIME_BUDGET_MS = 240_000
+
+/** Pause before the one retry of a failed download. */
+const DOWNLOAD_RETRY_PAUSE_MS = 500
+
+/**
+ * After this many documents in a row that storage failed to serve for a
+ * moment or as a service (isTransientStorageError), the run stops and answers
+ * an error once: storage is failing, not the documents, and going on made one
+ * item error per document for up to 200 documents. Refusals of one document
+ * (a 403) do not count: documents uploaded together that storage refuses
+ * would otherwise stop the run at the fifth, night after night. A document
+ * storage could not serve is a warning on its own; the run reports them in
+ * one error.
+ */
+const STORAGE_FAILURES_TO_STOP = 5
+
+/**
+ * Whether storage failed for a moment or as a service, saying nothing about
+ * this document: no answer at all, a 5xx, 429 or 408, 401 (the service role's
+ * own key), or a missing bucket (configuration). The document is left first
+ * in the queue for the next run.
+ */
+function isTransientStorageError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return true
+  const { status, message } = error as { status?: unknown; message?: unknown }
+  if (typeof status !== 'number') return true
+  if (typeof message === 'string' && /bucket/i.test(message)) return true
+  return status >= 500 || status === 429 || status === 408 || status === 401
+}
+
+/**
+ * Whether storage answered that nothing is at this key: HTTP 404, the 400
+ * with statusCode "404" Supabase Storage answers for a missing object, or a
+ * 400 InvalidKey (no object can be stored under a key storage rejects).
+ * Anything else (a 5xx, 429, 401, 403, no answer at all) says nothing about
+ * the object. A missing bucket answers "not found" too, but that is
+ * configuration, never a lost document.
+ */
+function isObjectNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const e = error as { message?: unknown; status?: unknown; statusCode?: unknown; code?: unknown; error?: unknown }
+  if (typeof e.status === 'number' && e.status >= 500) return false
+  const text = [e.message, e.code, e.error].filter((part): part is string => typeof part === 'string').join(' ')
+  if (/bucket/i.test(text)) return false
+  return e.status === 404 || e.statusCode === '404' || e.statusCode === 'InvalidKey' || /not[\s_-]?found|NoSuchKey|invalid ?key/i.test(text)
+}
+
 type ServiceClient = ReturnType<typeof createServiceRoleClient>
 
-type IntegrityResult = 'passed' | 'hash_mismatch' | 'object_missing'
+/**
+ * unreadable: storage refuses this document at every key with something other
+ * than "not found" (a 403). Recorded so the document moves behind the others
+ * in the queue instead of heading it every night; it is tried again when its
+ * turn comes. Migration 20261113041501.
+ */
+type IntegrityResult = 'passed' | 'hash_mismatch' | 'object_missing' | 'unreadable'
+
+/** PostgreSQL check_violation: the ledger refuses a result its migration has not added yet. */
+const CHECK_VIOLATION = '23514'
 
 /** One row of public.next_documents_for_integrity_check(). */
 interface QueuedDocument {
@@ -57,7 +121,7 @@ async function recordCheck(
   result: IntegrityResult,
   computedHash: string | null,
   detail: string | null
-): Promise<{ error: { message: string } | null }> {
+): Promise<{ error: { message: string; code?: string } | null }> {
   const { error } = await supabase.from('document_integrity_checks').insert({
     company_id: doc.company_id,
     document_id: doc.id,
@@ -102,8 +166,19 @@ export const GET = withServiceCronContext('cron.documents_verify', async (_reque
   // in the response so a broken write path shows up on the first run instead
   // of weeks later.
   let writeFailures = 0
+  // Documents storage could not serve twice (not every key answered "not
+  // found"): nothing written, left first in the queue.
+  let storageOutages = 0
+  const storageDeferredIds: string[] = []
+  // Documents storage refuses to serve at every key (a 403): recorded
+  // unreadable, so they move behind the others; reported when it is new.
+  let unreadable = 0
+  const newlyUnreadableIds: string[] = []
+  // Documents left for the next run because storage failed for a moment or
+  // as a service: only these count toward the stop.
+  let transientFailures = 0
 
-  const summary = await ctx.forEach('document', documents, async (doc, itemCtx) => {
+  const verifyOne = async (doc: QueuedDocument, itemCtx: CronItemContext): Promise<void> => {
     // Dual-layout download: the batch is snapshotted up front, and a
     // concurrent Phase B backfill (scripts/backfill-document-storage-paths.ts)
     // can re-home an object from the legacy uploader-scoped key to the
@@ -112,11 +187,73 @@ export const GET = withServiceCronContext('cron.documents_verify', async (_reque
     // PERMANENT false DOCUMENT_OBJECT_MISSING INTEGRITY_FAILURE row into the
     // immutable audit log for a healthy document. The helper tries the
     // stored pointer first, then the alternate layout.
-    const { blob: fileData, error: downloadError } = await downloadDocumentObject(
-      supabase,
-      doc.storage_path,
-      doc.company_id
-    )
+    let download = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
+
+    if (!download.blob) {
+      // One more try before anything permanent is written: a dropped
+      // connection or a gateway hiccup on a healthy object must not become a
+      // DOCUMENT_OBJECT_MISSING row nobody can remove.
+      await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_PAUSE_MS))
+      download = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
+    }
+    const { blob: fileData, error: downloadError } = download
+
+    const errorTexts = download.errors.map((e) => e.message || 'download_failed')
+    const leaveForNextRun = (transient: boolean): void => {
+      storageOutages++
+      if (transient) transientFailures++
+      storageDeferredIds.push(doc.id)
+      itemCtx.log.warn('document left for the next run: storage could not serve it', { documentId: doc.id, errors: errorTexts })
+    }
+
+    if (!fileData && !(download.errors.length > 0 && download.errors.every(isObjectNotFound))) {
+      // Missing is concluded only when every key (the stored one and the
+      // other layout) answered "not found". The first key's 404 with a 5xx,
+      // 429, 401, 403 or no answer on the other says nothing about the
+      // object: no audit row, the document is never written missing.
+      if (download.errors.some(isTransientStorageError)) {
+        // Storage failed for a moment or as a service: no ledger row either,
+        // the document keeps its place. A warning: the run reports these in
+        // one error at its end.
+        leaveForNextRun(true)
+        return
+      }
+      if (download.errors.some(isObjectNotFound)) {
+        // One key holds nothing and storage refuses the other: neither missing
+        // nor unreadable can be told. Left for the next run, reported in the
+        // run's error; it does not stop the run.
+        leaveForNextRun(false)
+        return
+      }
+      // Storage refuses this document at every key (a 403): recorded
+      // unreadable, so it moves behind the others instead of heading the
+      // queue every night. Reported when it is new, not every time it comes up.
+      const { data: previous } = await supabase
+        .from('document_integrity_checks')
+        .select('result')
+        .eq('document_id', doc.id)
+        .order('checked_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const { error: ledgerError } = await recordCheck(supabase, doc, 'unreadable', null, `UNREADABLE: ${errorTexts.join('; ')}`.slice(0, 1000))
+      if (ledgerError?.code === CHECK_VIOLATION) {
+        // The ledger does not take 'unreadable' until its migration lands.
+        leaveForNextRun(false)
+        return
+      }
+      if (ledgerError) {
+        writeFailures++
+        itemCtx.log.error('integrity ledger write failed', new Error(ledgerError.message), { documentId: doc.id, result: 'unreadable' })
+        throw new Error(`integrity ledger write failed: ${ledgerError.message}`)
+      }
+      unreadable++
+      if ((previous as { result?: string } | null)?.result === 'unreadable') {
+        itemCtx.log.warn('document still unreadable: storage refuses it', { documentId: doc.id, errors: errorTexts })
+      } else {
+        newlyUnreadableIds.push(doc.id)
+      }
+      return
+    }
 
     if (downloadError || !fileData) {
       // The storage object is unreadable: surface it as an incident in the
@@ -231,7 +368,26 @@ export const GET = withServiceCronContext('cron.documents_verify', async (_reque
     } else {
       verified++
     }
-  })
+  }
+
+  // One document at a time through ctx.forEach (its try/catch and per-item
+  // log), with the clock and the run of storage failures checked before each.
+  const deadline = ctx.startedAt + VERIFY_TIME_BUDGET_MS
+  const summary = { total: 0, failed: 0 }
+  let deferred = 0
+  let storageFailuresInARow = 0
+  for (const [index, doc] of documents.entries()) {
+    if (Date.now() >= deadline || storageFailuresInARow >= STORAGE_FAILURES_TO_STOP) {
+      deferred = documents.length - index
+      break
+    }
+    // Only a failure of storage itself counts toward the stop, never a refusal of one document.
+    const transientBefore = transientFailures
+    const one = await ctx.forEach('document', [doc], verifyOne)
+    summary.total += one.total
+    summary.failed += one.failed
+    storageFailuresInARow = transientFailures > transientBefore ? storageFailuresInARow + 1 : 0
+  }
 
   ctx.log.info('document verify summary', {
     processed: summary.total,
@@ -239,6 +395,9 @@ export const GET = withServiceCronContext('cron.documents_verify', async (_reque
     failures,
     missingObjects,
     writeFailures,
+    storageOutages,
+    unreadable,
+    deferred,
     downloadErrors: summary.failed,
   })
 
@@ -251,12 +410,47 @@ export const GET = withServiceCronContext('cron.documents_verify', async (_reque
     })
   }
 
-  return NextResponse.json({
+  const counts = {
     processed: summary.total,
     verified,
     failures,
     missingObjects,
     writeFailures,
     errors: summary.failed,
-  })
+    // Present only when they happened, so a normal night answers as before.
+    ...(storageOutages > 0 ? { storageOutages } : {}),
+    ...(unreadable > 0 ? { unreadable } : {}),
+    ...(deferred > 0 ? { deferred } : {}),
+  }
+
+  if (newlyUnreadableIds.length > 0) {
+    // Once per document: a document still unreadable when its turn comes
+    // again is a warning.
+    ctx.log.error('documents storage refuses to serve: recorded unreadable, behind the others in the queue', {
+      unreadable: newlyUnreadableIds.length,
+      documentIds: newlyUnreadableIds.slice(0, 20),
+    })
+  }
+
+  if (storageFailuresInARow >= STORAGE_FAILURES_TO_STOP) {
+    // Storage failed for the last documents in a row: the night's check did
+    // not happen. One error (this answer's log line) instead of one per document.
+    return errorResponseFromCode('TRANSIENT_ERROR', ctx.log, {
+      requestId: ctx.requestId,
+      reason: `document verify stopped: storage could not serve ${storageFailuresInARow} documents in a row; ${deferred} left for the next run`,
+      details: counts,
+    })
+  }
+
+  if (storageOutages > 0) {
+    // Some documents only: the run did its work, and they are first in the
+    // queue tomorrow. One error, so a document that storage never serves is
+    // seen every night.
+    ctx.log.error('documents left for the next run: storage could not serve them', {
+      storageOutages,
+      documentIds: storageDeferredIds.slice(0, 20),
+    })
+  }
+
+  return NextResponse.json(counts)
 })

@@ -248,6 +248,18 @@ export async function reconcileStrandedInboxUnderlag(
     })
   }
 
+  // A document anchored to another verifikat never heals by itself: every
+  // run finds it again, and the per-item warning reaches nobody. One error
+  // per run with the counts, so the conflicts get a person.
+  if (summary.anchoredElsewhere > 0) {
+    log.error('inbox underlag reconcile: documents anchored to another verifikat need a human', {
+      anchored_elsewhere: summary.anchoredElsewhere,
+      unlinked_locked: summary.unlinkedLocked,
+      still_unlinked: summary.stillUnlinked,
+      stranded_on_booked: summary.strandedOnBooked,
+    })
+  }
+
   return summary
 }
 

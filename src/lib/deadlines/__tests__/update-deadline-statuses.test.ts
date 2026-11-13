@@ -34,3 +34,26 @@ describe('updateDeadlineStatuses: bounds are Swedish calendar days', () => {
     expect(findCalls('deadlines', 'lte')).toEqual([['due_date', threshold]])
   })
 })
+
+describe('updateDeadlineStatuses: a failed update fails the run', () => {
+  it('throws when the overdue update fails, after still trying the action_needed one', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } })
+    enqueue({ data: [{ id: 'd2' }] })
+
+    await expect(updateDeadlineStatuses(supabase as never, new Date('2026-07-01T10:00:00Z'))).rejects.toThrow(
+      'Deadline status update failed (overdue: canceling statement due to statement timeout); 1 deadlines were updated',
+    )
+    expect(findCalls('deadlines', 'update')).toHaveLength(2)
+  })
+
+  it('throws when the action_needed update fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ error: { message: 'connection reset' } })
+
+    await expect(updateDeadlineStatuses(supabase as never, new Date('2026-07-01T10:00:00Z'))).rejects.toThrow(
+      'action_needed: connection reset',
+    )
+  })
+})

@@ -31,6 +31,15 @@
  * else of the consumers: its callers (the cron route, the kick in lib/init's
  * graph) compile the webhook fan-out, never every handler.
  *
+ * A delivery whose lease runs out on its last attempt (the run was killed, 8
+ * times) goes dead inside the claim's SQL, which answers claimed rows only,
+ * so nothing ever logged it. The cycle reads the deliveries on their last
+ * attempt before it claims and reports, as an error, the ones the claim took
+ * dead (reportDeadOnLeaseExpiry). Reading them was chosen over having the
+ * claim return them: that needs the function dropped and recreated with a new
+ * return type, which code deployed before or after the migration must both
+ * survive, for the same log line.
+ *
  * Two callers: the per-minute cron (/api/events/dispatch/cron) and the kick
  * after an emit that enqueued something (lib/events/outbox.ts). SKIP LOCKED
  * keeps their claims disjoint.
@@ -107,6 +116,8 @@ export interface OutboxDispatchSummary {
   retried: number
   /** Deferred deliveries failed for the last time (dead). */
   dead: number
+  /** Deliveries the claim took dead because their lease ran out on the last attempt. */
+  deadOnLeaseExpiry: number
   /** Age of the oldest delivery claimed (its event's age at the claim), or null with none claimed. */
   oldestAgeMs: number | null
   /** The outbox functions are not in the database yet (code deployed before the migration). */
@@ -150,6 +161,22 @@ export class OutboxError extends Error {
  * again when their lease runs out.
  */
 export async function dispatchEventOutbox(options: DispatchOptions): Promise<OutboxDispatchSummary> {
+  if (eventOutboxMode() === 'off') return claimAndFinish(options)
+
+  const lastAttempt = await deliveriesOnLastAttempt(options.supabase)
+  let summary: OutboxDispatchSummary | undefined
+  try {
+    summary = await claimAndFinish(options)
+    return summary
+  } finally {
+    // Also after a claim or finish that threw: the deliveries the claims of
+    // this cycle took dead are no longer live, so no later cycle finds them.
+    const dead = await reportDeadOnLeaseExpiry(options.supabase, lastAttempt)
+    if (summary) summary.deadOnLeaseExpiry = dead
+  }
+}
+
+async function claimAndFinish(options: DispatchOptions): Promise<OutboxDispatchSummary> {
   const mode = eventOutboxMode()
   const summary: OutboxDispatchSummary = {
     mode,
@@ -159,6 +186,7 @@ export async function dispatchEventOutbox(options: DispatchOptions): Promise<Out
     ran: 0,
     retried: 0,
     dead: 0,
+    deadOnLeaseExpiry: 0,
     oldestAgeMs: null,
     notDeployed: false,
   }
@@ -251,6 +279,69 @@ export async function dispatchEventOutbox(options: DispatchOptions): Promise<Out
   }
 
   return summary
+}
+
+/** What claim_event_deliveries writes on a delivery it takes dead (migration 20261018110300). */
+const LEASE_EXPIRED_ERROR = 'lease expired on the last attempt'
+
+interface DeliveryKey {
+  outbox_id: number
+  consumer_id: string
+}
+
+/**
+ * The claimed deliveries on their last attempt: the only ones the next claim
+ * can take dead (when their lease has run out). Normally none. Read through
+ * the partial index of live deliveries. Best effort: a failed read is a
+ * warning and reports nothing, it never stops the dispatch.
+ */
+async function deliveriesOnLastAttempt(supabase: SupabaseClient): Promise<DeliveryKey[]> {
+  const { data, error } = await supabase
+    .from('event_deliveries')
+    .select('outbox_id, consumer_id')
+    .eq('status', 'claimed')
+    .gte('attempts', DISPATCH_MAX_ATTEMPTS)
+    .order('outbox_id', { ascending: true })
+    .limit(DISPATCH_BATCH_SIZE)
+  if (error) {
+    if (!isOutboxNotDeployed(error)) log.warn('event outbox last-attempt read failed', { code: error.code })
+    return []
+  }
+  return (data ?? []) as DeliveryKey[]
+}
+
+/**
+ * Log, once each, the deliveries of `candidates` that a claim of this cycle
+ * took dead: they are dead with the claim's own error text. A delivery that
+ * died in fail_event_delivery carries another text and was logged there.
+ * Answers how many.
+ */
+async function reportDeadOnLeaseExpiry(supabase: SupabaseClient, candidates: DeliveryKey[]): Promise<number> {
+  if (candidates.length === 0) return 0
+  const { data, error } = await supabase
+    .from('event_deliveries')
+    .select('outbox_id, consumer_id, attempts')
+    .in('outbox_id', [...new Set(candidates.map((c) => c.outbox_id))])
+    .eq('status', 'dead')
+    .eq('last_error', LEASE_EXPIRED_ERROR)
+  if (error) {
+    log.warn('event outbox dead-on-lease-expiry read failed', { code: error.code })
+    return 0
+  }
+  const wanted = new Set(candidates.map((c) => `${c.outbox_id}:${c.consumer_id}`))
+  const dead = ((data ?? []) as Array<DeliveryKey & { attempts: number }>).filter((row) =>
+    wanted.has(`${row.outbox_id}:${row.consumer_id}`),
+  )
+  for (const row of dead) {
+    log.error('event outbox delivery dead', new Error(LEASE_EXPIRED_ERROR), {
+      outboxId: row.outbox_id,
+      consumerId: row.consumer_id,
+      attempt: row.attempts,
+      status: 'dead',
+      error: LEASE_EXPIRED_ERROR,
+    })
+  }
+  return dead.length
 }
 
 /**

@@ -174,6 +174,45 @@ describe('GET /api/reports/ledger-account-days/build/cron', () => {
     })
   })
 
+  it('logs a tag set step that fails for any other reason than a lock wait as an error, like the other steps', async () => {
+    serve(
+      [],
+      {
+        'build_ledger_tagset_days:c2': { code: '57014', message: 'canceling statement due to statement timeout' },
+        'compact_ledger_tagset_days:c3': { code: '55P03', message: 'lock timeout' },
+      },
+      [],
+      { pending: [['c2'], ['c2']], unfolded: [['c3'], ['c3']] },
+    )
+    await GET(createCronRequest(PATH, 'Bearer cron-secret'))
+    expect(logError).toHaveBeenCalledWith('ledger_tagset_days build failed', {
+      companyId: 'c2',
+      code: '57014',
+      reason: 'canceling statement due to statement timeout',
+    })
+    expect(logWarn).toHaveBeenCalledWith('ledger_tagset_days compaction skipped', { companyId: 'c3', code: '55P03' })
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts no build after 25 s: one more may run 30 s and the route is cut at 60', async () => {
+    serve([['c1', 'c2', 'c3']])
+    let builds = 0
+    const served = rpc.getMockImplementation()!
+    rpc.mockImplementation(async (fn: string, args: { p_company_id?: string }) => {
+      if (fn === 'build_ledger_account_days') {
+        builds++
+        // Each build takes 13 s: the third would start at 26 s.
+        vi.setSystemTime(new Date(Date.now() + 13_000))
+      }
+      return served(fn, args)
+    })
+    const response = await GET(createCronRequest(PATH, 'Bearer cron-secret'))
+    expect(response.status).toBe(200)
+    expect(builds).toBe(2)
+    // Nothing else is started either: no fold, no tag set listing.
+    expect(rpc.mock.calls.filter(([fn]) => fn !== 'ledger_account_days_pending' && fn !== 'build_ledger_account_days')).toEqual([])
+  })
+
   it('leaves the tag sets for a later run while their migration is not applied', async () => {
     serve([['c1']], {}, [], { missing: true })
     const response = await GET(createCronRequest(PATH, 'Bearer cron-secret'))

@@ -166,6 +166,35 @@ describe('GET /api/events/cleanup/cron', () => {
     expect(timeline).toContain('prune_event_outbox')
   })
 
+  it('starts no call after 250 s and names the steps left for the next run', async () => {
+    // Every delivery batch is full and takes 60 s: the fifth would start at 300 s.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      rpc.mockImplementation((name: string, args?: unknown) => {
+        if (name === 'prune_delivery_events') {
+          vi.setSystemTime(new Date(Date.now() + 60_000))
+          timeline.push(name)
+          return Promise.resolve({ data: 20_000, error: null })
+        }
+        return defaultRpc(name, args)
+      })
+
+      const response = await GET(createCronRequest('/api/events/cleanup/cron'))
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        success: true,
+        deletedDelivery: 100_000,
+        deferred: ['delivery_prune', 'telemetry_purge', 'outbox_prune'],
+      })
+      // Five batches (the last one started at 240 s), then nothing more.
+      expect(timeline).toEqual(['rollup_agent_telemetry', ...Array(5).fill('prune_delivery_events')])
+      expect(deleteCalls).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('prunes the event outbox after the event_log steps', async () => {
     pruneResult = { data: 7, error: null }
     const response = await GET(createCronRequest('/api/events/cleanup/cron'))

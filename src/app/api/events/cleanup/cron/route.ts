@@ -28,7 +28,16 @@ import { isOutboxNotDeployed } from '@/lib/events/outbox-dispatcher'
  *    never purged before it is counted.
  * 4. The event outbox (event_outbox, event_deliveries): finished events after
  *    7 days, events with a dead delivery after 30 (prune_event_outbox).
+ *
+ * Time: a rollup call may run 30 s (pre_request_statement_timeout), every
+ * other call 8 s, so seven slow rollups, ten slow batches and the two last
+ * calls add up to about 306 s against the route's limit (300 s, declared by
+ * the route). No call is started after
+ * TIME_BUDGET_MS (250 s + one 30 s call = 280 s); what was not started is
+ * named in `deferred`, logged as an error and done by the next night's run,
+ * which starts from the same cutoffs.
  */
+const TIME_BUDGET_MS = 250_000
 const DELIVERY_RETENTION_DAYS = 30
 const TELEMETRY_RETENTION_DAYS = 180
 const ROLLUP_MAX_CALLS = 7
@@ -52,9 +61,18 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   // set of rows.
   const rollupSince = new Date()
   rollupSince.setDate(rollupSince.getDate() - TELEMETRY_RETENTION_DAYS - 1)
+  const deadline = ctx.startedAt + TIME_BUDGET_MS
+  const deferred: string[] = []
+  const outOfTime = (step: string): boolean => {
+    if (Date.now() < deadline) return false
+    if (!deferred.includes(step)) deferred.push(step)
+    return true
+  }
+
   let rolledUpDays = 0
   let rollupError: unknown = null
   for (let call = 0; call < ROLLUP_MAX_CALLS; call++) {
+    if (outOfTime('rollup')) break
     const { data: rolled, error } = await supabase.rpc('rollup_agent_telemetry', {
       p_since: rollupSince.toISOString(),
       p_max_days: 1,
@@ -73,6 +91,7 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   let deletedDelivery = 0
   let deliveryError: unknown = null
   for (let batch = 0; batch < DELIVERY_MAX_BATCHES; batch++) {
+    if (outOfTime('delivery_prune')) break
     const { data: pruned, error } = await supabase.rpc('prune_delivery_events', {
       p_before: deliveryCutoff.toISOString(),
       p_limit: DELIVERY_BATCH,
@@ -90,7 +109,9 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   // 3. Everything past 180 days, catches the telemetry rows step 2 skipped.
   let deletedTelemetry = 0
   let telemetryError: unknown = null
-  if (!rollupError) {
+  // A rollup cut short by the clock skips the purge like a failed one: a
+  // telemetry day is never purged before it is counted.
+  if (!rollupError && !deferred.includes('rollup') && !outOfTime('telemetry_purge')) {
     const { error, count } = await supabase
       .from('event_log')
       .delete({ count: 'exact' })
@@ -119,7 +140,9 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   // never fails the run, and a database the outbox migration has not reached
   // yet answers PGRST202, which is a skip.
   let prunedOutbox = 0
-  const { data: pruned, error: pruneError } = await supabase.rpc('prune_event_outbox')
+  const { data: pruned, error: pruneError } = outOfTime('outbox_prune')
+    ? { data: 0, error: null }
+    : await supabase.rpc('prune_event_outbox')
   if (pruneError) {
     if (isOutboxNotDeployed(pruneError)) ctx.log.info('event outbox not deployed; prune skipped')
     else ctx.log.error('event outbox prune failed', pruneError)
@@ -128,8 +151,23 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     ctx.log.info('event outbox prune summary', { prunedOutbox })
   }
 
+  if (deferred.length > 0) {
+    ctx.log.error('event log cleanup ran out of time; the steps left wait for the next run', {
+      deferred,
+      durationMs: Date.now() - ctx.startedAt,
+    })
+  }
+
   const failure = rollupError ?? deliveryError ?? telemetryError
   if (failure) return errorResponse(failure, ctx.log, { requestId: ctx.requestId })
 
-  return NextResponse.json({ success: true, deleted, deletedDelivery, deletedTelemetry, rolledUpDays, prunedOutbox })
+  return NextResponse.json({
+    success: true,
+    deleted,
+    deletedDelivery,
+    deletedTelemetry,
+    rolledUpDays,
+    prunedOutbox,
+    ...(deferred.length > 0 ? { deferred } : {}),
+  })
 })
