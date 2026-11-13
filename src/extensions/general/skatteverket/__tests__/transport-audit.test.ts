@@ -58,6 +58,8 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
   return {
     ...actual,
+    // The company's own redovisare, which the query-string routes now read.
+    resolveRedovisare: vi.fn(async () => REDOVISARE),
     buildMomsuppgift: vi.fn(async () => ({
       declaration: COMPLETE_VAT_DECLARATION,
       redovisare: REDOVISARE,

@@ -9548,6 +9548,15 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_en:
       'The organisation number is confirmed with BankID in more than one company, and the ombud connection can only apply to one of them. Archive the other companies with the same organisation number, or ask whoever manages them to, then try again.',
   },
+  // A Skatteverket request named a redovisare other than the active company's
+  // own: a stale page after a company switch, or a crafted URL.
+  SKV_REDOVISARE_NOT_COMPANY: {
+    httpStatus: 403,
+    message_sv:
+      'Organisationsnumret hör inte till företaget du arbetar i. Ladda om sidan och försök igen.',
+    message_en:
+      'The organisation number does not belong to the company you are working in. Reload the page and try again.',
+  },
   SKATTEVERKET_RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar mot Skatteverket. Vänta en stund och försök igen.',

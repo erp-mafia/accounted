@@ -37,6 +37,7 @@ import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwC
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
+  resolveRedovisare,
   type VatDeclarationPrep,
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain, vatDeclarationIncompleteFailure } from './lib/vat-submit'
@@ -63,7 +64,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
-import { FilingIdentityError } from '@/lib/invariants/org-number'
+import { FilingIdentityError, sameOrgNumber } from '@/lib/invariants/org-number'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import { ombudAppointment } from '@/lib/skatteverket/ombud-appointment'
 import { ombudVerifyRetryAfterSeconds } from '@/lib/skatteverket/ombud-verify-retry'
@@ -1398,7 +1399,7 @@ export const skatteverketExtension: Extension = {
       path: '/declaration/draft',
       handler: async (request: Request, ctx: ExtensionContext) => {
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           const response = await skvRequest(
             ctx.supabase,
@@ -1443,7 +1444,7 @@ export const skatteverketExtension: Extension = {
         if (roleBlocked) return roleBlocked
 
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           const response = await skvRequest(
             ctx.supabase,
@@ -1483,7 +1484,7 @@ export const skatteverketExtension: Extension = {
         if (roleBlocked) return roleBlocked
 
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           // 'declaration/lock' with outcome 'ok' is read by the reset
           // guards: never relabel it.
@@ -1533,7 +1534,7 @@ export const skatteverketExtension: Extension = {
         if (roleBlocked) return roleBlocked
 
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           const response = await skvRequest(
             ctx.supabase,
@@ -1658,7 +1659,7 @@ export const skatteverketExtension: Extension = {
       path: '/declaration/submitted',
       handler: async (request: Request, ctx: ExtensionContext) => {
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           // resolveReadAuth: post-signing checks should outlive the user's
           // 65-minute session when the company has a moms_ombud grant, and
@@ -1701,7 +1702,7 @@ export const skatteverketExtension: Extension = {
       path: '/declaration/decided',
       handler: async (request: Request, ctx: ExtensionContext) => {
         try {
-          const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+          const { redovisare, redovisningsperiod } = await parseQueryParams(request, ctx)
 
           // resolveReadAuth: post-signing checks should outlive the user's
           // 65-minute session when the company has a moms_ombud grant, and
@@ -2708,24 +2709,36 @@ async function parseDeclarationInput(
   return { periodType, year, period, fiscalPeriodId }
 }
 
+/** A Skatteverket request named a redovisare that is not the active company's own. */
+class RedovisareNotCompanyError extends Error {
+  readonly code = 'SKV_REDOVISARE_NOT_COMPANY'
+}
+
 /**
  * Parse redovisare and redovisningsperiod from query params.
  * Used by GET/PUT/DELETE endpoints that don't need a full body.
+ *
+ * The redovisare answered is always the company's own (resolveRedovisare),
+ * never the URL's: a read may run on Accounted's own certificate
+ * (resolveReadAuth with a moms_ombud grant), which Skatteverket answers for
+ * every company that appointed Accounted, so a number taken from the URL
+ * would read another customer's filings. A URL naming another number is
+ * refused rather than silently corrected: the page that sent it is stale.
  */
-function parseQueryParams(
+async function parseQueryParams(
   request: Request,
   ctx: ExtensionContext
-): { redovisare: string; redovisningsperiod: string } {
+): Promise<{ redovisare: string; redovisningsperiod: string }> {
   const url = new URL(request.url)
-  const redovisare = url.searchParams.get('redovisare')
+  const named = url.searchParams.get('redovisare')
   const redovisningsperiod = url.searchParams.get('redovisningsperiod')
 
-  if (!redovisare || !redovisningsperiod) {
+  if (!named || !redovisningsperiod) {
     throw new Error('Saknar obligatoriska parametrar: redovisare, redovisningsperiod')
   }
 
-  // Suppress unused variable warning: ctx is required by the type signature
-  void ctx
+  const redovisare = await resolveRedovisare(ctx.supabase, ctx.companyId)
+  if (!sameOrgNumber(named, redovisare)) throw new RedovisareNotCompanyError()
 
   return { redovisare, redovisningsperiod }
 }
@@ -2829,6 +2842,10 @@ function handleSkvError(err: unknown): NextResponse {
 
   if (err instanceof FilingIdentityError) {
     return NextResponse.json({ error: err.message, code: err.code }, { status: 422 })
+  }
+
+  if (err instanceof RedovisareNotCompanyError) {
+    return errorResponseFromCode(err.code, log)
   }
 
   log.error('API error', err)
