@@ -289,6 +289,7 @@
     "callback_error_title_oauth": "External sign-in didn't work",
     "callback_error_body_oauth": "The external sign-in could not be completed. Try again, or sign in with another method.",
     "session_idle": "You were inactive. Sign in again.",
+    "session_ended": "Your sign-in has ended. Sign in again to continue where you left off.",
     "session_absolute": "Your session expired for security reasons.",
     "reset_title": "Reset password",
     "reset_subtitle": "Enter your email and we'll send you a reset link",

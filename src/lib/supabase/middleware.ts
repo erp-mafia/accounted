@@ -47,7 +47,11 @@ import {
   requestProtocolFromHeaders,
   supabaseAuthCookieOptions,
 } from '@/lib/supabase/cookie-options'
-import { upgradeLegacyAuthCookies } from '@/lib/supabase/auth-cookies'
+import {
+  authTokenCookieNames,
+  supabaseAuthStorageKey,
+  upgradeLegacyAuthCookies,
+} from '@/lib/supabase/auth-cookies'
 import { quietRejectedRefreshTokenErrors } from '@/lib/supabase/refresh-token-errors'
 import { clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 import { createAuthServiceWatch, userSessionFetch } from '@/lib/supabase/auth-call-budget'
@@ -60,6 +64,7 @@ import {
 import {
   isSessionAuthMethod,
   SESSION_AUTH_METHOD_HINT_COOKIE,
+  SESSION_ENDED_REASON,
   SESSION_TIMEOUT_COOKIE,
   SESSION_TIMEOUT_REASON_HEADER,
   type SessionAuthMethod,
@@ -184,6 +189,13 @@ async function updateSessionInner(
   // budget (lib/supabase/auth-call-budget.ts). `authService` learns when
   // GoTrue could not answer at all.
   const authService = createAuthServiceWatch()
+  // Whether the browser brought a session, read from what it sent, before
+  // getUser() runs: a request that brought one and leaves without a user had
+  // it ended (signed out on another device, the session removed, the refresh
+  // token refused), and /login says so.
+  const storageKey = supabaseAuthStorageKey()
+  const broughtSession =
+    storageKey !== null && authTokenCookieNames(request.cookies.getAll(), storageKey).length > 0
   // True while getUser() runs. auth-js removes a session whose refresh it
   // could not complete after the access token expired, and that removal is
   // written through setAll as cookie deletions. When the refresh was only
@@ -609,7 +621,7 @@ async function updateSessionInner(
       copyResponseCookies(supabaseResponse, response)
       return response
     }
-    return bounceToAuth(request, supabaseResponse, '/login')
+    return bounceToAuth(request, supabaseResponse, '/login', broughtSession ? SESSION_ENDED_REASON : null)
   }
 
   // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
@@ -1104,11 +1116,16 @@ const AUTH_DESTINATION_PARAM = {
  * The bounce also has to carry the cookies auth-js queued on the response
  * while `getUser()` ran, hence `authResponse`: see
  * `redirectWithAuthCookies`.
+ *
+ * `reason` (SESSION_ENDED_REASON) tells /login the browser had a session
+ * that is gone, so the page says why the user is there instead of a bare
+ * sign-in form. A fixed word, never anything from the request.
  */
 function bounceToAuth(
   request: NextRequest,
   authResponse: NextResponse,
   target: keyof typeof AUTH_DESTINATION_PARAM,
+  reason: typeof SESSION_ENDED_REASON | null = null,
 ) {
   // Absolute-path reference: replaces path AND clears query/fragment.
   const url = new URL(target, request.url)
@@ -1116,9 +1133,12 @@ function bounceToAuth(
     request.nextUrl.pathname + request.nextUrl.search,
     '/',
   )
+  const query: string[] = []
   if (destination !== '/') {
-    url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
+    query.push(`${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`)
   }
+  if (reason) query.push(`reason=${reason}`)
+  if (query.length > 0) url.search = query.join('&')
   return redirectWithAuthCookies(authResponse, url)
 }
 

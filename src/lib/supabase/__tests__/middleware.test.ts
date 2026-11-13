@@ -602,6 +602,54 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBe(`${ORIGIN}/login`)
     })
 
+    describe('a session the browser brought that has ended', () => {
+      // The session cookie is named after the project (sb-<ref>-auth-token):
+      // these cases run against a project whose ref is `test`.
+      let previousUrl: string | undefined
+      beforeEach(() => {
+        previousUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+        process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+      })
+      afterEach(() => {
+        if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+        else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl
+      })
+
+      it('is named on /login, and the way back is still remembered', async () => {
+        state.authError = { name: 'AuthApiError', code: 'refresh_token_not_found' }
+        state.cookieWrites = [
+          { name: 'sb-test-auth-token', value: '', options: { path: '/', maxAge: 0 } },
+        ]
+
+        const response = await run('/settings/tax?tab=moms', {
+          headers: { cookie: 'sb-test-auth-token=dead' },
+        })
+
+        expect(locationOf(response)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax%3Ftab%3Dmoms&reason=ended`)
+      })
+
+      it('is named for a chunked session cookie and on the root page too', async () => {
+        state.authError = { name: 'AuthApiError', code: 'session_not_found' }
+
+        const response = await run('/', { headers: { cookie: 'sb-test-auth-token.0=part; sb-test-auth-token.1=rest' } })
+
+        expect(locationOf(response)).toBe(`${ORIGIN}/login?reason=ended`)
+      })
+
+      it('is not claimed for a browser that brought no session', async () => {
+        state.authError = { name: 'AuthSessionMissingError' }
+
+        const plain = await run('/settings/tax')
+        // Another cookie of the project's, and another project's session cookie.
+        const otherCookies = await run('/settings/tax', {
+          headers: { cookie: 'gnubok-locale=sv; sb-test-auth-token-code-verifier=pkce; sb-other-auth-token=x' },
+        })
+
+        expect(locationOf(plain)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax`)
+        expect(locationOf(otherCookies)).toBe(`${ORIGIN}/login?next=%2Fsettings%2Ftax`)
+      })
+    })
+
     it('carries the cookies that clear a dead session', async () => {
       // auth-js removes the session inside getUser() and queues the deletion
       // on the response. Dropping it on the bounce made the browser replay

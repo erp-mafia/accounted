@@ -7,6 +7,15 @@ export const SESSION_TIMEOUT_REASON_HEADER = 'x-session-timeout-reason'
 export type SessionAuthMethod = 'password' | 'bankid'
 export type SessionTimeoutReason = 'idle' | 'absolute'
 
+/**
+ * The /login `reason` for a session that ended other than by a timeout:
+ * signed out on another device, removed, its refresh token refused. The
+ * proxy sends it when a page request brings a session that is gone, the
+ * dashboard's session guard when an open tab finds out, and /login says
+ * that the sign-in has ended.
+ */
+export const SESSION_ENDED_REASON = 'ended'
+
 export interface SessionTimeoutClientState {
   enabled: boolean
   idleTimeoutMs: number

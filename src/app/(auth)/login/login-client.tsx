@@ -47,6 +47,7 @@ import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import {
   isSessionAuthMethod,
+  SESSION_ENDED_REASON,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
 import {
@@ -110,6 +111,9 @@ export function LoginClient({
   const reasonParam = searchParams.get('reason')
   const timeoutReason: SessionTimeoutReason | null =
     reasonParam === 'idle' || reasonParam === 'absolute' ? reasonParam : null
+  // The proxy found a session in the browser that had ended (signed out on
+  // another device, removed, its refresh token refused).
+  const sessionEnded = reasonParam === SESSION_ENDED_REASON
   const methodParam = searchParams.get('method')
   const requestedMethod = isSessionAuthMethod(methodParam) ? methodParam : 'password'
   // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
@@ -140,9 +144,11 @@ export function LoginClient({
   })
   const prevMethodRef = useRef(method)
 
+  // An ended session is a sign-out the user did not make here: the previous
+  // identity goes, as after a timeout, so a shared device starts clean.
   useEffect(() => {
-    if (timeoutReason) resetAnalyticsIdentity()
-  }, [timeoutReason])
+    if (timeoutReason || sessionEnded) resetAnalyticsIdentity()
+  }, [timeoutReason, sessionEnded])
 
   // After a failed credentials attempt, put the caret back in the password
   // field with the old value selected so the user can retype immediately.
@@ -627,6 +633,11 @@ export function LoginClient({
               <AttnLine>
                 {timeoutReason === 'idle' ? tAuth('session_idle') : tAuth('session_absolute')}
               </AttnLine>
+            </div>
+          )}
+          {sessionEnded && (
+            <div role="alert" className="mb-4">
+              <AttnLine>{tAuth('session_ended')}</AttnLine>
             </div>
           )}
           {callbackError === 'auth_error' && (

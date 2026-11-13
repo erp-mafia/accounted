@@ -7,6 +7,7 @@ import {
   onSignedOutElsewhere,
   reloadTo,
 } from '@/lib/auth/session-client'
+import { SESSION_ENDED_REASON } from '@/lib/auth/session-timeout-shared'
 
 /**
  * Leaves the dashboard as soon as the server says the session is gone.
@@ -21,7 +22,8 @@ import {
  * What remains is the plain case: the session ended while the page was open
  * (revoked from another device, expired refresh token). The token endpoint
  * answers 401, and instead of rendering empty lists the page clears what it
- * held and goes to /login, returning here after sign-in. A session-timeout
+ * held and goes to /login, which says the sign-in has ended, returning here
+ * after sign-in. A session-timeout
  * 401 is left to SessionTimeoutController, which signs out with its reason.
  * A 403 (an MFA step-up owed) goes to /mfa/verify the same way.
  *
@@ -45,6 +47,7 @@ export function BrowserSessionGuard() {
           ? new URL('/mfa/verify', window.location.origin)
           : new URL('/login', window.location.origin)
       if (back() !== '/') url.searchParams.set(reason === 'mfa_required' ? 'returnTo' : 'next', back())
+      if (reason === 'unauthenticated') url.searchParams.set('reason', SESSION_ENDED_REASON)
       leave(url, reason === 'unauthenticated')
     })
     const stopSignedOut = onSignedOutElsewhere(() => {
