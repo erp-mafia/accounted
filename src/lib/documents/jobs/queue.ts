@@ -147,7 +147,7 @@ async function runClaimed(
     // the run (a job claimed late, a long scan). It is tried again on the short schedule, where the next run gives
     // it the whole run, instead of waiting half an hour for an outage that is not there. The attempt stays spent:
     // a step that never fits must run out of attempts, not come back every minute for good.
-    const waitOut = isProviderOutage(reason) && !isRunDeadlineCut(reason)
+    const waitOut = waitsOutOutage(reason)
     await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts, waitOut)).toISOString() })
     // The last attempt leaves the document unread or untyped for good: that reaches error tracking, a retry does not.
     if (job.attempts >= MAX_ATTEMPTS) log.error('document job gave up', fields)
@@ -159,27 +159,57 @@ async function runClaimed(
 /**
  * Runs the one due step of a single document now: the upload surface polls
  * this while a person watches, so a document lands in seconds instead of on
- * the next cron ticks. Null when the document has nothing due.
+ * the next cron ticks. Null when the document has nothing due, or when its
+ * step is the worker's to run (leftToWorker).
  */
 export async function runDocumentJobFor(
   supabase: SupabaseClient,
   documentId: string,
   worker: string,
+  now: () => number = Date.now,
 ): Promise<{ kind: string; result: string } | { kind: string; error: string } | null> {
-  // A step that ran out of its run's time is left to the worker cron: the route that calls this has a minute, the
-  // worker five, and claim_document_job_for retries a failed step at once, backoff or not. Without this every poll
-  // of a person watching a long scan would start the read again, be cut again and spend an attempt, until none
-  // were left and a document the worker could have read was given up on. Only a step the queue will still run:
-  // one out of attempts is never claimed again, and must not keep the document's other steps from running.
-  const { data: open, error: openError } = await supabase.from('document_jobs').select('status, attempts, max_attempts, last_error').eq('document_id', documentId).neq('status', 'done')
+  const { data: open, error: openError } = await supabase.from('document_jobs').select('status, attempts, max_attempts, last_error, run_after').eq('document_id', documentId).neq('status', 'done')
   if (openError) throw new Error(`jobs fetch failed: ${openError.message}`)
-  const steps = (open ?? []) as Array<{ attempts: number; max_attempts: number; last_error: string | null }>
-  if (steps.some((j) => jobHasAttemptsLeft(j) && isRunDeadlineCut(j.last_error))) return null
+  const at = now()
+  if (((open ?? []) as OpenStep[]).some((step) => leftToWorker(step, at))) return null
   const { data, error } = await supabase.rpc('claim_document_job_for', { p_document_id: documentId, p_worker: worker })
   if (error) throw new Error(`claim failed: ${error.message}`)
   const job = ((data ?? []) as ClaimedJob[])[0]
   if (!job) return null
-  return runClaimed(supabase, job, new Map(), Date.now)
+  return runClaimed(supabase, job, new Map(), now)
+}
+
+interface OpenStep {
+  status: string
+  attempts: number
+  max_attempts: number
+  last_error: string | null
+  run_after: string
+}
+
+/**
+ * A step runDocumentJobFor leaves to the worker cron, which claims a step
+ * only once its run_after is due, where claim_document_job_for takes a failed
+ * step at once, backoff or not. Only a step the queue will still run: one out
+ * of attempts is never claimed again, and must not keep the document's other
+ * steps from running.
+ *
+ * - Cut by its run's deadline, due or not: the route that calls this has a
+ *   minute, the worker five. Without this every poll of a person watching a
+ *   long scan would start the read again, be cut again and spend an attempt,
+ *   until none were left and a document the worker could have read was given
+ *   up on.
+ * - Failed on the provider, while its wait is still ahead: each poll (every
+ *   1.5 s) asked the provider again and spent an attempt, so a one-minute
+ *   outage used up all five, the job gave up and the upload showed the read
+ *   as failed (#210). Left alone it spends one attempt a wait, as in the
+ *   worker, and shows as on its way; once the wait is over a poll claims it,
+ *   as before.
+ */
+function leftToWorker(step: OpenStep, now: number): boolean {
+  if (!jobHasAttemptsLeft(step)) return false
+  if (isRunDeadlineCut(step.last_error)) return true
+  return step.status === 'failed' && waitsOutOutage(step.last_error ?? '') && Date.parse(step.run_after) > now
 }
 
 /** document_jobs.max_attempts (the column default; nothing sets another). */
@@ -195,6 +225,13 @@ const backoffMs = (attempts: number, providerOutage = false) =>
 
 /** The step failed on the reader or the model provider, not on the document. */
 const isProviderOutage = (reason: string) => reason.startsWith(READER_UNAVAILABLE) || reason.startsWith(PROVIDER_UNAVAILABLE)
+
+/**
+ * The step waits out a provider outage: it failed on the reader or the
+ * provider, and not because its run's own stop cut it. Such a step gets the
+ * outage's backoff, and runDocumentJobFor leaves it alone until that is over.
+ */
+const waitsOutOutage = (reason: string) => isProviderOutage(reason) && !isRunDeadlineCut(reason)
 
 /**
  * The period-lock trigger on document_attachments (migration 017) refuses
