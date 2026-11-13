@@ -1991,7 +1991,7 @@ describe('linkTransactionToVouchers', () => {
 
   /**
    * Queue up to and including the ledger reads, in the order the function
-   * consumes them: tx, invoice_payments, supplier_invoice_payments,
+   * consumes them: tx, the row's payment anchors (bank_row_anchors),
    * journal_entries, journal_entry_lines, and the bank_line slices other rows
    * already hold on the verifikat. (cash_account_id is null on the fixture,
    * so the cash-account cross-check is skipped.)
@@ -2001,8 +2001,7 @@ describe('linkTransactionToVouchers', () => {
     opts: { tx?: Record<string, unknown>; entries?: unknown[]; lines?: unknown[]; held?: unknown[]; pointers?: unknown[] } = {},
   ) {
     enqueue({ data: opts.tx ?? freeTx() })
-    enqueue({ data: [] }) // invoice_payments
-    enqueue({ data: [] }) // supplier_invoice_payments
+    enqueue({ data: [] }) // bank_row_anchors via payment
     enqueue({ data: opts.entries ?? postedEntries })
     enqueue({ data: opts.lines ?? bankLines })
     enqueue({ data: opts.held ?? [] }) // transaction_voucher_links held by other rows
@@ -2252,8 +2251,7 @@ describe('linkTransactionToVouchers', () => {
     }))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: freeTx({ amount: 69000 }) })
-    enqueue({ data: [] }) // invoice_payments
-    enqueue({ data: [] }) // supplier_invoice_payments
+    enqueue({ data: [] }) // bank_row_anchors via payment
     enqueue({ data: entries.slice(0, ID_READ_CHUNK) })
     enqueue({ data: entries.slice(ID_READ_CHUNK) })
     enqueue({ data: lines.slice(0, ID_READ_CHUNK) })
@@ -2305,11 +2303,26 @@ describe('linkTransactionToVouchers', () => {
     // Payment row (match-invoice / match-batch).
     m = createQueuedMockSupabase()
     m.enqueue({ data: freeTx() })
-    m.enqueue({ data: [{ id: 'ip-1' }] }) // invoice_payments
-    m.enqueue({ data: [] })
+    m.enqueue({ data: [{ journal_entry_id: 'je-pay' }] }) // bank_row_anchors via payment: a live verifikat
+    m.enqueue({ data: { voucher_series: 'A', voucher_number: 7 } }) // the verifikat, for its label
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
-    expect(r.error).toBe('Transaktionen är redan matchad mot en faktura.')
+    expect(r.error).toContain('fakturabetalning på verifikat A7')
+    expect(r.error).toContain('makulera det verifikatet först')
     expect(r.code).toBe('TRANSACTION_ALREADY_LINKED')
+    expect(m.findCalls('bank_row_anchors', 'eq')).toEqual(
+      expect.arrayContaining([['company_id', 'company-1'], ['transaction_id', 'tx-1'], ['via', 'payment']]),
+    )
+    // Asked of the view alone: a payment row's mere existence is not the answer.
+    expect(m.findCalls('invoice_payments', 'select')).toHaveLength(0)
+    expect(m.findCalls('supplier_invoice_payments', 'select')).toHaveLength(0)
+
+    // The payment anchors cannot be read: refused, never taken for a free row.
+    m = createQueuedMockSupabase()
+    m.enqueue({ data: freeTx() })
+    m.enqueue({ data: null, error: { message: 'timeout' } })
+    r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
+    expect(r.code).toBe('WRITE_FAILED')
+    expect(m.findCalls('transactions', 'update')).toHaveLength(0)
 
     // Ignored.
     m = createQueuedMockSupabase()
@@ -2319,12 +2332,42 @@ describe('linkTransactionToVouchers', () => {
     expect(r.code).toBe('TRANSACTION_IGNORED')
   })
 
+  it('links a row whose only payment rows carry no live verifikat, and leaves those payment rows alone (crm#1827)', async () => {
+    // The row paid invoices through payment rows without a verifikat, so no
+    // payment anchor stands in bank_row_anchors: the row is open in every
+    // list, and the verifikat that book the money can take it.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueReads(enqueue)
+    enqueue({ data: [{ id: 'tx-1' }] }) // lock UPDATE
+    enqueue({ data: null }) // junction insert
+    enqueue({ data: null }) // payment_match_log
+
+    const result = await linkTransactionToVouchers(
+      supabase as never,
+      'company-1',
+      'tx-1',
+      [{ journal_entry_id: E1 }, { journal_entry_id: E2 }],
+      'user-1',
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.allocations).toEqual([
+      { journal_entry_id: E1, amount: -500 },
+      { journal_entry_id: E2, amount: -300 },
+    ])
+    expect(findCalls('transaction_voucher_links', 'insert')).toHaveLength(1)
+    // Nothing is booked and no payment row is read, moved or removed.
+    for (const table of ['invoice_payments', 'supplier_invoice_payments', 'journal_entries', 'journal_entry_lines']) {
+      for (const write of ['insert', 'update', 'delete']) expect(findCalls(table, write)).toHaveLength(0)
+    }
+    expect(findCalls('invoice_payments', 'select')).toHaveLength(0)
+  })
+
   it('re-links a row stranded on a reversed entry (#988), locking on the stale pointer', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: freeTx({ journal_entry_id: 'je-reversed' }) })
     enqueue({ data: { status: 'reversed' } }) // hasLiveJournalEntryLink: stale
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: [] }) // bank_row_anchors via payment
     enqueue({ data: postedEntries })
     enqueue({ data: bankLines })
     enqueue({ data: [] }) // slices other rows hold on the verifikat
@@ -2378,8 +2421,7 @@ describe('linkTransactionToVouchers', () => {
   it('refuses when the transaction belongs to another cash account', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: freeTx({ cash_account_id: 'ca-1940' }) })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: [] }) // bank_row_anchors via payment
     enqueue({ data: { ledger_account: '1940' } }) // cash_accounts cross-check
 
     const result = await linkTransactionToVouchers(
@@ -2654,8 +2696,7 @@ describe('linkTransactionToVouchers', () => {
   it('does not link when the held slices cannot be read', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: freeTx() })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+    enqueue({ data: [] }) // bank_row_anchors via payment
     enqueue({ data: postedEntries })
     enqueue({ data: bankLines })
     enqueue({ data: null, error: { message: 'boom' } })

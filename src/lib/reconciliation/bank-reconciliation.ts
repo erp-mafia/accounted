@@ -1542,7 +1542,7 @@ export interface LinkTransactionToVouchersResult {
  *
  * Invariants (all refused, nothing written):
  *   - the transaction exists in the company, is not ignored and is not booked
- *     (live pointer, junction row or payment row);
+ *     (live pointer, junction row, or a payment row with a live verifikat);
  *   - at least two distinct verifikat, each posted, in the company, with a
  *     line on the settlement account;
  *   - every slice is non-zero, has the sign of that voucher's net line on the
@@ -1606,23 +1606,42 @@ export async function linkTransactionToVouchers(
   ) {
     return refused('TRANSACTION_ALREADY_LINKED', 'Transaktionen är redan kopplad till en verifikation.')
   }
-  // Third anchor of a bank row: a payment row (match-invoice,
-  // match-batch) settles the row through invoice_payments /
-  // supplier_invoice_payments with the pointer left NULL.
-  const [{ data: invoicePayments }, { data: supplierPayments }] = await Promise.all([
-    supabase
-      .from('invoice_payments')
-      .select('id')
-      .eq('transaction_id', transactionId)
-      .limit(1),
-    supabase
-      .from('supplier_invoice_payments')
-      .select('id')
-      .eq('transaction_id', transactionId)
-      .limit(1),
-  ])
-  if ((invoicePayments?.length ?? 0) > 0 || (supplierPayments?.length ?? 0) > 0) {
-    return refused('TRANSACTION_ALREADY_LINKED', 'Transaktionen är redan matchad mot en faktura.')
+  // Third anchor of a bank row: a payment row (match-invoice, match-batch)
+  // settles the row through invoice_payments / supplier_invoice_payments with
+  // the pointer left NULL. Asked of public.bank_row_anchors, the one answer
+  // every list and gnubok_get_transaction read: a payment row counts only
+  // while a live verifikat stands behind it. A payment row without one (its
+  // verifikat was removed, or the payment came over from another system and
+  // was booked there) leaves the row open everywhere else, so refusing it
+  // here stranded the row: shown as unbooked, impossible to link to the
+  // verifikat that do book it (crm#1827). Such a payment row is left as it
+  // is: it still names the row and the invoice it paid.
+  const { data: paymentAnchors, error: paymentAnchorError } = await supabase
+    .from('bank_row_anchors')
+    .select('journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('transaction_id', transactionId)
+    .eq('via', 'payment')
+    .limit(1)
+  if (paymentAnchorError) {
+    // Fail closed: an unread anchor must never read as a free row.
+    return refused('WRITE_FAILED', 'Kunde inte läsa transaktionens befintliga kopplingar. Försök igen.')
+  }
+  const paymentAnchor = (paymentAnchors ?? [])[0] as { journal_entry_id: string | null } | undefined
+  if (paymentAnchor) {
+    const { data: holder } = paymentAnchor.journal_entry_id
+      ? await supabase
+          .from('journal_entries')
+          .select('voucher_series, voucher_number')
+          .eq('company_id', companyId)
+          .eq('id', paymentAnchor.journal_entry_id)
+          .maybeSingle()
+      : { data: null }
+    const voucher = holder && holder.voucher_number != null ? ` ${formatVoucher(holder)}` : ''
+    return refused(
+      'TRANSACTION_ALREADY_LINKED',
+      `Transaktionen är redan bokförd som en fakturabetalning på verifikat${voucher}, så den kan inte kopplas en gång till. Är den bokningen fel: makulera det verifikatet först, sedan går raden att koppla.`,
+    )
   }
 
   // The transaction must belong to the account being reconciled (same guard
