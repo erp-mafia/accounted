@@ -1,6 +1,7 @@
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
 import {
+  findCompaniesWithOwnershipProof,
   getConnection,
   getConnectionOrThrow,
   recordProbeResult,
@@ -16,6 +17,7 @@ import {
   listOmbudGrants,
   OmbudApiError,
   summarizeGrants,
+  type OmbudGrantClaim,
 } from './ombud-client'
 import { createLogger } from '@/lib/logger'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -51,8 +53,9 @@ const log = createLogger('skatteverket-grant-probe')
  * rule); only an explicit 'denied' does.
  *
  * Only the register can GRANT: a behörighet counts when it was signed on or
- * after the company's own opt-in (grantCountsFor), and the read probes cannot
- * see when anything was signed. A probe that would have said 'granted' says
+ * after the company's own opt-in, or earlier when the company proved that
+ * behörighet's data with BankID around its opt-in (grantCountsFor), and the
+ * read probes cannot see when anything was signed. A probe that would have said 'granted' says
  * 'error' instead; a 403 still proves the absence of a grant.
  */
 
@@ -146,7 +149,7 @@ export interface RegistryProbe {
  */
 export async function probeViaOmbudsregister(
   orgNumber: string,
-  optInDay: string,
+  claim: OmbudGrantClaim,
   actor: SkvAuditActor,
   today: string = todayIsoStockholm()
 ): Promise<{ result: RegistryProbe; roles: string[] } | { result: null; reason: string }> {
@@ -170,13 +173,13 @@ export async function probeViaOmbudsregister(
       }
     }
     const describe = (key: 'lasombud' | 'moms_ombud'): ProbeClassification => {
-      if (grantCountsFor(summary, key, optInDay)) {
+      if (grantCountsFor(summary, key, claim)) {
         return { status: 'granted', detail: `ombudsregister: ${key} aktiv ${today}` }
       }
-      if (grantPredatesOptIn(summary, key, optInDay)) {
+      if (grantPredatesOptIn(summary, key, claim)) {
         return {
           status: 'denied',
-          detail: `ombudsregister: ${key} signerad ${summary?.signedFrom[key]}, före kopplingen ${optInDay}`,
+          detail: `ombudsregister: ${key} signerad ${summary?.signedFrom[key]}, före kopplingen ${claim.optInDay}, inget BankID-bevis sedan dess`,
           reason: 'predates_opt_in',
         }
       }
@@ -196,6 +199,21 @@ export async function probeViaOmbudsregister(
     log.warn('ombudsregister lookup unavailable, falling back to service probes', { orgNumber, reason })
     return { result: null, reason }
   }
+}
+
+/**
+ * The claim a company's grants are judged on: its opt-in day for this org
+ * number, and when a current member last proved each behörighet's data for
+ * the number with BankID. Throws when the proof cannot be read: the callers
+ * fail closed.
+ */
+async function grantClaim(companyId: string, orgNumber: string, optInDay: string): Promise<OmbudGrantClaim> {
+  const claims = [{ companyId, orgNumber }]
+  const [lasombud, moms] = await Promise.all([
+    findCompaniesWithOwnershipProof(claims, 'lasombud'),
+    findCompaniesWithOwnershipProof(claims, 'moms_ombud'),
+  ])
+  return { optInDay, provenOn: { lasombud: lasombud.get(companyId) ?? null, moms_ombud: moms.get(companyId) ?? null } }
 }
 
 /**
@@ -236,7 +254,7 @@ export async function probeCompanyGrants(
   const optInDay =
     todayIsoStockholm(stored && stored.org_number === orgNumber ? new Date(stored.created_at) : undefined)
   const actor: SkvAuditActor = { companyId, userId: createdBy ?? null }
-  const registry = await probeViaOmbudsregister(orgNumber, optInDay, actor)
+  const registry = await probeViaOmbudsregister(orgNumber, await grantClaim(companyId, orgNumber, optInDay), actor)
 
   let lasombud: ProbeClassification
   let momsOmbud: ProbeClassification
@@ -293,8 +311,8 @@ const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
  *   - Still listed: the grant stays. Skatteverket then refuses a grant it
  *     lists, which only we can chase, so the first such refusal reaches error
  *     tracking and last_error keeps it.
- *   - Register unreachable or unreadable: nothing changes; the next run asks
- *     again.
+ *   - Register or ownership proof unreachable or unreadable: nothing
+ *     changes; the next run asks again.
  * It never writes 'revoked', the status of the user's own "Koppla från",
  * which the register sync skips for good (#115), and never grants anything.
  */
@@ -305,11 +323,18 @@ export async function recordGrantRefusal(
   const environment = currentSkvEnvironment()
   const connection = await getConnection(companyId, environment)
   if (!connection) return 'unverified'
-  const registry = await probeViaOmbudsregister(
-    connection.org_number,
-    todayIsoStockholm(new Date(connection.created_at)),
-    { companyId, userId: null }
-  )
+  let claim: OmbudGrantClaim
+  try {
+    claim = await grantClaim(companyId, connection.org_number, todayIsoStockholm(new Date(connection.created_at)))
+  } catch (err) {
+    // Without the proof a proven grant would read as withdrawn: change nothing.
+    log.warn('ownership proof unreadable; grant refusal left for the next run', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 'unverified'
+  }
+  const registry = await probeViaOmbudsregister(connection.org_number, claim, { companyId, userId: null })
   const key = behorighet === 'lasombud' ? 'lasombud' : 'momsOmbud'
   const probe = registry.result?.[key]
   const record = { companyId, environment, orgNumber: connection.org_number }

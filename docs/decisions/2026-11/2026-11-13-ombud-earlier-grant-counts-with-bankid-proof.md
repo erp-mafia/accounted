@@ -1,0 +1,1 @@
+[2026-11-13] An ombud grant signed before the connection row counts when a member proved that behörighet's own data (skattekonto, VAT) with BankID on or after signing and at most 30 days before the opt-in: Skatteverket will not re-sign a standing grant, so "sign again" looped (crm#1762).

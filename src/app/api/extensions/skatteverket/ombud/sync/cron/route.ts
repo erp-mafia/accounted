@@ -3,6 +3,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import {
+  findCompaniesWithOwnershipProof,
   getOmbudClaimStandings,
   listConnections,
   recordProbeResult,
@@ -66,7 +67,8 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  *     until a member re-verifies; a still-standing grant at Skatteverket is
  *     not permission to switch the row back on,
  *   - a listed huvudman: granted/denied per behörighet from its active roles,
- *     where a role signed before the row's opt-in day does not count
+ *     where a role signed before the row's opt-in day counts only for a
+ *     company that proved that role's data with BankID around its opt-in
  *     (grantCountsFor: the org-number proof),
  *   - an unlisted huvudman: both behörigheter denied (withdrawn or expired),
  *     subject to the downgrade guards below.
@@ -114,7 +116,18 @@ export const GET = withCronContext('cron.skatteverket_ombud_sync', async (_reque
   const heldBack = new Set(
     [...standings].filter(([, standing]) => standing !== 'clear').map(([companyId]) => companyId)
   )
-  const decisions = planDecisions(rows, grants, today, heldBack)
+  // BankID proof is read per behörighet, only for the rows it can change: a
+  // grant signed before the opt-in. A failed read throws, like the standings
+  // above, so a run never mistakes it for "no proof" and denies a proven grant.
+  const proofFor = (key: SkvBehorighet) =>
+    findCompaniesWithOwnershipProof(
+      rows
+        .filter((row) => !heldBack.has(row.company_id) && predatesWithoutProof(row, grants.get(row.org_number)).includes(key))
+        .map((row) => ({ companyId: row.company_id, orgNumber: row.org_number })),
+      key
+    )
+  const [lasombudProofs, momsProofs] = await Promise.all([proofFor('lasombud'), proofFor('moms_ombud')])
+  const decisions = planDecisions(rows, grants, today, heldBack, { lasombud: lasombudProofs, moms_ombud: momsProofs })
 
   const grantedNow = rows.filter(isAnyGranted).length
   const fullDowngrades = decisions.filter((d) => d.kind === 'downgrade').length
@@ -201,6 +214,12 @@ function reasonFor(
   return decision.predatesOptIn?.includes(key) ? { reason: 'predates_opt_in' } : {}
 }
 
+/** The behörigheter active at Skatteverket that would not count for the row without BankID proof. */
+function predatesWithoutProof(row: SkvCompanyConnection, summary: HuvudmanGrantSummary | undefined): SkvBehorighet[] {
+  const claim = { optInDay: todayIsoStockholm(new Date(row.created_at)), provenOn: { lasombud: null, moms_ombud: null } }
+  return (['lasombud', 'moms_ombud'] as const).filter((key) => grantPredatesOptIn(summary, key, claim))
+}
+
 function isAnyGranted(row: SkvCompanyConnection): boolean {
   return row.lasombud_status === 'granted' || row.moms_ombud_status === 'granted'
 }
@@ -242,7 +261,9 @@ export function planDecisions(
   grants: Map<string, HuvudmanGrantSummary>,
   today: string,
   /** Company ids whose claim on their row's org number is not clear (ombudClaimStanding). */
-  heldBack: Set<string> = new Set()
+  heldBack: Set<string> = new Set(),
+  /** Per behörighet and company id, the latest day it proved that data for its row's org number with BankID (findCompaniesWithOwnershipProof). */
+  proofs: Record<SkvBehorighet, ReadonlyMap<string, string>> = { lasombud: new Map(), moms_ombud: new Map() }
 ): Decision[] {
   const decisions: Decision[] = []
   for (const row of rows) {
@@ -266,15 +287,21 @@ export function planDecisions(
       decisions.push({ kind: 'unrecognized', row })
       continue
     }
-    const optInDay = todayIsoStockholm(new Date(row.created_at))
-    const lasombud: GrantStatus = grantCountsFor(summary, 'lasombud', optInDay) ? 'granted' : 'denied'
-    const momsOmbud: GrantStatus = grantCountsFor(summary, 'moms_ombud', optInDay) ? 'granted' : 'denied'
+    const claim = {
+      optInDay: todayIsoStockholm(new Date(row.created_at)),
+      provenOn: {
+        lasombud: proofs.lasombud.get(row.company_id) ?? null,
+        moms_ombud: proofs.moms_ombud.get(row.company_id) ?? null,
+      },
+    }
+    const lasombud: GrantStatus = grantCountsFor(summary, 'lasombud', claim) ? 'granted' : 'denied'
+    const momsOmbud: GrantStatus = grantCountsFor(summary, 'moms_ombud', claim) ? 'granted' : 'denied'
     const predatesOptIn = (['lasombud', 'moms_ombud'] as const).filter((key) =>
-      grantPredatesOptIn(summary, key, optInDay)
+      grantPredatesOptIn(summary, key, claim)
     )
     const detail = summary
       ? `ombudsregister ${today}: roller ${summary.roles.join(', ') || 'inga'}` +
-        (predatesOptIn.length > 0 ? `; signerad före kopplingen ${optInDay}` : '')
+        (predatesOptIn.length > 0 ? `; signerad före kopplingen ${claim.optInDay}, inget BankID-bevis sedan dess` : '')
       : `ombudsregister ${today}: huvudman saknas`
     // A row already showing exactly this state is left alone, so a never-listed
     // company is written once (unknown -> denied, "Väntar på Skatteverket" in

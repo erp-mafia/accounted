@@ -396,9 +396,9 @@ function verifyRateLimited(
  * every behörighet, so the appoint button can say Klart instead of sending
  * the user to Skatteverket to sign what is already there: a grant the
  * register listed since the last hourly sync, or one signed directly at
- * Skatteverket on or after the opt-in day. The same probe the verify route
- * runs (grantCountsFor: a grant signed before the opt-in does not count, and
- * a company with no row opts in today, so it signs again), skipped for a row
+ * Skatteverket on or after the opt-in day, or earlier with BankID proof. The
+ * same probe the verify route runs (grantCountsFor; a company with no row
+ * opts in today), skipped for a row
  * probed within the last minute, whose answer is still fresh. A check that
  * fails answers null: the deep link is then handed out as before.
  */

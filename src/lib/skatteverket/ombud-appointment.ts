@@ -17,7 +17,7 @@ export type OmbudRole = 'lasombud' | 'moms_ombud'
 
 /** One behörighet, once the register has answered anything for the company. */
 export type OmbudRoleState =
-  /** In the ombudsregister, signed on or after the company's opt-in. */
+  /** In the ombudsregister, and counting for the company (grantCountsFor). */
   | 'granted'
   /** Never granted on this opt-in, while something else is (or was). */
   | 'not_included'
@@ -26,11 +26,11 @@ export type OmbudRoleState =
   /** The last check could not ask Skatteverket. */
   | 'error'
 
-/** `predatesOptIn`: a behörighet is active at Skatteverket but was signed before the opt-in. */
+/** `predatesOptIn`: a behörighet is active at Skatteverket but was signed before the opt-in, with no BankID proof that lets it count. */
 export type OmbudAppointment =
   /**
    * Not appointed: no opt-in, the company's own "Koppla från", or only a
-   * grant signed before the opt-in, which does not count.
+   * grant signed before the opt-in without the BankID proof that lets it count.
    */
   | { state: 'none'; predatesOptIn: boolean }
   /** Opted in, and Skatteverket has registered nothing on this opt-in yet. */

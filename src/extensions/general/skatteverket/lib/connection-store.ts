@@ -6,6 +6,7 @@ import { toRedovisare12 } from '@/lib/invariants/org-number'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { SKATTEKONTO_AUDIT_ENDPOINTS } from './skattekonto-client'
 
 const log = createLogger('skatteverket-connection-store')
@@ -462,8 +463,21 @@ async function findLiveClaimants(): Promise<Map<string, string[]>> {
 }
 
 /**
- * The claims (company on its current org number) with ownership proof: a
- * skattekonto read for exactly that number, recorded against that company,
+ * The own-BankID reads that prove a person may see one behörighet's data for
+ * a number: the skattekonto reads for läsombud; for momsombud the filed VAT
+ * views (fetchDeclarationView in declaration-status labels each call by its
+ * view) and the VAT draft read (the /declaration/draft route).
+ */
+const PROOF_ENDPOINTS: Record<SkvBehorighet, readonly string[]> = {
+  lasombud: Object.values(SKATTEKONTO_AUDIT_ENDPOINTS),
+  moms_ombud: ['inlamnat', 'beslutat', 'declaration/draft'],
+}
+
+/**
+ * The claims (company on its current org number) with ownership proof, each
+ * with the Swedish day of its latest proof: a read of `behorighet`'s data
+ * (PROOF_ENDPOINTS; the skattekonto by default, which the contested-number
+ * standing uses) for exactly that number, recorded against that company,
  * that Skatteverket answered (2xx) on the own BankID session of a person who
  * is still a member of the company. Skatteverket shows a tax account only to
  * someone who may represent its holder, so a tenant that typed another
@@ -473,11 +487,14 @@ async function findLiveClaimants(): Promise<Map<string, string[]>> {
  * the one they connected. A read on Accounted's own certificate
  * (auth_mode 'system') is no proof, and neither is a row from before
  * auth_mode was recorded. Throws on a read failure: the callers fail closed.
+ * The day is what lets a grant signed before the opt-in count
+ * (grantCountsFor).
  */
-async function findCompaniesWithOwnershipProof(
-  claims: Array<{ companyId: string; orgNumber: string }>
-): Promise<Set<string>> {
-  if (claims.length === 0) return new Set()
+export async function findCompaniesWithOwnershipProof(
+  claims: Array<{ companyId: string; orgNumber: string }>,
+  behorighet: SkvBehorighet = 'lasombud'
+): Promise<Map<string, string>> {
+  if (claims.length === 0) return new Map()
   const client = getServiceClient()
   const members = new Map<string, string[]>()
   for (const ids of chunk([...new Set(claims.map((claim) => claim.companyId))], 200)) {
@@ -501,28 +518,30 @@ async function findCompaniesWithOwnershipProof(
     memberClaims.map((claim) =>
       client
         .from('skatteverket_api_audit_log')
-        .select('id')
+        .select('created_at')
         .eq('company_id', claim.companyId)
         .eq('ag_registered_id', claim.orgNumber)
         .eq('auth_mode', 'user')
         .eq('outcome', 'ok')
-        .in('endpoint', Object.values(SKATTEKONTO_AUDIT_ENDPOINTS))
+        .in('endpoint', PROOF_ENDPOINTS[behorighet])
         // 'ok' is a 2xx for these reads today; the range keeps it so should
         // they ever list okStatuses (a 404 "no skattekonto" proves nothing).
         .gte('response_status', 200)
         .lt('response_status', 300)
         .in('user_id', members.get(claim.companyId)!)
+        .order('created_at', { ascending: false })
         .limit(1)
     )
   )
-  const proven = new Set<string>()
+  const proven = new Map<string, string>()
   for (const [i, { data, error }] of answers.entries()) {
     // Before migration 20261108074117 reaches the database there is no
     // auth_mode to read, and so no proof yet: every contested claim stays
     // held back, and uncontested ones are not dragged into a failure.
-    if (isMissingColumnError(error)) return new Set()
+    if (isMissingColumnError(error)) return new Map()
     if (error) throw new Error(`ownership proof read failed: ${error.message}`)
-    if ((data ?? []).length > 0) proven.add(memberClaims[i]!.companyId)
+    const latest = (data as Array<{ created_at: string }> | null)?.[0]
+    if (latest) proven.set(memberClaims[i]!.companyId, todayIsoStockholm(new Date(latest.created_at)))
   }
   return proven
 }
@@ -541,11 +560,12 @@ export async function getOmbudClaimStandings(
   const contested = [...new Set(claims.map((claim) => claim.orgNumber))].filter(
     (orgNumber) => (claimants.get(orgNumber)?.length ?? 0) > 1
   )
-  const proven = await findCompaniesWithOwnershipProof(
+  const proofs = await findCompaniesWithOwnershipProof(
     contested.flatMap((orgNumber) =>
       (claimants.get(orgNumber) ?? []).map((companyId) => ({ companyId, orgNumber }))
     )
   )
+  const proven = new Set(proofs.keys())
   return new Map(
     claims.map((claim) => [
       claim.companyId,
