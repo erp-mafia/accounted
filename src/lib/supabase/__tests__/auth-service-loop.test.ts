@@ -285,18 +285,18 @@ describe('a session the auth service says is gone', () => {
     const response = await send('/import', sessionCookie(30))
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?next=%2Fimport')
+    expect(response.headers.get('location')).toBe('http://localhost/login?next=%2Fimport&reason=ended')
     expect(clearsSession(response)).toBe(true)
   })
 })
 
 describe('a refresh token the auth service refuses', () => {
-  it('still ends the session: cookies cleared, bounce to /login with the way back', async () => {
+  it('still ends the session: cookies cleared, bounce to /login with the reason and the way back', async () => {
     auth.refresh = 'refused'
     const response = await send('/import?mode=sie', sessionCookie(-60, 'dead'))
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost/login?next=%2Fimport%3Fmode%3Dsie')
+    expect(response.headers.get('location')).toBe('http://localhost/login?next=%2Fimport%3Fmode%3Dsie&reason=ended')
     expect(clearsSession(response)).toBe(true)
   })
 
