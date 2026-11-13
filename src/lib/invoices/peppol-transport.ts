@@ -167,6 +167,14 @@ export interface PeppolInboundListOptions {
    * it; one that does not ignores it, so the caller still dedupes by id.
    */
   receivedAfter?: string
+  /**
+   * How long the call may take, in ms, from the caller's own limit. A listing
+   * that consumes (inboundListingConsumes) hands its page over when the
+   * provider answers, whether or not the answer reaches us, so it is given up
+   * only at this limit: only the caller knows how long it can still wait and
+   * archive what comes back. Not sent to the provider.
+   */
+  timeoutMs?: number
 }
 
 /**

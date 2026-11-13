@@ -152,8 +152,17 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(reprocessMock).toHaveBeenCalledTimes(1)
     expect(syncMock.mock.invocationCallOrder[0]).toBeLessThan(reprocessMock.mock.invocationCallOrder[0])
 
-    const syncArgs = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
-    const reprocessArgs = reprocessMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
+    const syncArgs = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown; deadline: number; functionEndsAt: number }
+    const reprocessArgs = reprocessMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown; deadline: number }
+    // Both passes are bounded inside the 300 s limit, and the reprocessing pass
+    // keeps time of its own after a listing that used all of the first budget.
+    const called = Date.now()
+    expect(syncArgs.deadline).toBeGreaterThan(called + 100_000)
+    expect(syncArgs.deadline).toBeLessThanOrEqual(called + 150_000)
+    expect(reprocessArgs.deadline - syncArgs.deadline).toBe(90_000)
+    // A listing that marks its page read may take until the reserve before the
+    // function's 300 s end, not a fixed limit of the transport's own.
+    expect(syncArgs.functionEndsAt - syncArgs.deadline).toBe(150_000)
     expect(syncArgs.transport).toBe(transport)
     expect(reprocessArgs.transport).toBe(transport)
     expect(reprocessArgs.deliver).toBe(syncArgs.deliver)

@@ -20,6 +20,23 @@ import {
 export const maxDuration = 300
 
 /**
+ * The run's budget inside maxDuration, from ctx.startedAt. The listing sync
+ * starts no listing and no document after 150 s. A listing that marks its
+ * page read (Qvalia) is not given up on a fixed clock: it may take until 90 s
+ * before maxDuration, because a page given up early is handed over and never
+ * received. Those 90 s are the read re-listing that finds such a page (60 s,
+ * asked for even past the 150 s deadline) and the archive of what it answers
+ * (30 s); while the access point answers normally the sync has ended long
+ * before. The reprocessing pass then has until 240 s, and its slowest unit
+ * (an XML fetch, 20 s, and one delivery) ends inside 300 s. The second
+ * deadline is what keeps a long listing from starving the rows the archive
+ * already holds; after a listing that ran into its limit the pass starts
+ * nothing, and the next run takes the rows.
+ */
+const SYNC_BUDGET_MS = 150_000
+const REPROCESS_BUDGET_MS = 240_000
+
+/**
  * The cron cannot receive in this environment. Whether that loses anything
  * depends on the companies that have receiving switched on (the rows
  * registerGrantedPeppolReceivers publishes): count them, and report an error
@@ -65,7 +82,11 @@ async function reportSkipped(log: Logger, reason: string): Promise<void> {
  * person: documents that became terminal in this run (never retried again,
  * and a received e-invoice under seven-year retention) and real processing
  * failures. Transport hiccups, XML misses under budget and held documents
- * are logged at warn and retried after the backoff.
+ * are logged at warn and retried after the backoff; a document held for hours
+ * reaches the team through the Peppol health digest (peppol-health.ts).
+ *
+ * Both passes stop at a deadline inside maxDuration and count what they left
+ * (`deferred`); the next run picks it up.
  *
  * First, the identifier of every company whose access no longer allows
  * receiving is withdrawn from the SMP (revoking access only changes our row),
@@ -132,10 +153,19 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
     if (delivered.inboxItemId) await proposeBankMatchForInboxItem(service, delivery.companyId, delivered.inboxItemId, ctx.log)
     return delivered
   }
-  const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  const summary = await syncInboundPeppolDocuments({
+    service,
+    transport,
+    deliver,
+    log: ctx.log,
+    deadline: ctx.startedAt + SYNC_BUDGET_MS,
+    functionEndsAt: ctx.startedAt + maxDuration * 1000,
+  })
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
 
-  const reprocess = await reprocessInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  const reprocess = await reprocessInboundPeppolDocuments({
+    service, transport, deliver, log: ctx.log, deadline: ctx.startedAt + REPROCESS_BUDGET_MS,
+  })
   ctx.log.info('peppol inbound reprocess complete', {
     ...reprocess,
     terminalDocuments: reprocess.terminalDocuments.length,

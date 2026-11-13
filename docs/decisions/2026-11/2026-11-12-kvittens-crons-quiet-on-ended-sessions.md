@@ -1,0 +1,1 @@
+[2026-11-12] The AGI and VAT kvittens crons count no_token and expired_token and do not raise them (a BankID session ends after 65 minutes; only its user can renew it), and raise failed reads at error level once per six hours, warn otherwise: pending rows never expire.

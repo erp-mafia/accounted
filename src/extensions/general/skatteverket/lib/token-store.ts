@@ -60,13 +60,16 @@ function decrypt(ciphertext: string): string {
  * choice, and a multi-company operator holds one row per company. The
  * DELETE + INSERT (instead of UPSERT) predates the UNIQUE constraint and is
  * safe because OAuth callbacks and refreshes for a given pair are coalesced.
+ *
+ * Answers the new row's id: every store makes a new row, so the id names
+ * this stored token (StoredTokenVersion).
  */
 export async function storeTokens(
   _supabase: SupabaseClient,
   userId: string,
   tokens: SkatteverketTokens,
   companyId: string,
-): Promise<void> {
+): Promise<string> {
   const encryptedAccess = encrypt(tokens.access_token)
   const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token) : null
   const db = getServiceClient()
@@ -78,7 +81,9 @@ export async function storeTokens(
     .eq('company_id', companyId)
   if (deleteError) throw new Error(`Failed to clear existing tokens: ${deleteError.message}`)
 
+  const id = crypto.randomUUID()
   const { error: insertError } = await db.from('skatteverket_tokens').insert({
+    id,
     user_id: userId,
     company_id: companyId,
     access_token: encryptedAccess,
@@ -88,6 +93,25 @@ export async function storeTokens(
     scope: tokens.scope,
   })
   if (insertError) throw new Error(`Failed to store tokens: ${insertError.message}`)
+  return id
+}
+
+/**
+ * Which stored token a verdict was reached on. storeTokens replaces the row
+ * (delete, then insert) on every BankID consent and every refresh, so the
+ * row's id names one stored token; refresh_count is kept beside it.
+ */
+export interface StoredTokenVersion {
+  rowId: string
+  refreshCount: number
+}
+
+/** Tokens as stored: decrypted, with the row they were read from. */
+export interface StoredSkatteverketTokens extends SkatteverketTokens {
+  /** The row's id (see StoredTokenVersion). */
+  row_id: string
+  /** When the row was stored, epoch ms: when its tokens were issued, give or take the store. */
+  stored_at: number
 }
 
 /**
@@ -98,11 +122,11 @@ export async function getTokens(
   _supabase: SupabaseClient,
   userId: string,
   companyId: string
-): Promise<SkatteverketTokens | null> {
+): Promise<StoredSkatteverketTokens | null> {
   const db = getServiceClient()
   const { data, error } = await db
     .from('skatteverket_tokens')
-    .select('access_token, refresh_token, expires_at, refresh_count, scope')
+    .select('id, access_token, refresh_token, expires_at, refresh_count, scope, created_at')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -122,6 +146,8 @@ export async function getTokens(
       expires_at: new Date(data.expires_at).getTime(),
       refresh_count: data.refresh_count ?? 0,
       scope: data.scope,
+      row_id: data.id,
+      stored_at: new Date(data.created_at).getTime(),
     }
   } catch (err) {
     log.error('decryption failed for stored tokens', {
@@ -129,27 +155,38 @@ export async function getTokens(
       companyId,
       error: err instanceof Error ? err.message : String(err),
     })
-    throw new SkatteverketAuthError(
+    const corrupted = new SkatteverketAuthError(
       'Tokens kunde inte läsas. Anslut igen med BankID.',
       'TOKEN_CORRUPTED'
     )
+    // The verdict is about this row only: a flag must not land on a row
+    // stored after it (markNeedsReconsent compares on the version).
+    corrupted.tokenRow = { userId, version: { rowId: data.id, refreshCount: data.refresh_count ?? 0 } }
+    throw corrupted
   }
 }
 
 /**
- * Delete stored tokens (disconnect from Skatteverket).
+ * Delete stored tokens (disconnect from Skatteverket). `onlyRowId` deletes
+ * that stored token and nothing stored after it: a verdict about one token
+ * (Skatteverket answering it is revoked) must not delete the token another
+ * process stored meanwhile. A failed delete throws: the token is still
+ * there, and the caller must not report it gone.
  */
 export async function deleteTokens(
   _supabase: SupabaseClient,
   userId: string,
-  companyId: string
+  companyId: string,
+  onlyRowId?: string,
 ): Promise<void> {
   const db = getServiceClient()
-  await db
+  const rows = db
     .from('skatteverket_tokens')
     .delete()
     .eq('user_id', userId)
     .eq('company_id', companyId)
+  const { error } = await (onlyRowId === undefined ? rows : rows.eq('id', onlyRowId))
+  if (error) throw new Error(`Failed to delete Skatteverket tokens: ${error.message}`)
 }
 
 /**
@@ -170,15 +207,25 @@ export const RECONSENT_ERROR_CODES = [
  * night and the UI can prompt proactively. storeTokens() (delete + insert)
  * resets the row to status 'active' on the next successful consent.
  * Best-effort: health bookkeeping must never mask the original auth error.
+ *
+ * `decidedOn` (SkatteverketAuthError.tokenRow.version) makes the write a
+ * compare-and-set: only the stored token the verdict was reached on is
+ * flagged, by its row id and refresh_count. Without it, a job that lost a
+ * refresh race flagged the row the winner had just stored, and a live
+ * connection asked its user for a new BankID login. The refresh_count alone
+ * was not enough: it restarts at 0 on every consent, so a new consent landing
+ * after a verdict about the old one's first token matched. Every store makes
+ * a new row, so a row replaced meanwhile no longer matches and is left alone.
  */
 export async function markNeedsReconsent(
   _supabase: SupabaseClient,
   userId: string,
   companyId: string,
   errorCode: string,
+  decidedOn?: StoredTokenVersion,
 ): Promise<void> {
   const db = getServiceClient()
-  const { error } = await db
+  const flag = db
     .from('skatteverket_tokens')
     .update({
       status: 'needs_reconsent',
@@ -187,6 +234,9 @@ export async function markNeedsReconsent(
     })
     .eq('user_id', userId)
     .eq('company_id', companyId)
+  const { error } = await (decidedOn === undefined
+    ? flag
+    : flag.eq('id', decidedOn.rowId).eq('refresh_count', decidedOn.refreshCount))
   if (error) {
     log.warn('failed to mark token row needs_reconsent', {
       userId,

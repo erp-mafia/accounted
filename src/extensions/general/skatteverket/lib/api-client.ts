@@ -9,7 +9,8 @@ import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { requireHttpsUrl } from '@/lib/http/require-https'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
-import { getTokens, storeTokens, deleteTokens } from './token-store'
+import { SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS } from '@/lib/skatteverket/session-lifetime'
+import { getTokens, storeTokens, deleteTokens, type StoredSkatteverketTokens, type StoredTokenVersion } from './token-store'
 import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
 import { getSystemApiGwCredentials } from './system-auth/config'
 import { writeSkatteverketAudit, type SkvAuditOutcome } from './audit'
@@ -90,6 +91,12 @@ interface SkvCallTrace {
   status: number | null
   correlationId: string | null
   requestSizeBytes: number | null
+  /**
+   * The stored personal token the call went out with (user mode). Every
+   * verdict about the call names it, so a flag or a delete it leads to acts
+   * on that token only, never on one another process stored meanwhile.
+   */
+  tokenVersion?: StoredTokenVersion
 }
 
 const MAX_AUDIT_ERROR_LEN = 500
@@ -312,18 +319,93 @@ async function enforceRateLimit(): Promise<void> {
 // rotates that token on first use, so the second call would fail with 401.
 // Cross-process races (separate Vercel function instances) are mitigated by
 // the re-read inside the critical section: if another process refreshed
-// while we waited on the network, we just use that newer token.
-const refreshInFlight = new Map<string, Promise<string>>()
+// while we waited on the network, we just use that newer token. Two processes
+// that both read the old token before either refreshed are settled after the
+// fact, in the dead-token path of refreshTokenForUser.
+const refreshInFlight = new Map<string, Promise<ValidToken>>()
+
+/** An access token to call with, and the stored token it came from. */
+interface ValidToken {
+  accessToken: string
+  version: StoredTokenVersion
+}
+
+function versionOf(tokens: StoredSkatteverketTokens): StoredTokenVersion {
+  return { rowId: tokens.row_id, refreshCount: tokens.refresh_count }
+}
 
 /**
- * Get a valid access token, refreshing if needed.
- * Throws if no tokens exist or refresh is exhausted.
+ * How long the loser of a cross-process refresh race waits before it reads
+ * the stored token a second time: the winner's storeTokens is a delete and an
+ * insert, in flight for a moment after Skatteverket has rotated the token.
+ */
+const REFRESH_RACE_RECHECK_MS = 1000
+
+/**
+ * The token another process stored while this one was refreshing `used`, or
+ * null. Read at once, and once more after REFRESH_RACE_RECHECK_MS unless
+ * nothing can be in flight: a row still holding `used` that was stored longer
+ * ago than a refresh token has ever been seen working (two hours, not the
+ * documented 65 minutes: session-lifetime.ts) cannot have been refreshed by
+ * anyone, so the wait is skipped. That is the common case, a session left
+ * overnight, and the wait was paid on every such call, interactive and MCP
+ * ones included. A row still holding `used` (or no row) is no answer.
+ */
+async function tokenStoredMeanwhile(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  used: StoredSkatteverketTokens,
+): Promise<StoredSkatteverketTokens | null> {
+  for (const waitMs of [0, REFRESH_RACE_RECHECK_MS]) {
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs))
+    let stored: StoredSkatteverketTokens | null
+    try {
+      stored = await getTokens(supabase, userId, companyId)
+    } catch (err) {
+      // The second look is a courtesy to a race; a read that fails here
+      // leaves the verdict on the token this process used, which stands.
+      log.warn('stored Skatteverket token could not be read again after a dead refresh', {
+        userId,
+        companyId,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+    if (stored && stored.row_id !== used.row_id && stored.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
+      return stored
+    }
+    if (stored && stored.row_id === used.row_id && Date.now() - stored.stored_at >= SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS) {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * A terminal verdict about the stored token itself, naming the row it was
+ * reached on (see SkatteverketAuthError.tokenRow).
+ */
+function tokenVerdict(
+  message: string,
+  code: 'SESSION_EXPIRED' | 'REFRESH_EXHAUSTED',
+  userId: string,
+  tokens: StoredSkatteverketTokens,
+): SkatteverketAuthError {
+  const err = new SkatteverketAuthError(message, code)
+  err.tokenRow = { userId, version: { rowId: tokens.row_id, refreshCount: tokens.refresh_count } }
+  return err
+}
+
+/**
+ * Get a valid access token, refreshing if needed, with the stored token it
+ * came from. Throws if no tokens exist or refresh is exhausted.
  */
 async function getValidToken(
   supabase: SupabaseClient,
   userId: string,
   companyId: string
-): Promise<string> {
+): Promise<ValidToken> {
   const tokens = await getTokens(supabase, userId, companyId)
   if (!tokens) {
     throw new SkatteverketAuthError(
@@ -334,7 +416,7 @@ async function getValidToken(
 
   // Token still valid (with 5-min margin)
   if (tokens.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-    return tokens.access_token
+    return { accessToken: tokens.access_token, version: versionOf(tokens) }
   }
 
   // Need refresh: coalesce concurrent attempts per (user, company) row.
@@ -352,7 +434,7 @@ async function refreshTokenForUser(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-): Promise<string> {
+): Promise<ValidToken> {
   // Re-read after entering the critical section. Another process may have
   // refreshed while we were waiting; if so, the row now has a new
   // refresh_token and a future expiry: just hand it back.
@@ -364,19 +446,13 @@ async function refreshTokenForUser(
     )
   }
   if (tokens.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
-    return tokens.access_token
+    return { accessToken: tokens.access_token, version: versionOf(tokens) }
   }
   if (!tokens.refresh_token) {
-    throw new SkatteverketAuthError(
-      'Sessionen har gått ut. Logga in med BankID igen.',
-      'SESSION_EXPIRED'
-    )
+    throw tokenVerdict('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED', userId, tokens)
   }
   if (tokens.refresh_count >= MAX_REFRESH_COUNT) {
-    throw new SkatteverketAuthError(
-      'Maximalt antal förnyelser uppnått. Logga in med BankID igen.',
-      'REFRESH_EXHAUSTED'
-    )
+    throw tokenVerdict('Maximalt antal förnyelser uppnått. Logga in med BankID igen.', 'REFRESH_EXHAUSTED', userId, tokens)
   }
 
   let refreshed
@@ -412,10 +488,17 @@ async function refreshTokenForUser(
       /CONNECTOR_SKV_REFRESH_DEAD/.test(message) ||
       (/\b404\b/.test(message) && /CONNECTOR_NOT_OWNED/.test(message))
     if (deadRefreshToken) {
-      throw new SkatteverketAuthError(
-        'Sessionen har gått ut. Logga in med BankID igen.',
-        'SESSION_EXPIRED'
-      )
+      // A dead refresh token is also what the loser of a race sees. The
+      // skattekonto sync and the AGI and VAT kvittens crons run in separate
+      // processes and can pick up the same token in the same minute (the
+      // collisions logged in production on 2026-11-05/06, see the skattekonto
+      // cron's NOT_CONNECTED branch); Skatteverket rotates the refresh token
+      // on first use, so the second process is told its copy is dead while the
+      // connection is alive under the token the first one stored. Use that
+      // token. Only when nobody stored a newer one is the session over.
+      const stored = await tokenStoredMeanwhile(supabase, userId, companyId, tokens)
+      if (stored) return { accessToken: stored.access_token, version: versionOf(stored) }
+      throw tokenVerdict('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED', userId, tokens)
     }
     throw err
   }
@@ -423,8 +506,8 @@ async function refreshTokenForUser(
     ...refreshed,
     scope: tokens.scope,
   }
-  await storeTokens(supabase, userId, updatedTokens, companyId)
-  return updatedTokens.access_token
+  const rowId = await storeTokens(supabase, userId, updatedTokens, companyId)
+  return { accessToken: updatedTokens.access_token, version: { rowId, refreshCount: updatedTokens.refresh_count } }
 }
 
 /**
@@ -630,6 +713,15 @@ export async function skvRequestWithAuth(
   try {
     response = await sendSkvRequest(auth, method, path, body, options, trace)
   } catch (err) {
+    // A user-mode verdict names the stored token it is about: whose it is (a
+    // company can hold one row per connected member), and which version, so
+    // a caller that flags the connection flags that row only while it is
+    // still that token. A refresh verdict names the token it refreshed; a
+    // verdict on the call (a 401 SESSION_EXPIRED, MISSING_SCOPE, the
+    // connector's NOT_OWNED for a token rotated away) the one it called with.
+    if (auth.mode === 'user' && err instanceof SkatteverketAuthError) {
+      err.tokenRow = { userId: auth.userId, version: err.tokenRow?.version ?? trace.tokenVersion }
+    }
     if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(err, trace))
     throw err
   }
@@ -669,7 +761,9 @@ async function sendSkvRequest(
 
   let accessToken: string
   if (auth.mode === 'user') {
-    accessToken = await getValidToken(auth.supabase, auth.userId, auth.companyId)
+    const valid = await getValidToken(auth.supabase, auth.userId, auth.companyId)
+    accessToken = valid.accessToken
+    trace.tokenVersion = valid.version
   } else {
     try {
       accessToken = await getSystemAccessToken()
@@ -904,7 +998,9 @@ async function sendSkvRequest(
     // primary auth error to the user.
     if (lower.includes('revoked') || lower.includes('token has been revoked')) {
       try {
-        await deleteTokens(auth.supabase, auth.userId, auth.companyId)
+        // Only the stored token this call went out with: one another process
+        // stored meanwhile (a refresh) is not the token Skatteverket refused.
+        await deleteTokens(auth.supabase, auth.userId, auth.companyId, trace.tokenVersion?.rowId)
       } catch (cleanupErr) {
         log.error('failed to clear revoked token row', cleanupErr as Error, { userId: auth.userId })
       }
@@ -1129,6 +1225,18 @@ export class SkatteverketAuthError extends Error {
     super(message)
     this.name = 'SkatteverketAuthError'
   }
+
+  /**
+   * The stored personal token a verdict is about, set on every error of a
+   * user-mode call: whose it is, and which stored version (the token a
+   * refresh was refused for, or the one the call went out with). A caller
+   * flags that user's row with markNeedsReconsent only while the row is
+   * still that token, so a verdict about a token another process replaced
+   * meanwhile, or that a new BankID consent replaced, cannot flag the live
+   * one. No version only when the call failed before a token was read (no
+   * row at all).
+   */
+  tokenRow?: { userId: string; version?: StoredTokenVersion }
 }
 
 /** True when `err` is Skatteverket's gateway refusing the APIGW client itself. */

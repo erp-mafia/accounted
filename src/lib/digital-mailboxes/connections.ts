@@ -140,6 +140,70 @@ export function connectionError(message: string): Pick<ConnectionPatch, 'last_er
   return { last_error: message.slice(0, 500), last_error_at: new Date().toISOString() }
 }
 
+/** A connection failing for this long is not healing by being retried: the team is told, once per failure. */
+export const CONNECTION_STUCK_AFTER_MS = 24 * 60 * 60 * 1000
+
+/**
+ * provider_meta keys for a failing connection. last_error_at is the time of
+ * the latest failed contact (what the Inkorg shows) and moves on every retry,
+ * so the start of a failure is kept beside it: `failing_since`, when a sweep
+ * first saw the connection failing, and `failure_reported`, the failing_since
+ * of the failure the team was told about.
+ */
+const FAILING_SINCE_KEY = 'failing_since'
+const FAILURE_REPORTED_KEY = 'failure_reported'
+
+/**
+ * What a sweep records in provider_meta about the connection's failure, as
+ * the row was read: null when nothing changes. A new failure starts the clock
+ * (at its last_error_at), a healed one clears both keys, and a failure past
+ * CONNECTION_STUCK_AFTER_MS that has not been reported is marked reported:
+ * `report` says the team is to be told.
+ */
+export function failureBookkeeping(
+  connection: Pick<DigitalMailboxConnection, 'last_error' | 'last_error_at' | 'provider_meta'>,
+  nowMs: number,
+): { providerMeta: Record<string, unknown>; report: boolean } | null {
+  const meta = connection.provider_meta ?? {}
+  const since = typeof meta[FAILING_SINCE_KEY] === 'string' ? (meta[FAILING_SINCE_KEY] as string) : null
+  if (!connection.last_error) {
+    if (since === null && !(FAILURE_REPORTED_KEY in meta)) return null
+    const { [FAILING_SINCE_KEY]: _since, [FAILURE_REPORTED_KEY]: _reported, ...rest } = meta
+    return { providerMeta: rest, report: false }
+  }
+  if (since === null) {
+    const started = connection.last_error_at ?? new Date(nowMs).toISOString()
+    return { providerMeta: { ...meta, [FAILING_SINCE_KEY]: started }, report: false }
+  }
+  const sinceMs = Date.parse(since)
+  if (!Number.isFinite(sinceMs) || nowMs - sinceMs < CONNECTION_STUCK_AFTER_MS) return null
+  if (meta[FAILURE_REPORTED_KEY] === since) return null
+  return { providerMeta: { ...meta, [FAILURE_REPORTED_KEY]: since }, report: true }
+}
+
+/**
+ * Write provider_meta onto the row as it was read, guarded on updated_at
+ * (which moves on every write): it never puts an older provider_meta back
+ * over one changed meanwhile (the Billo connect flow keeps the postal address
+ * there), and of two sweeps that see the same failure only one reports it.
+ * True when this call wrote it.
+ */
+export async function writeProviderMetaIfUnchanged(
+  service: SupabaseClient,
+  connection: Pick<DigitalMailboxConnection, 'id' | 'company_id' | 'updated_at'>,
+  providerMeta: Record<string, unknown>,
+): Promise<boolean> {
+  const { data, error } = await service
+    .from('digital_mailbox_connections')
+    .update({ provider_meta: providerMeta })
+    .eq('id', connection.id)
+    .eq('company_id', connection.company_id)
+    .eq('updated_at', connection.updated_at)
+    .select('id')
+  if (error) throw new Error(`digital mailbox connection update failed: ${error.message}`)
+  return ((data as Array<{ id: string }> | null) ?? []).length > 0
+}
+
 /** What the dashboard shows: never the provider's keys. */
 export interface ConnectionSummary {
   provider: DigitalMailboxProviderId

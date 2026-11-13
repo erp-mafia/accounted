@@ -35,6 +35,15 @@ export const SKV_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000
 export const SKV_REFRESH_TOKEN_LIFETIME_MS = 65 * 60 * 1000
 
 /**
+ * The longest a refresh token has been seen working after issue (prod,
+ * 2026-10, see above): two hours, not the documented 65 minutes. A rule that
+ * must not act on a token that might still be refreshable (the token-refresh
+ * race in the extension's api-client) waits this long, not the documented
+ * lifetime.
+ */
+export const SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS = 2 * 60 * 60 * 1000
+
+/**
  * How long past access-token expiry the refresh token still works: the
  * difference between the two lifetimes above.
  */

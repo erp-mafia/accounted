@@ -65,7 +65,13 @@ export type AgiReconcileOutcome =
    * caller already knew and the call was not made.
    */
   | { status: 'gateway_refused'; route: SkvGatewayRoute; asked: boolean }
-  | { status: 'error'; error: string }
+  /**
+   * `error` is for the person who asked: for a read Skatteverket refused it is
+   * Skatteverket's own message or body, which for an enskild firma can carry
+   * the arbetsgivare's personnummer, so a log takes `httpStatus` (set when
+   * the error is that refusal) and not the text.
+   */
+  | { status: 'error'; error: string; httpStatus?: number }
 
 /**
  * Which APIGW client a read goes out with: this installation's own, or the
@@ -230,7 +236,7 @@ export async function reconcileAgiDeclaration(
     throw err
   }
   if (!kvittRes.ok) {
-    return { status: 'error', error: kvittRes.error }
+    return { status: 'error', error: kvittRes.error, httpStatus: kvittRes.status }
   }
 
   // Every receipt Skatteverket lists for the period is kept before the

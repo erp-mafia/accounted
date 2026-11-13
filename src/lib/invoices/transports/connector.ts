@@ -256,7 +256,10 @@ export function createConnectorPeppolTransport(
   }
 
   async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {
-    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, options)
+    // The caller's time limit is not part of the hosted request: this listing
+    // is a cursor read that consumes nothing, given up at the read limit.
+    const { timeoutMs: _callerLimit, ...request } = options
+    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, request)
     return (items ?? []).map(withProvider)
   }
 

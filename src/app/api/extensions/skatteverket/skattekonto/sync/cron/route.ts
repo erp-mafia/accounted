@@ -355,7 +355,7 @@ export async function GET(request: Request) {
         err instanceof SkatteverketAuthError &&
         (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
-        await markNeedsReconsent(supabase, userId, companyId, err.code)
+        await markNeedsReconsent(supabase, userId, companyId, err.code, err.tokenRow?.version)
         return { userId, companyId, source, status: 'expired', error: err.code }
       }
       // TOKEN_REVOKED auto-deletes the row inside skvRequest — treat it as

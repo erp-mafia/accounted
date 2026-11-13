@@ -59,7 +59,7 @@ vi.mock('@/extensions/general/skatteverket/lib/skattekonto-client', () => {
 })
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
-  RECONSENT_ERROR_CODES: [] as const,
+  RECONSENT_ERROR_CODES: ['SESSION_EXPIRED'] as const,
   markNeedsReconsent: vi.fn(),
 }))
 
@@ -90,6 +90,7 @@ import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/
 import { listVerifiedCompanies } from '@/extensions/general/skatteverket/lib/connection-store'
 import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
 
 function makeRequest(): Request {
   return new Request('http://localhost/api/extensions/skatteverket/skattekonto/sync/cron')
@@ -237,6 +238,26 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
 
     expect(body).toMatchObject({ processed: 1, notConnected: 1, expired: 0, errors: 0 })
     expect(body.results[0]).toMatchObject({ companyId, status: 'not_connected', error: 'NOT_CONNECTED' })
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('flags a dead user token on the version the refresh read, so a row another job refreshed meanwhile stays live', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 2 }]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    // The AGI kvittens cron refreshes the same row in the same minute: the
+    // loser's verdict names the token version it was reached on.
+    mocks.syncSkattekonto.mockRejectedValue(
+      Object.assign(new (SkatteverketAuthError as any)('Sessionen har gått ut.', 'SESSION_EXPIRED'), {
+        tokenRow: { userId: 'u1', version: { rowId: 'row-1', refreshCount: 2 } },
+      }),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 1, expired: 1, errors: 0 })
+    expect(markNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'u1', companyId, 'SESSION_EXPIRED', { rowId: 'row-1', refreshCount: 2 })
     expect(log.error).not.toHaveBeenCalled()
   })
 

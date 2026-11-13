@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DigitalMailboxConnection } from '../connections'
 
 const listReceivingConnections = vi.hoisted(() => vi.fn())
+const writeProviderMetaIfUnchanged = vi.hoisted(() => vi.fn())
 const syncConnection = vi.hoisted(() => vi.fn())
 const activatePendingKivra = vi.hoisted(() => vi.fn())
 const loadCompanyIdentity = vi.hoisted(() => vi.fn())
 const getDigitalMailboxProviders = vi.hoisted(() => vi.fn())
 
-vi.mock('../connections', () => ({ listReceivingConnections }))
+vi.mock('../connections', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../connections')>()),
+  listReceivingConnections,
+  writeProviderMetaIfUnchanged,
+}))
 vi.mock('../connect', () => ({ activatePendingKivra, loadCompanyIdentity }))
 vi.mock('../providers', () => ({ getDigitalMailboxProviders }))
 vi.mock('../receive', () => ({
@@ -18,7 +23,8 @@ vi.mock('../receive', () => ({
 
 import { KIVRA_SAFETY_NET_MS, kivraDailyReadDue, sweepDigitalMailboxes } from '../sweep'
 
-const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as never
+const logMock = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() }
+const log = logMock as never
 
 const NOW = Date.parse('2026-11-01T12:03:00Z')
 const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString()
@@ -163,6 +169,71 @@ describe('sweepDigitalMailboxes: Kivra daily safety net (crm#1524)', () => {
     expect(activatePendingKivra).toHaveBeenCalledTimes(1)
     expect(summary).toMatchObject({ activated: 1, resting: 0 })
     expect(syncConnection).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('sweepDigitalMailboxes: a connection that keeps failing', () => {
+  const hoursAgo = (h: number) => new Date(NOW - h * 60 * 60_000).toISOString()
+  const failing = (meta: Record<string, unknown>, lastErrorAt = minutesAgo(10)) =>
+    row({ id: 'conn-billo', provider: 'billo', account_ref: 'b1', last_error: 'Billo answered 401', last_error_at: lastErrorAt, provider_meta: meta })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getDigitalMailboxProviders.mockReturnValue(providers(null))
+    syncConnection.mockResolvedValue({ filed: 0, already: 0, noFile: 0, failed: 1, more: false })
+    writeProviderMetaIfUnchanged.mockResolvedValue(true)
+  })
+
+  it('is reported to the team once its failure is a day old, and still retried', async () => {
+    const stuck = failing({ failing_since: hoursAgo(25) })
+    listReceivingConnections.mockResolvedValue([stuck])
+
+    const summary = await run(serviceStub(null).client)
+
+    expect(writeProviderMetaIfUnchanged).toHaveBeenCalledWith(expect.anything(), stuck, {
+      failing_since: hoursAgo(25),
+      failure_reported: hoursAgo(25),
+    })
+    expect(logMock.error).toHaveBeenCalledTimes(1)
+    expect(logMock.error).toHaveBeenCalledWith('digital mailbox connections have failed for more than a day', {
+      count: 1,
+      connections: [{ companyId: stuck.company_id, provider: 'billo', failingSince: hoursAgo(25), reason: 'Billo answered 401' }],
+    })
+    expect(summary.stuck).toBe(1)
+    expect(syncConnection).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts the clock at the first sweep that sees the failure, and leaves last_error_at to mean the latest failed contact', async () => {
+    const fresh = failing({}, minutesAgo(10))
+    listReceivingConnections.mockResolvedValue([fresh])
+
+    await run(serviceStub(null).client)
+
+    expect(writeProviderMetaIfUnchanged).toHaveBeenCalledWith(expect.anything(), fresh, { failing_since: minutesAgo(10) })
+    expect(logMock.error).not.toHaveBeenCalled()
+  })
+
+  it('is not reported before a day, nor a second time for the same failure, nor when another run wrote first', async () => {
+    listReceivingConnections.mockResolvedValue([failing({ failing_since: hoursAgo(23) })])
+    await run(serviceStub(null).client)
+    listReceivingConnections.mockResolvedValue([failing({ failing_since: hoursAgo(49), failure_reported: hoursAgo(49) })])
+    await run(serviceStub(null).client)
+    expect(writeProviderMetaIfUnchanged).not.toHaveBeenCalled()
+
+    writeProviderMetaIfUnchanged.mockResolvedValue(false)
+    listReceivingConnections.mockResolvedValue([failing({ failing_since: hoursAgo(25) })])
+    const summary = await run(serviceStub(null).client)
+    expect(writeProviderMetaIfUnchanged).toHaveBeenCalledTimes(1)
+    expect(logMock.error).not.toHaveBeenCalled()
+    expect(summary.stuck).toBe(0)
+  })
+
+  it('clears the failure once the connection heals, so the next failure is reported in its turn', async () => {
+    const healed = row({ id: 'conn-billo', provider: 'billo', account_ref: 'b1', provider_meta: { failing_since: hoursAgo(30), failure_reported: hoursAgo(30) } })
+    listReceivingConnections.mockResolvedValue([healed])
+    await run(serviceStub(null).client)
+    expect(writeProviderMetaIfUnchanged).toHaveBeenCalledWith(expect.anything(), healed, {})
+    expect(logMock.error).not.toHaveBeenCalled()
   })
 })
 

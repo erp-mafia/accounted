@@ -567,6 +567,23 @@ function capabilityFromDocType(value: string): PeppolRecipientCapability {
   }
 }
 
+/**
+ * How long a read from Qvalia (lookup, status, evidence, inbound XML) or an
+ * idempotent registration write may take, body included. There was no limit,
+ * so a call that hung held its cron until the platform killed the function.
+ * 20 s is what the connector service allows the same calls
+ * (transports/connector.ts). Two calls get no such limit: the send (see
+ * submit) and the inbound listing that marks its page read (see
+ * listInboundDocuments).
+ */
+const QVALIA_REQUEST_TIMEOUT_MS = 20_000
+/**
+ * The inbound listing with includeRead answers up to a page of whole
+ * documents, embedded attachments included, but marks nothing read: it gets
+ * longer than a read, and giving it up loses nothing.
+ */
+const QVALIA_INBOUND_RELIST_TIMEOUT_MS = 60_000
+
 export function createQvaliaTransport(
   config: QvaliaConfig,
   deps: QvaliaTransportDeps = {},
@@ -581,13 +598,20 @@ export function createQvaliaTransport(
   // adapter makes (PeppolTransport.tenantId).
   const tenantId = config.accountRegNo
 
+  /**
+   * One call to Qvalia. `timeoutMs` is QVALIA_REQUEST_TIMEOUT_MS unless the
+   * call names another limit, or null for none: then the call runs until it
+   * answers or the caller's function is stopped, as every call did before
+   * there were limits.
+   */
   async function request(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     url: string,
-    init: { headers?: Record<string, string>; body?: string } = {},
+    init: { headers?: Record<string, string>; body?: string; timeoutMs?: number | null } = {},
   ): Promise<Response> {
+    const timeoutMs = init.timeoutMs === undefined ? QVALIA_REQUEST_TIMEOUT_MS : init.timeoutMs
     try {
-      return await fetchImpl(url, {
+      const response = await fetchImpl(url, {
         method,
         headers: {
           Authorization: authorizationHeader(config),
@@ -596,6 +620,17 @@ export function createQvaliaTransport(
         },
         body: init.body,
         cache: 'no-store',
+        ...(timeoutMs === null ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+      })
+      if (timeoutMs === null) return response
+      // The body is read inside the timeout (the connector transport does the
+      // same): headers that arrive before a body that stalls must not hold
+      // the caller, and a body that fails is a network failure like any other.
+      const body = await response.arrayBuffer()
+      return new Response(body.byteLength > 0 ? body : null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
       })
     } catch (error) {
       throw new QvaliaApiError('network', 'Could not reach Qvalia', { cause: error })
@@ -689,9 +724,15 @@ export function createQvaliaTransport(
     // by adopting an earlier integrationId: that is the failed submission
     // the resend replaces, already recorded on another delivery.
     const overwrite = submission.replacesSubmissionId ? '?overwrite=true' : ''
+    // No time limit of our own on the send. Given up after Qvalia took the
+    // document, the delivery would read as a retryable failure, and a resend
+    // (with ?overwrite=true, which never answers 409) would go out under a new
+    // integrationId: a second e-invoice to the customer. The send route's own
+    // limit bounds the call, as it always did.
     const response = await request('POST', `${transactionBase}/invoices/outgoing${overwrite}`, {
       headers: { 'content-type': 'application/xml' },
       body: submission.document,
+      timeoutMs: null,
     })
     const { text, json } = await readBody(response)
 
@@ -895,7 +936,15 @@ export function createQvaliaTransport(
     const url = options.includeRead
       ? `${transactionBase}/${collection}/incoming?includeRead=true&limit=${limit}`
       : `${transactionBase}/${collection}/incoming/${read}?limit=${limit}`
-    const response = await request('GET', url)
+    // The read endpoint marks the page read when it answers, whether or not
+    // the answer reaches us: given up early, the page is handed over and never
+    // received. It runs for as long as the caller says it can wait (timeoutMs),
+    // and without a limit when the caller does not say. The includeRead
+    // listing marks nothing, so it has a limit of its own.
+    const timeoutMs = options.includeRead
+      ? Math.min(options.timeoutMs ?? QVALIA_INBOUND_RELIST_TIMEOUT_MS, QVALIA_INBOUND_RELIST_TIMEOUT_MS)
+      : options.timeoutMs ?? null
+    const response = await request('GET', url, { timeoutMs })
     if (response.status === 204) return []
     const { text, json } = await readBody(response)
     if (!response.ok) throw classifyHttpFailure(response.status, json, text)
