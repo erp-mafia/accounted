@@ -274,11 +274,24 @@ export async function completeBokioSupplierInvoices(options: CompleteBokioOption
   }
 }
 
+/** How long a company whose claim failed waits: its place at the head of the queue goes to the next one. */
+const CLAIM_FAILED_RETRY_MS = 60 * 60_000
+/**
+ * claim_bokio_supplier_completion raised: the connection the company was
+ * enrolled with is no longer accepted, or names another Bokio account. A
+ * person has to act (the reconcile route re-arms the work), so no retry.
+ */
+const CLAIM_REFUSED = 'claim_bokio_supplier_completion: P0001'
+
 /** Only explicitly enrolled companies run. Deployment never enrolls a company. */
 export async function runBokioSupplierCompletion(supabase: SupabaseClient, deadline: number) {
+  const log = createLogger('bokio-supplier-completion')
+  const startedAt = new Date().toISOString()
   const { data, error } = await withinMigrationDeadline(supabase.from('bokio_supplier_completion_work').select('company_id,consent_id')
-    .not('consent_id', 'is', null).lte('next_attempt_at', new Date().toISOString()).order('next_attempt_at').limit(10), deadline)
-  if (error) throw new Error('BOKIO_COMPLETION_QUEUE_READ_FAILED')
+    .not('consent_id', 'is', null).lte('next_attempt_at', startedAt).order('next_attempt_at').limit(10), deadline)
+  // The code travels with the error: the route logged this as "deferred",
+  // with nothing to tell a missing grant from an outage.
+  if (error) throw Object.assign(new Error('BOKIO_COMPLETION_QUEUE_READ_FAILED'), { code: error.code ?? 'DB_ERROR' })
   const results = []
   for (const work of data ?? []) {
     if (Date.now() >= deadline - 15_000) break
@@ -294,10 +307,29 @@ export async function runBokioSupplierCompletion(supabase: SupabaseClient, deadl
         const parked = await withinMigrationDeadline(supabase.from('bokio_supplier_completion_work')
           .update({ next_attempt_at: result.nextAttemptAt }).eq('company_id', work.company_id).is('run_id', null), deadline)
           .then(({ error }) => !error, () => false)
-        if (!parked) createLogger('bokio-supplier-completion').warn('enrolled company stays due', { companyId: work.company_id })
+        if (!parked) log.warn('enrolled company stays due', { companyId: work.company_id })
       }
-    } catch {
-      createLogger('bokio-supplier-completion').warn('enrolled company completion deferred', { companyId: work.company_id })
+    } catch (failure) {
+      const reason = failure instanceof Error ? failure.message : String(failure)
+      // A run that got its claim released it, which moved next_attempt_at a
+      // minute ahead: the filter below then matches nothing. One whose claim
+      // itself failed still has the next_attempt_at it was selected by, so it
+      // stayed first in line, and ten such companies filled every run's ten
+      // places for good. A refused claim is parked until a person acts; any
+      // other failure waits an hour behind the companies that can run.
+      const refused = reason === CLAIM_REFUSED
+      await withinMigrationDeadline(supabase.from('bokio_supplier_completion_work')
+        .update({ next_attempt_at: refused ? 'infinity' : new Date(Date.now() + CLAIM_FAILED_RETRY_MS).toISOString() })
+        .eq('company_id', work.company_id).is('run_id', null).lte('next_attempt_at', startedAt), deadline)
+        .then(({ error: pushError }) => {
+          if (pushError) log.warn('enrolled company stays first in line', { companyId: work.company_id, code: pushError.code })
+        }, () => undefined)
+      if (refused) {
+        log.error('Bokio supplier completion parked: its connection is gone or names another account', undefined,
+          { companyId: work.company_id, consentId: work.consent_id, reason })
+      } else {
+        log.warn('enrolled company completion deferred', { companyId: work.company_id, reason: reason.slice(0, 200) })
+      }
       results.push({ failed: 1, partial: true })
     }
   }

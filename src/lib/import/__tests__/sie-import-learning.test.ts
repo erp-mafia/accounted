@@ -121,6 +121,17 @@ describe('learnFromCompletedSIEImport', () => {
     expect(summary).toEqual({ templates: 4, parties: partySummary })
   })
 
+  it('learns the templates but starts no party suggestions once its deadline has passed', async () => {
+    helpers.populateTemplatesFromSieVouchers.mockResolvedValue(4)
+
+    const summary = await learnFromCompletedSIEImport(supabase, completedJob, vouchers, Date.now() - 1)
+
+    // The vouchers exist only in this invocation; the suggestions can be run again.
+    expect(helpers.populateTemplatesFromSieVouchers).toHaveBeenCalledTimes(1)
+    expect(helpers.suggestPartiesForCompany).not.toHaveBeenCalled()
+    expect(summary).toEqual({ templates: 4, parties: null })
+  })
+
   it('suggests parties on behalf of the importing user when no separate actor ran the job', async () => {
     helpers.populateTemplatesFromSieVouchers.mockResolvedValue(0)
     helpers.suggestPartiesForCompany.mockResolvedValue(partySummary)

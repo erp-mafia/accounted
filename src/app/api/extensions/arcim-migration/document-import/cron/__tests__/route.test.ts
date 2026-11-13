@@ -37,7 +37,7 @@ describe('underlag continuation cron (crm#1581)', () => {
   it('sweeps until 690 s in and cuts an overrun at 770 s, under the 800 s the platform allows', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
-    const result = { eligible: 1, claimed: 1, slices: 1, completed: 0, reconnect: 0, failed: 0, released: 0 }
+    const result = { eligible: 1, claimed: 1, slices: 1, completed: 0, reconnect: 0, failed: 0, interrupted: 0, released: 0 }
     vi.mocked(runDocumentImportContinuation).mockResolvedValue(result)
 
     const response = await GET(request())

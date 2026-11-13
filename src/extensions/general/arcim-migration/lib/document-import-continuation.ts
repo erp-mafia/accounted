@@ -103,6 +103,8 @@ export interface DocumentImportContinuationResult {
   reconnect: number
   /** Attempts that failed and wait to be tried again. */
   failed: number
+  /** Attempts the platform ended mid-slice, counted from the lease they left behind. */
+  interrupted: number
   /** Runs the server let go of for good (outdated, no connection, no writer). */
   released: number
 }
@@ -231,7 +233,7 @@ export async function runDocumentImportContinuation(
     now: options.now ?? Date.now,
     importDocuments: options.importDocuments ?? importProviderDocuments,
     id: options.workerId ?? randomUUID(),
-    outcome: { eligible: 0, claimed: 0, slices: 0, completed: 0, reconnect: 0, failed: 0, released: 0 },
+    outcome: { eligible: 0, claimed: 0, slices: 0, completed: 0, reconnect: 0, failed: 0, interrupted: 0, released: 0 },
   }
   const { supabase, deadline, now, outcome } = worker
 
@@ -286,20 +288,61 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
     return
   }
 
+  // A lease still on the summary (lapsed, or the run would not be claimable)
+  // was never let go: every way out of the loop below drops it, so the worker
+  // that took it was ended by the platform in the middle of a slice. A slice
+  // writes its cursor only when it ends, so that attempt left nothing else
+  // behind and nothing counted it: a run whose slice never finishes inside
+  // the invocation started over every fifteen minutes for the whole fourteen
+  // days. It is counted here as a failed attempt, by the claim that finds it;
+  // a folded slice starts the count over (foldDocumentImportSlice), so only
+  // attempts in a row that folded nothing reach the cap.
+  const interrupted = run.lease !== undefined
+  const failures = (run.serverFailures ?? 0) + (interrupted ? 1 : 0)
+  if (interrupted) outcome.interrupted++
+  if (interrupted && failures >= DOCUMENT_IMPORT_SERVER_MAX_FAILURES) {
+    // Given up on for good: the page shows the run as stopped and offers to
+    // carry on from the cursor. Reported once, here, because the attempts
+    // that were ended could not report themselves.
+    const stopped = await compareAndSet(supabase, row.id, row.updated_at, {
+      ...withoutServerHold(run),
+      serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES,
+    })
+    if (stopped) {
+      outcome.released++
+      log.error('underlag run stopped on the server: its attempts kept being ended mid-slice', undefined, {
+        companyId: row.company_id,
+        provider: run.provider,
+        failures,
+        cursor: run.nextCursor,
+        scanned: run.scanned,
+        total: run.total,
+      })
+    }
+    return
+  }
+
   const lease = () => ({ owner: worker.id, until: iso(now() + DOCUMENT_IMPORT_LEASE_MS) })
-  let current: DocumentImportRunSummary = { ...run, lease: lease() }
+  let current: DocumentImportRunSummary = {
+    ...run,
+    lease: lease(),
+    ...(interrupted ? { serverFailures: failures } : {}),
+  }
   const claimed = await compareAndSet(supabase, row.id, row.updated_at, current)
   if (!claimed) return
   let version: string = claimed
   let holding = true
   let contextStale = false
   let contextCheckedAt = now()
+  // This claim stored at least one slice: the run moved.
+  let folded = false
   outcome.claimed++
   log.info('underlag run continued on the server', {
     companyId: row.company_id,
     provider: run.provider,
     scanned: run.scanned,
     total: run.total,
+    ...(interrupted ? { interruptedAttempts: failures } : {}),
   })
 
   try {
@@ -344,15 +387,15 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
       if (result.partial && (!result.nextCursor || (cursor !== null && result.nextCursor <= cursor))) {
         throw new Error('UNDERLAG_RUN_NOT_ADVANCING')
       }
-      const folded = foldDocumentImportSlice(current, result, cursor, iso(now()), {
+      const summary = foldDocumentImportSlice(current, result, cursor, iso(now()), {
         driver: 'server',
         consentId: context.consentId,
         run: current.startedAt,
       })
       // `current` is the version this worker holds, so its next slice always
       // continues it; a null fold would mean the run is not this one.
-      if (!folded) break
-      const next: DocumentImportRunSummary = folded.complete ? folded : { ...folded, lease: lease() }
+      if (!summary) break
+      const next: DocumentImportRunSummary = summary.complete ? summary : { ...summary, lease: lease() }
       const written = await compareAndSet(supabase, row.id, version, next)
       if (!written) {
         // A tab wrote in between: it drives the run now.
@@ -361,6 +404,7 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
       }
       version = written
       current = next
+      folded = true
       if (next.complete) {
         holding = false
         outcome.completed++
@@ -377,8 +421,12 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
       }
     }
   } catch (sliceError) {
-    if (sliceError instanceof ExecutionBudgetExceeded) {
-      // Out of time, not a failure: the next cron run takes it on.
+    if (sliceError instanceof ExecutionBudgetExceeded && folded) {
+      // Out of time after a slice was stored is a deferral: the next cron
+      // run takes it on from the new cursor. Out of time with nothing stored
+      // falls through to the failed attempt below, as in the register
+      // worker: a slice that never ends inside the invocation otherwise
+      // repeated, uncounted, for the whole fourteen days.
       log.info('underlag run deferred to the next server run', { companyId: row.company_id })
     } else if (sliceError instanceof ProviderCallError && sliceError.code === 'PROVIDER_LICENSE_MISSING') {
       holding = false

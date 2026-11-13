@@ -143,6 +143,12 @@ export interface CloudSchedule {
    * put across DST transitions. Absent on records from before this field.
    */
   hour_local?: number
+  /**
+   * ISO timestamp of when automatic backup was last switched from off to on
+   * (PUT /schedule). The card's "nothing saved for two days" warning counts
+   * from it. Absent on schedules never switched on by hand since it existed.
+   */
+  enabled_at?: string | null
   /** ISO timestamp of the last auto-sync attempt (success or failure). */
   last_auto_sync_at: string | null
   /** Outcome of the last auto-sync attempt. */
@@ -156,6 +162,36 @@ export interface CloudSchedule {
   consecutive_failures?: number
   /** ISO timestamp of the last failure-alert email (throttle anchor). */
   last_alert_at?: string | null
+  /**
+   * The run claim (lib/run-claim.ts): ISO timestamp of when a run, the cron's
+   * or a person's, started working on this destination; null or absent when
+   * none does. Taken by compare-and-set and cleared when the run ends, so one
+   * still set long after is a run the platform ended mid-company.
+   */
+  sync_started_at?: string | null
+  /**
+   * Who holds the claim: the hourly cron, or a run a person started ("Synka
+   * nu", the first backup after connecting). Only a cron claim nobody
+   * released is a nightly backup that died; absent on a claim reads as cron.
+   */
+  sync_started_by?: 'cron' | 'manual' | null
+  /**
+   * ISO timestamp of when the cron last ran out of time on this destination
+   * with files still to upload. The schedule stays due; this only sends it to
+   * the back of the next run's queue.
+   */
+  deferred_at?: string | null
+  /**
+   * Due runs in a row that ended at the time budget before reaching this
+   * destination. The claim sets it back to 0: it counts waiting, not the
+   * runs a large backup needs.
+   */
+  left_over_runs?: number
+  /**
+   * ISO timestamp of when the cron last found this destination's claim
+   * abandoned and counted the run as failed. One such retry per night.
+   */
+  interrupted_at?: string | null
 }
 
 /** Per-provider status block returned to the UI. */

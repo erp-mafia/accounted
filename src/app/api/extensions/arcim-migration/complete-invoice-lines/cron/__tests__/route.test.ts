@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
+const log = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: log.warn, error: log.error, child: (): unknown => logger }
+  return { ...actual, createLogger: () => logger }
+})
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 vi.mock('@/lib/auth/cron', () => ({ verifyCronSecret: vi.fn().mockReturnValue(null) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({})) }))
@@ -45,10 +51,18 @@ describe('invoice completion cron', () => {
     expect(runInvoiceCompletion).toHaveBeenCalledWith(expect.anything(), start + 240_000)
     expect(await response.json()).toEqual({ data: summary, supplierCompletion: [] })
   })
-  it('continues customer completion when the supplier queue fails', async () => {
-    vi.mocked(runBokioSupplierCompletion).mockRejectedValue(new Error('unavailable'))
+  it('continues customer completion when the supplier queue fails, and reports the failure with its code', async () => {
+    const failure = Object.assign(new Error('BOKIO_COMPLETION_QUEUE_READ_FAILED'), { code: '42501' })
+    vi.mocked(runBokioSupplierCompletion).mockRejectedValue(failure)
     expect((await GET(request())).status).toBe(200)
     expect(runInvoiceCompletion).toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith('Bokio supplier completion failed', failure, { code: '42501' })
+  })
+  it('takes a supplier pass that ran out of time as a deferral, not an error', async () => {
+    vi.mocked(runBokioSupplierCompletion).mockRejectedValue(new Error('MIGRATION_DEADLINE'))
+    expect((await GET(request())).status).toBe(200)
+    expect(log.error).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledWith('Bokio supplier completion deferred: out of time')
   })
   it('surfaces a discovery failure instead of returning an empty successful run', async () => {
     vi.mocked(runInvoiceCompletion).mockRejectedValue(new Error('database unavailable'))

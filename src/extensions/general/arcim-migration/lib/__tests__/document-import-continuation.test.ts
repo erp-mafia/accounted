@@ -24,6 +24,13 @@ vi.mock('../import-documents', () => {
   return { FortnoxDocumentScopesRequiredError, ProviderConnectionRefusedError, ProviderCallError, importProviderDocuments: vi.fn() }
 })
 
+const logError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: logError, child: (): unknown => logger }
+  return { ...actual, createLogger: () => logger }
+})
+
 import { ProviderConnectionRefusedError, type ImportDocumentsResult } from '../import-documents'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import {
@@ -307,15 +314,78 @@ describe('runDocumentImportContinuation (crm#1581)', () => {
     expect(db.stored()).toMatchObject({ serverFailures: 1, scanned: 2740 })
   })
 
-  it('defers a slice cut at the hard stop without counting it as a failure', async () => {
+  it('defers a slice cut at the hard stop without counting it, once an earlier slice of the attempt was stored', async () => {
     const db = database(clock, { run: stoppedRun(clock) })
+    const importDocuments = vi.fn()
+      .mockResolvedValueOnce(slice())
+      .mockRejectedValueOnce(new ExecutionBudgetExceeded('underlag-continuation'))
+
+    const outcome = await run(db, importDocuments)
+
+    expect(db.stored()).toMatchObject({ scanned: 7740, nextCursor: 'file-7740' })
+    expect(db.stored()).not.toHaveProperty('lease')
+    expect(db.stored()).not.toHaveProperty('serverFailures')
+    expect(outcome).toMatchObject({ claimed: 1, slices: 1, failed: 0 })
+  })
+
+  it('counts an attempt cut at the hard stop with nothing stored: a slice that never ends is not retried for fourteen days', async () => {
+    const db = database(clock, { run: stoppedRun(clock, { serverFailures: 3 }) })
     const importDocuments = vi.fn().mockRejectedValue(new ExecutionBudgetExceeded('underlag-continuation'))
 
     const outcome = await run(db, importDocuments)
 
+    expect(db.stored()).toMatchObject({ serverFailures: 4, scanned: 2740, nextCursor: 'file-2740' })
     expect(db.stored()).not.toHaveProperty('lease')
-    expect(db.stored()).not.toHaveProperty('serverFailures')
-    expect(outcome).toMatchObject({ claimed: 1, failed: 0 })
+    expect(outcome).toMatchObject({ claimed: 1, failed: 1 })
+  })
+
+  describe('an attempt the platform ended mid-slice', () => {
+    // What a killed worker leaves: its lease, lapsed, and nothing else. The
+    // cursor is only written when a slice ends.
+    const abandoned = (overrides: Partial<DocumentImportRunSummary> = {}) =>
+      stoppedRun(clock, { driver: 'server', lease: { owner: 'worker-0', until: iso(clock - MINUTE) }, ...overrides })
+
+    it('is counted by the next claim, and a stored slice starts the count over', async () => {
+      const db = database(clock, { run: abandoned({ serverFailures: 1 }) })
+      const importDocuments = vi.fn().mockResolvedValueOnce(slice()).mockResolvedValueOnce(slice({ partial: false, nextCursor: null }))
+
+      const outcome = await run(db, importDocuments)
+
+      // The claim carries the count; the first fold drops it.
+      expect(db.writes[0]).toMatchObject({ serverFailures: 2, lease: { owner: 'worker-1' } })
+      expect(db.writes[1]).not.toHaveProperty('serverFailures')
+      expect(outcome).toMatchObject({ claimed: 1, interrupted: 1, completed: 1 })
+    })
+
+    it('keeps the count when this attempt stores nothing either', async () => {
+      const db = database(clock, { run: abandoned() })
+      const importDocuments = vi.fn().mockRejectedValue(new Error('Fortnox 503'))
+
+      await run(db, importDocuments)
+
+      // One for the attempt that was ended, one for this one.
+      expect(db.stored()).toMatchObject({ serverFailures: 2 })
+    })
+
+    it('stops the run at the fifth in a row, says so once, and starts no slice', async () => {
+      const db = database(clock, { run: abandoned({ serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES - 1 }) })
+      const importDocuments = vi.fn()
+
+      const outcome = await run(db, importDocuments)
+
+      expect(importDocuments).not.toHaveBeenCalled()
+      expect(db.stored()).toMatchObject({ serverFailures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES, scanned: 2740, nextCursor: 'file-2740' })
+      expect(db.stored()).not.toHaveProperty('lease')
+      expect(outcome).toMatchObject({ claimed: 0, interrupted: 1, released: 1 })
+      // Stopped for the server, and the tab's again.
+      expect(documentImportServerMayClaim(db.stored(), clock + 24 * 60 * MINUTE)).toBe(false)
+      expect(logError).toHaveBeenCalledTimes(1)
+      expect(logError).toHaveBeenCalledWith(
+        'underlag run stopped on the server: its attempts kept being ended mid-slice',
+        undefined,
+        expect.objectContaining({ companyId: 'company-1', failures: DOCUMENT_IMPORT_SERVER_MAX_FAILURES, cursor: 'file-2740' }),
+      )
+    })
   })
 
   it('reads the connection the run recorded when the company has several', async () => {

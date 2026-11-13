@@ -35,12 +35,22 @@ describe('register repair cron', () => {
   it('stops starting work 150 s in, half the time the platform allows, and answers the summary', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
-    const summary = { pending: 3, worked: 2, finished: 1, changed: 40 }
+    const summary = { pending: 3, worked: 2, finished: 1, changed: 40, errors: 0 }
     vi.mocked(runRegisterRepair).mockResolvedValue(summary)
     const response = await GET(request())
     expect(maxDuration).toBe(300)
     expect(runRegisterRepair).toHaveBeenCalledWith(expect.anything(), start + 150_000)
     expect(await response.json()).toEqual({ data: summary })
+  })
+
+  it('answers 200 when one company\'s progress could not be saved and the others\' was', async () => {
+    vi.mocked(runRegisterRepair).mockResolvedValue({ pending: 4, worked: 4, finished: 2, changed: 12, errors: 1 })
+    expect((await GET(request())).status).toBe(200)
+  })
+
+  it('answers 500 when no company\'s progress could be saved: the run did no lasting work', async () => {
+    vi.mocked(runRegisterRepair).mockResolvedValue({ pending: 4, worked: 4, finished: 0, changed: 0, errors: 4 })
+    expect((await GET(request())).status).toBe(500)
   })
 
   it('surfaces a failure instead of an empty successful run', async () => {
