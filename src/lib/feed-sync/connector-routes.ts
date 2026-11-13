@@ -25,6 +25,7 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { backfillDateErrorMessage, parseBackfillFrom, type BackfillDateError } from './cursor-window'
 import { ledgerCoveredThrough } from '@/lib/bookkeeping/ledger-coverage'
+import { userFacingFailure } from '@/lib/errors/get-error-message'
 
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
 /** Per user and connector; the MCP door shares the panel's budget. */
@@ -90,8 +91,9 @@ export interface FeedConnectorSpec<C extends FeedConnectionRow, S extends FeedSy
    */
   sync: (supabase: SupabaseClient, connection: C, deadlineMs: number | undefined) => Promise<S>
   /**
-   * The manual run's time budget. Null runs unbounded: Stripe persists its
-   * cursor per ingest chunk, so a run cut off at the ceiling resumes anyway.
+   * The manual run's time budget. Null runs unbounded, which no connector
+   * does: past the panel's own timeout the person is told the sync failed
+   * while it still runs.
    */
   manualSyncBudgetMs?: number | null
   disconnect: {
@@ -200,7 +202,9 @@ export function feedSyncRoute<C extends FeedConnectionRow, S extends FeedSyncSum
         ctx.log.error(`[${spec.extensionId}] Manual sync failed`, {
           message: error instanceof Error ? error.message : String(error),
         })
-        return NextResponse.json({ error: SYNC_FAILED_MESSAGE }, { status: 502 })
+        // A sync that says why in Swedish (a history no run gets through)
+        // answers that, not a "try again" that would fail the same way.
+        return NextResponse.json({ error: userFacingFailure(error, SYNC_FAILED_MESSAGE) }, { status: 502 })
       }
 
       if (results.length > 0 && results.every((r) => r.summary.locked)) {
@@ -372,7 +376,7 @@ export async function runFeedBackfill<C extends FeedConnectionRow, S extends Fee
       message: error instanceof Error ? error.message : String(error),
       connection_id: connection.id,
     })
-    return { ok: false, status: 502, error: SYNC_FAILED_MESSAGE, reason: 'sync_failed' }
+    return { ok: false, status: 502, error: userFacingFailure(error, SYNC_FAILED_MESSAGE), reason: 'sync_failed' }
   }
 }
 

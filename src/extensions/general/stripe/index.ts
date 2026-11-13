@@ -40,9 +40,9 @@ const NOT_CONFIGURED_MESSAGE =
  * Status, sync, backfill, the nightly toggle and disconnect: the shared feed
  * routes (lib/feed-sync/connector-routes). Feed-only (2026-07-24): the sync
  * imports balance transactions into the inbox and books nothing. The manual
- * run takes no time budget: the cursor persists per ingest chunk, so a run
- * cut off at the dispatcher ceiling resumes where it stopped (see the panel's
- * STRIPE_SYNC_TIMEOUT_MS).
+ * run has the shops' budget (MANUAL_SYNC_BUDGET_MS), so it ends inside the
+ * panel's STRIPE_SYNC_TIMEOUT_MS; the cursor persists per window and chunk,
+ * so the next sync goes on where it stopped.
  */
 export const stripeFeed: FeedConnectorSpec<StripeConnection, StripeTransactionSyncSummary> = {
   extensionId: 'stripe',
@@ -60,7 +60,6 @@ export const stripeFeed: FeedConnectorSpec<StripeConnection, StripeTransactionSy
   isConfigured: isStripeConnectConfigured,
   sync: (supabase, connection, deadlineMs) =>
     syncStripeBalanceTransactions(supabase, connection, undefined, deadlineMs),
-  manualSyncBudgetMs: null,
   disconnect: {
     columns: 'stripe_account_id',
     // Best effort: an already-severed connection throws at Stripe, which is

@@ -33,6 +33,7 @@ import { deauthorizeAccount } from '../lib/connect'
 import { syncStripeBalanceTransactions } from '../lib/transaction-sync'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { MANUAL_SYNC_BUDGET_MS } from '@/lib/feed-sync/connector-routes'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function findRoute(method: string, path: string) {
@@ -345,6 +346,11 @@ describe('stripe POST /backfill', () => {
     expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][1].last_balance_txn_synced_at).toBe(
       '2025-12-31T23:00:00.000Z',
     )
+    // Under the shops' manual budget, so it answers inside the panel's own
+    // timeout instead of running past it (accounted#209).
+    const deadlineMs = vi.mocked(syncStripeBalanceTransactions).mock.calls[0][3]
+    expect(deadlineMs).toBeGreaterThan(Date.now())
+    expect(deadlineMs).toBeLessThanOrEqual(Date.now() + MANUAL_SYNC_BUDGET_MS)
   })
 
   it('starts after a hand-entered samlingsverifikat on 1686, at Swedish midnight (crm#1386)', async () => {

@@ -157,6 +157,12 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       { connectionId: 'conn-1', inserted: 2, updated: 0, status: 'synced' },
       { connectionId: 'conn-2', inserted: 2, updated: 0, status: 'synced' },
     ])
+    // The run's deadline is shared, so each connection takes only its share
+    // of it; "Synka nu" and a backfill keep their whole budget (accounted#209).
+    for (const call of vi.mocked(syncStripeBalanceTransactions).mock.calls) {
+      expect(typeof call[3]).toBe('number')
+      expect(call[4]).toEqual({ fairShare: true })
+    }
   })
 
   it('reaches entitled connections behind a front of more than 50 non-entitled ones', async () => {

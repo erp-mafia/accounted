@@ -521,6 +521,8 @@
     "sync_done_feed": "{fetched} transaction(s) fetched: {imported} new in the inbox.",
     "sync_done_empty": "Stripe returned no transactions for the period. If you expected transactions, check that the right account is connected.",
     "sync_done_feed_errors": "{fetched} transaction(s) fetched: {imported} new in the inbox. {errors} row(s) could not be imported: sync again.",
+    "sync_partial_title": "Sync paused",
+    "sync_partial": "{fetched} transaction(s) fetched so far: {imported} new in the inbox.{errors, plural, =0 {} other { # row(s) could not be imported.}} Not all transactions were fetched in one go: sync again to continue where it stopped.",
     "sync_foreign_currency": "{count} of them are in a currency other than SEK and were left out of the inbox: the Stripe balance on account 1686 is kept in SEK, so they cannot be booked there.",
     "sync_revoked": "Stripe has revoked the connection, so no transactions could be fetched. Reconnect the Stripe account.",
     "transaction_sync_title": "Transactions from Stripe",

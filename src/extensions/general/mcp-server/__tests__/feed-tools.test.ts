@@ -93,6 +93,20 @@ describe('gnubok_backfill_feed (crm#1385)', () => {
     expect(result.instructions).toMatch(/2026-10-17.*include_booked=true/)
   })
 
+  it('says a backfill the run bound paused is not done, and how to go on (accounted#209)', async () => {
+    vi.mocked(runFeedBackfill).mockResolvedValueOnce({ ...OK, summary: { ...OK.summary, deadlineReached: true } })
+    const { supabase } = createQueuedMockSupabase()
+    const result = (await backfill.execute(
+      { provider: 'stripe', from: '2026-01-01' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Record<string, unknown>
+    expect(result.instructions).not.toMatch(/^Fetched from/)
+    expect(result.instructions).toMatch(/Started fetching from 2026-01-01/)
+    expect(result.instructions).toMatch(/stopped before today.*last_synced_at.*gnubok_list_feed_connections/)
+  })
+
   it('passes include_booked and connection_id through', async () => {
     const { supabase } = createQueuedMockSupabase()
     await backfill.execute(

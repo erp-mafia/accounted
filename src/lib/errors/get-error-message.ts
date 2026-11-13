@@ -434,6 +434,19 @@ export function looksLikeUserFacingSwedish(message: string): boolean {
   return hasSwedishWords(text)
 }
 
+/**
+ * A failed sync's error as the person may read it: the thrown error through
+ * the app's error mapping, kept only when that reads as a Swedish sentence
+ * written for a user (the mapping passes a few keywords through, "session"
+ * among them, that an English provider error can carry), else `fallback`.
+ * Never the raw exception. The nightly feed runners and the manual feed
+ * routes answer with it.
+ */
+export function userFacingFailure(error: unknown, fallback: string): string {
+  const mapped = getErrorMessage(error, { fallback })
+  return looksLikeUserFacingSwedish(mapped) ? mapped : fallback
+}
+
 function hasSwedishWords(text: string): boolean {
   if (SWEDISH_STRONG_RE.test(text)) return true
   const weak = new Set<string>()

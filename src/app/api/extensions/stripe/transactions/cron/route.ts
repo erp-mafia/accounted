@@ -28,8 +28,9 @@ export const GET = withServiceCronContext('cron.stripe_transaction_sync', async 
     capability: CAPABILITY.stripe_payments,
     isConfigured: () => Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_CONNECT_CLIENT_ID),
     // The runner counts inserted rows; a feed row is imported, never updated.
+    // Its deadline is shared by every connection in the run: each takes its share.
     sync: async (supabase, connection, log, deadlineMs) => {
-      const summary = await syncStripeBalanceTransactions(supabase, connection, log, deadlineMs)
+      const summary = await syncStripeBalanceTransactions(supabase, connection, log, deadlineMs, { fairShare: true })
       return { inserted: summary.imported, updated: 0, errors: summary.errors, deadlineReached: summary.deadlineReached, revoked: summary.revoked }
     },
   })
