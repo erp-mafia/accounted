@@ -6,6 +6,8 @@ import type {
   commitContractRevenue,
   commitDeferredTax,
   commitK3Transition,
+  commitAccrualDissolution,
+  commitAccrualInstallment,
   commitAssetDepreciation,
   commitAssetDisposal,
   commitBulkBooking,
@@ -247,7 +249,8 @@ export interface RecordSqlPostingEventsRequest {
  * events come from recordEventsForSql and travel in the wrapper's own
  * arguments, as `businessEvents`); commit_asset_depreciation and
  * commit_asset_disposal commit a draft made through draftJournalEntry, which
- * linked its event already.
+ * linked its event already, as commit_accrual_installment does for a
+ * periodisering month and commit_accrual_dissolution for the rest of one.
  */
 export interface SqlPostingDoors {
   bulk_book_transactions: typeof commitBulkBooking
@@ -263,6 +266,8 @@ export interface SqlPostingDoors {
   commit_deferred_tax: typeof commitDeferredTax
   commit_contract_revenue: typeof commitContractRevenue
   commit_k3_transition: typeof commitK3Transition
+  commit_accrual_installment: typeof commitAccrualInstallment
+  commit_accrual_dissolution: typeof commitAccrualDissolution
   book_counterparty_setoff: typeof commitCounterpartySetoff
 }
 

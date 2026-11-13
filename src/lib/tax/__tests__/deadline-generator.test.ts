@@ -4,6 +4,7 @@ import {
   ANNUAL_HORIZON_DAYS,
   RECURRING_HORIZON_DAYS,
   backfillMissingTaxDeadlines,
+  generateNewYearDeadlines,
   findSettingsMissingUpcomingDeadlines,
   findSettingsWithStaleUpcomingDeadlines,
   generateTaxDeadlinesForUser,
@@ -13,6 +14,15 @@ import {
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 import { createRowsMockSupabase } from '@/tests/helpers'
+
+// log.error is what reaches the error tracker: the fallback to two
+// statements must be reported, once per process. Other levels stay silent.
+const mockLogError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError, child: vi.fn() }
+  logger.child.mockReturnValue(logger)
+  return { ...(await importOriginal<typeof import('@/lib/logger')>()), createLogger: () => logger }
+})
 
 const SETTINGS: CompanySettingsForDeadlines = {
   entity_type: 'aktiebolag',
@@ -67,12 +77,20 @@ type SupersededRow = {
 }
 
 /**
- * Recording mock: captures the order of insert/delete operations and the
- * insert payload, so the tests can assert the insert-first/delete-after
- * ordering that prevents regeneration failures from wiping deadlines.
+ * Recording mock: captures the replacement the generator asks the database
+ * for (replace_system_tax_deadlines: the new rows and the window, one call)
+ * and its rows. With `functionMissing` the database answers as one that does
+ * not have the function yet, and the mock records the order of the two
+ * statements the generator then falls back to (insert first, delete after),
+ * the ordering that keeps a failed insert from wiping deadlines.
  */
 function makeRecordingSupabase(opts: {
+  /** The replacement (or, with functionMissing, the insert) fails with this. */
   insertError?: { code: string; message: string }
+  /** The database has no replace_system_tax_deadlines yet (PGRST202). */
+  functionMissing?: boolean
+  /** The function exists but fails with this error. */
+  replaceError?: { code: string; message: string }
   completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
   supersededRows?: SupersededRow[]
   fiscalPeriods?: Array<{ company_id: string; period_start: string; period_end: string }>
@@ -84,6 +102,18 @@ function makeRecordingSupabase(opts: {
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
+  let replaceArgs: Record<string, unknown> | null = null
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (name !== 'replace_system_tax_deadlines') return { data: null, error: null }
+    if (opts.functionMissing) return { data: null, error: { code: 'PGRST202', message: 'function not found' } }
+    calls.push('replace')
+    if (opts.replaceError) return { data: null, error: opts.replaceError }
+    replaceArgs = args
+    insertPayload = args.p_rows as Array<Record<string, unknown>>
+    return opts.insertError
+      ? { data: null, error: opts.insertError }
+      : { data: [{ created: insertPayload.length, deleted: 2 }], error: null }
+  })
   const filings = createRowsMockSupabase({
     agi_kvittenser: opts.agiKvittenser ?? [],
     agi_declarations: opts.agiDeclarations ?? [],
@@ -151,9 +181,10 @@ function makeRecordingSupabase(opts: {
   })
 
   return {
-    supabase: { from } as unknown as SupabaseClient,
+    supabase: { from, rpc } as unknown as SupabaseClient,
     calls,
     getInsertPayload: () => insertPayload,
+    getReplaceArgs: () => replaceArgs,
   }
 }
 
@@ -162,23 +193,105 @@ beforeEach(() => {
 })
 
 describe('generateTaxDeadlinesForUser', () => {
-  it('inserts replacement rows before deleting the old set', async () => {
-    const { supabase, calls } = makeRecordingSupabase()
+  it('replaces the set in one database call: the rows, the company and the window', async () => {
+    const { supabase, calls, getReplaceArgs, getInsertPayload } = makeRecordingSupabase()
 
     const result = await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
-    expect(calls[0]).toBe('insert')
-    expect(calls[1]).toBe('delete')
+    // One call, so the insert and the delete cannot interleave with another
+    // regeneration's: no separate insert or delete reaches the table.
+    expect(calls).toEqual(['replace'])
+    expect(getReplaceArgs()).toEqual({
+      p_company_id: 'company-1',
+      p_rows: getInsertPayload(),
+      p_from: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm' }).format(new Date()),
+      p_to: `${Math.max(...GEN_YEARS) + 1}-12-31`,
+    })
+    expect(result.created).toBe(getInsertPayload()!.length)
     expect(result.created).toBeGreaterThan(0)
     expect(result.deleted).toBe(2)
   })
 
-  it('excludes the newly inserted rows from the delete', async () => {
-    const { supabase, calls } = makeRecordingSupabase()
+  it('a failed replacement throws and deletes nothing', async () => {
+    const { supabase, calls } = makeRecordingSupabase({
+      insertError: { code: '23502', message: 'null value in column "user_id"' },
+    })
 
-    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+    await expect(
+      generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+    ).rejects.toMatchObject({ code: '23502' })
 
-    expect(calls.some((c) => c.startsWith('not('))).toBe(true)
+    // No fallback for a real error: the two statements are only for a
+    // database without the function.
+    expect(calls).toEqual(['replace'])
+  })
+
+  it('42883 from the function is a failure, never a reason to run the unsafe two statements', async () => {
+    // Postgres answers 42883 for a function or operator it cannot resolve
+    // inside the body or a trigger it fires: the function is there and broke.
+    const { supabase, calls } = makeRecordingSupabase({
+      replaceError: { code: '42883', message: 'operator does not exist: uuid = text' },
+    })
+
+    await expect(
+      generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+    ).rejects.toMatchObject({ code: '42883' })
+
+    expect(calls).toEqual(['replace'])
+  })
+
+  describe('before the database has replace_system_tax_deadlines (the deploy window)', () => {
+    it('falls back only on PGRST202, and says so as an error once per process', async () => {
+      // A fresh module: the report is once per process, and earlier tests in
+      // this file may already have made it.
+      vi.resetModules()
+      const fresh = await import('../deadline-generator')
+      mockLogError.mockClear()
+
+      for (let run = 0; run < 2; run++) {
+        const { supabase, calls } = makeRecordingSupabase({ functionMissing: true })
+        await fresh.generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+        expect(calls[0]).toBe('insert')
+      }
+
+      const fallbackReports = mockLogError.mock.calls.filter(([message]) =>
+        String(message).includes('replace_system_tax_deadlines is not in the database'),
+      )
+      expect(fallbackReports).toHaveLength(1)
+    })
+
+    it('inserts replacement rows before deleting the old set', async () => {
+      const { supabase, calls } = makeRecordingSupabase({ functionMissing: true })
+
+      const result = await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+
+      expect(calls[0]).toBe('insert')
+      expect(calls[1]).toBe('delete')
+      expect(result.created).toBeGreaterThan(0)
+      expect(result.deleted).toBe(2)
+    })
+
+    it('excludes the newly inserted rows from the delete', async () => {
+      const { supabase, calls } = makeRecordingSupabase({ functionMissing: true })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+
+      expect(calls.some((c) => c.startsWith('not('))).toBe(true)
+    })
+
+    it('does not delete existing deadlines when the insert fails', async () => {
+      const { supabase, calls } = makeRecordingSupabase({
+        functionMissing: true,
+        insertError: { code: '23502', message: 'null value in column "user_id"' },
+      })
+
+      await expect(
+        generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+      ).rejects.toMatchObject({ code: '23502' })
+
+      expect(calls).toContain('insert')
+      expect(calls).not.toContain('delete')
+    })
   })
 
   it('builds rows owned by company_id, without a user_id field', async () => {
@@ -222,19 +335,6 @@ describe('generateTaxDeadlinesForUser', () => {
     expect(rows!.every((row) => daysOut(row.due_date as string) <= ANNUAL_HORIZON_DAYS)).toBe(true)
     // But the near-term rows are all there (monthly settings → rows exist).
     expect(rows!.length).toBeGreaterThan(0)
-  })
-
-  it('does not delete existing deadlines when the insert fails', async () => {
-    const { supabase, calls } = makeRecordingSupabase({
-      insertError: { code: '23502', message: 'null value in column "user_id"' },
-    })
-
-    await expect(
-      generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
-    ).rejects.toMatchObject({ code: '23502' })
-
-    expect(calls).toContain('insert')
-    expect(calls).not.toContain('delete')
   })
 
   it('does not replace a completed future obligation with a new pending row', async () => {
@@ -1113,7 +1213,12 @@ describe('AGI rows for an active salaried employee before the first salary run (
           Promise.resolve({ data: [], error: null }).then(resolve)
         return chain
       })
-      return { supabase: { from } as unknown as SupabaseClient, inserts }
+      // The replacement of a company's set (replace_system_tax_deadlines).
+      const rpc = vi.fn(async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
+        if (args.p_rows.length > 0) inserts.push(args.p_rows)
+        return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
+      })
+      return { supabase: { from, rpc } as unknown as SupabaseClient, inserts }
     }
 
     function storedRows(companyId: string, settings: CompanySettingsForDeadlines) {
@@ -1172,6 +1277,73 @@ describe('AGI rows for an active salaried employee before the first salary run (
       // One read of the employees for every company, none per company.
       expect((supabase.from as ReturnType<typeof vi.fn>).mock.calls.filter(([table]) => table === 'employees'))
         .toHaveLength(1)
+    })
+
+    describe('inside a time budget', () => {
+      // Three companies that all miss their AGI rows, as on the night a due
+      // date enters the horizon for everyone at once.
+      function threeCompaniesToRepair() {
+        const { fiscal_years: _fy, tax_assessment_notices: _tan, ...raw } = UNATTESTED
+        const withoutAgi = { ...UNATTESTED, salaried_employee_since: null }
+        return makeSupabase({
+          company_settings: ['company-1', 'company-2', 'company-3'].map((company_id) => ({ company_id, ...raw })),
+          employees: ['company-1', 'company-2', 'company-3'].map((company_id, i) =>
+            employee({ id: `e${i}`, company_id }),
+          ),
+          deadlines: ['company-1', 'company-2', 'company-3'].flatMap((id) => storedRows(id, withoutAgi)),
+        })
+      }
+
+      it('repairs every flagged company when there is time', async () => {
+        const { supabase, inserts } = threeCompaniesToRepair()
+
+        const result = await backfillMissingTaxDeadlines(supabase, { deadline: Date.now() + 60_000 })
+
+        expect(result).toMatchObject({ companiesRepaired: 3, companiesNotReached: 0 })
+        expect(inserts).toHaveLength(3)
+      })
+
+      it('starts no repair after the deadline and counts the companies left for the next run', async () => {
+        const { supabase, inserts } = threeCompaniesToRepair()
+        // The first repair takes the run past its deadline.
+        const now = vi.spyOn(Date, 'now')
+        const start = Date.now()
+        ;(supabase.rpc as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
+            inserts.push(args.p_rows)
+            now.mockReturnValue(start + 10_000)
+            return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
+          },
+        )
+
+        const result = await backfillMissingTaxDeadlines(supabase, { deadline: start + 5_000 })
+        now.mockRestore()
+
+        expect(result).toMatchObject({ companiesScanned: 3, companiesRepaired: 1, companiesNotReached: 2 })
+        // Nothing was written for the two left: they still miss their rows,
+        // which is what makes the next run find them.
+        expect(inserts).toHaveLength(1)
+        expect(new Set(inserts[0].map((row) => row.company_id))).toEqual(new Set(['company-1']))
+      })
+
+      it('the new-year pass stops the same way', async () => {
+        const { supabase, inserts } = threeCompaniesToRepair()
+        const now = vi.spyOn(Date, 'now')
+        const start = Date.now()
+        ;(supabase.rpc as ReturnType<typeof vi.fn>).mockImplementationOnce(
+          async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
+            inserts.push(args.p_rows)
+            now.mockReturnValue(start + 10_000)
+            return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
+          },
+        )
+
+        const result = await generateNewYearDeadlines(supabase, { deadline: start + 5_000 })
+        now.mockRestore()
+
+        expect(result).toMatchObject({ usersProcessed: 1, companiesNotReached: 2 })
+        expect(inserts).toHaveLength(1)
+      })
     })
   })
 })

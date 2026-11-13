@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
+  cancelAbandonedAccrualDrafts,
   cancelSchedulesForSource,
   createAccrualSchedule,
   dissolveScheduleNow,
@@ -10,6 +11,11 @@ import {
 } from '@/lib/bookkeeping/accruals/service'
 import type { OperationContext } from '@/lib/operations/types'
 import {
+  cancelDraftEntry,
+  commitAccrualDissolution,
+  commitAccrualInstallment,
+  commitEntry,
+  createDraftEntry,
   createJournalEntry,
   findFiscalPeriod,
   reverseEntry,
@@ -25,12 +31,34 @@ import {
 } from '@/lib/bookkeeping/accruals/errors'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
+// log.error is what reaches the error tracker: asserted where a give-up must be loud once.
+const mockLogError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError, child: vi.fn() }
+  logger.child.mockReturnValue(logger)
+  return { ...(await importOriginal<typeof import('@/lib/logger')>()), createLogger: () => logger }
+})
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
+  cancelDraftEntry: vi.fn(),
+  commitAccrualDissolution: vi.fn(),
+  commitAccrualInstallment: vi.fn(),
+  commitEntry: vi.fn(),
+  createDraftEntry: vi.fn(),
   createJournalEntry: vi.fn(),
   findFiscalPeriod: vi.fn(),
   reverseEntry: vi.fn(),
 }))
 
+// A month posts as a draft (createDraftEntry) committed together with its
+// own row (commitAccrualInstallment); the rest of a schedule as one draft
+// committed together with every pending month (commitAccrualDissolution).
+// createJournalEntry is no longer a door of this service.
+const mockCreateDraftEntry = vi.mocked(createDraftEntry)
+const mockCommitAccrualInstallment = vi.mocked(commitAccrualInstallment)
+const mockCommitAccrualDissolution = vi.mocked(commitAccrualDissolution)
+const mockCommitEntry = vi.mocked(commitEntry)
+const mockCancelDraftEntry = vi.mocked(cancelDraftEntry)
 const mockCreateJournalEntry = vi.mocked(createJournalEntry)
 const mockFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 const mockReverseEntry = vi.mocked(reverseEntry)
@@ -87,6 +115,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-new' } as never)
+  mockCreateDraftEntry.mockResolvedValue({ id: 'je-new' } as never)
+  mockCommitAccrualInstallment.mockResolvedValue({ outcome: 'posted', entry: { id: 'je-new' } } as never)
+  mockCommitAccrualDissolution.mockResolvedValue({ outcome: 'posted', entry: { id: 'je-new' } } as never)
+  mockCommitEntry.mockResolvedValue({ id: 'je-new' } as never)
+  mockCancelDraftEntry.mockResolvedValue({ id: 'je-new', status: 'cancelled' } as never)
   mockReverseEntry.mockResolvedValue({ id: 'je-storno' } as never)
 })
 
@@ -96,7 +129,6 @@ describe('postDueInstallments', () => {
     enqueueMany([
       { data: [makeInstallment()] }, // due installments
       { data: { bookkeeping_locked_through: null } }, // company_settings
-      { data: [{ id: 'inst-1' }] }, // CAS claim
       { count: 0 }, // remaining pending
       { data: null }, // schedule -> completed
     ])
@@ -108,8 +140,8 @@ describe('postDueInstallments', () => {
     )
 
     expect(result).toMatchObject({ posted: 1, failed: 0, skipped: 0 })
-    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.source_type).toBe('accrual')
     expect(input.source_id).toBe('sched-1')
     // Floor: period month 2026-01-01 but origin entry dated 2026-01-15.
@@ -143,7 +175,7 @@ describe('postDueInstallments', () => {
       today: '2026-01-20',
     })
 
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.lines).toEqual([
       expect.objectContaining({ account_number: '2970', debit_amount: 1000, credit_amount: 0 }),
       expect.objectContaining({ account_number: '3001', debit_amount: 0, credit_amount: 1000 }),
@@ -166,7 +198,7 @@ describe('postDueInstallments', () => {
       today: '2026-01-20',
     })
 
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     // Both lines: the origin entry tags its interim 17xx/29xx line too, so
     // per-dimension views of the interim account must net to zero.
     expect(input.lines).toEqual([
@@ -196,7 +228,7 @@ describe('postDueInstallments', () => {
       today: '2026-01-20',
     })
 
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.lines).toHaveLength(2)
     for (const line of input.lines) {
       expect(line).not.toHaveProperty('dimensions')
@@ -218,7 +250,7 @@ describe('postDueInstallments', () => {
       today: '2026-04-10',
     })
 
-    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-04-01')
+    expect(mockCreateDraftEntry.mock.calls[0][3].entry_date).toBe('2026-04-01')
   })
 
   it('skips months that have not begun yet', async () => {
@@ -233,15 +265,32 @@ describe('postDueInstallments', () => {
     })
 
     expect(result.posted).toBe(0)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
-  it('reverses its own entry when the CAS claim is lost', async () => {
+  it('commits the draft together with the month, never as a separate claim', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: [makeInstallment()] },
       { data: { bookkeeping_locked_through: null } },
-      { data: [] }, // CAS claim lost (another runner won)
+      { count: 0 },
+      { data: null },
+    ])
+
+    await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, { userId: USER, today: '2026-01-20' })
+
+    // The month's own row rides along with the draft: the database posts both or neither.
+    expect(mockCommitAccrualInstallment).toHaveBeenCalledWith(expect.anything(), COMPANY, USER, { id: 'je-new' }, 'inst-1')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCommitEntry).not.toHaveBeenCalled()
+  })
+
+  it('posts nothing and reverses nothing when another run took the month first', async () => {
+    mockCommitAccrualInstallment.mockResolvedValueOnce({ outcome: 'not_pending' })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment()] },
+      { data: { bookkeeping_locked_through: null } },
     ])
 
     const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
@@ -249,22 +298,19 @@ describe('postDueInstallments', () => {
       today: '2026-01-20',
     })
 
-    expect(result).toMatchObject({ posted: 0, skipped: 1, failed: 0 })
-    expect(mockReverseEntry).toHaveBeenCalledWith(
-      expect.anything(),
-      COMPANY,
-      USER,
-      'je-new',
-    )
+    expect(result).toMatchObject({ posted: 0, skipped: 1, failed: 0, errors: [] })
+    // The loser's draft had no voucher number: no storno pair, no second verifikat.
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(mockCommitEntry).not.toHaveBeenCalled()
   })
 
-  it('reverses its own entry when the CAS claim UPDATE itself errors', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
+  it('leaves the month pending with its error when the commit is refused', async () => {
+    mockCommitAccrualInstallment.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: [makeInstallment()] },
       { data: { bookkeeping_locked_through: null } },
-      { data: null, error: { message: 'connection reset' } }, // claim errored
-      { data: null }, // last_error update in the catch
+      { data: null }, // last_error update
     ])
 
     const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
@@ -273,34 +319,158 @@ describe('postDueInstallments', () => {
     })
 
     expect(result).toMatchObject({ posted: 0, skipped: 0, failed: 1 })
-    expect(result.errors[0].message).toMatch(/Failed to mark installment posted/)
-    // Without the storno the next cron run would double-book the month.
-    expect(mockReverseEntry).toHaveBeenCalledWith(
-      expect.anything(),
-      COMPANY,
-      USER,
-      'je-new',
-    )
+    expect(result.errors[0]).toMatchObject({ installmentId: 'inst-1', message: 'Bokföringen är låst' })
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('accrual_schedule_installments', 'update')).toEqual([[{ last_error: 'Bokföringen är låst' }]])
   })
 
-  it('records the reversal failure too when storno after claim error fails', async () => {
-    mockReverseEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+  it('stops starting months at the deadline and counts what is left', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
-      { data: [makeInstallment()] },
+      {
+        data: [
+          makeInstallment({ id: 'inst-1' }),
+          makeInstallment({ id: 'inst-2', period_month: '2026-02-01' }),
+          makeInstallment({ id: 'inst-3', period_month: '2026-03-01' }),
+        ],
+      },
       { data: { bookkeeping_locked_through: null } },
-      { data: null, error: { message: 'connection reset' } }, // claim errored
-      { data: null }, // last_error update in the catch
+      { count: 2 },
     ])
+    // The first month takes the run past its deadline.
+    const now = vi.spyOn(Date, 'now')
+    let clock = 1_000
+    now.mockImplementation(() => clock)
+    mockCommitAccrualInstallment.mockImplementationOnce(async () => {
+      clock = 10_000
+      return { outcome: 'posted', entry: { id: 'je-new' } } as never
+    })
 
     const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
       userId: USER,
-      today: '2026-01-20',
+      today: '2026-03-20',
+      deadline: 5_000,
+    })
+    now.mockRestore()
+
+    expect(result).toMatchObject({ posted: 1, failed: 0, skipped: 0, deferred: 2 })
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+  })
+
+  describe('before the database has commit_accrual_installment (the deploy window)', () => {
+    // The engine's accrual door posted the draft the old way (its own commit,
+    // not the generic one, which refuses a periodisering draft).
+    beforeEach(() => {
+      mockCommitAccrualInstallment.mockResolvedValue({ outcome: 'posted_unclaimed', entry: { id: 'je-new' } } as never)
     })
 
-    expect(result.failed).toBe(1)
-    expect(result.errors[0].message).toMatch(/misslyckades också/)
-    expect(result.errors[0].message).toMatch(/Bokföringen är låst/)
+    it('claims the month the door posted, the way it did before', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [makeInstallment()] },
+        { data: { bookkeeping_locked_through: null } },
+        { data: [{ id: 'inst-1' }] }, // CAS claim
+        { count: 0 },
+        { data: null },
+      ])
+
+      const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+        userId: USER,
+        today: '2026-01-20',
+      })
+
+      expect(result).toMatchObject({ posted: 1, skipped: 0, failed: 0 })
+      expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+      // Never through the generic commit.
+      expect(mockCommitEntry).not.toHaveBeenCalled()
+      expect(mockReverseEntry).not.toHaveBeenCalled()
+    })
+
+    it('reverses its own entry when the CAS claim is lost', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [makeInstallment()] },
+        { data: { bookkeeping_locked_through: null } },
+        { data: [] }, // CAS claim lost (another runner won)
+      ])
+
+      const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+        userId: USER,
+        today: '2026-01-20',
+      })
+
+      expect(result).toMatchObject({ posted: 0, skipped: 1, failed: 0 })
+      expect(mockReverseEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY,
+        USER,
+        'je-new',
+      )
+    })
+
+    it('reverses its own entry when the CAS claim UPDATE itself errors', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [makeInstallment()] },
+        { data: { bookkeeping_locked_through: null } },
+        { data: null, error: { message: 'connection reset' } }, // claim errored
+        { data: null }, // last_error update in the catch
+      ])
+
+      const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+        userId: USER,
+        today: '2026-01-20',
+      })
+
+      expect(result).toMatchObject({ posted: 0, skipped: 0, failed: 1 })
+      expect(result.errors[0].message).toMatch(/Failed to mark installment posted/)
+      // Without the storno the next cron run would double-book the month.
+      expect(mockReverseEntry).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY,
+        USER,
+        'je-new',
+      )
+    })
+
+    it('records the reversal failure too when storno after claim error fails', async () => {
+      mockReverseEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [makeInstallment()] },
+        { data: { bookkeeping_locked_through: null } },
+        { data: null, error: { message: 'connection reset' } }, // claim errored
+        { data: null }, // last_error update in the catch
+      ])
+
+      const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+        userId: USER,
+        today: '2026-01-20',
+      })
+
+      expect(result.failed).toBe(1)
+      expect(result.errors[0].message).toMatch(/misslyckades också/)
+      expect(result.errors[0].message).toMatch(/Bokföringen är låst/)
+    })
+
+    it('records the failure when the door could not post the draft (it cancelled the draft itself)', async () => {
+      mockCommitAccrualInstallment.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [makeInstallment()] },
+        { data: { bookkeeping_locked_through: null } },
+        { data: null }, // last_error update in the catch
+      ])
+
+      const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+        userId: USER,
+        today: '2026-01-20',
+      })
+
+      expect(result).toMatchObject({ posted: 0, skipped: 0, failed: 1 })
+      expect(mockCommitEntry).not.toHaveBeenCalled()
+      expect(mockReverseEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('clamps the posting date to the next open fiscal period when the date falls in a closed one', async () => {
@@ -310,7 +480,6 @@ describe('postDueInstallments', () => {
       { data: [makeInstallment()] },
       { data: { bookkeeping_locked_through: null } },
       { data: { id: 'fp-next', period_start: '2027-01-01' } }, // next open period
-      { data: [{ id: 'inst-1' }] }, // CAS claim
       { count: 0 },
       { data: null },
     ])
@@ -321,7 +490,7 @@ describe('postDueInstallments', () => {
     })
 
     expect(result).toMatchObject({ posted: 1, failed: 0 })
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2027-01-01')
     expect(input.fiscal_period_id).toBe('fp-next')
   })
@@ -344,11 +513,11 @@ describe('postDueInstallments', () => {
     expect(result).toMatchObject({ posted: 0, failed: 1 })
     expect(result.errors[0].message).toMatch(/eller senare/)
     expect(result.errors[0].message).toMatch(/skapa nästa räkenskapsår/)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('records last_error and continues when posting fails', async () => {
-    mockCreateJournalEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+    mockCreateDraftEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       {
@@ -359,7 +528,6 @@ describe('postDueInstallments', () => {
       },
       { data: { bookkeeping_locked_through: null } },
       { data: null }, // last_error update for inst-1
-      { data: [{ id: 'inst-2' }] }, // CAS claim for inst-2
       { count: 0 },
       { data: null },
     ])
@@ -389,7 +557,7 @@ describe('postDueInstallments', () => {
     })
 
     expect(result.posted).toBe(0)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 })
 
@@ -422,7 +590,7 @@ describe('createAccrualSchedule', () => {
     )
 
     expect(schedule.id).toBe('sched-1')
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('persists the spec dimensions bag on the schedule row', async () => {
@@ -484,20 +652,20 @@ describe('createAccrualSchedule', () => {
 })
 
 describe('dissolveScheduleNow', () => {
-  it('posts one combined entry for the remaining months', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    enqueueMany([
-      { data: makeSchedule() }, // schedule fetch
-      {
-        data: [
-          makeInstallment({ id: 'inst-11', period_month: '2026-11-01', amount: 1000 }),
-          makeInstallment({ id: 'inst-12', period_month: '2026-12-01', amount: 1000 }),
-        ],
-      },
-      { data: { bookkeeping_locked_through: null } },
-      { data: [{ id: 'inst-11' }, { id: 'inst-12' }] }, // claim both
-      { data: null }, // schedule completed
-    ])
+  const twoPendingMonths = () => [
+    { data: makeSchedule() }, // schedule fetch
+    {
+      data: [
+        makeInstallment({ id: 'inst-11', period_month: '2026-11-01', amount: 1000 }),
+        makeInstallment({ id: 'inst-12', period_month: '2026-12-01', amount: 1000 }),
+      ],
+    },
+    { data: { bookkeeping_locked_through: null } },
+  ]
+
+  it('posts one combined entry for the remaining months, committed together with exactly those months', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany(twoPendingMonths())
 
     const result = await dissolveScheduleNow(
       supabase as unknown as SupabaseClient,
@@ -508,31 +676,75 @@ describe('dissolveScheduleNow', () => {
     )
 
     expect(result).toMatchObject({ journalEntryId: 'je-new', amount: 2000 })
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2026-10-15')
     expect(input.lines[0]).toMatchObject({ account_number: '6310', debit_amount: 2000 })
+    // The months the amount was added up from ride along with the draft: the
+    // database posts the verifikat and marks them, or does neither.
+    expect(mockCommitAccrualDissolution).toHaveBeenCalledWith(expect.anything(), COMPANY, USER, { id: 'je-new' }, {
+      scheduleId: 'sched-1',
+      installmentIds: ['inst-11', 'inst-12'],
+    })
+    // No second statement flips the months or completes the schedule.
+    expect(findCalls('accrual_schedule_installments', 'update')).toEqual([])
+    expect(findCalls('accrual_schedules', 'update')).toEqual([])
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCommitEntry).not.toHaveBeenCalled()
   })
 
-  it('reverses the combined entry when the claim is incomplete', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    enqueueMany([
-      { data: makeSchedule() },
-      {
-        data: [
-          makeInstallment({ id: 'inst-11', period_month: '2026-11-01', amount: 1000 }),
-          makeInstallment({ id: 'inst-12', period_month: '2026-12-01', amount: 1000 }),
-        ],
-      },
-      { data: { bookkeeping_locked_through: null } },
-      { data: [{ id: 'inst-11' }] }, // only one claimed
-    ])
+  it('posts nothing and reverses nothing when the pending months changed underneath (the cron booked one)', async () => {
+    mockCommitAccrualDissolution.mockResolvedValueOnce({ outcome: 'not_pending' })
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany(twoPendingMonths())
 
     await expect(
       dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'sched-1', {
         today: '2026-10-15',
       }),
-    ).rejects.toThrow(/ändrades samtidigt/i)
-    expect(mockReverseEntry).toHaveBeenCalled()
+    ).rejects.toThrow(/ändrades samtidigt: försök igen/i)
+
+    // No month was flipped to point at a verifikat that then had to be stornoed.
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('accrual_schedule_installments', 'update')).toEqual([])
+  })
+
+  describe('before the database has commit_accrual_dissolution (the deploy window)', () => {
+    beforeEach(() => {
+      mockCommitAccrualDissolution.mockResolvedValue({ outcome: 'posted_unclaimed', entry: { id: 'je-new' } } as never)
+    })
+
+    it('claims the months the door posted and completes the schedule, the way it did before', async () => {
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      enqueueMany([
+        ...twoPendingMonths(),
+        { data: [{ id: 'inst-11' }, { id: 'inst-12' }] }, // claim both
+        { data: null }, // schedule completed
+      ])
+
+      const result = await dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'sched-1', {
+        today: '2026-10-15',
+      })
+
+      expect(result).toMatchObject({ journalEntryId: 'je-new', amount: 2000 })
+      expect(mockCommitEntry).not.toHaveBeenCalled()
+      expect(findCalls('accrual_schedules', 'update')).toEqual([[{ status: 'completed' }]])
+      expect(mockReverseEntry).not.toHaveBeenCalled()
+    })
+
+    it('reverses the combined entry when the claim is incomplete', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        ...twoPendingMonths(),
+        { data: [{ id: 'inst-11' }] }, // only one claimed
+      ])
+
+      await expect(
+        dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'sched-1', {
+          today: '2026-10-15',
+        }),
+      ).rejects.toThrow(/ändrades samtidigt/i)
+      expect(mockReverseEntry).toHaveBeenCalled()
+    })
   })
 
   it('throws a typed not-found error with a stable code', async () => {
@@ -827,9 +1039,9 @@ describe('upplupen intäkt (revenue schedule on 17xx, #62)', () => {
     })
 
     expect(result).toMatchObject({ posted: 2, failed: 0 })
-    expect(mockCreateJournalEntry.mock.calls.map((call) => call[3].entry_date)).toEqual(['2026-08-31', '2026-09-30'])
+    expect(mockCreateDraftEntry.mock.calls.map((call) => call[3].entry_date)).toEqual(['2026-08-31', '2026-09-30'])
     expect(mockFindFiscalPeriod.mock.calls.map((call) => call[2])).toEqual(['2026-08-31', '2026-09-30'])
-    const sep = mockCreateJournalEntry.mock.calls[1][3]
+    const sep = mockCreateDraftEntry.mock.calls[1][3]
     expect(sep.source_type).toBe('accrual')
     // Revenue in its own month, no moms: the output VAT stays on the invoice.
     expect(sep.lines).toEqual([
@@ -855,7 +1067,7 @@ describe('upplupen intäkt (revenue schedule on 17xx, #62)', () => {
     expect(result).toMatchObject({ posted: 0, failed: 1 })
     expect(result.errors[0].message).toMatch(/Den upplupna intäkten för 2026-08 ska bokföras 2026-08-31/)
     expect(result.errors[0].message).toMatch(/flyttas inte/)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('keeps a 29xx förutbetald intäkt on the invoice-date floor (unchanged)', async () => {
@@ -873,8 +1085,8 @@ describe('upplupen intäkt (revenue schedule on 17xx, #62)', () => {
       today: '2026-10-15',
     })
 
-    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-10-15')
-    expect(mockCreateJournalEntry.mock.calls[0][3].lines).toEqual([
+    expect(mockCreateDraftEntry.mock.calls[0][3].entry_date).toBe('2026-10-15')
+    expect(mockCreateDraftEntry.mock.calls[0][3].lines).toEqual([
       expect.objectContaining({ account_number: '2970', debit_amount: 1000 }),
       expect.objectContaining({ account_number: '3001', credit_amount: 1000 }),
     ])
@@ -921,7 +1133,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
     })
 
     expect(result).toMatchObject({ posted: 3, failed: 0 })
-    const dates = mockCreateJournalEntry.mock.calls.map((call) => call[3].entry_date)
+    const dates = mockCreateDraftEntry.mock.calls.map((call) => call[3].entry_date)
     expect(dates).toEqual(['2026-07-31', '2026-08-31', '2026-09-30'])
     // Each month's own fiscal period is looked up for its own date.
     expect(mockFindFiscalPeriod.mock.calls.map((call) => call[2])).toEqual([
@@ -929,7 +1141,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
       '2026-08-31',
       '2026-09-30',
     ])
-    const sep = mockCreateJournalEntry.mock.calls[2][3]
+    const sep = mockCreateDraftEntry.mock.calls[2][3]
     expect(sep.source_type).toBe('accrual')
     // No moms on the accrual: VAT stays on the invoice date.
     expect(sep.lines).toEqual([
@@ -960,7 +1172,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
       today: '2026-01-20',
     })
 
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2025-12-31')
     expect(input.fiscal_period_id).toBe('fp-2025')
   })
@@ -982,7 +1194,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
     expect(result).toMatchObject({ posted: 0, failed: 1 })
     expect(result.errors[0].message).toMatch(/2026-07-31/)
     expect(result.errors[0].message).toMatch(/flyttas inte/)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
     expect(findCall('accrual_schedule_installments', 'update')?.[0]).toMatchObject({
       last_error: expect.stringMatching(/låsdatum/),
     })
@@ -1005,7 +1217,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
 
     expect(result).toMatchObject({ posted: 0, failed: 1 })
     expect(result.errors[0].message).toMatch(/inget öppet räkenskapsår täcker datumet/)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('keeps a 17xx schedule on the invoice-date floor (unchanged)', async () => {
@@ -1023,7 +1235,7 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
       today: '2026-10-05',
     })
 
-    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-10-05')
+    expect(mockCreateDraftEntry.mock.calls[0][3].entry_date).toBe('2026-10-05')
   })
 
   it('a credit note cancels the schedule and stornoes its posted months on the credit date', async () => {
@@ -1203,7 +1415,7 @@ describe('release day', () => {
     })
 
     expect(result).toMatchObject({ posted: 0, failed: 0 })
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('posts the month on its release day once the day has come', async () => {
@@ -1212,7 +1424,6 @@ describe('release day', () => {
     enqueueMany([
       { data: [makeInstallment({ period_month: '2026-02-01', schedule })] },
       { data: { bookkeeping_locked_through: null } },
-      { data: [{ id: 'inst-1' }] }, // CAS claim
       { count: 3 }, // pending months left
     ])
 
@@ -1222,7 +1433,7 @@ describe('release day', () => {
     })
 
     expect(result).toMatchObject({ posted: 1, failed: 0 })
-    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-02-14')
+    expect(mockCreateDraftEntry.mock.calls[0][3].entry_date).toBe('2026-02-14')
   })
 })
 
@@ -1235,14 +1446,13 @@ describe('postDueInstallments: a manual plan follows its origin verifikat', () =
       { data: [makeInstallment({ schedule: manualSchedule })] }, // due installments
       { data: { bookkeeping_locked_through: null } }, // company_settings
       { data: { id: 'je-origin', status: 'posted' } }, // liveEntryOf: the origin
-      { data: [{ id: 'inst-1' }] }, // CAS claim
       { count: 1 }, // still pending months
     ])
 
     const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, { userId: USER, today: '2026-01-20' })
 
     expect(result).toMatchObject({ posted: 1, failed: 0 })
-    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
   })
 
   it('books no month once the origin is reversed without a rättelse', async () => {
@@ -1259,9 +1469,111 @@ describe('postDueInstallments: a manual plan follows its origin verifikat', () =
 
     expect(result).toMatchObject({ posted: 0, failed: 1 })
     expect(result.errors[0].message).toMatch(/makulerat utan rättelse/)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
     expect(findCalls('accrual_schedule_installments', 'update')[0][0]).toMatchObject({
       last_error: expect.stringMatching(/Ångra periodiseringen/),
     })
+  })
+})
+
+describe('cancelAbandonedAccrualDrafts', () => {
+  const NOW = new Date('2026-11-12T05:15:00.000Z')
+  const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000).toISOString()
+  const OPEN = { is_closed: false, locked_at: null }
+  const draft = (id: string, hours: number, company = COMPANY, year: Record<string, unknown> = OPEN) => ({
+    id,
+    company_id: company,
+    user_id: USER,
+    created_at: hoursAgo(hours),
+    fiscal_period: year,
+  })
+
+  it('cancels the drafts of every company: half an hour to a week old, in an open year, oldest first, bounded', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [draft('je-a', 30, 'company-9'), draft('je-b', 2)] }) // what can be cancelled
+    enqueue({ data: [draft('je-b', 2)] }) // the last day's drafts, for the closed-year report
+
+    const result = await cancelAbandonedAccrualDrafts(supabase as unknown as SupabaseClient, { now: NOW })
+
+    expect(result).toEqual({ cancelled: 2, failed: 0, locked: 0 })
+    const selects = findCalls('journal_entries', 'select')
+    const filters = findCalls('journal_entries', 'eq')
+    expect(selects[0]![0]).toContain('fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(is_closed, locked_at)')
+    // Whatever is due, in whichever company: no company or schedule filter.
+    // The year's lock is filtered in the query, so a draft that cannot be
+    // cancelled never takes the place of one that can.
+    expect(filters.slice(0, 3)).toEqual([
+      ['source_type', 'accrual'],
+      ['status', 'draft'],
+      ['fiscal_period.is_closed', false],
+    ])
+    expect(findCalls('journal_entries', 'is')).toEqual([['fiscal_period.locked_at', null]])
+    // No live run can still be about to commit a draft half an hour old.
+    expect(findCalls('journal_entries', 'lt')[0]).toEqual(['created_at', '2026-11-12T04:45:00.000Z'])
+    expect(findCalls('journal_entries', 'gte')).toEqual([
+      ['created_at', '2026-11-05T05:15:00.000Z'],
+      ['created_at', '2026-11-11T04:45:00.000Z'],
+    ])
+    expect(findCalls('journal_entries', 'order')[0]).toEqual(['created_at', { ascending: true }])
+    expect(findCalls('journal_entries', 'limit')[0]).toEqual([200])
+    // Each draft is cancelled in its own company, through the engine.
+    expect(mockCancelDraftEntry.mock.calls.map((call) => call.slice(1))).toEqual([
+      ['company-9', USER, 'je-a'],
+      [COMPANY, USER, 'je-b'],
+    ])
+    expect(mockLogError).not.toHaveBeenCalled()
+  })
+
+  it('a draft in a closed or locked year is never tried, and is reported once, by the run whose day it falls in', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // nothing cancellable: the query leaves the locked years out
+    enqueue({
+      data: [
+        draft('je-closed', 3, COMPANY, { is_closed: true, locked_at: null }),
+        draft('je-locked', 20, COMPANY, { is_closed: false, locked_at: '2026-11-11T09:00:00Z' }),
+        draft('je-open', 1),
+      ],
+    })
+
+    const result = await cancelAbandonedAccrualDrafts(supabase as unknown as SupabaseClient, { now: NOW })
+
+    expect(result).toEqual({ cancelled: 0, failed: 0, locked: 2 })
+    // enforce_period_lock would refuse the write: no attempt, so no refusal logged by the engine.
+    expect(mockCancelDraftEntry).not.toHaveBeenCalled()
+    expect(mockLogError).toHaveBeenCalledTimes(2)
+    expect(mockLogError.mock.calls.map(([message, , context]) => [message, (context as { draftId: string }).draftId])).toEqual([
+      [expect.stringContaining('closed or locked fiscal year'), 'je-closed'],
+      [expect.stringContaining('closed or locked fiscal year'), 'je-locked'],
+    ])
+  })
+
+  it('a cancel that fails is an error once, while the draft is under a day old, then tried again quietly for a week', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [draft('je-old', 72), draft('je-yesterday', 20), draft('je-new', 1)] })
+    enqueue({ data: [] })
+    mockCancelDraftEntry
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValueOnce({ id: 'je-new', status: 'cancelled' } as never)
+
+    const result = await cancelAbandonedAccrualDrafts(supabase as unknown as SupabaseClient, { now: NOW })
+
+    expect(result).toEqual({ cancelled: 1, failed: 2, locked: 0 })
+    expect(mockLogError).toHaveBeenCalledTimes(1)
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('could not be cancelled'),
+      expect.any(Error),
+      expect.objectContaining({ draftId: 'je-yesterday' }),
+    )
+  })
+
+  it('throws when the drafts cannot be read, for the caller to report', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+
+    await expect(cancelAbandonedAccrualDrafts(supabase as unknown as SupabaseClient, { now: NOW })).rejects.toThrow(
+      /abandoned accrual drafts: statement timeout/,
+    )
+    expect(mockCancelDraftEntry).not.toHaveBeenCalled()
   })
 })

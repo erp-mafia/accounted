@@ -3,15 +3,28 @@
  * recorded call by call and compared with a committed fixture
  * (service.engine-input.json) that was taken before the producer went
  * through the port: the monthly dissolutions createAccrualSchedule posts at
- * once and postDueInstallments posts as the months begin, the storno of a
- * month a concurrent runner claimed first or whose claim failed,
+ * once and postDueInstallments posts as the months begin,
  * dissolveScheduleNow's one verifikat for the rest (and its storno when the
  * set changed under it), and the stornos cancelSchedulesForSource makes when
- * the invoice is credited. Every argument of createJournalEntry and
- * reverseEntry is recorded, an absent one as '<undefined>', so an extra
- * argument or a changed input fails here, and so does a changed order of the
- * calls. The tables answer from an in-memory copy of the schedule and its
- * installments, so the claim races are scripted per scenario.
+ * the invoice is credited. Every argument of every engine call is recorded,
+ * an absent one as '<undefined>', so an extra argument or a changed input
+ * fails here, and so does a changed order of the calls. The tables answer
+ * from an in-memory copy of the schedule and its installments, so the claim
+ * races are scripted per scenario.
+ *
+ * A month is a draft (createDraftEntry, with the input createJournalEntry
+ * got before) committed together with its own row (commitAccrualInstallment,
+ * migration 20261113020117): a month another run took first costs a
+ * cancelled draft and no storno. The rest of a schedule is one draft
+ * committed together with every pending month (commitAccrualDissolution,
+ * migration 20261112181809): a set that changed underneath costs a cancelled
+ * draft and no storno either. The fixture was regenerated for both moves on
+ * purpose; each draft's input is the one the earlier fixture pinned for
+ * createJournalEntry. The scenarios named "before the function exists" run
+ * as a database without the functions: the engine's accrual door posts the
+ * draft the old way (posted_unclaimed, never through the generic commitEntry,
+ * which refuses a periodisering draft), the months are claimed in a second
+ * write, and a lost or failed claim stornoed.
  *
  * Regenerate only on purpose, from the code before the move:
  *   UPDATE_ENGINE_INPUT_FIXTURE=1 npx vitest run src/lib/bookkeeping/accruals/__tests__/service.engine-input.test.ts
@@ -36,15 +49,35 @@ import type { AccrualScheduleSpec } from '../service'
 vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),
   createJournalEntry: vi.fn(),
+  createDraftEntry: vi.fn(),
+  commitAccrualInstallment: vi.fn(),
+  commitAccrualDissolution: vi.fn(),
+  commitEntry: vi.fn(),
+  cancelDraftEntry: vi.fn(),
   reverseEntry: vi.fn(),
   findFiscalPeriod: vi.fn(),
 }))
 
-const { createJournalEntry, reverseEntry, findFiscalPeriod } = await import('@/lib/bookkeeping/engine')
+const {
+  createJournalEntry,
+  createDraftEntry,
+  commitAccrualInstallment,
+  commitAccrualDissolution,
+  commitEntry,
+  reverseEntry,
+  findFiscalPeriod,
+} = await import('@/lib/bookkeeping/engine')
 const { cancelSchedulesForSource, createAccrualSchedule, dissolveScheduleNow, postDueInstallments } = await import('../service')
 
 const mockedCreate = vi.mocked(createJournalEntry)
+const mockedDraft = vi.mocked(createDraftEntry)
+const mockedCommitMonth = vi.mocked(commitAccrualInstallment)
+const mockedCommitRest = vi.mocked(commitAccrualDissolution)
+const mockedCommit = vi.mocked(commitEntry)
 const mockedReverse = vi.mocked(reverseEntry)
+
+/** The engine calls that carry a business event link while the port is on. */
+const LINKED_CALLS = new Set(['createJournalEntry', 'createDraftEntry', 'reverseEntry'])
 
 const FIXTURE = path.join(__dirname, 'service.engine-input.json')
 const SUPABASE = '<supabase>'
@@ -156,7 +189,9 @@ interface Scenario {
   /** The schedule row in the table before the door runs (none: the door inserts it). */
   schedule?: Record<string, unknown>
   installments?: Installment[]
-  /** How the CAS claim of a month (or of the whole rest) answers. */
+  /** How commit_accrual_installment (or commit_accrual_dissolution) answers; posted when absent. */
+  commit?: 'not_pending' | 'posted_unclaimed'
+  /** How the CAS claim of a month (posted_unclaimed) or of the whole rest answers. */
   claim?: 'lost' | 'error' | 'partial'
   /** A storno the engine answers with EntryAlreadyReversedError. */
   alreadyReversed?: string
@@ -178,16 +213,25 @@ const SCENARIOS: Scenario[] = [
     run: (supabase) => createAccrualSchedule(supabase, COMPANY, USER, REVENUE, { postingFloorDate: '2026-02-01', today: '2026-03-10' }),
   },
   {
-    name: 'the cron posts a month a concurrent runner claimed first: the duplicate stornoed as the schedule\'s creator',
+    name: 'the cron finds a month another run took first: its draft is not committed and nothing is stornoed',
     schedule: scheduleRow(EXPENSE, '2026-01-15'),
     installments: monthsOf('2026-04-01', 1, 1000),
+    commit: 'not_pending',
+    run: (supabase) => postDueInstallments(supabase, COMPANY, { today: '2026-04-05' }),
+  },
+  {
+    name: 'before the function exists, the cron posts a month a concurrent runner claimed first: the duplicate stornoed as the schedule\'s creator',
+    schedule: scheduleRow(EXPENSE, '2026-01-15'),
+    installments: monthsOf('2026-04-01', 1, 1000),
+    commit: 'posted_unclaimed',
     claim: 'lost',
     run: (supabase) => postDueInstallments(supabase, COMPANY, { today: '2026-04-05' }),
   },
   {
-    name: 'Bokför förfallna whose claim fails: the month stornoed and left pending',
+    name: 'before the function exists, Bokför förfallna whose claim fails: the month stornoed and left pending',
     schedule: scheduleRow(EXPENSE, '2026-01-15'),
     installments: monthsOf('2026-04-01', 1, 1000),
+    commit: 'posted_unclaimed',
     claim: 'error',
     run: (supabase) => postDueInstallments(supabase, COMPANY, { userId: USER, today: '2026-04-05' }),
   },
@@ -198,9 +242,18 @@ const SCENARIOS: Scenario[] = [
     run: (supabase) => dissolveScheduleNow(supabase, COMPANY, USER, SCHEDULE, { today: '2026-06-10' }),
   },
   {
-    name: 'the rest dissolved now while the cron posted a month: the combined verifikat stornoed',
+    name: 'the rest dissolved now while the cron posted a month: its draft is not committed and nothing is stornoed',
     schedule: scheduleRow(REVENUE, '2026-02-01'),
     installments: monthsOf('2026-06-01', 2, 4000),
+    commit: 'not_pending',
+    fails: true,
+    run: (supabase) => dissolveScheduleNow(supabase, COMPANY, USER, SCHEDULE, { today: '2026-06-10' }),
+  },
+  {
+    name: 'before the function exists, the rest dissolved now while the cron posted a month: the combined verifikat stornoed',
+    schedule: scheduleRow(REVENUE, '2026-02-01'),
+    installments: monthsOf('2026-06-01', 2, 4000),
+    commit: 'posted_unclaimed',
     claim: 'partial',
     fails: true,
     run: (supabase) => dissolveScheduleNow(supabase, COMPANY, USER, SCHEDULE, { today: '2026-06-10' }),
@@ -249,6 +302,8 @@ function tables(s: Scenario) {
   let schedule = s.schedule ? { ...s.schedule } : null
   let installments: Installment[] = (s.installments ?? []).map((i) => ({ ...i }))
   return {
+    /** The months as they stand now (createAccrualSchedule inserts them). */
+    installmentsNow: () => installments,
     accrual_schedules: (chain: Chain) => {
       const insert = methodOf(chain, 'insert')
       if (insert) {
@@ -312,7 +367,7 @@ function splitLink(call: unknown[]): { call: unknown[]; link: unknown } {
 
 interface Run {
   name: string
-  /** Every engine call in order: ['createJournalEntry', ...args] or ['reverseEntry', ...args]. */
+  /** Every engine call in order: [the engine function, ...args]. */
   calls: unknown[][]
   events: Array<Record<string, unknown>>
 }
@@ -321,6 +376,10 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
   const out: Run[] = []
   for (const s of SCENARIOS) {
     mockedCreate.mockReset()
+    mockedDraft.mockReset()
+    mockedCommitMonth.mockReset()
+    mockedCommitRest.mockReset()
+    mockedCommit.mockReset()
     mockedReverse.mockReset()
     const calls: unknown[][] = []
     let n = 0
@@ -329,6 +388,35 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
       n++
       return { id: `je-${n}`, voucher_series: 'H', voucher_number: n, entry_date: (args[3] as CreateJournalEntryInput).entry_date } as never
     })
+    // A month: the draft holds no number; the commit posts it with its row.
+    mockedDraft.mockImplementation(async (...args: unknown[]) => {
+      calls.push(['createDraftEntry', ...record(args)])
+      n++
+      return { id: `je-${n}` } as never
+    })
+    mockedCommitMonth.mockImplementation(async (...args: unknown[]) => {
+      calls.push(['commitAccrualInstallment', ...record(args)])
+      if (s.commit === 'posted_unclaimed') return { outcome: s.commit, entry: { id: (args[3] as { id: string }).id } } as never
+      if (s.commit) return { outcome: s.commit }
+      const month = installmentsNow().find((i) => i.id === args[4])
+      if (month) Object.assign(month, { status: 'posted', journal_entry_id: (args[3] as { id: string }).id })
+      return { outcome: 'posted', entry: { id: (args[3] as { id: string }).id } } as never
+    })
+    // The rest of a schedule: the draft, the pending months and the schedule's completion at once.
+    mockedCommitRest.mockImplementation(async (...args: unknown[]) => {
+      calls.push(['commitAccrualDissolution', ...record(args)])
+      if (s.commit === 'posted_unclaimed') return { outcome: s.commit, entry: { id: (args[3] as { id: string }).id } } as never
+      if (s.commit) return { outcome: s.commit }
+      const { installmentIds } = args[4] as { installmentIds: string[] }
+      for (const month of installmentsNow()) {
+        if (installmentIds.includes(month.id)) Object.assign(month, { status: 'posted', journal_entry_id: (args[3] as { id: string }).id })
+      }
+      return { outcome: 'posted', entry: { id: (args[3] as { id: string }).id } } as never
+    })
+    mockedCommit.mockImplementation(async (...args: unknown[]) => {
+      calls.push(['commitEntry', ...record(args)])
+      return { id: args[3] } as never
+    })
     mockedReverse.mockImplementation(async (...args: unknown[]) => {
       calls.push(['reverseEntry', ...record(args)])
       if (args[3] === s.alreadyReversed) throw new EntryAlreadyReversedError()
@@ -336,8 +424,11 @@ async function runScenarios(opts: { refuseEvent?: boolean } = {}): Promise<Run[]
       return { id: `je-${n}`, voucher_series: 'H', voucher_number: n } as never
     })
     vi.mocked(findFiscalPeriod).mockImplementation(async (_sb, _c, date: string) => (date.startsWith('2025') ? P2025 : P2026))
+    const scenarioTables = tables(s)
+    const installmentsNow = scenarioTables.installmentsNow
     const { supabase, payloads } = createTableMockSupabase({
-      ...tables(s),
+      accrual_schedules: scenarioTables.accrual_schedules,
+      accrual_schedule_installments: scenarioTables.accrual_schedule_installments,
       company_settings: { data: { bookkeeping_locked_through: null } },
       fiscal_periods: { data: null },
       business_events: opts.refuseEvent ? { error: { message: 'business_events refused', code: '42501' } } : { data: null },
@@ -377,16 +468,21 @@ describe('accrual schedule service engine input (posting port parity)', () => {
     const shadow = await runScenarios()
     for (const [i, run] of shadow.entries()) {
       expect(run.calls.map(([fn]) => fn), run.name).toEqual(off[i]!.calls.map(([fn]) => fn))
-      const links = run.calls.map(([fn, ...call], j) => {
+      const links = run.calls.flatMap(([fn, ...call], j) => {
         const { call: bare, link } = splitLink(call)
         const [, ...offCall] = off[i]!.calls[j]!
         expect(bare, `${run.name} #${j}`).toEqual(trimTrailingUndefined(offCall))
+        // A commit carries no link: the draft it commits was linked already.
+        if (!LINKED_CALLS.has(fn as string)) {
+          expect(link, `${run.name} #${j}`).toBeUndefined()
+          return []
+        }
         expect(link, `${run.name} #${j}`).toEqual({
           id: expect.stringMatching(UUID),
           role: fn === 'reverseEntry' ? 'reversal' : 'produced',
           onFailure: 'log',
         })
-        return (link as { id: string }).id
+        return [(link as { id: string }).id]
       })
       // One event per verifikat and per storno: each month posts on its own.
       expect(new Set(links).size, run.name).toBe(links.length)
@@ -400,7 +496,7 @@ describe('accrual schedule service engine input (posting port parity)', () => {
     vi.stubEnv('POSTING_EVENTS', 'shadow')
     const refused = await runScenarios({ refuseEvent: true })
     expect(refused.map((r) => r.calls)).toEqual(off.map((r) => r.calls))
-    expect(refused.map((r) => r.events.length)).toEqual(off.map((r) => r.calls.length))
+    expect(refused.map((r) => r.events.length)).toEqual(off.map((r) => r.calls.filter(([fn]) => LINKED_CALLS.has(fn as string)).length))
   })
 
   it('records what happened in business terms', async () => {
@@ -433,8 +529,15 @@ describe('accrual schedule service engine input (posting port parity)', () => {
     expect(byName('the rest dissolved now in one verifikat')).toEqual([
       expect.objectContaining({ kind: 'ledger.accrual', occurred_on: '2026-06-10', amount: 8000, subject_id: INVOICE }),
     ])
+    // A month (or a set of months) another run took first: the draft's event, and no storno.
+    expect(byName('the cron finds a month another run took first').map((e) => e.kind)).toEqual(['ledger.accrual'])
+    expect(byName('the rest dissolved now while the cron posted a month').map((e) => e.kind)).toEqual(['ledger.accrual'])
     // The service's own stornos after a lost or failed claim: system_derived.
-    for (const name of ['the cron posts a month a concurrent runner', 'Bokför förfallna whose claim fails', 'the rest dissolved now while the cron']) {
+    for (const name of [
+      'before the function exists, the cron posts a month a concurrent runner',
+      'before the function exists, Bokför förfallna whose claim fails',
+      'before the function exists, the rest dissolved now while the cron',
+    ]) {
       expect(byName(name).map((e) => [e.kind, e.evidence])).toEqual([
         ['ledger.accrual', { link_basis: 'user_created' }],
         ['ledger.storno', { link_basis: 'system_derived' }],

@@ -75,6 +75,8 @@ export const POSTING_SURFACE = {
     'commitDeferredTax', // commit_deferred_tax
     'commitContractRevenue', // commit_contract_revenue
     'commitK3Transition', // commit_k3_transition
+    'commitAccrualInstallment', // commit_accrual_installment
+    'commitAccrualDissolution', // commit_accrual_dissolution
     'replaceOpeningBalanceEntry', // commit_opening_balance_replacement
     'commitBulkBooking', // bulk_book_transactions
     'commitMatchBatchAllocation', // match_batch_allocate

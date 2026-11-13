@@ -151,6 +151,20 @@ describe('journal-entries.commit: unattended commit limit', () => {
     expect(mockCommitEntry).toHaveBeenCalled()
   })
 
+  it('a periodisering draft is refused by the engine\'s generic commit: 409 with its code, nothing posted', async () => {
+    auth(null)
+    mockServiceClient.mockReturnValue(makeSupabase([1000]))
+    const { AccrualDraftPostedByScheduleError } = await import('@/lib/bookkeeping/errors')
+    mockCommitEntry.mockRejectedValue(new AccrualDraftPostedByScheduleError(ENTRY_ID))
+
+    const res = await POST(makeRequest(), routeParams)
+    const body = (await res.json()) as { error: { code: string; message: string; retryable?: boolean } }
+
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('ACCRUAL_DRAFT_POSTED_BY_SCHEDULE')
+    expect(body.error.message).toMatch(/^Periodiseringens verifikat bokförs av periodiseringen själv/)
+  })
+
   it('commits any amount when the key has no ceiling', async () => {
     auth(null)
     mockServiceClient.mockReturnValue(makeSupabase([9_000_000]))

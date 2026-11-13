@@ -242,6 +242,20 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool and gnubok_create_supplier_invoice_from_inbox stage already) and tell the user it waits for their review in Accounted, under Att godkänna, or, for a supplier invoice or a document, in the Inkorg, where a person registers it. Blocks hold bank rows, supplier invoices (registered, or paid under kontantmetoden) and Inkorg documents; they are listed under Regler, Spärrar.',
     },
   },
+  // A periodisering's own verifikat (source_type 'accrual') is posted only by
+  // the periodisering, with the month it books (lib/bookkeeping/accruals).
+  ACCRUAL_DRAFT_POSTED_BY_SCHEDULE: {
+    httpStatus: 409,
+    message_sv:
+      'Periodiseringens verifikat bokförs av periodiseringen själv, tillsammans med månaden det gäller, och kan inte bokföras härifrån. Förfallna månader bokförs varje natt eller med Bokför förfallna under Periodiseringar, och ett utkast som blivit kvar makuleras automatiskt.',
+    message_en:
+      'A periodisering (accrual) voucher is posted by its schedule, together with the month it books, and cannot be committed here. Due months are posted every night or with Post due accruals on the accruals page, and a leftover draft is cancelled automatically.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not commit, edit or copy this draft: nothing was posted. It was left by an accrual run that did not finish. The nightly accrual run posts the month together with its schedule row and cancels the draft; a person can post due months now with Bokför förfallna under Periodiseringar in Accounted.',
+    },
+  },
   BOOKING_REVIEW_WEB_ONLY: {
     httpStatus: 403,
     message_sv:

@@ -13,15 +13,19 @@ import {
   invoiceMonthOnlyAccrualRows,
 } from '@/lib/bookkeeping/accruals/compute'
 import { createAccrualSchedule, postDueInstallments } from '@/lib/bookkeeping/accruals/service'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { commitAccrualInstallment, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: vi.fn(),
+  cancelDraftEntry: vi.fn(),
+  commitAccrualInstallment: vi.fn(),
+  createDraftEntry: vi.fn(),
   findFiscalPeriod: vi.fn(),
   reverseEntry: vi.fn(),
 }))
 
-const mockCreateJournalEntry = vi.mocked(createJournalEntry)
+// A month posts as a draft committed together with its own row.
+const mockCreateDraftEntry = vi.mocked(createDraftEntry)
+const mockCommitAccrualInstallment = vi.mocked(commitAccrualInstallment)
 const mockFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
 const COMPANY = 'company-1'
@@ -55,7 +59,8 @@ const novemberOnlySchedule = {
 beforeEach(() => {
   vi.clearAllMocks()
   mockFindFiscalPeriod.mockResolvedValue('fp-2026')
-  mockCreateJournalEntry.mockResolvedValue({ id: 'je-release' } as never)
+  mockCreateDraftEntry.mockResolvedValue({ id: 'je-release' } as never)
+  mockCommitAccrualInstallment.mockResolvedValue({ outcome: 'posted', entry: { id: 'je-release' } } as never)
 })
 
 describe('accrualCoversOnlyInvoiceMonth', () => {
@@ -146,7 +151,6 @@ describe('one-month periodisering on an October invoice', () => {
         ],
       }, // due installments
       { data: { bookkeeping_locked_through: null } }, // company lock date
-      { data: [{ id: 'inst-nov' }] }, // CAS claim
       { count: 0 }, // nothing left pending
       { data: null }, // schedule -> completed
     ])
@@ -157,7 +161,7 @@ describe('one-month periodisering on an October invoice', () => {
     })
 
     expect(result).toMatchObject({ posted: 1, failed: 0 })
-    const input = mockCreateJournalEntry.mock.calls[0][3]
+    const input = mockCreateDraftEntry.mock.calls[0][3]
     // The period month wins over the October posting floor.
     expect(input.entry_date).toBe('2026-11-01')
     expect(input.lines).toEqual([

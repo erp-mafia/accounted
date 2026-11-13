@@ -6,7 +6,7 @@ import {
   createMockRouteParams,
   makeJournalEntry,
 } from '@/tests/helpers'
-import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { AccrualDraftPostedByScheduleError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
 const mockCreateClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
@@ -152,6 +152,24 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_BALANCED')
+  })
+
+  it('refuses a periodisering draft with 409 and the Swedish reason: only its schedule posts it', async () => {
+    // A draft a killed accrual run left behind, picked up by a person or an
+    // agent cleaning up drafts: the engine's generic commit refuses it.
+    mockCreateClient.mockResolvedValue(clientWithDraft({ entry_date: '2026-03-01', description: 'Periodisering 2026-03', source_type: 'accrual', lines: [] }))
+    mockCommitEntry.mockRejectedValue(new AccrualDraftPostedByScheduleError('entry-1'))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: unknown } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ACCRUAL_DRAFT_POSTED_BY_SCHEDULE')
+    expect(body.error.message).toMatch(/^Periodiseringens verifikat bokförs av periodiseringen själv/)
+    expect(body.error.details).toEqual({ journal_entry_id: 'entry-1' })
+    // Through the one generic commit, which is where the refusal lives.
+    expect(mockCommitEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', 'user_accept')
   })
 
   describe('booking-time voucher warnings on a typed draft', () => {

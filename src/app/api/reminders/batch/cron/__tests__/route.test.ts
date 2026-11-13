@@ -34,6 +34,14 @@ describe('GET /api/reminders/batch/cron', () => {
     expect(runMock).toHaveBeenCalledTimes(1)
   })
 
+  it('gives the run a deadline 200 s after it began, inside the 300 s limit of the function', async () => {
+    const before = Date.now()
+    await GET(createCronRequest('/api/reminders/batch/cron', 'Bearer secret'))
+    const { deadline } = runMock.mock.calls[0]![0] as { deadline: number }
+    expect(deadline).toBeGreaterThanOrEqual(before + 200_000)
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 200_000)
+  })
+
   it('answers 500 when the run fails', async () => {
     runMock.mockRejectedValue(new Error('database down'))
     expect((await GET(createCronRequest('/api/reminders/batch/cron', 'Bearer secret'))).status).toBe(500)

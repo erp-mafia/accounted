@@ -1,0 +1,1 @@
+[2026-11-12] A recurring run that did not finish, or kept an invoice it may not have recorded, leaves its schedule for a person ("Skapa faktura nu" without an invoice, else check the period start, then pause and activate), not rolled: rolling wrote a false "no invoice" and billed the period again.

@@ -7,7 +7,7 @@ import {
   fetchActiveDimensionRules,
   isDimensionRuleExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
-import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { AccrualDraftPostedByScheduleError, BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { assertLinesWithinUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { createLogger } from '@/lib/logger'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
@@ -39,7 +39,8 @@ const log = createLogger('bookkeeping.journal-entry-batch')
  *      commitEntry re-checks the required rules as the authority).
  *
  * An API key's unattended ceiling is asked per voucher before step 1 too
- * (lib/bookkeeping/unattended-ceiling.ts).
+ * (lib/bookkeeping/unattended-ceiling.ts), and a periodisering voucher
+ * (source_type 'accrual', posted only by its schedule) refuses the set there.
  *
  * What remains is non-deterministic: a transient database error, a rule or
  * lock changed between the phases, the function stopped mid-commit. The
@@ -70,6 +71,13 @@ export async function createJournalEntries(
   // the first number: commitEntry asks again, but by then a refusal of
   // voucher k would leave 1..k-1 posted.
   for (const input of inputs) assertLinesWithinUnattendedCeiling(input.lines)
+  // A periodisering verifikat is posted only by its schedule, with the month
+  // it books (commitAccrualInstallment, commitAccrualDissolution).
+  // commitEntry refuses such a draft as well, but only when it reaches it,
+  // with the vouchers before it in the set already posted.
+  if (inputs.some((input) => input.source_type === 'accrual')) {
+    throw new AccrualDraftPostedByScheduleError()
+  }
   await assertRequiredDimensions(supabase, companyId, inputs)
 
   const { businessEvent } = options

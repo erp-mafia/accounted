@@ -31,9 +31,16 @@ function commitLogs(fn: typeof logger.warn): unknown[][] {
   return fn.mock.calls.filter((call) => call[0] === COMMIT_FAILED)
 }
 
+/** The draft's source_type read (a periodisering draft is refused before the RPC), then the failing RPC. */
 function supabaseFailingCommit(error: Record<string, unknown>) {
+  const draftHeader = () => {
+    const chain: Record<string, unknown> = {}
+    chain.eq = vi.fn(() => chain)
+    chain.maybeSingle = vi.fn().mockResolvedValue({ data: { source_type: 'manual' }, error: null })
+    return { select: vi.fn(() => chain) }
+  }
   return {
-    from: vi.fn(),
+    from: vi.fn((table: string) => (table === 'journal_entries' ? draftHeader() : undefined)),
     rpc: vi.fn().mockResolvedValue({ data: null, error }),
   }
 }

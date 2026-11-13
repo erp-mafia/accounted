@@ -36,16 +36,21 @@ describe('cancelAccrualsOnOriginReversal', () => {
       reversalDate: '2026-11-07',
     })
     expect(logMock.warn).not.toHaveBeenCalled()
+    expect(logMock.error).not.toHaveBeenCalled()
   })
 
-  it('logs months whose storno failed', async () => {
+  it('reports months whose storno failed as an error: nothing retries this consumer', async () => {
     cancelManualSchedulesForOrigin.mockResolvedValue({ cancelledSchedules: 0, reversedEntries: 1, failedReversals: 2 })
 
     await cancelAccrualsOnOriginReversal(payload('manual'))
 
-    expect(logMock.warn).toHaveBeenCalledWith(
+    // log.warn reaches nobody; log.error reaches the error tracker.
+    expect(logMock.warn).not.toHaveBeenCalled()
+    expect(logMock.error).toHaveBeenCalledTimes(1)
+    expect(logMock.error).toHaveBeenCalledWith(
       'manual accrual months could not be reversed with their origin',
-      expect.objectContaining({ originEntryId: 'origin-1', failedReversals: 2 }),
+      expect.any(Error),
+      expect.objectContaining({ companyId: 'company-1', originEntryId: 'origin-1', failedReversals: 2 }),
     )
   })
 

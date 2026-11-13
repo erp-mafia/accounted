@@ -66,7 +66,7 @@ import {
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
-import { createLogger } from '@/lib/logger'
+import { createLogger, type Logger } from '@/lib/logger'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
 import {
   firstRunDateOnOrAfter,
@@ -223,6 +223,104 @@ export interface ExecuteScheduleOptions {
    * are unchanged: the invoice is still created as an (unnumbered) draft.
    */
   suppressAutoSend?: boolean
+  /**
+   * Called once the invoice exists (header and lines), before the auto-send:
+   * the caller records the invoice on the schedule here (last_invoice_id and
+   * whatever else its run advances). The send is the slow part of a run
+   * (number, PDF, verifikat, email), so a run that is killed during it would
+   * otherwise leave a schedule that knows nothing of its invoice: the next
+   * day's roll reported "no invoice was created" and the next run billed the
+   * same period again.
+   *
+   * An error does not prove the write failed: a timeout or a dropped
+   * connection can hide one that landed, or one still on its way. So the
+   * draft is removed only when the hook throws RecurringRecordNotLandedError,
+   * the caller's word that its record did not land and now never will (it
+   * holds the schedule); the hook's error is rethrown only once the removal
+   * is confirmed, and the caller may then give the run back. Any other error,
+   * or a removal that is not confirmed, keeps the draft and is thrown as
+   * RecurringInvoiceKeptError: removing it could leave a schedule moved on to
+   * its next period with no invoice for this one, and giving the run back
+   * beside a draft would bill the period twice. After the record, a failure
+   * is thrown as RecurringInvoiceKeptError as well: the invoice is in place
+   * and the caller must not retry the run.
+   */
+  onInvoiceCreated?: (invoiceId: string) => Promise<void>
+}
+
+/**
+ * Thrown by an onInvoiceCreated hook whose record certainly did not land and
+ * can no longer land: the run's draft is removed, and nothing points at it.
+ * `heldAt` is the hold the hook left on the schedule (holdRecurringScheduleRun),
+ * which the caller gives back once the removal is confirmed.
+ */
+export class RecurringRecordNotLandedError extends Error {
+  constructor(
+    public readonly invoiceId: string,
+    reason: string,
+    public readonly heldAt: string | null = null,
+  ) {
+    super(reason)
+    this.name = 'RecurringRecordNotLandedError'
+  }
+}
+
+/**
+ * The run failed with its invoice still in place (only thrown for a caller
+ * that records through onInvoiceCreated): the caller keeps its claim, so no
+ * second invoice is created for the run, and tells the user to look at the
+ * invoice.
+ */
+export class RecurringInvoiceKeptError extends Error {
+  constructor(
+    public readonly invoiceId: string,
+    public readonly reason: unknown,
+  ) {
+    super(reason instanceof Error ? reason.message : String(reason))
+    this.name = 'RecurringInvoiceKeptError'
+  }
+}
+
+/**
+ * A failure that leaves a draft the run could not remove: for a caller that
+ * records through onInvoiceCreated (the cron, which holds the schedule on
+ * RecurringInvoiceKeptError instead of retrying beside the draft), kept; for
+ * any other caller, the failure as it is.
+ */
+function keptOrPlain(options: ExecuteScheduleOptions, invoiceId: string, failure: Error): Error {
+  return options.onInvoiceCreated ? new RecurringInvoiceKeptError(invoiceId, failure) : failure
+}
+
+/**
+ * Remove a draft this run created and cannot use. Only ever an unnumbered
+ * draft: the filter is the guard, so an invoice that has a number or has left
+ * draft is never deleted from here. Its lines go with it (invoice_items
+ * cascades) and no F-series number was taken. Answers whether the draft is
+ * confirmed gone; one that could not be removed (or whose removal answered an
+ * error) is logged as an error.
+ */
+async function removeUnnumberedDraft(
+  supabase: SupabaseClient,
+  opLog: Logger,
+  invoiceId: string,
+  why: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('invoices')
+    .delete()
+    .eq('id', invoiceId)
+    .is('invoice_number', null)
+    .eq('status', 'draft')
+    .select('id')
+  const removed = !error && Array.isArray(data) && data.length > 0
+  if (!removed) {
+    opLog.error(
+      'recurring draft could not be removed; a retry of the run creates a second draft beside it',
+      new Error(error?.message ?? 'no unnumbered draft matched the delete'),
+      { invoiceId, why },
+    )
+  }
+  return removed
 }
 
 /**
@@ -497,8 +595,9 @@ export async function executeRecurringSchedule(
   if (itemsError) {
     // Hard-delete is safe: the draft is unnumbered (step 5 inserted
     // invoice_number: null), so no F-series slot has been consumed.
-    await supabase.from('invoices').delete().eq('id', invoice.id)
-    throw new Error(`failed to insert invoice items: ${itemsError.message}`)
+    const failure = new Error(`failed to insert invoice items: ${itemsError.message}`)
+    if (await removeUnnumberedDraft(supabase, opLog, invoice.id, 'its lines could not be inserted')) throw failure
+    throw keptOrPlain(options, invoice.id, failure)
   }
 
   // 7. No number here. The draft stays unnumbered until it is issued, the
@@ -517,54 +616,88 @@ export async function executeRecurringSchedule(
     .single()
 
   if (!completeInvoice) {
-    throw new Error('failed to reload created invoice')
+    // The run stops here and its caller releases the claim, so the next run
+    // creates the invoice again: this draft must not stay beside that one.
+    const failure = new Error('failed to reload created invoice')
+    if (await removeUnnumberedDraft(supabase, opLog, invoice.id, 'it could not be reloaded')) throw failure
+    throw keptOrPlain(options, invoice.id, failure)
+  }
+
+  // The invoice exists from here on: let the caller record it before the
+  // send (see ExecuteScheduleOptions.onInvoiceCreated for what a hook that
+  // throws leads to).
+  let recordedByCaller = false
+  if (options.onInvoiceCreated) {
+    try {
+      await options.onInvoiceCreated(invoice.id)
+    } catch (err) {
+      if (err instanceof RecurringRecordNotLandedError) {
+        if (await removeUnnumberedDraft(supabase, opLog, invoice.id, 'the schedule did not record it')) throw err
+        // Not confirmed gone: kept, so the caller keeps the schedule held.
+        throw new RecurringInvoiceKeptError(invoice.id, err)
+      }
+      // The caller reports it (the cron as an error, with the schedule).
+      opLog.warn('recurring invoice kept: its record on the schedule is not confirmed', {
+        invoiceId: invoice.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      throw new RecurringInvoiceKeptError(invoice.id, err)
+    }
+    recordedByCaller = true
   }
 
   let autoSent = false
   let warning: string | null = null
 
-  // 9. Auto-send path. If anything below fails, we keep the invoice (an
-  //    unnumbered draft when it stopped before numbering, a numbered draft
-  //    after, or issued and booked when only the email failed) and surface a
-  //    Swedish warning on the schedule (last_run_warning): the user can act
-  //    on it from /invoices/[id].
-  if (schedule.auto_send && options.suppressAutoSend) {
-    // Route-level sandbox suppression: same outcome as the internal sandbox
-    // chokepoint below (no email, invoice retained as draft, manual-send
-    // warning), reached without entering the send path at all.
-    opLog.warn('auto-send suppressed by route-level sandbox guard', {
-      invoiceId: invoice.id,
-    })
-    warning = MANUAL_SEND_WARNING
-  } else if (schedule.auto_send) {
-    try {
-      const outcome = await sendInvoiceFromSchedule(
-        supabase,
-        schedule.company_id,
-        schedule.user_id,
-        completeInvoice as Invoice & { customer: Customer; items: InvoiceItem[] },
-      )
-      autoSent = outcome.sent
-      warning = outcome.warning ?? (outcome.sent ? null : MANUAL_SEND_WARNING)
-    } catch (err) {
-      opLog.error('auto-send failed for recurring schedule', err as Error, {
+  try {
+    // 9. Auto-send path. If anything below fails, we keep the invoice (an
+    //    unnumbered draft when it stopped before numbering, a numbered draft
+    //    after, or issued and booked when only the email failed) and surface a
+    //    Swedish warning on the schedule (last_run_warning): the user can act
+    //    on it from /invoices/[id].
+    if (schedule.auto_send && options.suppressAutoSend) {
+      // Route-level sandbox suppression: same outcome as the internal sandbox
+      // chokepoint below (no email, invoice retained as draft, manual-send
+      // warning), reached without entering the send path at all.
+      opLog.warn('auto-send suppressed by route-level sandbox guard', {
         invoiceId: invoice.id,
       })
-      warning = `Auto-utskick misslyckades: ${err instanceof Error ? err.message : 'okänt fel'}`
+      warning = MANUAL_SEND_WARNING
+    } else if (schedule.auto_send) {
+      try {
+        const outcome = await sendInvoiceFromSchedule(
+          supabase,
+          schedule.company_id,
+          schedule.user_id,
+          completeInvoice as Invoice & { customer: Customer; items: InvoiceItem[] },
+        )
+        autoSent = outcome.sent
+        warning = outcome.warning ?? (outcome.sent ? null : MANUAL_SEND_WARNING)
+      } catch (err) {
+        opLog.error('auto-send failed for recurring schedule', err as Error, {
+          invoiceId: invoice.id,
+        })
+        warning = `Auto-utskick misslyckades: ${err instanceof Error ? err.message : 'okänt fel'}`
+      }
     }
-  }
 
-  await eventBus.emit({
-    type: 'recurring_invoice.executed',
-    payload: {
-      scheduleId: schedule.id,
-      invoice: completeInvoice as Invoice,
-      autoSent,
-      warning,
-      companyId: schedule.company_id,
-      userId: schedule.user_id,
-    },
-  })
+    await eventBus.emit({
+      type: 'recurring_invoice.executed',
+      payload: {
+        scheduleId: schedule.id,
+        invoice: completeInvoice as Invoice,
+        autoSent,
+        warning,
+        companyId: schedule.company_id,
+        userId: schedule.user_id,
+      },
+    })
+  } catch (err) {
+    // The invoice is in place and, for a caller that recorded it, the
+    // schedule has moved on: not a run to retry.
+    if (recordedByCaller) throw new RecurringInvoiceKeptError(invoice.id, err)
+    throw err
+  }
 
   return {
     invoiceId: invoice.id,

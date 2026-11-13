@@ -27,6 +27,7 @@ vi.mock('../dimension-rules', async (importOriginal) => ({
 import { cancelDraftEntry, commitEntry, createDraftEntry } from '../engine'
 import { fetchActiveDimensionRules } from '../dimension-rules'
 import { DimensionValidationError, MandatoryDimensionMissingError } from '../dimension-errors'
+import { AccrualDraftPostedByScheduleError } from '../errors'
 import { createJournalEntries } from '../journal-entry-batch'
 
 const supabase = {} as never
@@ -105,6 +106,17 @@ describe('createJournalEntries: one business event, all vouchers or none', () =>
     await expect(createJournalEntries(supabase, 'co-1', 'user-1', SET)).rejects.toBeInstanceOf(
       MandatoryDimensionMissingError,
     )
+    expect(createDraftEntry).not.toHaveBeenCalled()
+    expect(commitEntry).not.toHaveBeenCalled()
+  })
+
+  it('a periodisering voucher in the set refuses the whole set before anything is drafted', async () => {
+    const set = [SET[0]!, voucher('Periodisering', ['5010', '1790'], { source_type: 'accrual', voucher_series: 'A' })]
+
+    await expect(createJournalEntries(supabase, 'co-1', 'user-1', set)).rejects.toBeInstanceOf(
+      AccrualDraftPostedByScheduleError,
+    )
+    // Not left to commitEntry, which would refuse it only after the first voucher was posted.
     expect(createDraftEntry).not.toHaveBeenCalled()
     expect(commitEntry).not.toHaveBeenCalled()
   })

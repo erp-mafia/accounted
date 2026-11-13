@@ -13,6 +13,7 @@ import {
   holdEscapeWhileUnsaved,
   useEditedSinceOpen,
 } from '@/components/ui/dialog'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -113,6 +114,14 @@ export default function NewRecurringScheduleDialog({ open, onOpenChange, onSaved
       >
         <DialogHeader>
           <DialogTitle>{schedule ? t('edit_title') : t('title')}</DialogTitle>
+          {/* What the schedule's last run left for the person, in full: the
+              list shows it only as a mark, and a schedule held for a person
+              says here which of its two cases calls for which action. */}
+          {schedule?.last_run_warning && (
+            <div data-ph-mask="">
+              <AttnLine>{schedule.last_run_warning}</AttnLine>
+            </div>
+          )}
         </DialogHeader>
         <div className="contents" {...editProps}>
           <NewRecurringScheduleForm

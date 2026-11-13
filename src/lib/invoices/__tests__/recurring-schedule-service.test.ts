@@ -6,6 +6,8 @@ import {
   rollNextRunDateForward,
   getStockholmDateHour,
   executeRecurringSchedule,
+  RecurringInvoiceKeptError,
+  RecurringRecordNotLandedError,
 } from '@/lib/invoices/recurring-schedule-service'
 import { createQueuedMockSupabase, makeCustomer, makeCompanySettings } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
@@ -17,6 +19,15 @@ import {
 
 // ── Mocks for the executeRecurringSchedule auto-send path ─────────────
 // The pure date-helper tests below don't touch any of these modules.
+
+// log.error is what reaches the error tracker: a draft that could not be
+// removed is asserted on it. Every other level stays silent.
+const mockLogError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError, child: vi.fn() }
+  logger.child.mockReturnValue(logger)
+  return { ...(await importOriginal<typeof import('@/lib/logger')>()), createLogger: () => logger }
+})
 
 const mockRenderToBuffer = vi.fn()
 vi.mock('@react-pdf/renderer', () => ({
@@ -1119,7 +1130,7 @@ describe('executeRecurringSchedule foreign-currency rate fetch', () => {
 })
 
 describe('executeRecurringSchedule dimension propagation', () => {
-  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+  const { supabase, enqueue, reset, findCalls, calls } = createQueuedMockSupabase()
   const client = supabase as unknown as SupabaseClient
   const today = new Date('2026-07-06T06:30:00Z')
 
@@ -1249,6 +1260,224 @@ describe('executeRecurringSchedule dimension propagation', () => {
     expect(inserted['invoices'][0]).toMatchObject({ default_dimensions: {} })
     const itemRows = inserted['invoice_items'][0] as Array<Record<string, unknown>>
     expect(itemRows.every((row) => JSON.stringify(row.dimensions) === '{}')).toBe(true)
+  })
+
+  describe('onInvoiceCreated: the caller records the invoice before the send', () => {
+    it('is called once the invoice and its lines exist, with the invoice id', async () => {
+      enqueueCreatePath()
+      // What had been written when the hook ran: the header and the lines.
+      let writtenAtHook: string[] = []
+      const onInvoiceCreated = vi.fn(async () => {
+        writtenAtHook = Object.keys(inserted)
+      })
+
+      const result = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated,
+      })
+
+      expect(onInvoiceCreated).toHaveBeenCalledTimes(1)
+      expect(onInvoiceCreated).toHaveBeenCalledWith('inv-1')
+      expect(writtenAtHook).toEqual(['invoices', 'invoice_items'])
+      expect(result.invoiceId).toBe('inv-1')
+    })
+
+    /**
+     * The delete statement of this run's draft, call by call: from its
+     * delete() to the end of what was asked of the invoices table, so the
+     * reload's own .eq('id') cannot stand in for the delete's filter.
+     */
+    const draftDelete = () => {
+      const invoiceCalls = calls.filter((c) => c.table === 'invoices')
+      const at = invoiceCalls.findIndex((c) => c.method === 'delete')
+      return at < 0 ? null : invoiceCalls.slice(at).map((c) => [c.method, ...c.args])
+    }
+    const GUARDED_DELETE = [
+      ['delete'],
+      ['eq', 'id', 'inv-1'],
+      ['is', 'invoice_number', null],
+      ['eq', 'status', 'draft'],
+      ['select', 'id'],
+    ]
+
+    it('when it throws RecurringRecordNotLandedError, the unnumbered draft is removed and the error rethrown', async () => {
+      enqueueCreatePath()
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoices delete
+      const emitted = vi.fn()
+      eventBus.on('recurring_invoice.executed', emitted)
+      const notLanded = new RecurringRecordNotLandedError('inv-1', 'the fence gave the claim back')
+
+      await expect(
+        executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+          suppressAutoSend: true,
+          onInvoiceCreated: async () => {
+            throw notLanded
+          },
+        }),
+      ).rejects.toBe(notLanded)
+
+      // Only ever an unnumbered draft: the delete's own filters are the guard.
+      expect(draftDelete()).toEqual(GUARDED_DELETE)
+      // Nothing was sent or announced for an invoice that no longer exists.
+      expect(emitted).not.toHaveBeenCalled()
+    })
+
+    it('when it throws RecurringRecordNotLandedError but the draft is not confirmed gone, it is thrown as kept: the caller keeps the schedule held', async () => {
+      enqueueCreatePath()
+      enqueue({ data: null, error: { message: 'connection reset' } }) // invoices delete answered an error
+      const notLanded = new RecurringRecordNotLandedError('inv-1', 'schedule update failed', '2026-07-06T06:30:00.001Z')
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: async () => {
+          throw notLanded
+        },
+      }).catch((err: unknown) => err)
+
+      // Rethrowing the hook's error would let the caller give the run back
+      // beside a draft that may still be there: the next run bills the period again.
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe('inv-1')
+      expect((failure as RecurringInvoiceKeptError).reason).toBe(notLanded)
+      expect(draftDelete()).toEqual(GUARDED_DELETE)
+    })
+
+    it('any other error keeps the draft and is thrown as kept: the record may have landed', async () => {
+      enqueueCreatePath()
+      const emitted = vi.fn()
+      eventBus.on('recurring_invoice.executed', emitted)
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: async () => {
+          throw new Error('the record of invoice inv-1 on the schedule is not confirmed: connection reset')
+        },
+      }).catch((err: unknown) => err)
+
+      // Removing it could leave a schedule moved on with no invoice for the period.
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe('inv-1')
+      expect(draftDelete()).toBeNull()
+      // Not read back either: the caller's fence decides, not a read that could race the write.
+      expect(calls.filter((c) => c.table === 'recurring_invoice_schedules')).toEqual([])
+      expect(emitted).not.toHaveBeenCalled()
+    })
+
+    it('a failure after the record is thrown as kept: the caller must not retry the run', async () => {
+      enqueueCreatePath()
+      const emit = vi.spyOn(eventBus, 'emit').mockRejectedValueOnce(new Error('bus down'))
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: async () => {},
+      }).catch((err: unknown) => err)
+      emit.mockRestore()
+
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe('inv-1')
+      expect(draftDelete()).toBeNull()
+    })
+
+    it('without the hook a late failure is thrown as it is', async () => {
+      enqueueCreatePath()
+      const emit = vi.spyOn(eventBus, 'emit').mockRejectedValueOnce(new Error('bus down'))
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+      }).catch((err: unknown) => err)
+      emit.mockRestore()
+
+      expect(failure).not.toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as Error).message).toBe('bus down')
+    })
+  })
+
+  describe('a draft the run cannot use is removed, never left beside the next one', () => {
+    function enqueueUntilReload(reloaded: unknown) {
+      enqueue({ data: customer, error: null }) // customers select
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+      enqueue({ data: null, error: null }) // invoice_items insert
+      enqueue({ data: reloaded, error: null }) // re-fetch with relations
+    }
+
+    it('a failed reload removes the draft before throwing: the retry after the released claim creates the only one', async () => {
+      enqueueUntilReload(null)
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoices delete
+      const onInvoiceCreated = vi.fn()
+
+      await expect(
+        executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true, onInvoiceCreated }),
+      ).rejects.toThrow('failed to reload created invoice')
+
+      const invoiceCalls = calls.filter((c) => c.table === 'invoices')
+      const at = invoiceCalls.findIndex((c) => c.method === 'delete')
+      expect(invoiceCalls.slice(at).map((c) => [c.method, ...c.args])).toEqual([
+        ['delete'],
+        ['eq', 'id', 'inv-1'],
+        ['is', 'invoice_number', null],
+        ['eq', 'status', 'draft'],
+        ['select', 'id'],
+      ])
+      expect(findCalls('invoices', 'delete')).toHaveLength(1)
+      expect(onInvoiceCreated).not.toHaveBeenCalled()
+    })
+
+    it('with a caller that records (the cron), a draft whose removal is not confirmed is thrown as kept, so the run is not retried beside it', async () => {
+      enqueueUntilReload(null)
+      enqueue({ data: null, error: { message: 'connection reset' } }) // invoices delete answered an error
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: vi.fn(),
+      }).catch((err: unknown) => err)
+
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe('inv-1')
+      expect((failure as RecurringInvoiceKeptError).message).toBe('failed to reload created invoice')
+    })
+
+    it('the same for lines that could not be inserted: kept for a caller that records, as it is for any other', async () => {
+      const enqueueUntilItemsFail = () => {
+        enqueue({ data: customer, error: null }) // customers select
+        enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+        enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+        enqueue({ data: null, error: { message: 'items down' } }) // invoice_items insert
+        enqueue({ data: [], error: null }) // invoices delete matched nothing
+      }
+
+      enqueueUntilItemsFail()
+      const kept = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: vi.fn(),
+      }).catch((err: unknown) => err)
+      expect(kept).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((kept as RecurringInvoiceKeptError).message).toBe('failed to insert invoice items: items down')
+
+      reset()
+      enqueueUntilItemsFail()
+      const plain = await executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true }).catch(
+        (err: unknown) => err,
+      )
+      expect(plain).not.toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((plain as Error).message).toBe('failed to insert invoice items: items down')
+    })
+
+    it('a removal that deletes nothing is reported as an error, with the original failure still thrown', async () => {
+      enqueueUntilReload(null)
+      enqueue({ data: [], error: null }) // invoices delete matched no unnumbered draft
+      mockLogError.mockClear()
+
+      await expect(
+        executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true }),
+      ).rejects.toThrow('failed to reload created invoice')
+
+      expect(mockLogError).toHaveBeenCalledWith(
+        expect.stringContaining('recurring draft could not be removed'),
+        expect.any(Error),
+        expect.objectContaining({ invoiceId: 'inv-1' }),
+      )
+    })
   })
 })
 
