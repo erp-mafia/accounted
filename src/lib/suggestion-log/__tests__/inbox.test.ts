@@ -258,6 +258,66 @@ describe('recordInboxDecision', () => {
   })
 })
 
+describe('recordInboxDecision: the document was deleted meanwhile', () => {
+  const DOCUMENT_GONE = {
+    code: '23503',
+    message: 'insert or update on table "suggestion_log" violates foreign key constraint "suggestion_log_document_id_fkey"',
+  }
+  const gone: InboxSnapshot = { companyId: 'company-1', inboxItemId: 'item-1', documentId: 'doc-1', extraction: reading, model: null }
+
+  /** Refuses each insert that names a document with `refusal`; records every attempt. */
+  function refusingClient(refusal: { code?: string; message: string }) {
+    const inserts: Array<Record<string, unknown>> = []
+    const client = {
+      from: () => ({
+        insert: async (row: Record<string, unknown>) => {
+          inserts.push(row)
+          return { error: row.document_id ? refusal : null }
+        },
+      }),
+    }
+    return { client, inserts }
+  }
+
+  it('keeps a booking decision, on its inbox item alone', async () => {
+    const { client, inserts } = refusingClient(DOCUMENT_GONE)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await recordInboxDecision(client as never, gone, { supplier_invoice_id: 'si-1', fields: { supplier_name: 'Telia' } }, 'user-1')
+
+    expect(inserts).toHaveLength(2)
+    expect(inserts[0]).toMatchObject({ inbox_item_id: 'item-1', document_id: 'doc-1' })
+    expect(inserts[1]).toMatchObject({ inbox_item_id: 'item-1', document_id: null, final: { supplier_invoice_id: 'si-1' } })
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('writes no second row for a dismissal, and reports no failure: the row would leave with its document', async () => {
+    const { client, inserts } = refusingClient(DOCUMENT_GONE)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await recordInboxDecision(client as never, gone, null, 'user-1')
+
+    expect(inserts).toHaveLength(1)
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('does not retry any other refusal, another foreign key included', async () => {
+    const other = refusingClient({ code: '23503', message: 'violates foreign key constraint "suggestion_log_inbox_item_id_fkey"' })
+    const denied = refusingClient({ code: '42501', message: 'permission denied' })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await recordInboxDecision(other.client as never, gone, { fields: {} }, 'user-1')
+    await recordInboxDecision(denied.client as never, gone, { fields: {} }, 'user-1')
+
+    expect(other.inserts).toHaveLength(1)
+    expect(denied.inserts).toHaveLength(1)
+    expect(errorSpy).toHaveBeenCalledTimes(2)
+    errorSpy.mockRestore()
+  })
+})
+
 describe('loadEntryLines', () => {
   it("reads the verifikat's lines through the company-scoped entry", async () => {
     const { client } = fakeClient({

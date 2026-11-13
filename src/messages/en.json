@@ -9394,6 +9394,7 @@
     "ext_arcim_documents_customer_invoice_pdfs_linked": "{count} on the invoice and its voucher",
     "ext_arcim_documents_customer_invoice_pdfs_invoice_only": "{count} on the invoice only",
     "ext_arcim_documents_customer_invoice_pdfs_skipped": "{count} already there",
+    "ext_arcim_documents_customer_invoice_pdfs_refused": "{count} Fortnox will not hand out as PDF",
     "ext_arcim_documents_unmatched": "No matching voucher",
     "ext_arcim_documents_failed": "Could not be fetched",
     "ext_arcim_documents_unmatched_help": "Not saved: the voucher is missing here or cannot be told apart for certain.",

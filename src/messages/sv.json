@@ -9394,6 +9394,7 @@
     "ext_arcim_documents_customer_invoice_pdfs_linked": "{count} på fakturan och dess verifikat",
     "ext_arcim_documents_customer_invoice_pdfs_invoice_only": "{count} bara på fakturan",
     "ext_arcim_documents_customer_invoice_pdfs_skipped": "{count} fanns redan",
+    "ext_arcim_documents_customer_invoice_pdfs_refused": "{count} lämnar Fortnox inte ut som PDF",
     "ext_arcim_documents_unmatched": "Utan matchande verifikat",
     "ext_arcim_documents_failed": "Kunde inte hämtas",
     "ext_arcim_documents_unmatched_help": "Sparades inte: verifikatet saknas här eller går inte att peka ut säkert.",

@@ -150,6 +150,11 @@ export async function loadEntryLines(
   }
 }
 
+/** Postgres refused the row because its document_attachments row is gone (23503 on the document foreign key). */
+function isDocumentGone(error: { code?: string; message?: string }): boolean {
+  return error.code === '23503' && (error.message ?? '').includes('suggestion_log_document_id_fkey')
+}
+
 export interface InboxBooking {
   supplier_invoice_id?: string | null
   journal_entry_id?: string | null
@@ -188,27 +193,46 @@ export async function recordInboxDecision(
       booked,
     })
     // The approved operation's reason, when an agent staged it with one.
-    const { error } = await writeWithTraceId((traceId) => writeWithAgentReason(committingAgentReason(), (agentReason) =>
-      supabase.from('suggestion_log').insert({
-        company_id: snapshot.companyId,
-        kind: 'inbox_item',
-        inbox_item_id: booking ? snapshot.inboxItemId : null,
-        document_id: snapshot.documentId,
-        suggestions: classified.suggestions,
-        acted_on: classified.acted_on,
-        final: classified.final,
-        outcome: classified.outcome,
-        actor_type: getActor()?.type ?? 'user',
-        resolved_by: userId,
-        rule_version: snapshot.ruleVersion ?? null,
-        input_hash: snapshot.inputHash ?? null,
-        checks: checks ?? null,
-        pending_operation_id: committingOperationId(),
-        // The request that recorded it (lib/observability/trace-context.ts).
-        ...traceIdColumn(traceId),
-        ...agentReasonColumn(agentReason),
-      }),
-    ))
+    const insert = (documentId: string | null) =>
+      writeWithTraceId((traceId) => writeWithAgentReason(committingAgentReason(), (agentReason) =>
+        supabase.from('suggestion_log').insert({
+          company_id: snapshot.companyId,
+          kind: 'inbox_item',
+          inbox_item_id: booking ? snapshot.inboxItemId : null,
+          document_id: documentId,
+          suggestions: classified.suggestions,
+          acted_on: classified.acted_on,
+          final: classified.final,
+          outcome: classified.outcome,
+          actor_type: getActor()?.type ?? 'user',
+          resolved_by: userId,
+          rule_version: snapshot.ruleVersion ?? null,
+          input_hash: snapshot.inputHash ?? null,
+          checks: checks ?? null,
+          pending_operation_id: committingOperationId(),
+          // The request that recorded it (lib/observability/trace-context.ts).
+          ...traceIdColumn(traceId),
+          ...agentReasonColumn(agentReason),
+        }),
+      ))
+    let { error } = await insert(snapshot.documentId)
+    if (error && snapshot.documentId && isDocumentGone(error)) {
+      // The document was deleted between the snapshot and this row: another
+      // request removed it meanwhile (a discarded upload deletes its inbox
+      // item and its file side by side).
+      if (!booking) {
+        // A dismissal is recorded against its document only, and leaves with
+        // it (ON DELETE CASCADE): with the document gone there is no row to
+        // keep, and nothing failed.
+        log.info('the underlag was deleted with its inbox item; its dismissal leaves with it', {
+          companyId: snapshot.companyId,
+          inboxItemId: snapshot.inboxItemId,
+        })
+        return
+      }
+      // A booking still has its inbox item to stand on: keep the decision.
+      ;({ error } = await insert(null))
+    }
     if (error) throw new Error(error.message)
   } catch (err) {
     log.error('failed to record inbox decision (booking unaffected)', {

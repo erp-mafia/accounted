@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { resolveConsent } from '@/lib/providers/resolve-consent'
@@ -1588,9 +1588,13 @@ describe('Fortnox customer invoice copies (#165)', () => {
       documentNumbers?: Record<string, string>
       existingAttachments?: ExistingAttachment[]
       anchorRefused?: boolean
+      /** The stored customer_invoice_copy_refusals value, as an earlier run left it. */
+      copyRefusals?: unknown
     } = {},
   ) {
     const anchors: { id: string; values: Record<string, unknown> }[] = []
+    // extension_data, the one key this import reads and writes.
+    const kept: { value: unknown; writes: number } = { value: opts.copyRefusals ?? null, writes: 0 }
     const supabase = {
       from(table: string) {
         if (table === 'migration_source_records') {
@@ -1607,6 +1611,19 @@ describe('Fortnox customer invoice copies (#165)', () => {
                 })),
                 error: null,
               }),
+          }
+          return node
+        }
+        if (table === 'extension_data') {
+          const node = {
+            select: () => node,
+            eq: () => node,
+            maybeSingle: () => Promise.resolve({ data: kept.value === null ? null : { value: kept.value }, error: null }),
+            upsert: (row: { value: unknown }) => {
+              kept.value = row.value
+              kept.writes++
+              return Promise.resolve({ error: null })
+            },
           }
           return node
         }
@@ -1654,7 +1671,7 @@ describe('Fortnox customer invoice copies (#165)', () => {
       },
       rpc: base.rpc,
     } as unknown as SupabaseClient
-    return { supabase, anchors }
+    return { supabase, anchors, kept }
   }
 
   const ENTRY_B7 = { id: 'je-b7', fiscal_period_id: 'fp-2021', entry_date: '2021-03-05', source_voucher_series: 'B', source_voucher_number: 7 }
@@ -1683,7 +1700,7 @@ describe('Fortnox customer invoice copies (#165)', () => {
 
     const result = await run(supabase)
 
-    expect(result.customerInvoicePdfs).toEqual({ scanned: 1, linked: 1, invoiceOnly: 0, skipped: 0, locked: 0, failed: 0 })
+    expect(result.customerInvoicePdfs).toEqual({ scanned: 1, linked: 1, invoiceOnly: 0, skipped: 0, locked: 0, failed: 0, refused: 0 })
     expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0, failed: 0 })
     // The invoice's own link is a live migrated verifikat: Fortnox is not asked.
     expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
@@ -1904,6 +1921,138 @@ describe('Fortnox customer invoice copies (#165)', () => {
     expect(result.customerInvoicePdfs).toMatchObject({ failed: 1 })
     expect(mockUpload).not.toHaveBeenCalled()
     expect(mockRecordImportedDelivery).not.toHaveBeenCalled()
+  })
+
+  describe('a copy Fortnox will not hand out', () => {
+    const ACCOUNT = '5560000001'
+    const badRequest = () =>
+      new FortnoxApiError(
+        'Fortnox API error: 400 Bad Request',
+        400,
+        JSON.stringify({ ErrorInformation: { error: 1, message: 'Kan inte skapa utskrift.', code: 2000999 } }),
+      )
+    const TWO = [PAID, { id: 'inv-2', status: 'paid', journal_entry_id: 'je-b7' }]
+    const NUMBERS = { documentNumbers: { 'inv-1': '1001', 'inv-2': '1002' } }
+    let errorSpy: ReturnType<typeof vi.spyOn>
+    let warnSpy: ReturnType<typeof vi.spyOn>
+
+    /** The customer invoice wiring, on a connection whose account key is ACCOUNT. */
+    const wire = () => {
+      const base = wireCustomerInvoices()
+      mockResolveConsent.mockResolvedValue({
+        consent: { provider: 'fortnox', org_number: '556000-0001' },
+        accessToken: 'fortnox-token',
+      } as never)
+      return base
+    }
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    })
+
+    afterEach(() => {
+      vi.unstubAllEnvs()
+      errorSpy.mockRestore()
+      warnSpy.mockRestore()
+    })
+
+    it('counts a 400 on one invoice as refused, keeps it with Fortnox\'s code, and goes on to the next invoice', async () => {
+      mockInvoicePreview
+        .mockRejectedValueOnce(badRequest())
+        .mockResolvedValueOnce({ bytes: bytesOf('FORTNOX-PREVIEW-2'), contentType: 'application/pdf' })
+      const { supabase, kept } = withCustomerInvoices(wire(), TWO, NUMBERS)
+
+      const result = await run(supabase)
+
+      expect(result).toMatchObject({ failed: 1, linked: 1 })
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 2, linked: 1, failed: 1, refused: 1 })
+      expect(kept.value).toEqual({
+        [ACCOUNT]: { '1001': { status: 400, code: '2000999', message: 'Kan inte skapa utskrift.', at: expect.any(String) } },
+      })
+    })
+
+    it('logs no error per invoice: one warning for the call, naming the answer and how many got it', async () => {
+      mockInvoicePreview.mockRejectedValue(badRequest())
+      const { supabase } = withCustomerInvoices(wire(), TWO, NUMBERS)
+      // The logger keeps warnings off the console under test; this test reads them.
+      vi.stubEnv('NODE_ENV', 'development')
+
+      await run(supabase)
+
+      expect(errorSpy).not.toHaveBeenCalled()
+      const lines = warnSpy.mock.calls.map((call: unknown[]) => call.map(String).join(" ")).filter((line: string) => line.includes('would not hand out'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('2000999')
+      expect(lines[0]).toContain('Kan inte skapa utskrift.')
+      // The answer, never the invoice it was about.
+      expect(lines[0]).not.toContain('1001')
+    })
+
+    it('does not ask Fortnox again for an invoice an earlier run was refused, and still counts it', async () => {
+      const at = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
+      const { supabase, kept } = withCustomerInvoices(wire(), [PAID], {
+        copyRefusals: { [ACCOUNT]: { '1001': { status: 400, code: '2000999', message: null, at } } },
+      })
+
+      const result = await run(supabase)
+
+      expect(mockInvoicePreview).not.toHaveBeenCalled()
+      expect(mockInvoiceBookingVoucher).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ failed: 1, linked: 0 })
+      expect(result.customerInvoicePdfs).toMatchObject({ scanned: 1, failed: 1, refused: 1 })
+      expect(kept.writes).toBe(0)
+      expect(errorSpy).not.toHaveBeenCalled()
+    })
+
+    it('asks once more when the kept refusal is older than a week', async () => {
+      const at = new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString()
+      const { supabase } = withCustomerInvoices(wire(), [PAID], {
+        copyRefusals: { [ACCOUNT]: { '1001': { status: 400, code: '2000999', message: null, at } } },
+      })
+
+      const result = await run(supabase)
+
+      expect(mockInvoicePreview).toHaveBeenCalledTimes(1)
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 1, failed: 0, refused: 0 })
+    })
+
+    it('keeps nothing for an answer a retry may cure: a 429 and a 500 are failures, logged, and asked again next run', async () => {
+      mockInvoicePreview
+        .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 429 Too Many Requests', 429))
+        .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 500 Internal Server Error', 500))
+      const { supabase, kept } = withCustomerInvoices(wire(), TWO, NUMBERS)
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ failed: 2, refused: 0 })
+      expect(kept.writes).toBe(0)
+      const logged = errorSpy.mock.calls.filter((call: unknown[]) => String(call[0]).includes('failed to import a customer invoice copy'))
+      expect(logged).toHaveLength(2)
+    })
+
+    it('keeps nothing in a dry run', async () => {
+      mockInvoiceBookingVoucher.mockRejectedValue(badRequest())
+      const { supabase, kept } = withCustomerInvoices(wire(), [{ ...PAID, journal_entry_id: null }])
+
+      await run(supabase, true)
+
+      expect(kept.writes).toBe(0)
+    })
+
+    it('still imports when the kept refusals cannot be read', async () => {
+      const { supabase } = withCustomerInvoices(wire(), [PAID])
+      const from = supabase.from.bind(supabase)
+      vi.spyOn(supabase, 'from').mockImplementation(((table: string) => {
+        if (table !== 'extension_data') return from(table)
+        const node = { select: () => node, eq: () => node, maybeSingle: () => Promise.resolve({ data: null, error: { message: 'timeout' } }) }
+        return node
+      }) as never)
+
+      const result = await run(supabase)
+
+      expect(result.customerInvoicePdfs).toMatchObject({ linked: 1, failed: 0 })
+    })
   })
 
   it('retries a copy the execution budget cut in flight, without counting it as failed (crm#1581)', async () => {
