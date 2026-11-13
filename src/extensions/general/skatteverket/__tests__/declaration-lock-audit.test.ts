@@ -15,6 +15,12 @@ vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: (...args: unknown[]) => mockWriteSkatteverketAudit(...args),
 }))
 
+// The company's own redovisare, which the lock route now reads instead of the URL's.
+vi.mock('../lib/declaration-prep', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/declaration-prep')>()),
+  resolveRedovisare: vi.fn(async () => '165560000000'),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return {

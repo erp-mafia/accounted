@@ -17,6 +17,8 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 import { createLogger } from '@/lib/logger'
+import { companyRedovisare } from '@/lib/company/org-number'
+import { sameOrgNumber } from '@/lib/invariants/org-number'
 
 export const maxDuration = 60
 
@@ -172,6 +174,17 @@ export const GET = withCronContext('cron.skatteverket_vat_kvittenser', async () 
     }
 
     try {
+      // The company's own number, never the stored state's: extension_data
+      // is writable by the company's members, and on Accounted's certificate
+      // the number alone picks whose filing Skatteverket answers. A lock taken
+      // for another number (changed since, or edited) is not checked.
+      const redovisare = await companyRedovisare(supabase, companyId)
+      if (!redovisare || !sameOrgNumber(redovisare, state.redovisare)) {
+        log.warn('locked draft names another redovisare than the company; not checked', { companyId, key })
+        results.push({ companyId, period, status: 'error', error: 'redovisare_mismatch' })
+        continue
+      }
+
       // Prefers system credentials (verified moms_ombud grant), falls back
       // to the company's user token: post-signing checks are exactly where
       // the 65-minute personal session is usually already dead.
@@ -188,14 +201,14 @@ export const GET = withCronContext('cron.skatteverket_vat_kvittenser', async () 
       const response = await skvRequestWithAuth(
         resolved.auth,
         'GET',
-        `/inlamnat/${state.redovisare}/${period}`,
+        `/inlamnat/${redovisare}/${period}`,
         {
           endpoint: 'inlamnat',
           companyId,
           // Nobody asked: the token owner on a personal token, null on
           // system credentials. Never a stand-in user.
           userId: auditUserIdFor(resolved.auth),
-          agRegistreradId: state.redovisare ?? null,
+          agRegistreradId: redovisare,
           redovisningsperiod: period,
           okStatuses: [404],
         }

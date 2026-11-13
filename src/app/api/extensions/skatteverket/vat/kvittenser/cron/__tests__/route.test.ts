@@ -81,6 +81,12 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   hasCapability: vi.fn().mockResolvedValue(true),
 }))
 
+// The company's own redovisare: the cron reads it, never the stored state's.
+vi.mock('@/lib/company/org-number', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/org-number')>()),
+  companyRedovisare: vi.fn().mockResolvedValue('165560000000'),
+}))
+
 import { GET } from '../route'
 import { createClient } from '@supabase/supabase-js'
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -366,6 +372,31 @@ describe('VAT kvittenser cron', () => {
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+  })
+
+  it("a locked draft naming another company's number is never asked about", async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables({ ...LOCKED_STATE, redovisare: '165599999999' }))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockSkvRequest).not.toHaveBeenCalled()
+    expect(body.signed).toBe(0)
+    expect(mockRecordVatFilingConfirmed).not.toHaveBeenCalled()
+  })
+
+  it("the read names the company's own number in its 12-digit form", async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables({ ...LOCKED_STATE, redovisare: '556000-0000' }))
+    mockSkvRequest.mockResolvedValueOnce({ ok: false, status: 404 } as any)
+
+    await GET(makeRequest())
+
+    expect(mockSkvRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'GET',
+      `/inlamnat/165560000000/${LOCKED_STATE.redovisningsperiod}`,
+      expect.objectContaining({ agRegistreradId: '165560000000' })
+    )
   })
 
   it('skips rows that are not draft_locked', async () => {
