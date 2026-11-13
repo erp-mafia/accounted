@@ -17,7 +17,18 @@
  *                         an invoice that was issued anyway (sent or overdue),
  *                         created within 45 days
  *   inbound_unrouted      a received document left 'unrouted' or 'failed' for
- *                         over 30 minutes, created within 30 days
+ *                         over 30 minutes, created within 30 days; or one
+ *                         not filed for over 3 hours, created within 7 days:
+ *                         held back from the inbox ('routed': no member to
+ *                         own it, or its XML has not come) or never routed
+ *                         ('received': archived by a run that ended before
+ *                         routing it), unless terminal (the inbound cron
+ *                         pages those itself). A held document used to be
+ *                         retried every half hour with a warning nobody
+ *                         reads, and a 'received' one was in no rule. And a
+ *                         document the read re-listing found from before its
+ *                         delivery window, archived and held for a person to
+ *                         decide on (PEPPOL_INBOUND_HELD_RECOVERED_PREFIX).
  *
  * Each problem is claimed in peppol_alerts with INSERT ... ON CONFLICT
  * (kind, ref_id) DO NOTHING RETURNING; only what this run claimed is
@@ -47,6 +58,7 @@ import { escapeHtml, sanitizeSubjectLine } from '@/lib/email/user-text'
 import { createLogger, type Logger } from '@/lib/logger'
 import { resolveMemberEmail } from '@/lib/notifications/member-email'
 import { getSupportRecipientEmail } from '@/lib/support'
+import { PEPPOL_INBOUND_HELD_RECOVERED_PREFIX } from '@/lib/invoices/peppol-inbound'
 
 export const PEPPOL_ALERT_KINDS = [
   'delivery_failed',
@@ -64,6 +76,19 @@ const FAILED_LOOKBACK_MS = 7 * DAY_MS
 const STUCK_AFTER_MS = HOUR_MS
 const DELIVERY_LOOKBACK_MS = 45 * DAY_MS
 const INBOUND_STUCK_AFTER_MS = 30 * MINUTE_MS
+/**
+ * A hold is a state at first (the XML is fetched again every half hour and
+ * goes terminal, and is paged, after three empty answers), and a 'received'
+ * row is routed by the next reprocessing pass; past this it is a document
+ * nobody will see without a person stepping in.
+ */
+const INBOUND_HELD_AFTER_MS = 3 * HOUR_MS
+/**
+ * How far back the held rule looks: a week, not the 30 days of the rule for
+ * unrouted documents, so the first runs after the rule went live do not mail
+ * a month of old holds.
+ */
+const INBOUND_HELD_LOOKBACK_MS = 7 * DAY_MS
 const INBOUND_LOOKBACK_MS = 30 * DAY_MS
 
 /** Rows each rule reads per run, newest first. */
@@ -236,6 +261,39 @@ async function findProblems(service: SupabaseClient, now: Date): Promise<PeppolP
       .limit(SCAN_LIMIT_PER_KIND),
     'inbound documents',
   )
+  // Reported under the same kind: the claim table's CHECK names the kinds,
+  // and "an inbound document is stuck" is what the reader needs either way
+  // (the digest line carries the status and the hold reason). Terminal rows
+  // are left out: the inbound cron pages each one when it goes terminal, and
+  // 'xml unavailable' keeps a held row's status.
+  const held = await rows<InboundRow>(
+    service
+      .from('peppol_inbound_documents')
+      .select('id, company_id, provider_document_id, document_type, status, recipient_scheme, recipient_identifier, sender_name, last_error, created_at')
+      .in('status', ['received', 'routed'])
+      .lt('created_at', at(INBOUND_HELD_AFTER_MS))
+      .gte('created_at', at(INBOUND_HELD_LOOKBACK_MS))
+      // Literal on purpose, as in peppol-inbound.ts: the column guard
+      // (tests/schema) can only check a filter it can read, and the prefix is
+      // PEPPOL_INBOUND_TERMINAL_PREFIX.
+      .or('last_error.is.null,last_error.not.like.terminal:*')
+      .order('created_at', { ascending: false })
+      .limit(SCAN_LIMIT_PER_KIND),
+    'held inbound documents',
+  )
+  // Found again by the read re-listing but received before its delivery
+  // window: archived and held, not delivered (peppol-inbound.ts). Whether it
+  // goes to the customer's Inkorg now is a person's call, so it is listed.
+  const heldRecovered = await rows<InboundRow>(
+    service
+      .from('peppol_inbound_documents')
+      .select('id, company_id, provider_document_id, document_type, status, recipient_scheme, recipient_identifier, sender_name, last_error, created_at')
+      .like('last_error', `${PEPPOL_INBOUND_HELD_RECOVERED_PREFIX}%`)
+      .gte('created_at', at(INBOUND_LOOKBACK_MS))
+      .order('created_at', { ascending: false })
+      .limit(SCAN_LIMIT_PER_KIND),
+    'held recovered inbound documents',
+  )
 
   const fromDelivery = (kind: PeppolAlertKind, since: (row: DeliveryRow) => string) => (fetched: FetchedDeliveryRow): PeppolProblem => {
     const row = asDeliveryRow(fetched)
@@ -252,7 +310,7 @@ async function findProblems(service: SupabaseClient, now: Date): Promise<PeppolP
     ...failed.map(fromDelivery('delivery_failed', (row) => row.terminal_at ?? row.status_at)),
     ...stuck.map(fromDelivery('delivery_stuck', (row) => row.status_at)),
     ...retryStuck.map(fromDelivery('delivery_retry_stuck', (row) => row.status_at)),
-    ...inbound.map((row): PeppolProblem => ({
+    ...[...inbound, ...held, ...heldRecovered].map((row): PeppolProblem => ({
       kind: 'inbound_unrouted',
       refId: row.id,
       companyId: row.company_id,

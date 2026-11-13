@@ -98,6 +98,13 @@ describe('connector Peppol transport', () => {
     expect(second).toEqual({ documentType: 'CreditNote' })
   })
 
+  it("never sends the caller's time limit to the hosted service: its listing consumes nothing and keeps its own limit", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse([]))
+    const transport = build(fetchMock as unknown as typeof fetch)
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 5, timeoutMs: 200_000 })
+    expect(JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ documentType: 'Invoice', limit: 5 })
+  })
+
   it('polls status and evidence with the connector provider stamped on and the owning company resolved', async () => {
     const event = {
       provider: 'qvalia', providerTenantId: 'SE5595386219', providerSubmissionId: 'int-1', providerEventId: 'e1', idempotencyKey: null,

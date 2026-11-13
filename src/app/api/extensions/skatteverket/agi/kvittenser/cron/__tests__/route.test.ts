@@ -151,12 +151,20 @@ function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknow
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'in', 'order', 'limit', 'update', 'delete', 'insert', 'upsert']) {
+      for (const method of ['select', 'eq', 'in', 'gt', 'order', 'limit', 'update', 'delete', 'insert', 'upsert']) {
         chain[method] = vi.fn(() => chain)
       }
+      // The wrap-round read of the rotating batch (id <= pivot): the first
+      // read (id > pivot) already answered with every row the stub holds.
+      let wrapRound = false
+      chain.lte = vi.fn(() => {
+        wrapRound = true
+        return chain
+      })
       chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
       chain.single = vi.fn().mockResolvedValue(resolved)
-      chain.then = (resolve: (v: unknown) => void) => resolve(resolved)
+      chain.then = (resolve: (v: unknown) => void) =>
+        resolve(wrapRound ? { data: resolved.error ? null : [], error: resolved.error } : resolved)
       return chain
     }),
   } as any
@@ -512,39 +520,62 @@ describe('AGI kvittenser cron', () => {
     // companyId is internal log context, never response payload.
     expect(body.results[0]).not.toHaveProperty('companyId')
 
-    // Untagged access denials are real failures: error level with the
-    // message in context, no suppression, no reconsent flagging.
-    expect(errorRecorder).toHaveBeenCalledTimes(1)
-    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
-    expect(errorRecorder.mock.calls[0][1]).toMatchObject({
+    // Untagged access denials are real failures, not suppressed and never a
+    // reconsent flag: in the run's report by code (error level in the run
+    // that opens a six-hour window; 10:15 does not), and the message on the
+    // run's own log line.
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith('Reconciliation failed', expect.objectContaining({
       declarationId: 'decl-1',
       companyId: 'comp-1',
       message: 'Skatteverkets API-gateway nekade anropet.',
-    })
+    }))
+    expect(warnRecorder).toHaveBeenCalledWith('agi kvittens: declarations could not be reconciled (kinds: ACCESS_DENIED)', expect.objectContaining({
+      failureKinds: { ACCESS_DENIED: 1 },
+    }))
     expect(warnSpy).not.toHaveBeenCalled()
-    expect(warnRecorder).not.toHaveBeenCalled()
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
 
-    expect(runSummary()).toMatchObject({ errors: 1 })
+    expect(runSummary()).toMatchObject({ errors: 1, failureKinds: { ACCESS_DENIED: 1 } })
     expect(JSON.stringify(runSummary())).not.toContain('apigw')
   })
 
   it('still flags reconsent codes as expired_token and marks the connection', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
-    mockAgiGetKvittenser.mockRejectedValueOnce(
-      new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
-    )
+    // The verdict names the token it is about: whose, and which stored row.
+    const expired = new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED')
+    expired.tokenRow = { userId: 'user-7', version: { rowId: 'row-7', refreshCount: 3 } }
+    mockAgiGetKvittenser.mockRejectedValueOnce(expired)
 
     const res = await GET(makeRequest())
     const body = await res.json()
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
+    // That user's row, not one picked again, and only while it is that token:
+    // a row another job refreshed meanwhile is not flagged.
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-7', 'comp-1', 'SESSION_EXPIRED', {
+      rowId: 'row-7',
+      refreshCount: 3,
+    })
     expect(errorSpy).not.toHaveBeenCalled()
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()
     expect(warnRecorder).not.toHaveBeenCalled()
+  })
+
+  it('treats a token row gone mid-read as the next run\'s business, not a failure (another job was replacing it)', async () => {
+    // storeTokens deletes, then inserts: a read in between finds no row. The
+    // VAT and skattekonto crons already treat it this way.
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockRejectedValueOnce(new SkatteverketAuthError('Inte ansluten.', 'NOT_CONNECTED'))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'NOT_CONNECTED' })
+    expect(body.errors).toBe(0)
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
   })
 
   it('still records expired_token for TOKEN_REVOKED without reconsent flagging', async () => {
@@ -563,7 +594,13 @@ describe('AGI kvittenser cron', () => {
     expect(errorRecorder).not.toHaveBeenCalled()
   })
 
-  it('still logs at error level for other SkatteverketAuthError codes', async () => {
+  it('reports other SkatteverketAuthError codes by code in the run report, at error level once per six hours', async () => {
+    // It was an error per declaration on every run, 96 a day.
+    const report = ['agi kvittens: declarations could not be reconciled (kinds: BEHORIGHET_SAKNAS)', {
+      count: 1,
+      failureKinds: { BEHORIGHET_SAKNAS: 1 },
+      declarations: [{ declarationId: 'decl-1', companyId: 'comp-1', code: 'BEHORIGHET_SAKNAS' }],
+    }]
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(
       new SkatteverketAuthError('Du har inte behörighet.', 'BEHORIGHET_SAKNAS'),
@@ -574,13 +611,132 @@ describe('AGI kvittenser cron', () => {
 
     expect(body.errors).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'error', error: 'Du har inte behörighet.' })
-    expect(errorRecorder).toHaveBeenCalledTimes(1)
-    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
+    // 10:15 opens no six-hour window.
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith(...report)
+    expect(runSummary()).toMatchObject({ errors: 1, failureKinds: { BEHORIGHET_SAKNAS: 1 } })
     expect(warnSpy).not.toHaveBeenCalled()
-    expect(warnRecorder).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    vi.setSystemTime(new Date('2026-06-01T18:00:03Z'))
+    mockVerifyCronSecret.mockReturnValue(null)
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockRejectedValueOnce(
+      new SkatteverketAuthError('Du har inte behörighet.', 'BEHORIGHET_SAKNAS'),
+    )
+    await GET(makeRequest())
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledWith(...report)
   })
 
-  it('still logs at error level for generic errors', async () => {
+  it('reads the batch from a random point in id order and wraps round, so no pending declaration is always behind the limit', async () => {
+    // Oldest first with a limit of 100, a hundred declarations nobody signs
+    // kept every newer one from ever being asked about.
+    const stub = stubHappyTables()
+    mockCreateClient.mockReturnValueOnce(stub)
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [] } } as any)
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.stillPending).toBe(1)
+    const reads = stub.from.mock.calls
+      .map(([table]: [string], index: number) => (table === 'agi_declarations' ? stub.from.mock.results[index].value : null))
+      .filter((chain: unknown) => chain !== null)
+      .slice(0, 2)
+    const pivot = reads[0].gt.mock.calls[0][1]
+    expect(reads[0].gt.mock.calls).toEqual([['id', pivot]])
+    expect(pivot).toMatch(/^[0-9a-f-]{36}$/)
+    expect(reads[0].order.mock.calls).toEqual([['id', { ascending: true }]])
+    expect(reads[0].limit.mock.calls).toEqual([[100]])
+    // One row came back after the pivot: the rest of the batch is read from the start.
+    expect(reads[1].lte.mock.calls).toEqual([['id', pivot]])
+    expect(reads[1].limit.mock.calls).toEqual([[99]])
+  })
+
+  it('reports declarations the reconciler could not reconcile in one line per run, at error level once per six hours', async () => {
+    // A pending declaration never expires: one Skatteverket keeps refusing
+    // was an error on every run, 96 a day.
+    const tables = () =>
+      makeSupabaseStub({
+        agi_declarations: {
+          data: [PENDING_DECLARATION, { ...PENDING_DECLARATION, id: 'decl-2', period_month: 6 }],
+        },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      })
+    // Skatteverket's own text for a refused read; for an enskild firma it can
+    // carry the arbetsgivare's personnummer, so only the status is logged.
+    const failing = { ok: false, status: 500, error: 'Fel för arbetsgivare 191212121212' } as any
+    const report = ['agi kvittens: declarations could not be reconciled (kinds: http_500)', {
+      count: 2,
+      failureKinds: { http_500: 2 },
+      declarations: [
+        { declarationId: 'decl-1', companyId: 'comp-1', httpStatus: 500 },
+        { declarationId: 'decl-2', companyId: 'comp-1', httpStatus: 500 },
+      ],
+    }]
+
+    // 10:15 opens no six-hour window: a warning, with the counts in the summary.
+    mockCreateClient.mockReturnValueOnce(tables())
+    mockAgiGetKvittenser.mockResolvedValueOnce(failing).mockResolvedValueOnce(failing)
+    const body = await (await GET(makeRequest())).json()
+    expect(body.errors).toBe(2)
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith(...report)
+    expect(runSummary()).toMatchObject({ errors: 2, failureKinds: { http_500: 2 } })
+    expect(JSON.stringify(warnRecorder.mock.calls)).not.toContain('191212121212')
+
+    // 12:00, the run that opens a window: the same line at error level.
+    vi.clearAllMocks()
+    vi.setSystemTime(new Date('2026-06-01T12:00:04Z'))
+    mockVerifyCronSecret.mockReturnValue(null)
+    mockCreateClient.mockReturnValueOnce(tables())
+    mockAgiGetKvittenser.mockResolvedValueOnce(failing).mockResolvedValueOnce(failing)
+    await GET(makeRequest())
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledWith(...report)
+  })
+
+  it('counts a company without a connection in the run summary without raising it: only its user can reconnect', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        agi_declarations: { data: [PENDING_DECLARATION] },
+        skatteverket_tokens: { data: [] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      }),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results[0]).toMatchObject({ status: 'no_token' })
+    expect(runSummary()).toMatchObject({ noToken: 1, errors: 0 })
+    expect(errorRecorder).not.toHaveBeenCalled()
+  })
+
+  it('starts no declaration after 30 s, so the slowest one (refresh 10 s, second look 1 s, call 15 s, writes) ends inside the 60 s limit', async () => {
+    const twoPending = () =>
+      makeSupabaseStub({
+        agi_declarations: { data: [PENDING_DECLARATION, { ...PENDING_DECLARATION, id: 'decl-2', period_month: 6 }] },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      })
+    // The first read takes `ms` of the run's clock.
+    const slowRead = (ms: number) => async () => {
+      vi.setSystemTime(Date.now() + ms)
+      return { ok: true, status: 200, data: { kvittenser: [] } } as any
+    }
+
+    mockCreateClient.mockReturnValueOnce(twoPending())
+    mockAgiGetKvittenser.mockImplementationOnce(slowRead(29_999)).mockImplementationOnce(slowRead(0))
+    expect((await (await GET(makeRequest())).json()).processed).toBe(2)
+
+    mockCreateClient.mockReturnValueOnce(twoPending())
+    mockAgiGetKvittenser.mockImplementationOnce(slowRead(30_001))
+    expect((await (await GET(makeRequest())).json()).processed).toBe(1)
+    expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports a generic thrown failure by its name, never its message, at error level only in the run that opens a window', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(new Error('fetch failed'))
 
@@ -592,7 +748,34 @@ describe('AGI kvittenser cron', () => {
       status: 'error',
       error: 'Något gick fel. Försök igen.',
     })
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledWith('agi kvittens: declarations could not be reconciled (kinds: Error)', {
+      count: 1,
+      failureKinds: { Error: 1 },
+      declarations: [{ declarationId: 'decl-1', companyId: 'comp-1', code: 'Error' }],
+    })
+  })
+
+  it('names the failure kinds in the message, so a new kind is its own group in error tracking', async () => {
+    // One message for every kind put a TypeError from a bug in the same group
+    // as a standing, perhaps muted, Skatteverket refusal.
+    vi.setSystemTime(new Date('2026-06-01T06:05:00Z'))
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        agi_declarations: { data: [PENDING_DECLARATION, { ...PENDING_DECLARATION, id: 'decl-2', period_month: 6 }] },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      }),
+    )
+    mockAgiGetKvittenser
+      .mockRejectedValueOnce(new TypeError("Cannot read properties of undefined (reading 'kvittenser')"))
+      .mockRejectedValueOnce(new SkatteverketAuthError('Nekad.', 'ACCESS_DENIED'))
+
+    await GET(makeRequest())
+
     expect(errorRecorder).toHaveBeenCalledTimes(1)
-    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
+    expect(errorRecorder.mock.calls[0][0]).toBe('agi kvittens: declarations could not be reconciled (kinds: ACCESS_DENIED, TypeError)')
+    // Names and codes only: the TypeError's message stays out of the report.
+    expect(JSON.stringify(errorRecorder.mock.calls)).not.toContain('Cannot read properties')
   })
 })

@@ -1,0 +1,1 @@
+[2026-11-12] needs_reconsent is set only on the token row a verdict was reached on (row id and refresh_count) and on the user the verdict names, and a job told its refresh token is dead first uses one another job stored: crons refreshing one token in a minute flagged live connections.

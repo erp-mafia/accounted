@@ -36,6 +36,9 @@ import emptyMetadata from './fixtures/qvalia/outgoing-status-empty-metadata-0ff1
 // captured for a just-accepted message on 2026-09-28 (event
 // message-log/create, no status); the integrationId is a placeholder.
 import created from './fixtures/qvalia/outgoing-status-created-synthesized.json'
+// A document as Qvalia's inbound listing answers it: only `Invoice` and
+// `integrationId` at the top level.
+import realInboundInvoice from './fixtures/qvalia-inbound-invoice.json'
 
 const config: QvaliaConfig = {
   apiKey: 'test-key',
@@ -387,6 +390,24 @@ describe('Qvalia transport: submit', () => {
       .rejects.toMatchObject({ kind: 'duplicate', retryable: false })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('never gives a send up on a clock of its own, not even a resend that can only be undone by a second e-invoice', async () => {
+    // Cut at 20 s after Qvalia took the document, the delivery read as a
+    // retryable failure and the resend (overwrite=true, never a 409) went out
+    // under a new integrationId.
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      for (const replacesSubmissionId of [undefined, 'int-failed']) {
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: { integrationId: 'int-1' } }))
+        await transport.submit(submission({ replacesSubmissionId }))
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock.mock.calls.map(([, init]) => init?.signal)).toEqual([undefined, undefined])
+      expect(timeout).not.toHaveBeenCalled()
+    } finally {
+      timeout.mockRestore()
+    }
+  })
 })
 
 describe('Qvalia transport: verifyWebhook', () => {
@@ -663,6 +684,17 @@ describe('Qvalia transport: receiving side', () => {
     expect(messages[0].payload).toHaveProperty('Invoice')
   })
 
+  it('lists the real answer shape with no receipt time: Qvalia sends no createdAt beside the document', async () => {
+    // The inbound sync must not read a missing receipt time as an old one
+    // (the re-listing judges such a document by its IssueDate instead).
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: [realInboundInvoice] }))
+    const [listed] = await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10 })
+    expect(Object.keys(realInboundInvoice).sort()).toEqual(['Invoice', 'integrationId'])
+    expect(listed.providerDocumentId).toBe(realInboundInvoice.integrationId)
+    expect(listed.receivedAt).toBeNull()
+    expect(listed.payload).toHaveProperty('Invoice')
+  })
+
   it('reads a credit note whose integrationId sits under CreditNote, and logs a listed document it cannot name', async () => {
     // The read endpoint has marked both read: a silent skip lost them for good (accounted#115).
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {
@@ -680,6 +712,48 @@ describe('Qvalia transport: receiving side', () => {
       keys: ['CreditNote'],
     })
     expect(transport.inboundListingConsumes).toBe(true)
+  })
+
+  it('gives up a read that hangs at 20 s, and the listing that marks its page read only at the limit its caller gives', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    fetchMock.mockResolvedValueOnce(new Response(XML, { status: 200 }))
+    await transport.fetchInboundDocumentXml!('in-1', 'Invoice')
+    expect(timeout.mock.calls).toEqual([[20_000]])
+
+    // readinvoices hands the page over when it answers: the caller's limit
+    // (the time its function has left), and no limit when it gives none.
+    timeout.mockClear()
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10, timeoutMs: 200_000 })
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10 })
+    expect(timeout.mock.calls).toEqual([[200_000]])
+    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal).toBeUndefined()
+
+    // The includeRead listing marks nothing: 60 s at most, less when the caller has less.
+    timeout.mockClear()
+    for (const timeoutMs of [200_000, 30_000, undefined]) {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await transport.listInboundDocuments!({ documentType: 'Invoice', includeRead: true, ...(timeoutMs ? { timeoutMs } : {}) })
+    }
+    expect(timeout.mock.calls).toEqual([[60_000], [30_000], [60_000]])
+
+    // The timeout firing is a network failure (retryable), whether the call
+    // never answers or the body stalls after the headers.
+    timeout.mockReturnValueOnce(AbortSignal.abort(new DOMException('The operation timed out', 'TimeoutError')))
+    fetchMock.mockImplementationOnce(async (_url: unknown, init?: RequestInit) => {
+      if (init?.signal?.aborted) throw init.signal.reason
+      return new Response(null, { status: 204 })
+    })
+    await expect(transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10, timeoutMs: 200_000 })).rejects.toSatisfy(
+      (err: unknown) => err instanceof QvaliaApiError && err.kind === 'network' && err.retryable,
+    )
+    const stalled = new ReadableStream({ start: (controller) => controller.error(new DOMException('The operation timed out', 'TimeoutError')) })
+    fetchMock.mockResolvedValueOnce(new Response(stalled, { status: 200 }))
+    await expect(transport.fetchInboundDocumentXml!('in-1', 'Invoice')).rejects.toSatisfy(
+      (err: unknown) => err instanceof QvaliaApiError && err.kind === 'network',
+    )
+    timeout.mockRestore()
   })
 
   it('re-syncs with includeRead, handles 204 as empty, and reads credit notes from their own collection', async () => {

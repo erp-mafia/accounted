@@ -1,0 +1,1 @@
+[2026-11-13] A Peppol document the read re-listing finds is archived but held for a person and listed in the Peppol digest when it was received (or, with no receipt time, issued) over 14 days earlier or has no date: old lost invoices would land in inboxes as new. Founders may deliver all instead.
