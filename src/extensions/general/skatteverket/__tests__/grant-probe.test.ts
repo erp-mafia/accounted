@@ -1,7 +1,8 @@
 /**
  * Grant verification: the ombudsregister (Ombudshantering v2) decides when it
- * answers, and a grant counts only when it was signed on or after the
- * company's own opt-in for the org number. The read-service probes (200 /
+ * answers, and a grant counts when it was signed on or after the company's
+ * own opt-in for the org number, or earlier for a company that proved the
+ * number with BankID. The read-service probes (200 /
  * felkod 3 / OMBUD_GRANT_MISSING / 404 / transient) speak only when the
  * register cannot be consulted, and since they cannot see when anything was
  * signed they can deny but never grant. The transient-error-never-downgrades
@@ -21,6 +22,15 @@ vi.mock('../lib/api-client', async (importOriginal) => {
 
 const mockRecordProbeResult = vi.fn()
 const mockGetConnection = vi.fn()
+const mockFindProof = vi.fn()
+/** Per behörighet, the day company-1 last proved that data with BankID. */
+let proofDays: Partial<Record<'lasombud' | 'moms_ombud', string>> = {}
+function proven(days: typeof proofDays) {
+  proofDays = days
+  mockFindProof.mockImplementation(async (_claims: unknown, key: 'lasombud' | 'moms_ombud') =>
+    new Map(proofDays[key] ? [['company-1', proofDays[key]!]] : [])
+  )
+}
 vi.mock('../lib/connection-store', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
   return {
@@ -28,6 +38,7 @@ vi.mock('../lib/connection-store', async (importOriginal) => {
     recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
     getConnectionOrThrow: (...a: unknown[]) => mockGetConnection(...a),
     getConnection: (...a: unknown[]) => mockGetConnection(...a),
+    findCompaniesWithOwnershipProof: (...a: unknown[]) => mockFindProof(...a),
   }
 })
 
@@ -58,6 +69,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockRecordProbeResult.mockResolvedValue({ id: 'conn-1', status: 'verified' })
   mockGetConnection.mockResolvedValue({ id: 'conn-1', org_number: ORG, created_at: OPT_IN_AT })
+  mockFindProof.mockResolvedValue(new Map())
+  proofDays = {}
   vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -187,9 +200,14 @@ describe('probeCompanyGrants via the ombudsregister', () => {
   })
 })
 
-async function probeViaOmbudsregisterWith(posts: unknown[], optInDay = '2024-12-01') {
+async function probeViaOmbudsregisterWith(posts: unknown[], optInDay = '2024-12-01', lasombudProof: string | null = null) {
   registryAnswers(posts)
-  return probeViaOmbudsregister(ORG, optInDay, { companyId: 'company-1', userId: null }, TODAY)
+  return probeViaOmbudsregister(
+    ORG,
+    { optInDay, provenOn: { lasombud: lasombudProof, moms_ombud: null } },
+    { companyId: 'company-1', userId: null },
+    TODAY
+  )
 }
 
 describe('the Swedish day and month', () => {
@@ -291,6 +309,94 @@ describe('org-number proof: only grants signed on or after the opt-in count', ()
     const result = await probeCompanyGrants('company-1', ORG)
 
     expect(result.lasombud.status).toBe('denied')
+  })
+})
+
+describe('crm#1762: a grant signed before the opt-in counts for a company proven with BankID', () => {
+  // The customer's case: in the app since May, appointed the app at
+  // Skatteverket on 19 July, and the connection row was created only on
+  // 9 November by the new appoint button. Skatteverket refuses to sign a
+  // grant that already stands, so "sign again" was a loop.
+  const SIGNED_IN_JULY = { huvudman: ORG, roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-07-19' }
+  const MOMS_IN_JULY = { huvudman: ORG, roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-07-19' }
+  const ROW_IN_NOVEMBER = { id: 'conn-1', org_number: ORG, created_at: '2026-11-09T14:43:38Z' }
+
+  it('proven with BankID: both behörigheter count, nothing to sign again', async () => {
+    mockGetConnection.mockResolvedValueOnce(ROW_IN_NOVEMBER)
+    proven({ lasombud: '2026-11-09', moms_ombud: '2026-11-09' })
+    registryAnswers([SIGNED_IN_JULY, MOMS_IN_JULY])
+
+    const result = await probeCompanyGrants('company-1', ORG, 'user-1')
+
+    expect(mockFindProof).toHaveBeenCalledWith([{ companyId: 'company-1', orgNumber: ORG }], 'lasombud')
+    expect(mockFindProof).toHaveBeenCalledWith([{ companyId: 'company-1', orgNumber: ORG }], 'moms_ombud')
+    expect(result.lasombud).toEqual({ status: 'granted', detail: expect.any(String) })
+    expect(result.momsOmbud).toEqual({ status: 'granted', detail: expect.any(String) })
+    expect(mockRecordProbeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lasombud: expect.objectContaining({ status: 'granted', reason: undefined }),
+        momsOmbud: expect.objectContaining({ status: 'granted', reason: undefined }),
+      })
+    )
+  })
+
+  it('no BankID proof (a tenant that typed the number): the earlier grant is still not inherited', async () => {
+    mockGetConnection.mockResolvedValueOnce(ROW_IN_NOVEMBER)
+    registryAnswers([SIGNED_IN_JULY, MOMS_IN_JULY])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+    expect(result.momsOmbud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+    expect(result.lasombud.detail).toContain('inget BankID-bevis sedan dess')
+  })
+
+  it('BankID proof from before the grant was signed proves nothing about it (a seller, an ended accountant)', async () => {
+    // Opted in on 1 August, within 30 days of the proof: only its age against the grant fails it.
+    mockGetConnection.mockResolvedValueOnce({ ...ROW_IN_NOVEMBER, created_at: '2026-08-01T08:00:00Z' })
+    proven({ lasombud: '2026-07-18', moms_ombud: '2026-07-18' })
+    registryAnswers([SIGNED_IN_JULY, MOMS_IN_JULY])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+    expect(result.momsOmbud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+  })
+
+  it('BankID proof on the signing day itself counts, within 30 days of the opt-in', async () => {
+    const result = await probeViaOmbudsregisterWith([SIGNED_IN_JULY], '2026-08-01', '2026-07-19')
+    expect(result.result?.lasombud.status).toBe('granted')
+  })
+
+  it('BankID proof more than 30 days before the opt-in speaks for nobody now', async () => {
+    const result = await probeViaOmbudsregisterWith([SIGNED_IN_JULY], '2026-11-09', '2026-08-15')
+    expect(result.result?.lasombud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+  })
+
+  it('a skattekonto proof counts for läsombud only: the VAT behörighet needs a VAT read', async () => {
+    mockGetConnection.mockResolvedValueOnce(ROW_IN_NOVEMBER)
+    proven({ lasombud: '2026-11-09' })
+    registryAnswers([SIGNED_IN_JULY, MOMS_IN_JULY])
+
+    const result = await probeCompanyGrants('company-1', ORG)
+
+    expect(result.lasombud.status).toBe('granted')
+    expect(result.momsOmbud).toMatchObject({ status: 'denied', reason: 'predates_opt_in' })
+  })
+
+  it('proof only lifts the signing-day rule: a grant the register does not list is still missing', async () => {
+    const result = await probeViaOmbudsregisterWith([SIGNED_IN_JULY], '2026-11-09', '2026-11-09')
+    expect(result.result?.lasombud.status).toBe('granted')
+    expect(result.result?.momsOmbud).toMatchObject({ status: 'denied' })
+    expect(result.result?.momsOmbud.reason).toBeUndefined()
+  })
+
+  it('an unreadable proof stops the probe before anything is asked or recorded', async () => {
+    mockFindProof.mockRejectedValueOnce(new Error('ownership proof read failed: timeout'))
+
+    await expect(probeCompanyGrants('company-1', ORG)).rejects.toThrow('ownership proof read failed')
+    expect(mockSkvRequestWithAuth).not.toHaveBeenCalled()
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 })
 
@@ -458,6 +564,21 @@ describe('recordGrantRefusal: a refused system read asks the register before tou
   it('roles the register lists but we cannot name: nothing changes', async () => {
     registryAnswers([{ huvudman: ORG, roll: 'ZZ1', rollbeskrivning: 'Okänd roll', giltigFrom: '2026-07-19' }])
     await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('unverified')
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('a proven grant signed before the opt-in stays active on a refusal (crm#1762)', async () => {
+    mockGetConnection.mockResolvedValue({ ...CONNECTION, created_at: '2026-11-09T14:43:38Z' })
+    proven({ lasombud: '2026-11-09' })
+    registryAnswers([LASOMBUD])
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('active')
+    expect(recorded()).toEqual([{ companyId: 'company-1', environment: 'test', orgNumber: ORG, error: 'SKV_403_GRANT_ACTIVE' }])
+  })
+
+  it('ownership proof unreadable: nothing changes and the register is not asked', async () => {
+    mockFindProof.mockRejectedValueOnce(new Error('ownership proof read failed: timeout'))
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('unverified')
+    expect(mockSkvRequestWithAuth).not.toHaveBeenCalled()
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
   })
 

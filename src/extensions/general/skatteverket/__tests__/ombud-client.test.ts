@@ -269,7 +269,7 @@ describe('pure helpers', () => {
     expect(unknown.get('165560000000')).toMatchObject({ roles: ['ZZ'], recognized: false, lasombud: false })
   })
 
-  it('grantCountsFor: only an active grant signed on or after the opt-in day counts', () => {
+  it('grantCountsFor: without BankID proof only an active grant signed on or after the opt-in day counts', () => {
     const summary = summarizeGrants(
       [
         { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-03-01' },
@@ -281,14 +281,44 @@ describe('pure helpers', () => {
 
     // The newest active post decides, compared on its date part.
     expect(summary?.signedFrom).toEqual({ lasombud: '2026-06-15', moms_ombud: '2026-02-01' })
-    expect(grantCountsFor(summary, 'lasombud', '2026-06-15')).toBe(true)
-    expect(grantCountsFor(summary, 'lasombud', '2026-06-16')).toBe(false)
-    expect(grantPredatesOptIn(summary, 'lasombud', '2026-06-16')).toBe(true)
-    expect(grantCountsFor(summary, 'moms_ombud', '2026-05-01')).toBe(false)
-    expect(grantPredatesOptIn(summary, 'moms_ombud', '2026-05-01')).toBe(true)
+    const unproven = (optInDay: string) => ({ optInDay, provenOn: { lasombud: null, moms_ombud: null } })
+    expect(grantCountsFor(summary, 'lasombud', unproven('2026-06-15'))).toBe(true)
+    expect(grantCountsFor(summary, 'lasombud', unproven('2026-06-16'))).toBe(false)
+    expect(grantPredatesOptIn(summary, 'lasombud', unproven('2026-06-16'))).toBe(true)
+    expect(grantCountsFor(summary, 'moms_ombud', unproven('2026-05-01'))).toBe(false)
+    expect(grantPredatesOptIn(summary, 'moms_ombud', unproven('2026-05-01'))).toBe(true)
     // Nothing granted is neither counted nor "predating".
-    expect(grantCountsFor(undefined, 'lasombud', '2026-01-01')).toBe(false)
-    expect(grantPredatesOptIn(undefined, 'lasombud', '2026-01-01')).toBe(false)
+    expect(grantCountsFor(undefined, 'lasombud', unproven('2026-01-01'))).toBe(false)
+    expect(grantPredatesOptIn(undefined, 'lasombud', unproven('2026-01-01'))).toBe(false)
+  })
+
+  it('grantCountsFor: an earlier grant counts with BankID proof of that behörighet around the opt-in (crm#1762)', () => {
+    const summary = summarizeGrants(
+      [
+        { huvudman: '165560000000', roll: 'skol', rollbeskrivning: 'Skattekonto, bara läsbehörighet', giltigFrom: '2026-07-19' },
+        { huvudman: '165560000000', roll: 'momsdeklaration_ombud', rollbeskrivning: 'Momsdeklaration, ombud', giltigFrom: '2026-07-19' },
+      ],
+      '2026-11-13',
+    ).get('165560000000')
+    const claim = (lasombud: string | null, moms_ombud: string | null = null, optInDay = '2026-11-09') => ({
+      optInDay,
+      provenOn: { lasombud, moms_ombud },
+    })
+
+    expect(grantCountsFor(summary, 'lasombud', claim('2026-11-09'))).toBe(true)
+    expect(grantPredatesOptIn(summary, 'lasombud', claim('2026-11-09'))).toBe(false)
+    // Each behörighet needs its own proof: a skattekonto read proves nothing about VAT.
+    expect(grantCountsFor(summary, 'moms_ombud', claim('2026-11-09'))).toBe(false)
+    expect(grantPredatesOptIn(summary, 'moms_ombud', claim('2026-11-09'))).toBe(true)
+    expect(grantCountsFor(summary, 'moms_ombud', claim(null, '2026-11-09'))).toBe(true)
+    // Proof older than the grant says nothing about who signed it.
+    expect(grantCountsFor(summary, 'lasombud', claim('2026-07-18', null, '2026-08-01'))).toBe(false)
+    expect(grantCountsFor(summary, 'lasombud', claim('2026-07-19', null, '2026-08-01'))).toBe(true)
+    // Proof more than 30 days before the opt-in speaks for nobody now.
+    expect(grantCountsFor(summary, 'lasombud', claim('2026-10-09'))).toBe(false)
+    expect(grantCountsFor(summary, 'lasombud', claim('2026-10-10'))).toBe(true)
+    // Proof lifts the signing-day rule, it grants nothing the register lacks.
+    expect(grantCountsFor(undefined, 'lasombud', claim('2026-11-09'))).toBe(false)
   })
 })
 

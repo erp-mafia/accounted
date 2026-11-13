@@ -15,6 +15,7 @@ vi.mock('@/lib/supabase/service-client', () => ({
 }))
 
 import {
+  findCompaniesWithOwnershipProof,
   getOmbudClaimStanding,
   getOmbudClaimStandings,
   keepRowsOnCurrentOrgNumber,
@@ -333,7 +334,7 @@ describe('getOmbudClaimStandings', () => {
     queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
     queued.enqueue({ data: [] })
     queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }, { company_id: 'b', user_id: 'stranger' }] })
-    queued.enqueue({ data: [{ id: 'audit-1' }] })
+    queued.enqueue({ data: [{ created_at: '2026-11-09T14:00:00Z' }] })
     queued.enqueue({ data: [] })
 
     const result = await getOmbudClaimStandings([
@@ -361,13 +362,40 @@ describe('getOmbudClaimStandings', () => {
     )
     expect(queued.findCall('skatteverket_api_audit_log', 'gte')).toEqual(['response_status', 200])
     expect(queued.findCall('skatteverket_api_audit_log', 'lt')).toEqual(['response_status', 300])
+    expect(queued.findCall('skatteverket_api_audit_log', 'order')).toEqual(['created_at', { ascending: false }])
+  })
+
+  it('findCompaniesWithOwnershipProof proves the VAT behörighet with own-BankID VAT reads', async () => {
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }] })
+    queued.enqueue({ data: [{ created_at: '2026-11-09T10:00:00Z' }] })
+
+    const proofs = await findCompaniesWithOwnershipProof([{ companyId: 'a', orgNumber: ORG }], 'moms_ombud')
+
+    expect(Object.fromEntries(proofs)).toEqual({ a: '2026-11-09' })
+    expect(queued.findCalls('skatteverket_api_audit_log', 'in')).toEqual(
+      expect.arrayContaining([['endpoint', ['inlamnat', 'beslutat', 'declaration/draft']]])
+    )
+  })
+
+  it('findCompaniesWithOwnershipProof gives each proven company the Swedish day of its latest proof', async () => {
+    queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }, { company_id: 'b', user_id: 'other' }] })
+    // 23:30 UTC on 8 November is already 9 November in Sweden.
+    queued.enqueue({ data: [{ created_at: '2026-11-08T23:30:00Z' }] })
+    queued.enqueue({ data: [] })
+
+    const proofs = await findCompaniesWithOwnershipProof([
+      { companyId: 'a', orgNumber: ORG },
+      { companyId: 'b', orgNumber: ORG },
+    ])
+
+    expect(Object.fromEntries(proofs)).toEqual({ a: '2026-11-09' })
   })
 
   it('a claimant without members is never proven and costs no audit read', async () => {
     queued.enqueue({ data: settings([['a', '556000-0000'], ['b', '5560000000']]) })
     queued.enqueue({ data: [] })
     queued.enqueue({ data: [{ company_id: 'a', user_id: 'owner' }] })
-    queued.enqueue({ data: [{ id: 'audit-1' }] })
+    queued.enqueue({ data: [{ created_at: '2026-11-09T14:00:00Z' }] })
 
     expect(await getOmbudClaimStanding('a', ORG)).toBe('clear')
     expect(queued.findCalls('skatteverket_api_audit_log', 'select')).toHaveLength(1)

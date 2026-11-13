@@ -426,30 +426,56 @@ export function summarizeGrants(posts: Behorighetspost[], today: string): Map<st
 }
 
 /**
- * Whether a register grant counts for a company that opted in on `optInDay`
- * (yyyy-mm-dd, the day its connection row was created for this org number).
+ * A company's claim on the org number it asks the ombud connection for, as
+ * Swedish days (yyyy-mm-dd). `optInDay`: its connection row was created for
+ * this org number. `provenOn`: per behörighet, the latest day a current
+ * member read that behörighet's data for the number with their own BankID
+ * for this company (findCompaniesWithOwnershipProof in connection-store),
+ * null for none.
+ */
+export interface OmbudGrantClaim {
+  optInDay: string
+  provenOn: Record<SkvBehorighet, string | null>
+}
+
+/** How long before its opt-in a company's BankID proof still speaks for it. */
+export const OMBUD_PROOF_WINDOW_DAYS = 30
+
+/**
+ * Whether a register grant counts for a company's claim.
  *
- * Org-number proof (founder decision 2026-10-02): a grant counts only when it
- * was signed on or after the company's own opt-in. Org numbers are public and
- * any tenant can type one; a grant signed BEFORE the tenant opted in was given
- * to Accounted for someone else's use of the number (a former customer who
- * left without withdrawing it), and must not be inherited. A grant signed
- * after the opt-in was signed by a firmatecknare for this very connection.
+ * Org-number proof (founder decisions 2026-10-02 and 2026-11-13): org numbers
+ * are public and any tenant can type one, so a grant signed BEFORE the tenant
+ * opted in may have been given for someone else's use of the number (a
+ * former customer who left without withdrawing it) and is not inherited on
+ * the number alone. A grant signed on or after the opt-in was signed by a
+ * firmatecknare for this very connection. An earlier grant counts when the
+ * company proved with BankID that it may see that behörighet's own data for
+ * the number (a skattekonto read for läsombud, a VAT read for momsombud), on
+ * or after the grant was signed and no more than OMBUD_PROOF_WINDOW_DAYS
+ * before its opt-in: someone Skatteverket let in while the grant stood, and
+ * around the time this company asked for it. Older proof speaks for nobody
+ * now (a seller, or an accountant whose access has ended). Asking such a
+ * company to sign again is a dead end: Skatteverket refuses to sign a grant
+ * that already stands ("Behörigheten finns redan", crm#1762).
  */
 export function grantCountsFor(
   summary: HuvudmanGrantSummary | undefined,
   key: SkvBehorighet,
-  optInDay: string
+  claim: OmbudGrantClaim
 ): boolean {
   const from = summary?.signedFrom[key]
-  return Boolean(summary?.[key] && from && from >= optInDay)
+  if (!summary?.[key] || !from) return false
+  if (from >= claim.optInDay) return true
+  const proof = claim.provenOn[key]
+  return proof !== null && proof >= from && proof >= addDaysIso(claim.optInDay, -OMBUD_PROOF_WINDOW_DAYS)
 }
 
-/** True when the behörighet is active at Skatteverket but was signed before the opt-in. */
+/** True when the behörighet is active at Skatteverket but does not count: signed before the opt-in, with no BankID proof. */
 export function grantPredatesOptIn(
   summary: HuvudmanGrantSummary | undefined,
   key: SkvBehorighet,
-  optInDay: string
+  claim: OmbudGrantClaim
 ): boolean {
-  return Boolean(summary?.[key]) && !grantCountsFor(summary, key, optInDay)
+  return Boolean(summary?.[key]) && !grantCountsFor(summary, key, claim)
 }
