@@ -42,10 +42,9 @@ export const STRIPE_ACTION_TIMEOUT_MS = 15_000
  * Deadline for "Synka nu".
  *
  * Deliberately far longer than the writes. A backfill ("Hämta äldre
- * transaktioner") can list up to 10 000 balance transactions
- * (MAX_TXNS_PER_RUN in transaction-sync.ts), which legitimately takes minutes,
- * and aborting early would be worse than the missing catch this replaces: the
- * server keeps working
+ * transaktioner") runs up to the manual budget (MANUAL_SYNC_BUDGET_MS, 240 s,
+ * plus one bounded page), which legitimately takes minutes, and aborting early
+ * would be worse than the missing catch this replaces: the server keeps working
  * and advances `last_balance_txn_synced_at`, so the user would be told the sync
  * failed and then find nothing on the retry. The only honest bound is the
  * route's own ceiling (`export const maxDuration = 300` in
@@ -77,8 +76,9 @@ export interface StripeSyncPayload {
     foreignCurrency?: number
     revoked?: boolean
     /**
-     * Only set when the caller passes a time budget. The manual button's route
-     * passes none, so it cannot appear here; the nightly cron owns that case.
+     * The run stopped before the end of the feed: at its time budget or its
+     * bound on transactions read (MAX_TXNS_PER_RUN in transaction-sync.ts),
+     * which the button's run reaches too. Syncing again goes on from there.
      */
     deadlineReached?: boolean
   }

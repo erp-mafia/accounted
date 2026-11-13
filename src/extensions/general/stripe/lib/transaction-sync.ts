@@ -16,6 +16,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { TIME_BUDGET_MS } from '@/lib/webshop-orders/order-cron'
 import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
 import { markConnectionRevokedUpstream } from './revoked'
@@ -39,16 +40,22 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * (+gross -fee per charge, -net per payout), which is what makes the cash
  * account reconcile against the real Stripe balance.
  *
- * Cursor: stripe_connections.last_balance_txn_synced_at (max `created`
- * processed, or the run start once a window is listed to its end), re-polled
- * with a 24h overlap. Safe because balance transactions
- * are immutable and carry stable txn_... ids: a re-seen transaction collides
- * on (company_id, external_id) and is skipped. The OAuth callback seeds the
- * cursor with the connection moment; older history is an explicit choice
- * (POST /backfill moves the cursor back to the start of a Swedish day).
- * Every window is floored at the day after the company lock date: rows
- * behind the lock can never be booked and would only be permanent inbox
- * noise.
+ * Cursor: stripe_connections.last_balance_txn_synced_at, re-polled with a
+ * 24h overlap, which a run reads first as one window. From the cursor on it
+ * reads in bounded windows (created in [gte, lt)), oldest first: it lists a
+ * window to its end, ingests it and moves the cursor to the window's end
+ * before the next one, so a run that stops loses at most the window it was
+ * in and the next run goes on from the cursor. A window read in part is
+ * never ingested: Stripe lists newest first, so the part holds the window's
+ * newest transactions, and moving the cursor past it would skip the older
+ * ones for good. Rereading is safe
+ * because balance transactions are immutable and carry stable txn_... ids:
+ * a re-seen transaction collides on (company_id, external_id) and is
+ * skipped. The OAuth callback seeds the cursor with the connection moment;
+ * older history is an explicit choice (POST /backfill moves the cursor back
+ * to the start of a Swedish day). Every window is floored at the day after
+ * the company lock date: rows behind the lock can never be booked and would
+ * only be permanent inbox noise.
  *
  * Feed start (crm#1344): neither the connection moment nor a backfill day
  * may cut through the Stripe balance. Money Stripe paid out before the start
@@ -80,23 +87,51 @@ export const STRIPE_IMPORT_SOURCE = 'stripe'
 const CURSOR_OVERLAP_SECONDS = 24 * 60 * 60
 /** Balance transactions per ingest chunk (each maps to at most 2 rows). */
 const INGEST_CHUNK_SIZE = 200
-/** Hard cap per run; the cursor resumes where a truncated run stopped. */
+/**
+ * Balance transactions a run reads from where its cursor stood before it
+ * stops: it starts no window that could take it past this, and the next run
+ * goes on from the cursor. A bound on one run's work, never on what the feed
+ * imports. Not counted: the re-read before the cursor (FetchPlan.wholeUntil),
+ * which holds nothing the cursor can move past. One window can still take a
+ * run past it: a single second, which cannot be split and is read whole (up
+ * to WHOLE_WINDOW_PAGE_CAP) once the windows before it are in.
+ */
 const MAX_TXNS_PER_RUN = 10_000
 /** Balance transactions per list call: Stripe's largest page. */
 const LIST_PAGE_SIZE = 100
 /**
- * The longest one connection's listing may take of the nightly run, counted
- * from its own start. A listing that runs out of it does not fit any night:
- * its cursor never moves, so it stays first in the cron's order, and without
- * a share of its own it used the whole run every night and left nothing for
- * the connections behind it. That is a failure, not a pause.
+ * Pages one window may take. A window with more is dropped, and since Stripe
+ * lists newest first, the part it listed tells where the next one ends (see
+ * syncStripeBalanceTransactions). A cut at the deadline loses ten pages at most.
  */
-const FAIR_LIST_BUDGET_MS = 120_000
+const WINDOW_PAGE_CAP = 10
+const MAX_TXNS_PER_WINDOW = WINDOW_PAGE_CAP * LIST_PAGE_SIZE
 /**
- * What the connection says when its history does not fit (the cron's runner
- * stores it after its lead sentence, lib/webshop-orders/order-cron.ts). No
- * later night gets through either, so it promises no retry: this is for us
- * to solve, and the error log is how we hear of it.
+ * Pages a window that cannot be split may take: a first run's window before
+ * its feed start, or a single second. One that holds more gets through no run.
+ */
+const WHOLE_WINDOW_PAGE_CAP = MAX_TXNS_PER_RUN / LIST_PAGE_SIZE
+/** Span of a run's first window; a window under half full doubles the next. */
+const FIRST_WINDOW_SECONDS = 7 * 86_400
+/**
+ * The longest one connection may take of the nightly runner's deadline, which
+ * all its connections share (SyncOptions.fairShare), counted from its own
+ * start. A connection that reaches it without moving its cursor does not fit
+ * any run: its cursor stays, so it stays first in the cron's
+ * oldest-cursor-first order, and without a share of its own it would take
+ * every night's run from the connections behind it. That is a failure, not
+ * a pause. A manual run's deadline is its own: it gets all of it.
+ */
+const FAIR_SHARE_MS = 120_000
+/** After a pause that moved the cursor less than a day: a warning this far behind. */
+const BEHIND_WARN_MS = 48 * 3_600_000
+/** ...and an error, once, on the run that takes it this far behind. */
+const BEHIND_ERROR_MS = 7 * 86_400_000
+/**
+ * What the connection says when no run can get through (the cron's runner
+ * stores it after its lead sentence, lib/webshop-orders/order-cron.ts). It
+ * promises no retry: this is for us to solve, and the error log is how we
+ * hear of it.
  */
 export const STRIPE_HISTORY_TOO_LARGE_MESSAGE =
   'Historiken hos Stripe är för stor för att hämtas automatiskt. Supporten har fått veta det.'
@@ -107,6 +142,11 @@ export const STRIPE_HISTORY_TOO_LARGE_MESSAGE =
  * minutes for one page.
  */
 const DEADLINE_PAGE_OPTIONS = { timeout: 25_000, maxNetworkRetries: 1 } as const
+
+/** A Stripe call's options: bounded by DEADLINE_PAGE_OPTIONS under a deadline. */
+function withDeadlineBounds(requestOptions: Stripe.RequestOptions, deadlineMs: number | undefined): Stripe.RequestOptions {
+  return deadlineMs === undefined ? requestOptions : { ...requestOptions, ...DEADLINE_PAGE_OPTIONS }
+}
 /**
  * Longest time Stripe holds a charge before it can be paid out (a payout
  * schedule's delay_days stays within 30). A charge still on the balance when
@@ -150,7 +190,11 @@ export interface StripeTransactionSyncSummary {
   errors: number
   /** Processed balance transactions left out for not being in SEK. */
   foreignCurrency: number
-  /** Set when the caller's time budget ran out before all chunks processed. */
+  /**
+   * Set when the run stopped before the end of its range: the caller's time
+   * budget ran out, or the run read MAX_TXNS_PER_RUN. The cursor holds what
+   * was ingested, and the next run goes on from there.
+   */
   deadlineReached?: boolean
   /** Set when the connection turned out to be revoked upstream. */
   revoked?: boolean
@@ -310,72 +354,111 @@ export function isLedgerCurrency(txn: Pick<BalanceTxnLike, 'currency'>): boolean
 }
 
 /**
- * Moves the cursor forward to `ms`, never back. Progress also clears
- * error_message, as in the webshop order syncs: a failure the nightly run
- * wrote on the connection is over once a sync (the button's too) gets through.
+ * Moves the cursor forward to `ms`, never back; true when it moved. Progress
+ * also clears error_message, as in the webshop order syncs: a failure the
+ * nightly run wrote on the connection is over once a sync (the button's too)
+ * gets through.
  */
 async function advanceWatermark(
   supabase: SupabaseClient,
   connection: StripeConnection,
   ms: number,
-): Promise<void> {
+): Promise<boolean> {
   const current = connection.last_balance_txn_synced_at
     ? Date.parse(connection.last_balance_txn_synced_at)
     : Number.NEGATIVE_INFINITY
-  if (!(ms > current)) return
+  if (!(ms > current)) return false
   const iso = new Date(ms).toISOString()
   await supabase
     .from('stripe_connections')
     .update({ last_balance_txn_synced_at: iso, error_message: null })
     .eq('id', connection.id)
   connection.last_balance_txn_synced_at = iso
+  return true
+}
+
+/** One window's listing, whole only when neither `cut` nor `overflow` is set. */
+interface WindowListing {
+  /**
+   * The window's transactions the plan keeps, oldest first. After an
+   * overflow: its listed, newest part only (see listWindow). After a cut:
+   * nothing.
+   */
+  kept: BalanceTxnLike[]
+  /** Balance transactions listed, kept or not. */
+  listed: number
+  /** The oldest `created` listed (epoch seconds); null when nothing was. */
+  oldest: number | null
+  /** The deadline came before the window's end. */
+  cut: boolean
+  /** The window took its page cap and Stripe had more: the rest was not listed. */
+  overflow: boolean
 }
 
 /**
- * Lists the window's balance transactions page by page (newest first, as
- * Stripe returns them), up to MAX_TXNS_PER_RUN, checking the caller's
- * deadline before each page. One awaited autoPagingToArray could not be
- * stopped: up to 100 requests ran to the end whatever was left of the cron's
- * budget, and a kill at the route's maxDuration takes the rest of the run's
- * connections with it.
+ * Lists one window, created in [gte, lt), page by page (newest first, as
+ * Stripe returns them), checking the caller's deadline before each page. One
+ * awaited autoPagingToArray could not be stopped: up to 100 requests ran to
+ * the end whatever was left of the cron's budget, and a kill at the route's
+ * maxDuration takes the rest of the run's connections with it.
  *
- * `cut` means the deadline stopped the listing early. What was listed is then
- * the newest part of the window only, so the caller must not ingest it and
- * move the cursor: the older transactions behind it would be skipped for good.
+ * A cut or an overflow leaves the window's newest part only: the cursor must
+ * not pass the older transactions behind that part. A cut returns nothing; an
+ * overflow stops at the page cap without asking for one more, and returns its
+ * listed part, which only a re-read behind the cursor may ingest.
  */
-async function listBalanceTransactions(
+async function listWindow(
   stripe: Pick<Stripe, 'balanceTransactions'>,
-  gte: number,
+  window: { gte: number; lt: number },
+  keep: FetchPlan['keep'],
   requestOptions: Stripe.RequestOptions,
   deadlineMs: number | undefined,
-): Promise<{ listed: BalanceTxnLike[]; cut: boolean }> {
-  const listed: BalanceTxnLike[] = []
-  // The button's sync passes no deadline and keeps the client's defaults.
-  const pageOptions = deadlineMs === undefined ? requestOptions : { ...requestOptions, ...DEADLINE_PAGE_OPTIONS }
+  pageCap: number,
+): Promise<WindowListing> {
+  const kept: BalanceTxnLike[] = []
+  let listed = 0
+  let oldest: number | null = null
+  const pageOptions = withDeadlineBounds(requestOptions, deadlineMs)
   let startingAfter: string | undefined
-  while (listed.length < MAX_TXNS_PER_RUN) {
-    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return { listed, cut: true }
+  for (let pages = 0; ; pages++) {
+    if (pages === pageCap) {
+      kept.sort((a, b) => a.created - b.created)
+      return { kept, listed, oldest, cut: false, overflow: true }
+    }
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return { kept: [], listed, oldest, cut: true, overflow: false }
     const page = await stripe.balanceTransactions.list(
       {
-        created: { gte },
+        created: { gte: window.gte, lt: window.lt },
         limit: LIST_PAGE_SIZE,
         expand: ['data.source'],
         ...(startingAfter ? { starting_after: startingAfter } : {}),
       },
       pageOptions,
     )
-    listed.push(...page.data)
+    listed += page.data.length
+    for (const txn of page.data) {
+      if (oldest === null || txn.created < oldest) oldest = txn.created
+      if (keep(txn)) kept.push(txn)
+    }
     if (!page.has_more || page.data.length === 0) break
     startingAfter = page.data[page.data.length - 1].id
   }
-  return { listed: listed.slice(0, MAX_TXNS_PER_RUN), cut: false }
+  // Oldest first: the cursor moves through the window in time order.
+  kept.sort((a, b) => a.created - b.created)
+  return { kept, listed, oldest, cut: false, overflow: false }
 }
 
-/** The cursor-window view of a connection (see lib/feed-sync/cursor-window). */
+/**
+ * The cursor-window view of a connection (see lib/feed-sync/cursor-window).
+ * Its start is the feed start the feed has read the open balance of, when one
+ * is recorded (a backfill's day): a cursor past it is a later run, so a
+ * backfill paused partway resumes from its cursor instead of reading the
+ * balance there as a new start.
+ */
 function cursorWindowOf(connection: StripeConnection): CursorWindowConnection {
   return {
     cursor: connection.last_balance_txn_synced_at,
-    connectedAt: connection.connected_at,
+    connectedAt: connection.balance_txn_feed_start ?? connection.connected_at,
     createdAt: connection.created_at,
   }
 }
@@ -403,8 +486,18 @@ async function firstBookableMs(supabase: SupabaseClient, companyId: string): Pro
 
 /** What one run lists from Stripe, and which listed transactions it keeps. */
 export interface FetchPlan {
-  /** created.gte for the list call (epoch seconds). */
+  /** created.gte of the run's first window (epoch seconds). */
   gte: number
+  /**
+   * Where the cursor stands (epoch seconds): a later run's cursor, or a first
+   * run's feed start. What the run reads before it (the 24h overlap, or the
+   * open balance at a feed start) is one window, never split and not counted
+   * against MAX_TXNS_PER_RUN, as main read the overlap: the cursor cannot
+   * record progress there. An overlap too large for one window is only a
+   * re-read: its older part is skipped. An open balance too large for one
+   * fails the run.
+   */
+  wholeUntil: number
   /** False for a listed transaction the feed must leave out. */
   keep: (txn: BalanceTxnLike) => boolean
 }
@@ -440,7 +533,8 @@ async function lastPayoutPerCurrency(
  * Where a run starts reading, and what it keeps (crm#1344).
  *
  * Once the cursor has passed the connection moment, a run reads from its
- * cursor minus the 24h overlap and keeps everything.
+ * cursor minus the 24h overlap and keeps everything; the overlap is one
+ * window (FetchPlan.wholeUntil).
  *
  * Until then the cursor is a feed start: the connection moment the OAuth
  * callback seeded, or the day a backfill chose. A feed start must not cut
@@ -457,8 +551,11 @@ async function lastPayoutPerCurrency(
  * - 1686 is empty: the run also reads every transaction that was still on
  *   the balance at the start, i.e. made payable after the last payout before
  *   it, and never an earlier payout itself.
- * external_id dedup keeps a rerun from the same start idempotent. Every
- * window is floored at the day after the company lock date.
+ * Either way, what the run reads before the feed start is one window
+ * (FetchPlan.wholeUntil). external_id dedup keeps a rerun from the same start
+ * idempotent. Every window is floored at the day after the company lock date.
+ *
+ * Null when `deadlineMs` passed before the payout list: the run stops there.
  */
 export async function planFetch(
   supabase: SupabaseClient,
@@ -466,12 +563,17 @@ export async function planFetch(
   stripe: Pick<Stripe, 'payouts'>,
   requestOptions: Stripe.RequestOptions,
   log: Logger = defaultLog,
-): Promise<FetchPlan> {
+  deadlineMs?: number,
+): Promise<FetchPlan | null> {
   const floorMs = await firstBookableMs(supabase, connection.company_id)
   const window = cursorWindowOf(connection)
   if (!isBeforeFirstAdvance(window)) {
     const fromMs = resolveWindowStartMs(window, CURSOR_OVERLAP_SECONDS * 1000)
-    return { gte: toSeconds(Math.max(fromMs, floorMs)), keep: keepAll }
+    return {
+      gte: toSeconds(Math.max(fromMs, floorMs)),
+      wholeUntil: toSeconds(Date.parse(window.cursor!)),
+      keep: keepAll,
+    }
   }
 
   const cursorMs = window.cursor ? Date.parse(window.cursor) : Number.NaN
@@ -479,6 +581,7 @@ export async function planFetch(
   const startDay = isoDate(startSec)
   const fromStartDay: FetchPlan = {
     gte: toSeconds(Math.max(stockholmDayStartMs(startDay), floorMs)),
+    wholeUntil: startSec,
     keep: keepAll,
   }
 
@@ -490,9 +593,10 @@ export async function planFetch(
   )
   if (ledgerBalance === null || ledgerBalance !== 0) return fromStartDay
 
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) return null
   let lastPayout: Map<string, number>
   try {
-    lastPayout = await lastPayoutPerCurrency(stripe, requestOptions, startSec)
+    lastPayout = await lastPayoutPerCurrency(stripe, withDeadlineBounds(requestOptions, deadlineMs), startSec)
   } catch (err) {
     if (isRevokedConnectionError(err)) throw err
     log.warn('payout list failed; the feed starts at the start day', {
@@ -509,6 +613,7 @@ export async function planFetch(
       : startSec - NO_PAYOUT_LOOKBACK_SECONDS
   return {
     gte: toSeconds(Math.max(listFromSec * 1000, floorMs)),
+    wholeUntil: startSec,
     keep: (txn) => {
       if (txn.created >= startSec) return true
       if (txn.type === 'payout') return false
@@ -567,16 +672,26 @@ async function ensureStripeBalanceAccount(
   }
 }
 
+export interface SyncOptions {
+  /**
+   * The deadline is the nightly runner's, shared with the connections behind
+   * this one: take at most FAIR_SHARE_MS of it. Without it, as for "Synka nu"
+   * and a backfill, the deadline is all this connection's own.
+   */
+  fairShare?: boolean
+}
+
 export async function syncStripeBalanceTransactions(
   supabase: SupabaseClient,
   connection: StripeConnection,
   log: Logger = defaultLog,
   /**
-   * Absolute deadline (epoch ms) from the caller's time budget. Enforced
-   * between ingest chunks: the cursor advances only over processed chunks, so
-   * the next run resumes exactly where this one stopped.
+   * Absolute deadline (epoch ms) from the caller's time budget, checked
+   * before each Stripe call and each ingest chunk. The cursor advances only
+   * over what was ingested, so the next run resumes where this one stopped.
    */
   deadlineMs?: number,
+  options: SyncOptions = {},
 ): Promise<StripeTransactionSyncSummary> {
   const summary: StripeTransactionSyncSummary = {
     fetched: 0,
@@ -589,91 +704,110 @@ export async function syncStripeBalanceTransactions(
 
   const stripe = getStripe()
   const requestOptions = connectedAccountOptions(connection.stripe_account_id)
+  const syncStartMs = Date.now()
+  const view = cursorWindowOf(connection)
   // One-time chart setup (1686) runs until the cursor has moved past the
   // connection moment: a freshly activated connection carries a seeded
   // cursor, so "no cursor" no longer identifies the first run.
-  const firstRun = isBeforeFirstAdvance(cursorWindowOf(connection))
-  const runStartMs = Date.now()
+  const firstRun = isBeforeFirstAdvance(view)
+  // Where the cursor stood. What the run reads before it is a re-read: the
+  // 24h overlap, or a first run's window before its feed start.
+  const cursorMs = view.cursor ? Date.parse(view.cursor) : Number.NaN
+  const startMs = Number.isFinite(cursorMs) ? cursorMs : connectionStartMs(view)
+  // The run reads up to its own start, in Stripe's whole seconds: what is
+  // created while it runs is the next run's, whose 24h overlap reads it.
+  const untilSec = Math.floor(syncStartMs / 1000)
+  // Under the nightly runner's shared deadline a connection also has a share
+  // of its own, so one that cannot get through takes no more of the run than
+  // that (FAIR_SHARE_MS). A manual run's deadline is all its own.
+  const shareEndMs = deadlineMs !== undefined && options.fairShare ? syncStartMs + FAIR_SHARE_MS : undefined
+  const stopAtMs = deadlineMs === undefined ? undefined : Math.min(deadlineMs, shareEndMs ?? deadlineMs)
 
-  let listed: BalanceTxnLike[]
-  let plan: FetchPlan
-  let cut: boolean
-  let listStartMs: number
+  /** No run gets through: an error for us, and the message for the connection. */
+  const tooLarge = (reason: string, details: Record<string, unknown>): never => {
+    log.error(reason, { connectionId: connection.id, companyId: connection.company_id, ...details })
+    throw new Error(STRIPE_HISTORY_TOO_LARGE_MESSAGE)
+  }
+
+  // Any Stripe call can find the connection severed: it is then marked
+  // revoked, and the run ends with what it did. Other errors go on up.
+  const endIfRevoked = async (err: unknown): Promise<StripeTransactionSyncSummary> => {
+    if (!isRevokedConnectionError(err)) throw err
+    await markConnectionRevokedUpstream(supabase, connection, log)
+    summary.revoked = true
+    return summary
+  }
+
+  let plan: FetchPlan | null
   try {
-    plan = await planFetch(supabase, connection, stripe, requestOptions, log)
-    listStartMs = Date.now()
-    // Under the run's deadline the listing also has a share of its own, so
-    // one account too large for any night cannot take the whole run.
-    const listDeadlineMs = deadlineMs === undefined ? undefined : Math.min(deadlineMs, listStartMs + FAIR_LIST_BUDGET_MS)
-    ;({ listed, cut } = await listBalanceTransactions(stripe, plan.gte, requestOptions, listDeadlineMs))
+    plan = await planFetch(supabase, connection, stripe, requestOptions, log, stopAtMs)
   } catch (err) {
-    if (isRevokedConnectionError(err)) {
-      await markConnectionRevokedUpstream(supabase, connection, log)
-      summary.revoked = true
-      return summary
-    }
-    throw err
+    return endIfRevoked(err)
   }
-
-  if (cut) {
-    // Nothing is ingested and the cursor stays, so the connection keeps the
-    // front of the cron's oldest-cursor-first order and gets its share again
-    // next run. Unless it was its own share that ran out: then no run will
-    // get through, so it is an error for us, and the cron's runner writes the
-    // message on the connection instead of leaving a date that never moves.
-    if (deadlineMs !== undefined && listStartMs + FAIR_LIST_BUDGET_MS <= deadlineMs) {
-      log.error('stripe balance-transaction listing does not fit its share of the nightly run', {
-        connectionId: connection.id,
-        companyId: connection.company_id,
-        listed: listed.length,
-        listedFrom: new Date(plan.gte * 1000).toISOString(),
-        shareMs: FAIR_LIST_BUDGET_MS,
-      })
-      throw new Error(STRIPE_HISTORY_TOO_LARGE_MESSAGE)
-    }
+  if (plan === null) {
     summary.deadlineReached = true
-    log.info('time budget exhausted while listing; nothing ingested, the cursor stays', {
-      connectionId: connection.id,
-      listed: listed.length,
-    })
+    log.info('time budget exhausted before listing; the next run starts here', { connectionId: connection.id })
     return summary
   }
-
-  const txns = listed.filter(plan.keep)
-  summary.fetched = txns.length
-  // Fewer than the cap: the list ran to the end of the window.
-  const windowExhausted = listed.length < MAX_TXNS_PER_RUN
-  if (txns.length === 0) {
-    // A quiet account moves its cursor to the run start too, or it keeps the
-    // front of the cron's oldest-cursor-first candidates. Not on the first
-    // run: the cursor passing the connection moment is what ends the one-time
-    // 1686 chart setup, which only an imported row needs.
-    if (!firstRun) await advanceWatermark(supabase, connection, runStartMs)
-    return summary
-  }
-
-  // Oldest first: cursor advancement stays chronological.
-  txns.sort((a, b) => a.created - b.created)
-
-  await ensureStripeBalanceAccount(supabase, connection, firstRun, log)
 
   /** Left-out non-SEK balance transactions per currency, for the log. */
   const foreignByCurrency: Record<string, number> = {}
   // Earliest chunk with a row that failed to insert; the cursor never passes
   // it, as in the webshop order syncs.
   let failureFloorMs = Number.POSITIVE_INFINITY
+  // Whether the 1686 cash account is ensured this run. A first run moves no
+  // cursor before that: the cursor passing the connection moment is what
+  // ends the one-time chart setup, which only an imported row needs.
+  let accountReady = false
+  // Whether the run got past where its cursor stood, whatever a failed row let
+  // the cursor record: a stop after that is a pause, never a failure. Not for
+  // a first run before its first row: its cursor cannot move yet, so the next
+  // run would do the same again.
+  let progressed = false
+  let feedStartRecorded = false
 
-  for (const chunk of chunked(txns, INGEST_CHUNK_SIZE)) {
-    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
-      summary.deadlineReached = true
-      log.info('time budget exhausted; stopping balance-transaction batch', {
+  /**
+   * Records the start this first run read the open balance of, once its
+   * cursor is past it, so the next run resumes from the cursor instead of
+   * reading that balance again (cursorWindowOf). Best effort: without it the
+   * next run reads it again, which the external_id dedup makes harmless.
+   */
+  const recordFeedStart = async (): Promise<void> => {
+    if (feedStartRecorded) return
+    feedStartRecorded = true
+    const recorded = connection.balance_txn_feed_start ?? connection.connected_at
+    if (recorded && Date.parse(recorded) === startMs) return
+    const iso = new Date(startMs).toISOString()
+    const { error } = await supabase
+      .from('stripe_connections')
+      .update({ balance_txn_feed_start: iso })
+      .eq('id', connection.id)
+    if (error) {
+      log.warn('could not record the feed start; the next run reads its open balance again', {
         connectionId: connection.id,
-        processed: summary.imported + summary.duplicates,
-        remaining: summary.fetched - summary.imported - summary.duplicates,
+        error: error.message,
       })
-      break
+      return
     }
+    connection.balance_txn_feed_start = iso
+  }
 
+  /**
+   * Moves the cursor forward to `ms`, held below a failed row. Never back: a
+   * first run's window before the connection moment leaves the seeded cursor
+   * where it is, so a stopped first run reruns as a first run instead of
+   * reading as a backfill to that earlier date.
+   */
+  const advanceTo = async (ms: number): Promise<void> => {
+    if (firstRun && !accountReady) return
+    if (ms > startMs) progressed = true
+    if ((await advanceWatermark(supabase, connection, Math.min(ms, failureFloorMs))) && firstRun) {
+      await recordFeedStart()
+    }
+  }
+
+  /** Imports one chunk's SEK rows; the rest are counted as foreignCurrency. */
+  const ingestChunk = async (chunk: BalanceTxnLike[]): Promise<void> => {
     const bookable: BalanceTxnLike[] = []
     for (const txn of chunk) {
       if (isLedgerCurrency(txn)) {
@@ -722,22 +856,176 @@ export async function syncStripeBalanceTransactions(
         })
       }
     }
-
-    // Persist the cursor after each chunk so a crash or deadline stop resumes
-    // from the last fully-processed chunk (the 24h overlap absorbs the rest),
-    // capped by the failure floor. Never back: a first run's chunks from
-    // before the connection moment leave the seeded cursor where it is, so a
-    // stopped first run reruns as a first run instead of reading as a
-    // backfill to that earlier date.
-    await advanceWatermark(supabase, connection, Math.min(chunk[chunk.length - 1].created * 1000, failureFloorMs))
   }
 
-  // Scanned-through watermark, as in the webshop order syncs: a window listed
-  // to its end and fully processed means "synced through run start", even
-  // when the last transaction is days old. The 24h overlap re-poll covers
-  // transactions Stripe made visible while the run was in flight.
-  if (windowExhausted && !summary.deadlineReached) {
-    await advanceWatermark(supabase, connection, Math.min(runStartMs, failureFloorMs))
+  /** Ingests one window's transactions, oldest first; false when the deadline stopped it. */
+  const ingestWindow = async (txns: BalanceTxnLike[]): Promise<boolean> => {
+    if (txns.length === 0) return true
+    if (!accountReady) {
+      await ensureStripeBalanceAccount(supabase, connection, firstRun, log)
+      accountReady = true
+    }
+    summary.fetched += txns.length
+    for (const chunk of chunked(txns, INGEST_CHUNK_SIZE)) {
+      if (stopAtMs !== undefined && Date.now() >= stopAtMs) return false
+      await ingestChunk(chunk)
+      // Persist the cursor after each chunk so a crash or deadline stop
+      // resumes from the last fully-processed chunk (the 24h overlap absorbs
+      // the rest), capped by the failure floor.
+      await advanceTo(chunk[chunk.length - 1].created * 1000)
+    }
+    return true
+  }
+
+  /**
+   * After a later run's pause that moved the cursor less than a day, a feed
+   * synced once a night falls further behind: a warning past BEHIND_WARN_MS,
+   * and an error on the run that takes it past BEHIND_ERROR_MS. Where the
+   * cursor stood when the row was last written (its previous run, updated_at)
+   * tells that run apart, so the error comes once, not every night; that
+   * write came up to one run budget after the previous run measured its own
+   * lag, hence the slack. Not on a first run: a backfill pausing on its way
+   * catches up on the later runs.
+   */
+  const reportBehind = (): void => {
+    if (firstRun) return
+    const cursorAfterMs = Date.parse(connection.last_balance_txn_synced_at ?? '')
+    if (!Number.isFinite(cursorAfterMs) || cursorAfterMs - startMs >= 24 * 3_600_000) return
+    const behindMs = syncStartMs - cursorAfterMs
+    if (behindMs <= BEHIND_WARN_MS) return
+    const lastWrittenMs = Date.parse(connection.updated_at)
+    const behindBeforeMs = Number.isFinite(lastWrittenMs) ? lastWrittenMs - startMs - TIME_BUDGET_MS : 0
+    const details = {
+      connectionId: connection.id,
+      companyId: connection.company_id,
+      behindHours: Math.round(behindMs / 3_600_000),
+    }
+    if (behindMs > BEHIND_ERROR_MS && behindBeforeMs <= BEHIND_ERROR_MS) {
+      log.error('stripe balance-transaction feed has fallen more than a week behind', details)
+    } else {
+      log.warn('stripe balance-transaction feed is falling behind', details)
+    }
+  }
+
+  // What lies before where the cursor stands is read as one window: a later
+  // run's 24h overlap, or a first run's open balance at its feed start.
+  const wholeUntil = plan.wholeUntil
+  let from = plan.gte
+  let span = FIRST_WINDOW_SECONDS
+  // After a window too full to list: the oldest second its listed part
+  // reached. The windows before it end there, and that second is then read on
+  // its own, whole, since it can hold more than a window does.
+  let barrier: number | null = null
+  /** Rows of this run's finished windows from where the cursor stood (MAX_TXNS_PER_RUN). */
+  let fresh = 0
+  let windows = 0
+  let stop: 'deadline' | 'bound' | null = null
+  while (from < untilSec) {
+    const whole = from < wholeUntil
+    const second = !whole && barrier === from
+    if (!whole && !second && fresh + MAX_TXNS_PER_WINDOW > MAX_TXNS_PER_RUN) {
+      stop = 'bound'
+      break
+    }
+    const lt = whole
+      ? Math.min(wholeUntil, untilSec)
+      : second
+        ? from + 1
+        : Math.min(from + span, barrier ?? untilSec, untilSec)
+    const unsplittable = whole || lt - from === 1
+    let listing: WindowListing
+    try {
+      listing = await listWindow(
+        stripe, { gte: from, lt }, plan.keep, requestOptions, stopAtMs,
+        unsplittable ? WHOLE_WINDOW_PAGE_CAP : WINDOW_PAGE_CAP,
+      )
+    } catch (err) {
+      return endIfRevoked(err)
+    }
+    if (listing.cut) {
+      stop = 'deadline'
+      break
+    }
+    if (listing.overflow) {
+      if (whole && !firstRun) {
+        // A later run's 24h overlap with more than one window holds is only a
+        // re-read of what the cursor has passed: its listed, newest part goes
+        // in, as main took it, its older part is skipped, and the run goes on
+        // from the cursor.
+        log.warn('stripe balance-transaction overlap too large to re-read whole; its older part is skipped', {
+          connectionId: connection.id,
+          skippedBefore: new Date((listing.oldest ?? from) * 1000).toISOString(),
+        })
+        windows += 1
+        if (!(await ingestWindow(listing.kept))) {
+          stop = 'deadline'
+          break
+        }
+        from = lt
+        continue
+      }
+      if (unsplittable) {
+        tooLarge('stripe balance-transaction window that cannot be split holds more than one run reads', {
+          from: new Date(from * 1000).toISOString(),
+          to: new Date(lt * 1000).toISOString(),
+          listed: listing.listed,
+        })
+      }
+      // Stripe lists newest first, so the listed part is the window's newest,
+      // from its oldest second on. The next window ends at that second, and
+      // is half as long as the listed part took; a shorter guess than needed
+      // grows back by doubling.
+      const oldest = listing.oldest ?? from
+      barrier = oldest
+      span = Math.max(1, Math.floor((lt - oldest) / 2))
+      continue
+    }
+    windows += 1
+    if (!whole) fresh += listing.kept.filter((txn) => txn.created * 1000 >= startMs).length
+    if (!(await ingestWindow(listing.kept))) {
+      stop = 'deadline'
+      break
+    }
+    // Listed to its end and ingested: the cursor moves to the window's end,
+    // even when its last transaction is days older.
+    await advanceTo(lt * 1000)
+    if (second) barrier = null
+    else if (!whole && listing.listed < MAX_TXNS_PER_WINDOW / 2) span *= 2
+    from = lt
+  }
+
+  if (stop === 'deadline') {
+    // The time this connection had ran out, and it got nowhere: it fits no
+    // run, and a pause would hand it the front of every night's run. Under
+    // the nightly runner that time is its share; when the run's end came
+    // first, it started late and the next night gives it the whole share. A
+    // manual run's deadline is all its own.
+    const ownTimeOver = shareEndMs === undefined || (shareEndMs < deadlineMs! && Date.now() >= shareEndMs)
+    if (!progressed && ownTimeOver) {
+      tooLarge('stripe balance-transaction sync does not fit its share of the run', {
+        from: new Date(from * 1000).toISOString(),
+        windows,
+        shareMs: shareEndMs === undefined ? deadlineMs! - syncStartMs : FAIR_SHARE_MS,
+      })
+    }
+    summary.deadlineReached = true
+    log.info('time budget exhausted; the next run goes on from the cursor', {
+      connectionId: connection.id,
+      from: new Date(from * 1000).toISOString(),
+      progressed,
+    })
+    if (progressed) reportBehind()
+  } else if (stop === 'bound') {
+    summary.deadlineReached = true
+    log.info('balance-transaction run bound reached; the next run goes on from the cursor', {
+      connectionId: connection.id,
+      fresh,
+    })
+    reportBehind()
+  } else {
+    // Read through to the run start, also when there was nothing to read: a
+    // quiet account leaves the front of the cron's oldest-cursor-first order.
+    await advanceTo(untilSec * 1000)
   }
 
   if (summary.foreignCurrency > 0) {
@@ -749,6 +1037,7 @@ export async function syncStripeBalanceTransactions(
 
   log.info('stripe balance-transaction sync done', {
     connectionId: connection.id,
+    windows,
     ...summary,
   })
   return summary

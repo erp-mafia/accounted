@@ -24,6 +24,13 @@ export interface StripeConnection {
   transaction_sync_enabled: boolean
   /** Balance-transaction polling cursor (max `created` processed). */
   last_balance_txn_synced_at: string | null
+  /**
+   * The feed start (a connection moment or backfill day) whose open Stripe
+   * balance the feed has read; null means connected_at. A cursor at or before
+   * it starts a first run (transaction-sync planFetch). Optional: absent until
+   * migration 20261113002101 has run.
+   */
+  balance_txn_feed_start?: string | null
   error_message: string | null
   connected_at: string | null
   disconnected_at: string | null

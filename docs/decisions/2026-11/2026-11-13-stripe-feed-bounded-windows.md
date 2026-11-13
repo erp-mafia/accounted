@@ -1,0 +1,1 @@
+[2026-11-13] The Stripe feed reads its 24h overlap as one window, then bounded windows oldest first, moving its cursor per window and recording its feed start; 10 000 per run pauses, and a nightly connection whose 120 s share ends without moving its cursor fails loudly, as on main.

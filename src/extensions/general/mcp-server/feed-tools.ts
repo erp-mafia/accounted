@@ -208,12 +208,23 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
         if (!result.ok) throw backfillRefusal(provider, result.reason, result.error)
 
         const lands = LANDS_IN[provider]
+        // A run stops at its time budget or its bound on rows read: what it
+        // read is in, the rest of the period is not yet.
+        const paused = (result.summary as { deadlineReached?: boolean } | null)?.deadlineReached === true
+        const verb = paused ? 'Started fetching' : 'Fetched'
         const instructions =
           result.from === null
             ? `Nothing older was fetched: the books already hold everything through ${result.bookedThrough} (an imported ledger, or a manual voucher on 1686). Pass include_booked=true only if those vouchers do not hold this money; otherwise booking these rows would book it twice.`
-            : result.bookedThrough
-              ? `Fetched from the day after ${result.bookedThrough}: the books already hold the days up to it, so they were skipped. Rows land ${lands}. Pass include_booked=true only if those vouchers do not hold this money.`
-              : `Fetched from ${String(args.from)}. Rows land ${lands}; rows already imported were skipped.`
+            : [
+                result.bookedThrough
+                  ? `${verb} from the day after ${result.bookedThrough}: the books already hold the days up to it, so they were skipped. Rows land ${lands}. Pass include_booked=true only if those vouchers do not hold this money.`
+                  : `${verb} from ${String(args.from)}. Rows land ${lands}; rows already imported were skipped.`,
+                ...(paused
+                  ? [
+                      'The run stopped before today (summary.deadlineReached), so only the start of the period is in. To fetch the rest, call gnubok_backfill_feed again with from set to the day of last_synced_at (gnubok_list_feed_connections); the nightly sync also goes on from there when nightly_sync is on.',
+                    ]
+                  : []),
+              ].join(' ')
         return {
           connection_id: result.connectionId,
           provider,

@@ -18,6 +18,8 @@ import {
   STRIPE_SYNC_TIMEOUT_MS,
   type StripeSyncPayload,
 } from '../lib/settings-actions'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 
 const originalFetch = globalThis.fetch
 
@@ -283,5 +285,19 @@ describe('syncSummary', () => {
       reason: 'feed',
       values: { fetched: 5, imported: 2, foreignCurrency: 3 },
     })
+  })
+
+  it('reports a run stopped at its bound as paused, in words the panel has (accounted#209)', () => {
+    // The button's run now stops at the feed's per-run bound and goes on at
+    // the next sync: it must not read as a complete one.
+    expect(syncSummary(syncPayload({ fetched: 10_000, imported: 9_800, deadlineReached: true }))).toEqual({
+      reason: 'partial',
+      values: { fetched: 10_000, imported: 9_800, foreignCurrency: 0, errors: 0 },
+    })
+    for (const messages of [sv, en]) {
+      expect(messages.settings_payments.sync_partial_title).toBeTruthy()
+      expect(messages.settings_payments.sync_partial).toContain('{fetched}')
+      expect(messages.settings_payments.sync_partial).toContain('{imported}')
+    }
   })
 })

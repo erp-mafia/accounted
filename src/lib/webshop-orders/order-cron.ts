@@ -36,7 +36,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-import { getErrorMessage, looksLikeUserFacingSwedish } from '@/lib/errors/get-error-message'
+import { userFacingFailure } from '@/lib/errors/get-error-message'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
@@ -77,16 +77,11 @@ export interface CronConnection {
 const FAILURE_NOTE_MAX = 400
 
 /**
- * The text a failed nightly sync leaves on its connection. Never the raw
- * exception: the lead sentence is ours, and what follows is the thrown error
- * through the app's error mapping, kept only when that reads as a Swedish
- * sentence written for a user (the mapping passes a few keywords through,
- * "session" among them, that an English provider error can carry).
+ * The text a failed nightly sync leaves on its connection: our lead
+ * sentence, then the error as userFacingFailure reads it.
  */
 export function failureNote(label: string, error: unknown): string {
-  const retry = 'Vi försöker igen nästa natt.'
-  const mapped = getErrorMessage(error, { fallback: retry })
-  const detail = looksLikeUserFacingSwedish(mapped) ? mapped : retry
+  const detail = userFacingFailure(error, 'Vi försöker igen nästa natt.')
   return `Den senaste automatiska hämtningen från ${label} misslyckades. ${detail}`.slice(0, FAILURE_NOTE_MAX)
 }
 

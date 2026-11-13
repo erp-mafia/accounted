@@ -80,6 +80,8 @@ function serviceReturning(...results: Array<{ data?: unknown; error?: unknown }>
 }
 
 const ACTIVE: Row = { id: 'c1', company_id: 'company-1', status: 'active', cursor_at: '2026-09-01T00:00:00.000Z' }
+/** What a sync throws when no run can get through (the Stripe feed's status). */
+const TOO_LARGE = 'Historiken hos Stripe är för stor för att hämtas automatiskt. Supporten har fått veta det.'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -136,6 +138,25 @@ describe('POST /sync', () => {
     expect(res.status).toBe(404)
     expect((await res.json()).error).toBe('Ingen anslutning.')
   })
+
+  it('answers the Swedish sentence a sync failed with, not a "try again" that fails the same way', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    const res = await feedSyncRoute(spec({ sync: vi.fn().mockRejectedValue(new Error(TOO_LARGE)) })).handler(
+      request('POST'),
+      context(supabase),
+    )
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toBe(TOO_LARGE)
+
+    // A provider's own English still reads as the generic sentence.
+    serviceReturning({ data: [ACTIVE] })
+    const english = await feedSyncRoute(spec({ sync: vi.fn().mockRejectedValue(new Error('upstream exploded')) })).handler(
+      request('POST'),
+      context(supabase),
+    )
+    expect((await english.json()).error).toBe('Synkroniseringen misslyckades. Försök igen.')
+  })
 })
 
 describe('POST /backfill', () => {
@@ -171,6 +192,16 @@ describe('POST /backfill', () => {
     expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2026-01-01T00:00:00.000Z')
     expect(ledgerCoveredThrough).toHaveBeenCalledWith(service.supabase, 'company-1', ['1686'], '2026-01-01')
     expect((await res.json()).booked_through).toBeNull()
+  })
+
+  it('answers the Swedish sentence the sync failed with', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    enqueue({ data: [] })
+    const s = spec({ sync: vi.fn().mockRejectedValue(new Error(TOO_LARGE)) })
+    const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-01-01' }), context(supabase))
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toBe(TOO_LARGE)
   })
 
   it('starts after the days the books already hold, never inside them (crm#1386)', async () => {

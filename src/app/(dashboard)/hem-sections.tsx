@@ -316,6 +316,12 @@ export async function HemPanesSection({
   // last review (one indexed probe for a company that never had a rule), with
   // the agent that booked each posting.
   const grantReviewPromise = loadGrantReview(supabase, companyId, { withAgents: true })
+  // Whether the company has one posted entry: asked as "is there one", never
+  // "how many" (the exact count walked every verifikat of the company on each
+  // Hem load: 154 000 for the largest, 230 ms). Two places read it, each only
+  // in the one state it matters in.
+  const firstPostedEntry = () =>
+    supabase.from('journal_entries').select('id').eq('company_id', companyId).in('status', ['posted', 'reversed']).limit(1)
   const [
     worklist,
     expensePayouts,
@@ -363,14 +369,9 @@ export async function HemPanesSection({
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
       // One posted entry distinguishes "brand-new empty ledger" from "all
-      // caught up" in the Att göra empty state. Asked only while the setup
-      // checklist is open, the one state that reads it, and as "is there
-      // one", not "how many": the exact count walked every verifikat of the
-      // company on each Hem load (154 000 for the largest, 230 ms) for an
-      // answer nothing showed.
-      setupOpen
-        ? supabase.from('journal_entries').select('id').eq('company_id', companyId).in('status', ['posted', 'reversed']).limit(1)
-        : null,
+      // caught up" in the Att göra empty state, read only while the setup
+      // checklist is open.
+      setupOpen ? firstPostedEntry() : null,
       attestsDuePromise,
       // The several-invoice payments among them get rows of their own.
       suggestedMatchesPromise,
@@ -394,11 +395,16 @@ export async function HemPanesSection({
   // ledger with no bank row on its way is not "all done": finishing the books
   // act without a bank lands exactly here. Asked only for that company (no
   // posted entry, no active connection), so nobody else pays for the count,
-  // and a failed read keeps the ordinary copy, as above.
+  // and a failed read keeps the ordinary copy, as above. The list above asks
+  // for a posted entry only while the checklist is open, so a company with a
+  // closed checklist and no active connection asks for it here (one row).
   let noBankFeed = false
-  if (!setupOpen && !postedEntries.error && (postedEntries.count || 0) === 0 && !hasActiveBankConnection) {
-    const { count: transactionCount, error: transactionCountError } = await countTransactions(companyId)
-    noBankFeed = !transactionCountError && !hasBankFeed({ activeBankConnections: 0, transactionCount: transactionCount || 0 })
+  if (!setupOpen && !hasActiveBankConnection) {
+    const posted = await firstPostedEntry()
+    if (!posted.error && (posted.data ?? []).length === 0) {
+      const { count: transactionCount, error: transactionCountError } = await countTransactions(companyId)
+      noBankFeed = !transactionCountError && !hasBankFeed({ activeBankConnections: 0, transactionCount: transactionCount || 0 })
+    }
   }
 
   // Same day-math as the bank_connection_expiring notice predicate
