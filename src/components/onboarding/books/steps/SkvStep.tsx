@@ -12,7 +12,7 @@ import { fmtKr } from '../engines/cash-draw'
 import { SkvHandshake } from '../ui/SkvHandshake'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
-import { openOmbudDeepLink, verifyOmbudGrant } from '@/components/skatteverket/ombud-appoint'
+import { openOmbudDeepLink, verifyOmbudGrantWithRetries } from '@/components/skatteverket/ombud-appoint'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 
 const RETURN_TO = '/onboarding/books?station=skv'
@@ -54,6 +54,10 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const ombudMode = Boolean(flags.skvOmbud)
   // Set once the ombud deep link is open: the next return to this page checks the register.
   const awaitingOmbud = useRef(false)
+  // The register check in flight, with its waits when the server paces it: a
+  // new signing, or leaving the step, drops it.
+  const ombudCheck = useRef<AbortController | null>(null)
+  useEffect(() => () => ombudCheck.current?.abort(), [])
 
   const at = useCallback((ms: number, fn: () => void) => {
     timers.current.push(window.setTimeout(fn, ms))
@@ -132,12 +136,24 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       if (document.visibilityState !== 'visible' || !awaitingOmbud.current) return
       if (phaseRef.current !== 'leaving' && phaseRef.current !== 'away') return
       awaitingOmbud.current = false
-      const outcome = await verifyOmbudGrant(errorLocale)
+      ombudCheck.current?.abort()
+      const run = new AbortController()
+      ombudCheck.current = run
+      // Paced by the server (one check a minute): the step opens again and
+      // says it checks again by itself, instead of asking for a new click.
+      const outcome = await verifyOmbudGrantWithRetries(errorLocale, run.signal, (seconds) => {
+        setAttn(t('skv_ombud_wait_retrying', { seconds }))
+        dispatch({ type: 'SKV_PHASE', phase: 'open' })
+      })
+      if (!outcome) return
+      ombudCheck.current = null
       if (outcome.result === 'granted') {
+        setAttn(null)
         arrive()
         return
       }
       if (outcome.result === 'waiting') {
+        setAttn(null)
         setOmbudWaiting(true)
       } else {
         setAttn(outcome.result === 'rate_limited' ? t('skv_ombud_wait') : (outcome.error ?? t('skv_failed')))
@@ -149,6 +165,8 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   }, [arrive, dispatch, errorLocale, t])
 
   async function appointOmbud() {
+    ombudCheck.current?.abort()
+    ombudCheck.current = null
     setAttn(null)
     setOmbudWaiting(false)
     dispatch({ type: 'SKV_PHASE', phase: 'leaving' })

@@ -423,6 +423,16 @@ describe('POST /system-connection/verify: one check a minute', () => {
     expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
   })
 
+  it('the 429 names the wait that is left of the minute, in the body and in Retry-After', async () => {
+    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(20_000) })
+    const res = await verify()
+    expect(res.status).toBe(429)
+    const body = (await res.json()) as { retry_after_seconds: number }
+    expect(body.retry_after_seconds).toBeGreaterThanOrEqual(39)
+    expect(body.retry_after_seconds).toBeLessThanOrEqual(40)
+    expect(res.headers.get('Retry-After')).toBe(String(body.retry_after_seconds))
+  })
+
   it('back from signing within the minute: the appoint button checked, then minted the link, so the check runs', async () => {
     mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(19_900) })
     const res = await verify()

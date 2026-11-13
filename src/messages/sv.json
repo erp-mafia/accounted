@@ -2763,7 +2763,15 @@
     "accept_wrong_email_title": "Inbjudan gäller en annan e-postadress",
     "accept_wrong_email_body": "Din inbjudan är kvar. Logga ut och logga in med den adress inbjudan skickades till för att gå med.",
     "accept_spent_title": "Inbjudan kunde inte användas",
-    "accept_spent_body": "Inbjudan har redan använts eller gått ut. Be den som bjöd in dig att skicka en ny."
+    "accept_spent_body": "Inbjudan har redan använts eller gått ut. Be den som bjöd in dig att skicka en ny.",
+    "header_already_member": "Du är redan med",
+    "already_member_description": "Du har redan tackat ja till den här inbjudan och är medlem.",
+    "already_member_open": "Öppna {appName}",
+    "used_title": "Inbjudan har redan använts",
+    "used_description": "Var det du som tackade ja? Då är du redan med och kan logga in. Annars behöver du be den som bjöd in dig om en ny inbjudan.",
+    "used_other_account_description": "Kontot du är inloggad med är inte med. Logga in med kontot som tackade ja, eller be den som bjöd in dig om en ny inbjudan.",
+    "revoked_title": "Inbjudan har dragits tillbaka",
+    "revoked_description": "Be personen som bjöd in dig att skicka en ny inbjudan."
   },
   "settings_company": {
     "danger_delete_row_label": "Företaget tas bort för alla användare",
@@ -15053,6 +15061,7 @@
     "skv_ombud_connect": "Utse {appName} som ombud",
     "skv_ombud_hold": "Hos Skatteverket. Signera med BankID och kom sedan tillbaka hit …",
     "skv_ombud_wait": "Vänta en minut och försök igen.",
+    "skv_ombud_wait_retrying": "Skatteverket fick nyss en fråga om ombudet. Kontrollerar igen om {seconds} sekunder.",
     "skv_ombud_link_failed": "Länken till Skatteverket kunde inte skapas. Försök igen.",
     "skv_abandoned": "Fliken stängdes innan Skatteverket svarade. Försök igen.",
     "v_skv_connected": "Skattekontot hämtas från Skatteverket",
@@ -16436,6 +16445,7 @@
     "reopen": "Öppna länken igen",
     "withdrawn_hint": "Utse {appName} som ombud för företaget igen och signera hos Skatteverket.",
     "rate_limited": "Vänta en minut och försök igen.",
+    "rate_limited_retrying": "Skatteverket fick nyss en fråga om ombudet. Kontrollerar igen om {seconds} sekunder.",
     "link_failed": "Länken till Skatteverket kunde inte skapas",
     "verify_failed": "Ombudet kunde inte kontrolleras"
   },

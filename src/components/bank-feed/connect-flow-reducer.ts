@@ -92,6 +92,14 @@ export interface FlowState {
    * Börja om or Försök igen. Null while the poll runs or has not started.
    */
   pollError: { reason: PollGiveUpReason; text: string } | null
+  /**
+   * The person closed the flow over a running BankID (for #206): the consent
+   * poll stops before the half-made connection is removed, and an answer
+   * that was already on its way is dropped, so no poll is sent for (and no
+   * give-up shown about) a connection we removed ourselves. Never unset: the
+   * surface closes right after.
+   */
+  closing: boolean
   /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
   returned: FlowReturn | null
   starting: boolean
@@ -156,6 +164,7 @@ export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowSta
     stepsSeen: [],
     failure: returned?.result === 'error' ? { code: returned.code, text: null } : null,
     pollError: null,
+    closing: false,
     returned,
     starting: false,
     startError: null,
@@ -203,6 +212,8 @@ export type FlowAction =
   | { type: 'poll_retry' }
   /** Börja om after the poll was refused: back to the BankID start (a resumed connection: a new connection from the bank step). */
   | { type: 'start_over' }
+  /** The person closes the flow: the poll stops now and late answers are dropped. */
+  | { type: 'closing' }
   | { type: 'account_toggled'; uid: string }
   | { type: 'ledger_set'; uid: string; ledger: string }
   | { type: 'activate' }
@@ -217,9 +228,20 @@ export type FlowAction =
 
 /** Whether the bank is still working on the consent: the poll keeps asking. */
 export function pollingActive(state: FlowState): boolean {
-  if (state.step !== 'bankid' || !state.connectionId || state.pollError) return false
+  if (state.closing || state.step !== 'bankid' || !state.connectionId || state.pollError) return false
   if (state.mode === 'resume' && state.attempt === null) return state.pollState !== 'failed' && state.pollState !== 'valid'
   return state.attempt !== null && (state.pollState === null || state.pollState === 'pending' || state.pollState === 'partially_authorised')
+}
+
+/**
+ * Whether closing the flow removes its connection: a half-made one (a BankID
+ * that was closed over, an unsaved selection) goes so no row lingers. A live
+ * connection stays, and so does one resumed for the second signatory (it
+ * belongs to the first); one the person came back to from the bank's page is
+ * their own and goes.
+ */
+export function removesConnectionOnClose(state: Pick<FlowState, 'connectionId' | 'connection' | 'mode' | 'returned'>): boolean {
+  return Boolean(state.connectionId) && !state.connection && (state.mode !== 'resume' || state.returned !== null)
 }
 
 /** The screen after the accounts are live: the payments offer when it stands, else the finished screen. */
@@ -401,6 +423,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, starting: false, startError: action.message }
 
     case 'polled': {
+      // An answer that was on its way when the person closed the flow.
+      if (state.closing) return state
       const { poll } = action
       const attempt = mergeChallenge(state, poll)
       const base: FlowState = {
@@ -426,6 +450,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     }
 
     case 'poll_gave_up':
+      // A refusal about a connection the close itself removed is not news.
+      if (state.closing) return state
       return { ...state, pollError: { reason: action.reason, text: action.text } }
 
     case 'poll_retry':
@@ -433,6 +459,9 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case 'start_over':
       return startOver(state)
+
+    case 'closing':
+      return state.closing ? state : { ...state, closing: true }
 
     case 'account_toggled':
       return { ...state, selection: toggleAccount(state.accounts, state.selection, action.uid), activateError: null }

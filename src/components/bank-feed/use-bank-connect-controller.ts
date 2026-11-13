@@ -10,7 +10,7 @@ import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { resolveBankByName, type SigningApproach } from './bank-help'
-import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, type FlowAction, type FlowState } from './connect-flow-reducer'
+import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, type FlowAction, type FlowState } from './connect-flow-reducer'
 import {
   isBankBusy,
   isSecondConsent,
@@ -263,9 +263,13 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   const asksPsuAuthoriserId = takesPsuAuthoriserId({ bic: state.bank?.bic ?? null })
   const typedAuthoriser = asksPsuAuthoriserId ? normalizePsuAuthoriserId(state.psuAuthoriserId) : null
   const typedPsuAuthoriserId = typedAuthoriser?.ok ? typedAuthoriser.value : null
+  // The running loop's stop, so a close can end it in the same tick as the
+  // click, before the connection is removed (the effect's own cleanup only
+  // runs after the next render, a poll too late).
+  const stopConsentPoll = useRef<(() => void) | null>(null)
   useEffect(() => {
     if (!polling || !connectionId) return
-    return startPollLoop({
+    const stop = startPollLoop({
       poll: (signal) =>
         backendRef.current.bank.pollConnection(connectionId, signal, {
           ...(typedPersonalNumber ? { personal_number: typedPersonalNumber } : {}),
@@ -279,6 +283,11 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
       immediate: pollAtOnce,
       onGiveUp: (error, reason) => dispatch({ type: 'poll_gave_up', reason, text: pollGiveUpText.current(error, reason) }),
     })
+    stopConsentPoll.current = stop
+    return () => {
+      stop()
+      if (stopConsentPoll.current === stop) stopConsentPoll.current = null
+    }
   }, [polling, connectionId, secondSigner, pollAtOnce, typedPersonalNumber, typedPsuAuthoriserId])
 
   // Svea's second round went through: the connection is live, run the first
@@ -494,11 +503,16 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   }
 
   // Closing over a running BankID or an unsaved selection: the half-made
-  // connection is removed so no row lingers. A connection resumed for the
-  // second signatory belongs to the first and stays; one the person came
-  // back to from the bank's page is their own and goes.
+  // connection is removed so no row lingers (removesConnectionOnClose says
+  // which). The consent poll ends first, in this same tick: the request in
+  // flight is aborted, the pending tick cancelled, and the reducer drops an
+  // answer that still lands, so nothing asks about a connection that is
+  // being removed (for #206: one more poll went out and was refused).
   async function abandon() {
-    if (connectionId && !state.connection && (state.mode !== 'resume' || state.returned !== null)) {
+    stopConsentPoll.current?.()
+    stopConsentPoll.current = null
+    dispatch({ type: 'closing' })
+    if (connectionId && removesConnectionOnClose(state)) {
       try {
         await backend.bank.deleteConnection(connectionId)
       } catch {

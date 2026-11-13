@@ -2763,7 +2763,15 @@
     "accept_wrong_email_title": "The invitation is for a different email address",
     "accept_wrong_email_body": "Your invitation is still valid. Sign out and sign in with the address the invitation was sent to in order to join.",
     "accept_spent_title": "The invitation could not be used",
-    "accept_spent_body": "The invitation has already been used or has expired. Ask the person who invited you to send a new one."
+    "accept_spent_body": "The invitation has already been used or has expired. Ask the person who invited you to send a new one.",
+    "header_already_member": "You have already joined",
+    "already_member_description": "You have already accepted this invitation and are a member.",
+    "already_member_open": "Open {appName}",
+    "used_title": "The invitation has already been used",
+    "used_description": "Was it you who accepted it? Then you have already joined and can sign in. Otherwise, ask the person who invited you for a new invitation.",
+    "used_other_account_description": "The account you are signed in with has not joined. Sign in with the account that accepted it, or ask the person who invited you for a new invitation.",
+    "revoked_title": "The invitation has been withdrawn",
+    "revoked_description": "Ask the person who invited you to send a new invitation."
   },
   "settings_company": {
     "danger_delete_row_label": "The company is removed for every user",
@@ -15053,6 +15061,7 @@
     "skv_ombud_connect": "Appoint {appName} as ombud",
     "skv_ombud_hold": "At Skatteverket. Sign with BankID, then come back here …",
     "skv_ombud_wait": "Wait a minute and try again.",
+    "skv_ombud_wait_retrying": "Skatteverket was asked about the ombud a moment ago. Checking again in {seconds} seconds.",
     "skv_ombud_link_failed": "The link to Skatteverket could not be created. Try again.",
     "skv_abandoned": "The tab closed before Skatteverket answered. Try again.",
     "v_skv_connected": "The tax account is fetched from Skatteverket",
@@ -16436,6 +16445,7 @@
     "reopen": "Open the link again",
     "withdrawn_hint": "Appoint {appName} as the company's ombud again and sign at Skatteverket.",
     "rate_limited": "Wait a minute and try again.",
+    "rate_limited_retrying": "Skatteverket was asked about the ombud a moment ago. Checking again in {seconds} seconds.",
     "link_failed": "The link to Skatteverket could not be created",
     "verify_failed": "The ombud could not be checked"
   },

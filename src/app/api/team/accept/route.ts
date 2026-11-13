@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
 import { readPreparedProfile } from '@/lib/company/client-profile'
+import type { InviteGoneReason } from '@/lib/auth/invite-gone'
 
 interface TeamInviteRow {
   id: string
@@ -15,13 +16,73 @@ interface TeamInviteRow {
   teams: { name: string; kind: string } | null
 }
 
+// One sentence per reason (lib/auth/invite-gone.ts); the invite page shows
+// its own localized text and reads only `reason`.
+const INVITE_GONE_MESSAGE: Record<InviteGoneReason, string> = {
+  used: 'Inbjudan har redan använts. Var det du som tackade ja kan du logga in.',
+  used_other_account:
+    'Inbjudan har redan använts, och kontot du är inloggad med är inte med. Logga in med kontot som tackade ja eller be om en ny inbjudan.',
+  revoked: 'Inbjudan har dragits tillbaka. Be den som bjöd in dig att skicka en ny.',
+  expired: 'Inbjudan har gått ut. Be den som bjöd in dig att skicka en ny.',
+}
+
+function inviteGone(reason: InviteGoneReason) {
+  return NextResponse.json({ error: INVITE_GONE_MESSAGE[reason], reason }, { status: 410 })
+}
+
+/**
+ * The answer for an invitation whose status is no longer 'pending'. This
+ * used to be one sentence, "Inbjudan har redan använts", for a revoked and
+ * an expired invitation too, and it sent the person who had already joined
+ * off to ask for a new one (for #206).
+ *
+ * The endpoint is public, so the answer carries the invitation's own state
+ * and nothing about other people: no e-mail, no name, and what is being
+ * joined only to the signed-in member the invitation made. Whether the
+ * caller is that member is read from their own session: an invitation is
+ * only ever accepted by the address it was sent to (POST checks it), so a
+ * signed-in caller with that address who still holds the membership has
+ * already joined, which is not an error.
+ */
+async function answerSettledInvite(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  invite: { status: string; email: string },
+  membership: { table: 'company_members' | 'team_members'; column: 'company_id' | 'team_id'; id: string },
+  joined: { type: 'company' | 'team'; name: string },
+) {
+  if (invite.status === 'revoked') return inviteGone('revoked')
+  if (invite.status === 'expired') return inviteGone('expired')
+
+  // 'accepted'. An unreadable session is an anonymous caller: the answer
+  // then says the least.
+  const { user } = await requireAuth()
+  if (!user) return inviteGone('used')
+
+  if (user.email?.toLowerCase() === invite.email.toLowerCase()) {
+    const { data: member } = await serviceClient
+      .from(membership.table)
+      .select('user_id')
+      .eq(membership.column, membership.id)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (member) {
+      return NextResponse.json({
+        data: { type: joined.type, alreadyMember: true, companyName: joined.name },
+      })
+    }
+  }
+  return inviteGone('used_other_account')
+}
+
 /**
  * GET /api/team/accept?token=xxx
  * Validates an invite token and returns invite info (for the invite page).
  * Handles both company invitations and byrå-team invitations (WL-08 invite
  * unfreeze). Team invitations resolve only for teams with kind='byra':
  * personal teams are uninvitable, so a token pointing at one is invalid.
- * No auth required: this is a public endpoint.
+ * No auth required: this is a public endpoint. An invitation that is no
+ * longer pending is answered by answerSettledInvite: 410 with a `reason`, or
+ * 200 `alreadyMember` for the signed-in person who already joined.
  */
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get('token')
@@ -39,8 +100,14 @@ export async function GET(request: NextRequest) {
     .single()
 
   if (companyInvite) {
+    const companyName = (companyInvite.companies as unknown as { name: string })?.name || 'Företag'
     if (companyInvite.status !== 'pending') {
-      return NextResponse.json({ error: 'Inbjudan har redan använts.' }, { status: 410 })
+      return answerSettledInvite(
+        serviceClient,
+        companyInvite,
+        { table: 'company_members', column: 'company_id', id: companyInvite.company_id },
+        { type: 'company', name: companyName },
+      )
     }
 
     const expired = new Date(companyInvite.expires_at) < new Date()
@@ -55,7 +122,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       data: {
         type: 'company',
-        companyName: (companyInvite.companies as unknown as { name: string })?.name || 'Företag',
+        companyName,
         email: companyInvite.email,
         expired,
         alreadyHasAccount,
@@ -80,8 +147,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Inbjudan hittades inte eller är ogiltig.' }, { status: 404 })
   }
 
+  const teamName = teamInvite.teams?.name || 'Team'
   if (teamInvite.status !== 'pending') {
-    return NextResponse.json({ error: 'Inbjudan har redan använts.' }, { status: 410 })
+    return answerSettledInvite(
+      serviceClient,
+      teamInvite,
+      { table: 'team_members', column: 'team_id', id: teamInvite.team_id },
+      { type: 'team', name: teamName },
+    )
   }
 
   const expired = new Date(teamInvite.expires_at) < new Date()
@@ -89,8 +162,6 @@ export async function GET(request: NextRequest) {
   const { data: alreadyHasAccount } = await serviceClient.rpc('check_email_exists', {
     email_to_check: teamInvite.email,
   })
-
-  const teamName = teamInvite.teams?.name || 'Team'
 
   return NextResponse.json({
     data: {
