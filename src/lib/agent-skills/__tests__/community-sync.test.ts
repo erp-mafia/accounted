@@ -89,6 +89,22 @@ describe('syncCommunityFromRepo', () => {
     expect(findCalls('agent_atom_registry', 'upsert')).toHaveLength(0)
   })
 
+  it('gives every GitHub request a timeout, so a request never answered cannot hold the run', async () => {
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    const signals: Array<AbortSignal | null | undefined> = []
+    const github = fakeGitHub({ 'ny-rutin': withoutSubmission('ny-rutin') })
+    const recording = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal)
+      return github(input, init)
+    }) as typeof fetch
+    await syncCommunityFromRepo(supabase as never, recording)
+    // The listing and one file.
+    expect(signals).toHaveLength(2)
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('never switches anything off when the repository listing answers 404 or refuses access (accounted#115)', async () => {
     for (const status of [404, 401, 403]) {
       reset()

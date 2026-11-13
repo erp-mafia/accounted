@@ -51,7 +51,7 @@ async function recordCheck(params: {
   companyId: string
   documentId: string
   checkedAt?: string
-  result?: 'passed' | 'hash_mismatch' | 'object_missing'
+  result?: 'passed' | 'hash_mismatch' | 'object_missing' | 'unreadable'
 }): Promise<string> {
   const { rows } = await getPool().query<{ id: string }>(
     `INSERT INTO public.document_integrity_checks
@@ -206,6 +206,20 @@ describe('next_documents_for_integrity_check ordering', () => {
     )
     const mine = rows.map((r) => r.id).filter((id) => [never, stale, fresh].includes(id))
     expect(mine).toEqual([never, stale, fresh])
+  })
+
+  it('takes an unreadable outcome (migration 20261113041501) and puts the document behind the never-checked and older ones', async () => {
+    const s = await seedCompany()
+    const never = await attachDocument({ userId: s.userId, companyId: s.companyId, journalEntryId: null, fileName: 'never.pdf' })
+    const older = await attachDocument({ userId: s.userId, companyId: s.companyId, journalEntryId: null, fileName: 'older.pdf' })
+    const refused = await attachDocument({ userId: s.userId, companyId: s.companyId, journalEntryId: null, fileName: 'refused.pdf' })
+    await recordCheck({ companyId: s.companyId, documentId: older, checkedAt: '2026-01-01' })
+    // Storage refused it tonight: before the migration this row could not be written, and it headed the queue every night.
+    await recordCheck({ companyId: s.companyId, documentId: refused, result: 'unreadable' })
+
+    const { rows } = await getPool().query<{ id: string }>(`SELECT id FROM public.next_documents_for_integrity_check(1000)`)
+    const mine = rows.map((r) => r.id).filter((id) => [never, older, refused].includes(id))
+    expect(mine).toEqual([never, older, refused])
   })
 
   it('reads only the newest check per document', async () => {

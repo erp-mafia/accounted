@@ -6,8 +6,14 @@ import { isMissingRpcSignature } from '@/lib/bookkeeping/actor-rpc'
 
 export const maxDuration = 60
 
-/** Stop starting new builds after this long, well inside maxDuration. */
-const TIME_BUDGET_MS = 40_000
+/**
+ * Stop starting new work after this long. One call started at the last moment
+ * may run until the 30 s statement timeout PostgREST sets for the service
+ * role (pre_request_statement_timeout), so budget plus one call must fit
+ * maxDuration: 25 + 30 = 55 s. At 40 s it did not (40 + 30 = 70 s; a run of
+ * 48.7 s was seen in production).
+ */
+const TIME_BUDGET_MS = 25_000
 /** Companies read per pass; the loop asks again until the budget is spent. */
 const BATCH = 200
 /**
@@ -32,11 +38,12 @@ function logSkipped(
   step: 'build' | 'compaction',
   companyId: string,
   error: { code?: string; message?: string },
+  table: 'ledger_account_days' | 'ledger_tagset_days' = 'ledger_account_days',
 ): void {
   if (error.code === LOCK_NOT_AVAILABLE) {
-    log.warn(`ledger_account_days ${step} skipped`, { companyId, code: error.code })
+    log.warn(`${table} ${step} skipped`, { companyId, code: error.code })
   } else {
-    log.error(`ledger_account_days ${step} failed`, { companyId, code: error.code ?? null, reason: error.message ?? null })
+    log.error(`${table} ${step} failed`, { companyId, code: error.code ?? null, reason: error.message ?? null })
   }
 }
 
@@ -121,8 +128,8 @@ export const GET = withCronContext('cron.ledger_account_days_build', async (_req
   let tagsetsBuilt = 0
   let tagsetsCompacted = 0
   const tagsetSteps = [
-    { list: 'ledger_tagset_days_pending', work: 'build_ledger_tagset_days' },
-    { list: 'ledger_tagset_days_unfolded', work: 'compact_ledger_tagset_days' },
+    { list: 'ledger_tagset_days_pending', work: 'build_ledger_tagset_days', name: 'build' },
+    { list: 'ledger_tagset_days_unfolded', work: 'compact_ledger_tagset_days', name: 'compaction' },
   ] as const
   tagsets: for (const step of tagsetSteps) {
     while (Date.now() - started < TIME_BUDGET_MS) {
@@ -140,7 +147,7 @@ export const GET = withCronContext('cron.ledger_account_days_build', async (_req
         if (workError) {
           failed.add(companyId)
           skipped++
-          ctx.log.warn('ledger_tagset_days step skipped', { companyId, step: step.work, code: workError.code })
+          logSkipped(ctx.log, step.name, companyId, workError, 'ledger_tagset_days')
           continue
         }
         if (step.work === 'build_ledger_tagset_days') tagsetsBuilt++

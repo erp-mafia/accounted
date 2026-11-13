@@ -11,6 +11,19 @@ vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 vi.mock('@/lib/arkiv/facts/derive-company', () => ({ deriveCompanyFacts: vi.fn(async () => ({ recorded: 3, retired: 1, predicates: ['revenue_12m'] })) }))
 vi.mock('@/lib/commitments/agreements', () => ({ refreshManualAgreements: vi.fn() }))
 
+// Only the error level is swapped: the run's one error line is asserted.
+const logError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
+
 import { GET } from '../route'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { observeObligations } from '@/lib/arkiv/agreements/observe'
@@ -53,7 +66,7 @@ describe('GET /api/arkiv/derive/cron', () => {
     ;(enqueueDocumentJob as ReturnType<typeof vi.fn>).mockResolvedValue(true)
     const { status, body } = await parseJsonResponse(await call())
     expect(status).toBe(200)
-    expect(body).toEqual({ ok: true, companies: 1, checked: 3, matched: 1, missed: 1, rederived: 1, facts: { companies: 1, recorded: 3, retired: 1, failed: 0 } })
+    expect(body).toEqual({ ok: true, companies: 1, checked: 3, matched: 1, missed: 1, rederived: 1, failed: 0, facts: { companies: 1, recorded: 3, retired: 1, failed: 0 } })
     expect(observeObligations).toHaveBeenCalledTimes(1)
     expect(observeObligations).toHaveBeenCalledWith(mockSupabase, 'co-1', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))
     expect(enqueueDocumentJob).toHaveBeenCalledTimes(1)
@@ -68,6 +81,37 @@ describe('GET /api/arkiv/derive/cron', () => {
     expect(status).toBe(200)
     expect(body).toMatchObject({ companies: 1 })
     expect(observeObligations).toHaveBeenCalledWith(mockSupabase, 'co-1', expect.any(String))
+  })
+
+  it('keeps going when one company fails, and reports it as one error', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1,co-2,co-3'
+    enqueue({
+      data: ['co-1', 'co-2', 'co-3'].map((company_id) => ({ company_id, source_document_id: `doc-${company_id}`, derived_at: yesterday })),
+    })
+    ;(observeObligations as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, companyId: string) => {
+      if (companyId === 'co-1') throw new Error('transactions fetch failed: timeout')
+      return { checked: 2, matched: 1, missed: 0 }
+    })
+    const { status, body } = await parseJsonResponse(await call())
+    // Before: co-1 threw, co-2 and co-3 were never observed, and the run answered 500.
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, companies: 3, checked: 4, matched: 2, failed: 1 })
+    expect(observeObligations).toHaveBeenCalledTimes(3)
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('arkiv derive failed for some companies', {
+      observeFailed: 1,
+      factsFailed: 0,
+      manualFailed: 0,
+      companies: ['co-1'],
+    })
+  })
+
+  it('answers 500 when every company failed', async () => {
+    enqueue({ data: [{ company_id: 'co-1', source_document_id: 'doc-1', derived_at: yesterday }] })
+    ;(observeObligations as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'))
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(500)
+    expect(body).toMatchObject({ ok: false, companies: 1, failed: 1 })
   })
 
   it('answers 500 when the agreements cannot be read', async () => {

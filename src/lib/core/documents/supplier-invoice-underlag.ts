@@ -38,12 +38,15 @@ const log = createLogger('supplier-invoice-underlag')
  * Returns the journal entry id the document was anchored to, or null when
  * nothing needed doing (no document, already anchored, no eligible verifikat).
  * Never throws: every caller runs after a committed, immutable booking, so a
- * failure here must be logged, not surfaced.
+ * failure here must be logged, not surfaced. A caller that counts failures
+ * (the nightly sweep) passes `trace`; `trace.failed` is set when the anchor
+ * write failed or something threw, as opposed to nothing needing doing.
  */
 export async function anchorSupplierInvoiceDocument(
   supabase: SupabaseClient,
   companyId: string,
   supplierInvoiceId: string,
+  trace?: { failed?: boolean },
 ): Promise<string | null> {
   try {
     const { data: invoice } = await supabase
@@ -109,6 +112,7 @@ export async function anchorSupplierInvoiceDocument(
       .select('id')
 
     if (error) {
+      if (trace) trace.failed = true
       log.warn('failed to anchor supplier invoice document to verifikat', {
         companyId,
         supplierInvoiceId,
@@ -133,6 +137,7 @@ export async function anchorSupplierInvoiceDocument(
     }
     return entryId
   } catch (err) {
+    if (trace) trace.failed = true
     log.warn('anchorSupplierInvoiceDocument threw', {
       companyId,
       supplierInvoiceId,
@@ -268,6 +273,8 @@ export interface FloatingDocumentSweepResult {
   candidates: number
   /** Documents actually anchored to a verifikat this run. */
   anchored: number
+  /** Documents whose anchor write failed or threw (not the ones no open verifikat can take). */
+  failed: number
 }
 
 /**
@@ -290,6 +297,12 @@ export interface FloatingDocumentSweepResult {
  *
  * Meant to run under the service-role client from a cron: RLS would otherwise
  * scope the candidate scan to one user's companies.
+ *
+ * Throws when the candidate scan fails, so the cron run fails: answered as
+ * zero candidates, a broken scan looked like a clean night (the #2022 embed
+ * error did exactly that). Newest invoices first: a document no open
+ * verifikat can take stays a candidate every night, and without an order
+ * enough of those could fill the limit ahead of last night's failures.
  */
 export async function sweepFloatingSupplierInvoiceDocuments(
   supabase: SupabaseClient,
@@ -308,22 +321,30 @@ export async function sweepFloatingSupplierInvoiceDocuments(
     .or('payment_journal_entry_id.not.is.null,registration_journal_entry_id.not.is.null')
     .is('document.journal_entry_id', null)
     .eq('document.is_current_version', true)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true })
     .limit(limit)
 
   if (error) {
-    log.warn('floating-document sweep query failed', { reason: error.message })
-    return { candidates: 0, anchored: 0 }
+    throw new Error(`floating-document sweep query failed: ${error.message}`)
   }
 
   const rows = (data ?? []) as unknown as Array<{ id: string; company_id: string }>
   let anchored = 0
+  let failed = 0
   for (const row of rows) {
-    if (await anchorSupplierInvoiceDocument(supabase, row.company_id, row.id)) anchored++
+    const trace: { failed?: boolean } = {}
+    if (await anchorSupplierInvoiceDocument(supabase, row.company_id, row.id, trace)) anchored++
+    else if (trace.failed) failed++
   }
   if (rows.length > 0) {
-    log.info('floating-document sweep complete', { candidates: rows.length, anchored })
+    log.info('floating-document sweep complete', { candidates: rows.length, anchored, failed })
   }
-  return { candidates: rows.length, anchored }
+  // One line per run, not one per document: each failure is a warning above.
+  if (failed > 0) {
+    log.error('floating-document sweep could not anchor some documents', { candidates: rows.length, anchored, failed })
+  }
+  return { candidates: rows.length, anchored, failed }
 }
 
 export async function reanchorOrphanedSupplierInvoiceDocuments(

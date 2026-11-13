@@ -163,4 +163,65 @@ describe('GET /api/v1/operations/:id', () => {
     const res = await get()
     expect(res.status).toBe(200)
   })
+
+  describe('an operation whose request was killed', () => {
+    function stale(startedMsAgo: number, update: { data?: unknown; error?: unknown } = { data: [{ id: OPERATION_ID }] }) {
+      const row = {
+        ...OPERATION_ROW,
+        status: 'running',
+        started_at: new Date(Date.now() - startedMsAgo).toISOString(),
+        completed_at: null,
+        result: null,
+      }
+      const mock = createTableMockSupabase({
+        operations: (chain) => {
+          if (chain.some((c) => c.method === 'update')) return update
+          const select = chain.find((c) => c.method === 'select')?.args[0]
+          return { data: select === 'company_id' ? { company_id: COMPANY_ID } : row }
+        },
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+      return mock
+    }
+
+    it('is reported as failed with OPERATION_ABANDONED once it is older than any route may run, in the same shape', async () => {
+      const mock = stale(16 * 60_000)
+
+      const res = await get()
+
+      expect(res.status).toBe(200)
+      const { data } = await res.json()
+      expect(data).toMatchObject({
+        operation_id: OPERATION_ID,
+        type: 'fiscal_periods.year_end',
+        status: 'failed',
+        result: null,
+        error: { code: 'OPERATION_ABANDONED', message: expect.stringContaining('may be partly or fully done') },
+        completed_at: expect.any(String),
+        poll_url: `/api/v1/operations/${OPERATION_ID}`,
+      })
+      // Written once, guarded on the row still running.
+      expect(mock.payloads('operations', 'update')).toEqual([
+        { status: 'failed', completed_at: expect.any(String), error: expect.objectContaining({ code: 'OPERATION_ABANDONED' }) },
+      ])
+      expect(mock.findCalls('operations', 'eq')).toContainEqual(['status', 'running'])
+    })
+
+    it('stays running while its request may still be alive', async () => {
+      const mock = stale(10 * 60_000)
+      const res = await get()
+      expect((await res.json()).data.status).toBe('running')
+      expect(mock.payloads('operations', 'update')).toEqual([])
+    })
+
+    it('answers the stored row when another poll or the request itself resolved it first', async () => {
+      // The guarded write matched nothing; the re-read is what is answered.
+      const mock = stale(16 * 60_000, { data: [] })
+      const res = await get()
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.status).toBe('running')
+      expect(mock.payloads('operations', 'update')).toHaveLength(1)
+    })
+  })
 })

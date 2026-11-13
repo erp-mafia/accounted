@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 
 const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
@@ -35,9 +36,15 @@ import {
 
 type RpcResult = { data: unknown; error: { code?: string; message?: string } | null }
 
-function mockSupabase(results: RpcResult[]) {
+/**
+ * `deliveries`: what the two event_deliveries reads answer, in order: the
+ * claimed deliveries on their last attempt (before the claim), then the ones
+ * of them that are dead with the claim's error (after it). None by default.
+ */
+function mockSupabase(results: RpcResult[], deliveries: TableMockResult[] = [{ data: [] }]) {
   const rpc = vi.fn(async (_name: string, _args: Record<string, unknown>) => results.shift() ?? { data: [], error: null })
-  return { client: { rpc } as unknown as SupabaseClient, rpc }
+  const table = createTableMockSupabase({ event_deliveries: deliveries })
+  return { client: { rpc, from: table.supabase.from } as unknown as SupabaseClient, rpc, table }
 }
 
 function delivery(
@@ -75,9 +82,10 @@ afterEach(() => {
 describe('dispatchEventOutbox', () => {
   it('makes no database call with the mode off', async () => {
     vi.stubEnv('EVENT_OUTBOX_MODE', undefined)
-    const { client, rpc } = mockSupabase([])
+    const { client, rpc, table } = mockSupabase([])
     const summary = await dispatchEventOutbox({ supabase: client })
     expect(rpc).not.toHaveBeenCalled()
+    expect(table.tables()).toEqual([])
     expect(summary).toEqual({
       mode: 'off',
       batches: 0,
@@ -86,6 +94,7 @@ describe('dispatchEventOutbox', () => {
       ran: 0,
       retried: 0,
       dead: 0,
+      deadOnLeaseExpiry: 0,
       oldestAgeMs: null,
       notDeployed: false,
     })
@@ -117,6 +126,7 @@ describe('dispatchEventOutbox', () => {
       ran: 0,
       retried: 0,
       dead: 0,
+      deadOnLeaseExpiry: 0,
       oldestAgeMs: 30_000,
       notDeployed: false,
     })
@@ -396,6 +406,73 @@ describe('dispatchEventOutbox: deliveries the bus deferred (step E3)', () => {
       name: 'OutboxError',
       code: 'XX000',
     })
+  })
+})
+
+describe('a delivery whose lease ran out on its last attempt', () => {
+  // The claim takes it dead in SQL and answers claimed rows only.
+  it('is logged as an error once the claim took it dead, and counted', async () => {
+    const { client, table } = mockSupabase(
+      [{ data: [], error: null }],
+      [
+        { data: [{ outbox_id: 41, consumer_id: 'webhooks' }, { outbox_id: 42, consumer_id: 'webhooks' }] },
+        // 42 is still being run by another dispatcher; a sibling delivery of event 41 died earlier.
+        { data: [{ outbox_id: 41, consumer_id: 'webhooks', attempts: 8 }, { outbox_id: 41, consumer_id: 'attest-notify', attempts: 8 }] },
+      ],
+    )
+
+    const summary = await dispatchEventOutbox({ supabase: client, now: () => NOW })
+
+    expect(summary.deadOnLeaseExpiry).toBe(1)
+    expect(logMock.error).toHaveBeenCalledTimes(1)
+    expect(logMock.error).toHaveBeenCalledWith(
+      'event outbox delivery dead',
+      expect.any(Error),
+      { outboxId: 41, consumerId: 'webhooks', attempt: 8, status: 'dead', error: 'lease expired on the last attempt' },
+    )
+    // Before the claim: claimed deliveries at the attempt cap. After: the dead ones among them.
+    expect(table.findCalls('event_deliveries', 'gte')).toEqual([['attempts', DISPATCH_MAX_ATTEMPTS]])
+    expect(table.findCalls('event_deliveries', 'in')).toEqual([['outbox_id', [41, 42]]])
+    expect(table.findCalls('event_deliveries', 'eq')).toEqual([
+      ['status', 'claimed'],
+      ['status', 'dead'],
+      ['last_error', 'lease expired on the last attempt'],
+    ])
+  })
+
+  it('reads nothing more when no delivery is on its last attempt', async () => {
+    const { client, table } = mockSupabase([{ data: [], error: null }])
+    const summary = await dispatchEventOutbox({ supabase: client, now: () => NOW })
+    expect(summary.deadOnLeaseExpiry).toBe(0)
+    expect(table.tables()).toEqual(['event_deliveries'])
+    expect(logMock.error).not.toHaveBeenCalled()
+  })
+
+  it('is still logged when the cycle throws after the claim', async () => {
+    const { client } = mockSupabase(
+      [
+        { data: [delivery(1, 'webhooks', 1, '2026-10-17T09:59:58Z')], error: null },
+        { data: null, error: { code: 'XX000', message: 'complete broke' } },
+      ],
+      [{ data: [{ outbox_id: 41, consumer_id: 'webhooks' }] }, { data: [{ outbox_id: 41, consumer_id: 'webhooks', attempts: 8 }] }],
+    )
+    await expect(dispatchEventOutbox({ supabase: client, now: () => NOW })).rejects.toMatchObject({ name: 'OutboxError' })
+    expect(logMock.error).toHaveBeenCalledWith(
+      'event outbox delivery dead',
+      expect.any(Error),
+      expect.objectContaining({ outboxId: 41 }),
+    )
+  })
+
+  it('never stops the dispatch when the read fails', async () => {
+    const { client, rpc } = mockSupabase(
+      [{ data: [delivery(1, 'webhooks', 1, '2026-10-17T09:59:58Z')], error: null }, { data: 1, error: null }],
+      [{ error: { code: 'XX000', message: 'read broke' } }],
+    )
+    const summary = await dispatchEventOutbox({ supabase: client, now: () => NOW })
+    expect(summary).toMatchObject({ claimed: 1, completed: 1, deadOnLeaseExpiry: 0 })
+    expect(rpc).toHaveBeenCalledTimes(2)
+    expect(logMock.warn).toHaveBeenCalledWith('event outbox last-attempt read failed', { code: 'XX000' })
   })
 })
 

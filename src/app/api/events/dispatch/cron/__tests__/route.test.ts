@@ -34,6 +34,7 @@ const SUMMARY = {
   ran: 12,
   retried: 1,
   dead: 0,
+  deadOnLeaseExpiry: 0,
   oldestAgeMs: 41_000,
   notDeployed: false,
 }

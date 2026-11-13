@@ -2347,6 +2347,7 @@ Returns the current snapshot of a v1 async operation: status (queued / running /
 - Terminal statuses (`succeeded`, `failed`, `cancelled`) are final; the row never transitions out of them.
 - progress is free-form jsonb; agents should treat it as opaque except for the documented fields `phase` (string), `current` / `total` (numbers for percent calculation).
 - started_at is null while status=queued (the work has not begun yet); completed_at is null until a terminal status is reached.
+- An operation still `running` 15 minutes after started_at has lost the request that ran it: it is reported as `failed` with error.code `OPERATION_ABANDONED`. The work may be partly or fully done, so read the resource it was changing before starting it again.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

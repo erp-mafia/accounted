@@ -13,6 +13,9 @@ import { communityReviewerIds } from './reviewers'
 type Fetch = typeof fetch
 const log = createLogger('community.notify')
 
+/** How long the check that a published page answers on accounted.se may take; a timeout fails that row only. */
+const PAGE_CHECK_TIMEOUT_MS = 10_000
+
 export interface PublishedNotifyResult {
   notified: string[]
   /** Published, but the page on accounted.se is not up yet: asked again next hour. */
@@ -32,8 +35,10 @@ async function userEmail(service: SupabaseClient, userId: string): Promise<strin
  * and only when its page answers on accounted.se: the website refreshes its
  * approved list hourly, so an email sent at approval would link to a page
  * that is not there yet. The row is claimed before sending (at most one
- * email, whichever run gets there first) and released when the send fails,
- * so the next run tries again. Runs after the hourly community sync.
+ * email, whichever run gets there first) and released when the send fails
+ * or throws, so the next run tries again: a claim left standing after a
+ * throw meant the author was never told. Runs after the hourly community
+ * sync; the page check gives up after PAGE_CHECK_TIMEOUT_MS.
  */
 export async function notifyPublishedAuthors(service: SupabaseClient, fetchImpl: Fetch = fetch): Promise<PublishedNotifyResult> {
   const result: PublishedNotifyResult = { notified: [], waiting: [], failed: [] }
@@ -47,14 +52,17 @@ export async function notifyPublishedAuthors(service: SupabaseClient, fetchImpl:
   for (const row of (data ?? []) as PublishedRow[]) {
     const slug = row.published_atom_id!.replace(/^community\//, '')
     const pageUrl = communityPageUrl(slug)
+    let claimedByThisRun = false
+    const release = () => service.from('company_skills').update({ published_notified_at: null }).eq('id', row.id).eq('share_status', 'published')
     try {
-      const page = await fetchImpl(pageUrl, { method: 'HEAD', cache: 'no-store' })
+      const page = await fetchImpl(pageUrl, { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(PAGE_CHECK_TIMEOUT_MS) })
       if (!page.ok) { result.waiting.push(row.id); continue }
       const { data: claimed, error: claimError } = await service.from('company_skills')
         .update({ published_notified_at: new Date().toISOString() })
         .eq('id', row.id).eq('share_status', 'published').is('published_notified_at', null).select('id')
       if (claimError) throw new Error(claimError.message)
       if ((claimed ?? []).length === 0) continue
+      claimedByThisRun = true
       const to = await userEmail(service, row.created_by)
       // No address to write to: the claim stands, there is nobody to retry for.
       if (!to) continue
@@ -63,11 +71,16 @@ export async function notifyPublishedAuthors(service: SupabaseClient, fetchImpl:
         to, subject: publishedEmailSubject(mail), html: publishedEmailHtml(mail), text: publishedEmailText(mail), replyTo: getBranding().supportEmail,
       })
       if (sent.success) { result.notified.push(row.id); continue }
-      await service.from('company_skills').update({ published_notified_at: null }).eq('id', row.id).eq('share_status', 'published')
+      await release()
       result.failed.push(row.id)
     } catch (err) {
       log.warn('Publish notification failed', { submission: row.id, error: err instanceof Error ? err.message : String(err) })
       result.failed.push(row.id)
+      if (claimedByThisRun) {
+        const { error: releaseError } = await release()
+        // Not released: nothing will ever mail this author, so a person must.
+        if (releaseError) log.error('Publish notification claim not released; the author is never told', { submission: row.id, error: releaseError.message })
+      }
     }
   }
   return result

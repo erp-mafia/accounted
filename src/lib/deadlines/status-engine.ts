@@ -33,7 +33,11 @@ export function daysUntilDeadline(dueDate: string, now: Date = new Date()): numb
 }
 
 /**
- * Update deadline statuses automatically (called by daily cron)
+ * Update deadline statuses automatically (called by daily cron).
+ *
+ * Both updates are always tried. When either fails this throws after the
+ * second one, so the cron run answers an error: logged and answered 200, a
+ * run that moved no deadline to overdue looked like a quiet day.
  */
 export async function updateDeadlineStatuses(
   supabase: SupabaseClient,
@@ -47,6 +51,7 @@ export async function updateDeadlineStatuses(
   let updated = 0
   let newlyOverdue = 0
   let newlyActionNeeded = 0
+  const failed: string[] = []
 
   // 1. Mark overdue: past deadline, not completed, not submitted/confirmed
   const { data: overdueDeadlines, error: overdueError } = await supabase
@@ -63,6 +68,7 @@ export async function updateDeadlineStatuses(
 
   if (overdueError) {
     log.error('Error updating overdue deadlines:', overdueError)
+    failed.push(`overdue: ${overdueError.message}`)
   } else {
     newlyOverdue = overdueDeadlines?.length || 0
     updated += newlyOverdue
@@ -84,9 +90,14 @@ export async function updateDeadlineStatuses(
 
   if (actionNeededError) {
     log.error('Error updating action_needed deadlines:', actionNeededError)
+    failed.push(`action_needed: ${actionNeededError.message}`)
   } else {
     newlyActionNeeded = actionNeededDeadlines?.length || 0
     updated += newlyActionNeeded
+  }
+
+  if (failed.length > 0) {
+    throw new Error(`Deadline status update failed (${failed.join('; ')}); ${updated} deadlines were updated`)
   }
 
   return { updated, newlyOverdue, newlyActionNeeded }

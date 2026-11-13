@@ -163,6 +163,8 @@ describe('reconcileStrandedInboxUnderlag', () => {
 
     expect(summary).toMatchObject({ repaired: 0, stillUnlinked: 1, historyAppended: 0 })
     expect(appendHistory).not.toHaveBeenCalled()
+    // A link that failed is retried by the next run: no error for it.
+    expect(log.error).not.toHaveBeenCalled()
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('still unlinked'),
       expect.objectContaining({ inbox_item_id: 'i1', transaction_id: TX1 }),
@@ -188,6 +190,12 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('another verifikat'),
       expect.objectContaining({ inbox_item_id: 'i1', document_journal_entry_id: 'je-other' }),
+    )
+    // The warning reaches nobody: the run says it once as an error, with the counts.
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(
+      'inbox underlag reconcile: documents anchored to another verifikat need a human',
+      { anchored_elsewhere: 1, unlinked_locked: 0, still_unlinked: 0, stranded_on_booked: 1 },
     )
   })
 

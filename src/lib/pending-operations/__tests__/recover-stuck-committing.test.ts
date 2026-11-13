@@ -329,6 +329,8 @@ describe('recoverStuckCommittingOperations', () => {
       (c) => (c.args[1] as Record<string, unknown>).outcome,
     )
     expect(outcomes).toEqual(['committed', 'unknown'])
+    // Verified present needs nobody; an unknown outcome needs a person.
+    expect(recoveryLines.map((c) => c.level)).toEqual(['warn', 'error'])
     expect(recoveryLines[0].args[1]).toMatchObject({
       pendingOperationId: 'op-booked',
       companyId: 'company-1',
@@ -359,6 +361,34 @@ describe('recoverStuckCommittingOperations', () => {
     expect(captures.filter((c) => c.payload !== undefined)).toHaveLength(0)
     const line = calls.find((c) => c.args[0] === 'pending_op_recovery')
     expect(line?.level).toBe('error')
+  })
+
+  it('logs a row that keeps failing at warn for the caller that runs every few minutes, and at error by default (nightly)', async () => {
+    const run = async (failureLevel?: 'warn' | 'error') => {
+      const { supabase, enqueue } = createCapturingSupabase()
+      const { log, calls } = createLogSpy()
+      enqueue({ data: [makeRow({ id: 'op-probe-fail', operation_type: 'categorize_transaction', params: { transaction_id: 'tx-1' } })] })
+      enqueue({ error: { message: 'probe down' } })
+      await recoverStuckCommittingOperations(supabase, { log, ...(failureLevel ? { failureLevel } : {}) })
+      return calls.filter((c) => c.args[0] === 'pending_op_recovery')
+    }
+
+    const every5Minutes = await run('warn')
+    expect(every5Minutes.map((c) => c.level)).toEqual(['warn'])
+    expect(every5Minutes[0]!.args[1]).toMatchObject({ outcome: 'skipped_probe_error', error: 'is_transaction_booked probe failed: probe down' })
+    expect((await run()).map((c) => c.level)).toEqual(['error'])
+  })
+
+  it('logs a failed terminal write at the caller\'s failure level too', async () => {
+    const { supabase, enqueue } = createCapturingSupabase()
+    const { log, calls } = createLogSpy()
+    enqueue({ data: [makeRow({ id: 'op-write-fail' })] })
+    enqueue({ error: { message: 'write down' } })
+
+    await recoverStuckCommittingOperations(supabase, { log, failureLevel: 'warn' })
+
+    const lines = calls.filter((c) => c.args[0] === 'pending_op_recovery')
+    expect(lines.map((c) => [c.level, (c.args[1] as Record<string, unknown>).outcome])).toEqual([['warn', 'skipped_write_error']])
   })
 
   it('counts a lost CAS as skipped when a concurrent finalize resolved the row first', async () => {
