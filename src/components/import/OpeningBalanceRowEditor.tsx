@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { openingBalanceAmountText, openingBalanceDraftAmount } from '@/lib/import/opening-balance/amount-draft'
 import Fuse, { type IFuseOptions } from 'fuse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -73,6 +74,8 @@ function getBalanceFuse(): Fuse<BASReferenceAccount> | null {
   return balanceFuseInstance
 }
 
+type AmountField = 'debit_amount' | 'credit_amount'
+
 let idCounter = 0
 function generateId() {
   return `row_${++idCounter}_${Date.now()}`
@@ -128,6 +131,7 @@ export default function OpeningBalanceRowEditor({
   const [activeAutocomplete, setActiveAutocomplete] = useState<string | null>(null)
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
   const autocompleteRef = useRef<HTMLDivElement>(null)
+  const [amountDraft, setAmountDraft] = useState<{ rowId: string; field: AmountField; text: string } | null>(null)
   const tCommon = useTranslations('common')
 
   // Hold onChange in a ref so an unstable (inline) callback identity can't
@@ -242,6 +246,28 @@ export default function OpeningBalanceRowEditor({
     setRows((prev) => [...prev, adjustmentRow])
   }, [totals])
 
+  // The field being typed in shows the typed text untouched; the row carries
+  // the amount parsed from it. Writing the parsed number back as the text ate
+  // a trailing decimal mark and a leading zero on every keystroke (crm#1836).
+  const amountInput = (row: EditableRow, field: AmountField, label: string) => {
+    const typing = amountDraft?.rowId === row.id && amountDraft.field === field
+    return (
+      <Input
+        inputMode="decimal"
+        aria-label={label}
+        value={typing ? amountDraft.text : openingBalanceAmountText(row[field])}
+        onChange={(e) => {
+          const text = e.target.value
+          setAmountDraft({ rowId: row.id, field, text })
+          updateRow(row.id, { [field]: openingBalanceDraftAmount(text) })
+        }}
+        onBlur={() => setAmountDraft(null)}
+        placeholder="0,00"
+        className="h-8 text-right tabular-nums w-28"
+      />
+    )
+  }
+
   return (
     <div className="space-y-4">
       {/* Table */}
@@ -327,36 +353,8 @@ export default function OpeningBalanceRowEditor({
                     )}
                   </div>
                 </td>
-                <td className="px-3 py-1.5">
-                  <Input
-                    type="number"
-                    value={row.debit_amount || ''}
-                    onChange={(e) =>
-                      updateRow(row.id, {
-                        debit_amount: Math.round(parseFloat(e.target.value || '0') * 100) / 100,
-                      })
-                    }
-                    placeholder="0,00"
-                    className="h-8 text-right tabular-nums w-28"
-                    min={0}
-                    step={0.01}
-                  />
-                </td>
-                <td className="px-3 py-1.5">
-                  <Input
-                    type="number"
-                    value={row.credit_amount || ''}
-                    onChange={(e) =>
-                      updateRow(row.id, {
-                        credit_amount: Math.round(parseFloat(e.target.value || '0') * 100) / 100,
-                      })
-                    }
-                    placeholder="0,00"
-                    className="h-8 text-right tabular-nums w-28"
-                    min={0}
-                    step={0.01}
-                  />
-                </td>
+                <td className="px-3 py-1.5">{amountInput(row, 'debit_amount', 'Debet')}</td>
+                <td className="px-3 py-1.5">{amountInput(row, 'credit_amount', 'Kredit')}</td>
                 <td className="px-3 py-1.5">
                   <Button
                     variant="ghost"

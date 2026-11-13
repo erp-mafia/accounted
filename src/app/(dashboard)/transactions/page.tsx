@@ -9,6 +9,7 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
@@ -4713,6 +4714,7 @@ export default function TransactionsPage() {
                 out of the selection, so the counter stays to the end. */}
             {(selectedIds.size > 0 || skvSelectedIds.size > 0 || batchProgress) && (
               <div
+                {...PAGE_BOTTOM_BAR_PROPS}
                 className={FLOATING_BULK_BAR_CLASS}
               >
                 {batchProgress ? (

@@ -7,6 +7,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { SpinnerIcon, XMarkIcon } from '@/components/icons'
 import AgentAvatar from './AgentAvatar'
 import { collapsedStatusLabel } from './agent-status'
+import { AGENT_FAB_PROPS } from '@/components/ui/fab-clearance'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -300,9 +301,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // the tab row plus the iOS home indicator). Still needed after the FAB
       // went desktop-only: the collapsed handle above renders on mobile too.
       // Desktop: standard 20px lift, no mobile nav to worry about, except when
-      // the page declares a bottom action bar (body[data-page-bottom-bar],
-      // set by e.g. the standalone invoice editor): lift above it so the FAB
-      // never covers the bar's primary button.
+      // the page shows a bottom action bar (an element carrying
+      // data-page-bottom-bar, see ui/fab-clearance.ts): lift above it so the FAB
+      // never covers the bar's primary button. The marker is read with :has(),
+      // so a bar only has to render the attribute. It used to be expected on
+      // <body>, which nothing set, so the lift never happened (crm#1841).
       // z-[45]: above the DialogVeil (z-40) so the assistant can be OPENED
       // while a non-modal dialog (booking, invoice) holds the page inert, but
       // below dialog content (z-50). Under a true modal dialog Radix sets
@@ -311,7 +314,8 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // data-agent-ui: opening the assistant must not dismiss an open
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-[var(--shadow-md)] bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      {...AGENT_FAB_PROPS}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-[var(--shadow-md)] bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

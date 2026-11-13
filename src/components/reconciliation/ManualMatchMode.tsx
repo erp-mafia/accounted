@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { useToast } from '@/components/ui/use-toast'
 import { chunk, cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -451,7 +452,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
 
       {/* Footer: the arithmetic of the selection, and the one button. Sticks
           above the mobile bottom nav (--bottom-nav-h), not behind it. */}
-      <div className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-background py-3 text-[13px]">
+      <div {...PAGE_BOTTOM_BAR_PROPS} className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-background py-3 text-[13px]">
         <span className="tabular-nums" data-ph-mask>
           {t('match_selected_external', { count: pickedExternal.size, amount: formatCurrency(externalSum, currency) })}
         </span>

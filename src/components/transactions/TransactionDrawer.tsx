@@ -8,6 +8,7 @@ import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, XMarkIcon, type Icon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -187,7 +188,9 @@ export function TransactionDrawer({
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* The panel reaches the corner the assistant button floats in, so its
+          scroll body clears the button the same way the page does. */}
+      <div className={cn('min-h-0 flex-1 overflow-y-auto', AGENT_FAB_CLEARANCE_CLASS)}>
         {!booked && (
           <div className="border-b border-border px-6 py-3">
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_category')}</p>

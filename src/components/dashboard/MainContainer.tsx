@@ -5,6 +5,8 @@ import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
 import { isFullBleedEditorPath } from '@/lib/invoices/editor/new-editor-params'
+import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
+import { cn } from '@/lib/utils'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
@@ -57,9 +59,11 @@ export function MainContainer({
   // max-width, 24px side padding, and PageHeader restyled into the panel's
   // top bar by the .page-header rules in globals.css. The 16px top padding
   // is what the sticky top bar pulls itself back over (negative margin), so
-  // the two numbers must stay in step with the CSS.
+  // the two numbers must stay in step with the CSS. While the floating
+  // assistant button is on screen the bottom padding grows, so the last row
+  // of a page scrolls clear of the button (crm#1841).
   return (
-    <div key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
+    <div key={companyId ?? ''} className={cn('px-4 pb-8 pt-4 md:px-6', AGENT_FAB_CLEARANCE_CLASS)}>
       <SIEImportHoldBanner companyId={companyId} />
       {children}
     </div>
