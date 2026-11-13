@@ -377,38 +377,136 @@ describe('runDocumentJobs', () => {
 })
 
 describe('runDocumentJobFor', () => {
+  const t0 = Date.parse('2026-11-13T08:00:00Z')
+  const at = (ms: number) => new Date(ms).toISOString()
+  const OUTAGE = 'reader_unavailable: 503 Bedrock is unable to process your request.'
+  const CUT = "reader_unavailable: Request timed out: the run's time was up 48 s into the model call"
+  const CLAIM = { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' }
+
   it('runs the one due step of a document now and settles it', async () => {
     const { runDocumentJobFor } = await import('../queue')
     const { createQueuedMockSupabase } = await import('@/tests/helpers')
     const local = createQueuedMockSupabase()
     const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
-    local.enqueue({ data: [{ status: 'queued', attempts: 0, max_attempts: 5, last_error: null }] }) // the document's open jobs
+    local.enqueue({ data: [{ status: 'queued', attempts: 0, max_attempts: 5, last_error: null, run_after: at(t0) }] }) // the document's open jobs
     local.enqueue({ data: [] }) // the claim: nothing due
-    expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')).toBeNull()
-    expect(local.supabase.rpc).toHaveBeenLastCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
+    expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1', () => t0)).toBeNull()
+    expect(local.supabase.rpc).toHaveBeenLastCalledWith('claim_document_job_for', CLAIM)
   })
 
-  it('leaves a step that ran out of its run\'s time to the worker: a watcher\'s polls would spend every attempt on it', async () => {
+  it('leaves a step that ran out of its run\'s time to the worker, due or not: a watcher\'s polls would spend every attempt on it', async () => {
     const { runDocumentJobFor } = await import('../queue')
     const { createQueuedMockSupabase } = await import('@/tests/helpers')
     const local = createQueuedMockSupabase()
     const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
-    local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: "reader_unavailable: Request timed out: the run's time was up 48 s into the model call" }] })
-    expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')).toBeNull()
+    // Its short wait over or not, the route's minute would cut it again: the worker has five.
+    for (const runAfter of [t0 - 60_000, t0 + 60_000]) {
+      local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: CUT, run_after: at(runAfter) }] })
+      expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1', () => t0)).toBeNull()
+    }
     // The claim retries a failed step at once, backoff or not: it is never asked.
     expect(local.supabase.rpc).not.toHaveBeenCalled()
-    expect(local.findCalls('document_jobs', 'eq')).toEqual([['document_id', 'doc-1']])
+    expect(local.findCalls('document_jobs', 'eq')).toEqual([['document_id', 'doc-1'], ['document_id', 'doc-1']])
   })
 
-  it('still retries at once a step that failed for another reason, for the person waiting', async () => {
+  it('leaves a step that failed on the provider to the worker while its wait is still ahead', async () => {
     const { runDocumentJobFor } = await import('../queue')
     const { createQueuedMockSupabase } = await import('@/tests/helpers')
     const local = createQueuedMockSupabase()
     const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
-    local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: 'provider_unavailable: 503 Bedrock is unable to process your request.' }] })
+    // A read the reader got no answer for, and a classification the model gave none: both wait out the outage.
+    for (const lastError of [OUTAGE, 'provider_unavailable: 503 Bedrock is unable to process your request.']) {
+      local.enqueue({ data: [{ status: 'failed', attempts: 1, max_attempts: 5, last_error: lastError, run_after: at(t0 + 1) }] })
+      expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1', () => t0)).toBeNull()
+    }
+    // claim_document_job_for takes a failed step at once, backoff or not: asking it would spend an attempt a poll.
+    expect(local.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('claims a step that failed on the provider once its wait is over, as before', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    local.enqueue({ data: [{ status: 'failed', attempts: 1, max_attempts: 5, last_error: OUTAGE, run_after: at(t0) }] })
     local.enqueue({ data: [] })
-    await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')
-    expect(local.supabase.rpc).toHaveBeenCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
+    await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1', () => t0)
+    expect(local.supabase.rpc).toHaveBeenCalledWith('claim_document_job_for', CLAIM)
+  })
+
+  it('still retries at once a step that failed for another reason, wait or not, for the person waiting', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    local.enqueue({ data: [{ status: 'failed', attempts: 2, max_attempts: 5, last_error: 'insert failed: deadlock detected', run_after: at(t0 + 4 * 60_000) }] })
+    local.enqueue({ data: [] })
+    await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1', () => t0)
+    expect(local.supabase.rpc).toHaveBeenCalledWith('claim_document_job_for', CLAIM)
+  })
+
+  it('spends one attempt a wait, not one a poll, while a person watches an upload through a provider outage', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    // The read job of one document, kept as the database keeps it across polls. The claim does what
+    // claim_document_job_for (migration 20260916100000) does: it takes a queued or failed job with attempts
+    // left at once, whatever its run_after.
+    const row = { id: 'job-1', kind: 'read', status: 'queued', attempts: 0, max_attempts: 5, last_error: null as string | null, run_after: at(t0) }
+    interface Query {
+      select(): Query
+      eq(): Query
+      neq(): Query
+      maybeSingle(): Query
+      update(change: Partial<typeof row>): Query
+      then(resolve: (result: { data: unknown; error: null }) => void): void
+    }
+    const from = (table: string) => {
+      let patch: Partial<typeof row> | null = null
+      const query: Query = {
+        select: () => query,
+        eq: () => query,
+        neq: () => query,
+        maybeSingle: () => query,
+        update: (change: Partial<typeof row>) => {
+          patch = change
+          return query
+        },
+        then: (resolve: (result: { data: unknown; error: null }) => void) => {
+          if (table === 'document_attachments') return resolve({ data: DOCUMENT, error: null })
+          if (patch) {
+            Object.assign(row, patch)
+            return resolve({ data: null, error: null })
+          }
+          // The document's open jobs: the select leaves out a done one.
+          return resolve({ data: row.status === 'done' ? [] : [{ ...row }], error: null })
+        },
+      }
+      return query
+    }
+    const claim = vi.fn(async () => {
+      if (row.attempts >= row.max_attempts || (row.status !== 'queued' && row.status !== 'failed')) return { data: [], error: null }
+      Object.assign(row, { status: 'running', attempts: row.attempts + 1 })
+      return { data: [{ id: row.id, company_id: 'co-1', document_id: 'doc-1', kind: row.kind, attempts: row.attempts }], error: null }
+    })
+    const database = { from, rpc: claim } as unknown as SupabaseClient
+    mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: OUTAGE } })
+    // The upload screen asks every 1.5 s, for a minute at a time.
+    const watch = async (start: number) => {
+      for (let poll = 0; poll < 40; poll++) await runDocumentJobFor(database, 'doc-1', 'pipeline:user-1', () => start + poll * 1500)
+    }
+
+    await watch(t0)
+    // One reading, one attempt, then the outage's half hour: before, five polls spent all five and gave the job up.
+    expect(readDocumentByPlan).toHaveBeenCalledTimes(1)
+    expect(row).toMatchObject({ status: 'failed', attempts: 1, last_error: OUTAGE, run_after: at(t0 + 30 * 60_000) })
+
+    // Once the wait is over, a poll asks again, as the worker would: one more attempt, and the next wait is an hour.
+    const t1 = t0 + 30 * 60_000
+    await watch(t1)
+    expect(readDocumentByPlan).toHaveBeenCalledTimes(2)
+    expect(row).toMatchObject({ status: 'failed', attempts: 2, run_after: at(t1 + 60 * 60_000) })
+    expect(claim).toHaveBeenCalledTimes(2)
+    // A retry is a warning; nothing gave up.
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('does not let a step out of attempts hold the document: its other steps still run for the person waiting', async () => {
