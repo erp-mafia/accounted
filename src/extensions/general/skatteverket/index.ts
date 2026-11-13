@@ -66,6 +66,7 @@ import { formatRedovisare } from '@/lib/skatteverket/format'
 import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import { ombudAppointment } from '@/lib/skatteverket/ombud-appointment'
+import { ombudVerifyRetryAfterSeconds } from '@/lib/skatteverket/ombud-verify-retry'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { createUtseOmbudDeepLink, OMBUD_COMPANY_GUIDE_URL, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
@@ -1112,9 +1113,17 @@ export const skatteverketExtension: Extension = {
         // register check runs just before the link it hands out.
         const existing = await getConnection(ctx.companyId, currentSkvEnvironment())
         if (verifyRateLimited(existing)) {
+          // The wait is named (body and Retry-After), so the page can check
+          // again by itself when the minute is up instead of leaving the
+          // person to come back and click (for #206).
+          const retryAfterSeconds = ombudVerifyRetryAfterSeconds(
+            existing?.lasombud_checked_at ?? null,
+            Date.now(),
+            MANUAL_PROBE_INTERVAL_MS,
+          )
           return NextResponse.json(
-            { error: 'Vänta en minut mellan verifieringar.', connection: existing },
-            { status: 429 }
+            { error: 'Vänta en minut mellan verifieringar.', connection: existing, retry_after_seconds: retryAfterSeconds },
+            { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
           )
         }
 

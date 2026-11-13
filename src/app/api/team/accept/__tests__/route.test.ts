@@ -385,3 +385,130 @@ describe('GET /api/team/accept (company invitations)', () => {
     expect(body.data.companyName).toBe('Klient AB')
   })
 })
+
+// For #206: one sentence ("redan använts") used to answer every invitation
+// that was no longer pending, and it sent the person who had already joined
+// off to ask for a new one.
+describe('GET /api/team/accept (an invitation that is no longer pending)', () => {
+  function makeGetReq(token: string) {
+    return new NextRequest(`http://localhost/api/team/accept?token=${token}`)
+  }
+  const anonymous = () =>
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: serviceSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+  const companyInvite = (status: string) => ({
+    id: 'inv-1',
+    email: 'Invitee@test.se',
+    status,
+    expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    company_id: 'company-1',
+    invited_by: 'owner-1',
+    companies: { name: 'Klient AB' },
+  })
+  const teamInvite = (status: string) => ({
+    id: 'tinv-1',
+    team_id: 'team-byra',
+    email: 'invitee@test.se',
+    role: 'member',
+    status,
+    expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    teams: { name: 'Siffran AB', kind: 'byra' },
+  })
+  type Gone = { error: string; reason: string }
+
+  /** A stranger's answer names nobody and nothing that is being joined. */
+  function expectNothingLeaked(body: unknown) {
+    const text = JSON.stringify(body)
+    expect(text).not.toContain('test.se')
+    expect(text).not.toContain('Klient AB')
+    expect(text).not.toContain('Siffran AB')
+  }
+
+  it('says a revoked invitation was withdrawn, without asking who is calling', async () => {
+    enqueue({ data: companyInvite('revoked') })
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<Gone>(res)
+    expect(status).toBe(410)
+    expect(body.reason).toBe('revoked')
+    expect(body.error).toContain('dragits tillbaka')
+    expect(requireAuthMock).not.toHaveBeenCalled()
+    expectNothingLeaked(body)
+  })
+
+  it('says an invitation marked expired has expired', async () => {
+    enqueue({ data: companyInvite('expired') })
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<Gone>(res)
+    expect(status).toBe(410)
+    expect(body.reason).toBe('expired')
+    expect(body.error).toContain('gått ut')
+    expectNothingLeaked(body)
+  })
+
+  it('tells a caller who is not signed in only that it was used, and that they can log in', async () => {
+    anonymous()
+    enqueue({ data: companyInvite('accepted') })
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<Gone>(res)
+    expect(status).toBe(410)
+    expect(body.reason).toBe('used')
+    expect(body.error).toContain('logga in')
+    expectNothingLeaked(body)
+    // No membership read for an anonymous caller.
+    expect(findCalls('company_members', 'select')).toHaveLength(0)
+  })
+
+  it('answers 200 alreadyMember for the signed-in person who joined through it', async () => {
+    enqueue({ data: companyInvite('accepted') })
+    enqueue({ data: { user_id: 'user-1' } }) // company_members: still a member
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ type: 'company', alreadyMember: true, companyName: 'Klient AB' })
+  })
+
+  it('tells a signed-in caller with another address that this account has not joined', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-2', email: 'stranger@test.se' },
+      supabase: serviceSupabase,
+      error: null,
+    })
+    enqueue({ data: companyInvite('accepted') })
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<Gone>(res)
+    expect(status).toBe(410)
+    expect(body.reason).toBe('used_other_account')
+    expectNothingLeaked(body)
+    expect(findCalls('company_members', 'select')).toHaveLength(0)
+  })
+
+  it('does not call the invitee a member once the membership is gone', async () => {
+    enqueue({ data: companyInvite('accepted') })
+    enqueue({ data: null }) // company_members: removed since
+    const res = await GET(makeGetReq('abc'))
+    const { status, body } = await parseJsonResponse<Gone>(res)
+    expect(status).toBe(410)
+    expect(body.reason).toBe('used_other_account')
+    expectNothingLeaked(body)
+  })
+
+  it('tells the same cases apart for a byrå-team invitation', async () => {
+    enqueue({ data: null, error: { code: 'PGRST116' } }) // no company invite
+    enqueue({ data: teamInvite('revoked') })
+    const revoked = await parseJsonResponse<Gone>(await GET(makeGetReq('abc')))
+    expect(revoked.status).toBe(410)
+    expect(revoked.body.reason).toBe('revoked')
+    expectNothingLeaked(revoked.body)
+
+    enqueue({ data: null, error: { code: 'PGRST116' } })
+    enqueue({ data: teamInvite('accepted') })
+    enqueue({ data: { user_id: 'user-1' } }) // team_members
+    const joined = await parseJsonResponse<{ data: Record<string, unknown> }>(await GET(makeGetReq('abc')))
+    expect(joined.status).toBe(200)
+    expect(joined.body.data).toEqual({ type: 'team', alreadyMember: true, companyName: 'Siffran AB' })
+    expect(findCalls('team_members', 'select')).toHaveLength(1)
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
+import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
 import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
 import { selectionBlocker } from '../account-selection'
 
@@ -375,6 +375,65 @@ describe('a consent poll that gave up', () => {
   it('a new start clears the give-up', () => {
     const restarted = run(gone, { type: 'start' })
     expect(restarted.pollError).toBeNull()
+  })
+})
+
+describe('closing the flow over a running BankID', () => {
+  const started = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'context_set', context: 'corporate' }, { type: 'to_bankid' }, { type: 'start' }, {
+    type: 'started',
+    result: { connection_id: 'c-1', attempt: attempt() },
+  })
+  const closing = flowReducer(started, { type: 'closing' })
+
+  it('stops the consent poll at once', () => {
+    expect(pollingActive(started)).toBe(true)
+    expect(closing.closing).toBe(true)
+    expect(pollingActive(closing)).toBe(false)
+  })
+
+  it('drops an answer that was already on its way', () => {
+    expect(flowReducer(closing, { type: 'polled', poll: poll({ state: 'valid', accounts: [account()] }) })).toBe(closing)
+    expect(flowReducer(closing, { type: 'polled', poll: poll({ state: 'failed', failure_code: 'x', failure_text: 'y' }) })).toBe(closing)
+  })
+
+  it('shows nothing about a refused poll for the connection the close removed', () => {
+    const late = flowReducer(closing, { type: 'poll_gave_up', reason: 'refused', text: 'Kopplingen finns inte längre.' })
+    expect(late).toBe(closing)
+    expect(late.pollError).toBeNull()
+  })
+
+  it('a start that answers after the close does not begin a new poll', () => {
+    const lateStart = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'context_set', context: 'corporate' }, { type: 'to_bankid' }, { type: 'start' }, { type: 'closing' }, {
+      type: 'started',
+      result: { connection_id: 'c-1', attempt: attempt() },
+    })
+    expect(pollingActive(lateStart)).toBe(false)
+  })
+
+  it('a resumed second-signatory flow also stops polling when closed', () => {
+    const resumed = openFlow('resume', { connectionId: 'c-1' })
+    expect(pollingActive(resumed)).toBe(true)
+    expect(pollingActive(flowReducer(resumed, { type: 'closing' }))).toBe(false)
+  })
+
+  it('is the same state when closed twice', () => {
+    expect(flowReducer(closing, { type: 'closing' })).toBe(closing)
+  })
+})
+
+describe('removesConnectionOnClose', () => {
+  it('a half-made connection goes, a flow with none has nothing to remove', () => {
+    expect(removesConnectionOnClose(openFlow('new'))).toBe(false)
+    expect(removesConnectionOnClose({ ...openFlow('new'), connectionId: 'c-1' })).toBe(true)
+  })
+
+  it('a live connection stays', () => {
+    expect(removesConnectionOnClose({ ...openFlow('new'), connectionId: 'c-1', connection: view() })).toBe(false)
+  })
+
+  it('a connection resumed for the second signatory stays; one the person came back to from the bank goes', () => {
+    expect(removesConnectionOnClose(openFlow('resume', { connectionId: 'c-1' }))).toBe(false)
+    expect(removesConnectionOnClose(openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } }))).toBe(true)
   })
 })
 

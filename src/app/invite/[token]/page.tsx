@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { inviteGoneReason, type InviteGoneReason } from '@/lib/auth/invite-gone'
 
 const branding = getBranding()
 
@@ -78,6 +79,18 @@ interface InviteInfo {
   preparedProfile?: { id: string; name: string; name_sv: string } | null
 }
 
+/**
+ * What the page says for an invitation that can no longer be accepted, per
+ * reason: the heading, the next step, and whether a login link helps (it does
+ * only for someone who is not signed in).
+ */
+const GONE_COPY = {
+  used: { title: 'used_title', body: 'used_description', loginLink: true },
+  used_other_account: { title: 'used_title', body: 'used_other_account_description', loginLink: false },
+  revoked: { title: 'revoked_title', body: 'revoked_description', loginLink: false },
+  expired: { title: 'expired_title', body: 'expired_description', loginLink: false },
+} as const satisfies Record<InviteGoneReason, { title: string; body: string; loginLink: boolean }>
+
 export default function InvitePage() {
   const params = useParams()
   const router = useRouter()
@@ -89,6 +102,11 @@ export default function InvitePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [invite, setInvite] = useState<InviteInfo | null>(null)
+  // The invitation is spent, withdrawn or expired (410 with a reason).
+  const [gone, setGone] = useState<InviteGoneReason | null>(null)
+  // The signed-in person already joined through this invitation: not an
+  // error, they are sent into the app. Holds what they joined.
+  const [joinedName, setJoinedName] = useState<string | null>(null)
   // Email of the currently signed-in user (if any). Used to short-circuit
   // the login redirect for users who are already authenticated.
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
@@ -106,7 +124,17 @@ export default function InvitePage() {
 
         const data = await inviteRes.json()
         if (!inviteRes.ok) {
+          const reason = inviteGoneReason(data)
+          if (reason) {
+            setGone(reason)
+            return
+          }
           setError(getErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('invalid_invite') }))
+          return
+        }
+
+        if (data.data?.alreadyMember) {
+          setJoinedName(data.data.companyName ?? '')
           return
         }
 
@@ -199,6 +227,11 @@ export default function InvitePage() {
     reloadTo(invite?.alreadyHasAccount ? '/login' : `/register?invite=${encodeURIComponent(token)}`)
   }
 
+  // One card for every invitation that can no longer be accepted. A pending
+  // invitation past its date (expired: true on a 200) reads the same as one
+  // already marked expired.
+  const goneCopy = gone ? GONE_COPY[gone] : invite?.expired ? GONE_COPY.expired : null
+
   // "Din byrå har förberett: <profil>", the same muted line in every card
   // that names the company.
   const prepared = invite?.preparedProfile
@@ -236,7 +269,11 @@ export default function InvitePage() {
           </div>
           <div className="animate-fade-in">
             <h1 className="font-display text-2xl md:text-3xl tracking-tight leading-[1.1]">
-              {error ? t('header_invalid') : t('header_invited')}
+              {joinedName !== null
+                ? t('header_already_member')
+                : error || gone
+                  ? t('header_invalid')
+                  : t('header_invited')}
             </h1>
           </div>
         </div>
@@ -263,15 +300,45 @@ export default function InvitePage() {
                   </div>
                 </div>
               </Card>
-            ) : invite?.expired ? (
+            ) : joinedName !== null ? (
+              // Already joined through this invitation: straight into the app.
+              <div className="space-y-6">
+                <Card className="p-6">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2.5 rounded-lg bg-muted/50">
+                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <p className="font-medium">{joinedName}</p>
+                      <p className="text-sm text-muted-foreground mt-0.5">
+                        {t('already_member_description')}
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Full page load, as after a join: the app resolves the company context afresh. */}
+                <Button size="lg" className="w-full" onClick={() => reloadTo('/')}>
+                  {t('already_member_open', { appName: branding.appName })}
+                </Button>
+              </div>
+            ) : goneCopy ? (
               <Card className="p-6">
                 <div className="flex items-start gap-3">
                   <ExclamationCircleIcon className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-medium">{t('expired_title')}</p>
+                    <p className="font-medium">{t(goneCopy.title)}</p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {t('expired_description')}
+                      {t(goneCopy.body)}
                     </p>
+                    {goneCopy.loginLink && (
+                      <Link
+                        href="/login"
+                        className="text-sm text-primary hover:underline mt-3 inline-block"
+                      >
+                        {t('go_to_login')}
+                      </Link>
+                    )}
                   </div>
                 </div>
               </Card>

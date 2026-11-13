@@ -6,6 +6,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { ombudCheckOutcome, type OmbudCheckOutcome, type OmbudConnectionFacts } from '@/lib/skatteverket/ombud-appointment'
+import { namedRetryAfterSeconds, ombudVerifyRetryDecision } from '@/lib/skatteverket/ombud-verify-retry'
 
 /**
  * Appointing the app as the company's ombud at Skatteverket, shared by every
@@ -64,13 +65,21 @@ export async function openOmbudDeepLink(locale: ErrorLocale = 'sv'): Promise<Omb
 /** What a check found (ombudCheckOutcome), or why it could not ask. */
 export type OmbudVerifyResult = OmbudCheckOutcome | 'rate_limited' | 'failed'
 
+/** One check's answer. `retryAfterSeconds`: the wait a rate-limit refusal named, when it named one. */
+export interface OmbudVerifyOutcome {
+  result: OmbudVerifyResult
+  error: string | null
+  retryAfterSeconds?: number | null
+}
+
 /** Ask the ombudsregister whether the company has appointed the app: the user is back from signing. */
-export async function verifyOmbudGrant(
-  locale: ErrorLocale = 'sv',
-): Promise<{ result: OmbudVerifyResult; error: string | null }> {
+export async function verifyOmbudGrant(locale: ErrorLocale = 'sv'): Promise<OmbudVerifyOutcome> {
   try {
     const res = await fetch(`${BASE}/verify`, { method: 'POST' })
-    if (res.status === 429) return { result: 'rate_limited', error: null }
+    if (res.status === 429) {
+      const refused = (await res.json().catch(() => ({}))) as { retry_after_seconds?: unknown }
+      return { result: 'rate_limited', error: null, retryAfterSeconds: namedRetryAfterSeconds(refused.retry_after_seconds, res.headers.get('Retry-After')) }
+    }
     const body = (await res.json().catch(() => ({}))) as {
       data?: { connection?: OmbudConnectionFacts | null }
       error?: unknown
@@ -79,6 +88,50 @@ export async function verifyOmbudGrant(
     return { result: ombudCheckOutcome(body.data?.connection ?? null), error: null }
   } catch {
     return { result: 'failed', error: null }
+  }
+}
+
+/** Resolves after `seconds`, or at once with false when `signal` aborts. */
+function waitSeconds(seconds: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false)
+      return
+    }
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, seconds * 1000)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * verifyOmbudGrant that stays with a rate-limited check (for #206): when the
+ * server says the register was asked within the minute, wait as long as it
+ * named and ask again, a bounded number of times (ombudVerifyRetryDecision
+ * holds the rule). `onWaiting` hears each wait as it starts, so the page can
+ * say that it checks again. Past the bound the refusal is returned as it is
+ * and the person asks again themselves. Null when `signal` aborted (the page
+ * went away, or a new signing replaced this check): nothing to report.
+ */
+export async function verifyOmbudGrantWithRetries(
+  locale: ErrorLocale,
+  signal: AbortSignal,
+  onWaiting: (seconds: number) => void,
+): Promise<OmbudVerifyOutcome | null> {
+  for (let retriesDone = 0; ; retriesDone += 1) {
+    const outcome = await verifyOmbudGrant(locale)
+    if (signal.aborted) return null
+    if (outcome.result !== 'rate_limited') return outcome
+    const decision = ombudVerifyRetryDecision({ retriesDone, retryAfterSeconds: outcome.retryAfterSeconds ?? null })
+    if (!decision.retry) return outcome
+    onWaiting(decision.waitSeconds)
+    if (!(await waitSeconds(decision.waitSeconds, signal))) return null
   }
 }
 
@@ -91,31 +144,53 @@ export type OmbudAppointOutcome = { result: OmbudVerifyResult | 'link_failed'; e
  * unfinished signature costs one register call per return, and the hourly
  * ombud sync finds a grant Skatteverket registers later. A company the server
  * finds already appointed hears 'granted' at once, with no tab and no check.
+ *
+ * A check the server paces (a 429) is not the end of it: it is asked again
+ * after the wait the server named, a bounded number of times, and
+ * `onWaiting` hears each wait so the surface can say so. `checking` covers
+ * the whole of it; a new appoint, or leaving the page, drops a pending wait.
  */
-export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void) {
+export function useOmbudAppoint(onResult: (outcome: OmbudAppointOutcome) => void, onWaiting?: (seconds: number) => void) {
   const errorLocale = useLocale() as ErrorLocale
   const [linking, setLinking] = useState(false)
   const [checking, setChecking] = useState(false)
   const armed = useRef(false)
+  const pending = useRef<AbortController | null>(null)
   const onResultRef = useRef(onResult)
+  const onWaitingRef = useRef(onWaiting)
   useEffect(() => {
     onResultRef.current = onResult
-  }, [onResult])
+    onWaitingRef.current = onWaiting
+  }, [onResult, onWaiting])
 
   useEffect(() => {
     async function onVisible() {
       if (document.visibilityState !== 'visible' || !armed.current) return
       armed.current = false
+      pending.current?.abort()
+      const run = new AbortController()
+      pending.current = run
       setChecking(true)
-      const outcome = await verifyOmbudGrant(errorLocale)
+      const outcome = await verifyOmbudGrantWithRetries(errorLocale, run.signal, (seconds) => onWaitingRef.current?.(seconds))
+      // Aborted: a newer check (or the unmount) owns the state now.
+      if (!outcome) return
+      pending.current = null
       setChecking(false)
-      onResultRef.current(outcome)
+      onResultRef.current({ result: outcome.result, error: outcome.error })
     }
     document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      pending.current?.abort()
+      pending.current = null
+    }
   }, [errorLocale])
 
   const appoint = useCallback(async () => {
+    // A new signing replaces a check that is waiting out the pacing.
+    pending.current?.abort()
+    pending.current = null
+    setChecking(false)
     setLinking(true)
     const opened = await openOmbudDeepLink(errorLocale)
     setLinking(false)
@@ -164,5 +239,6 @@ export function useOmbudAppointWithToasts(onVerified: (result: OmbudVerifyResult
     },
     [appName, onVerified, t, toast],
   )
-  return useOmbudAppoint(handle)
+  const waiting = useCallback((seconds: number) => toast({ title: t('rate_limited_retrying', { seconds }) }), [t, toast])
+  return useOmbudAppoint(handle, waiting)
 }
