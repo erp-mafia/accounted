@@ -278,6 +278,7 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'budgets.import': BOOK_RECORD,
   'suppliers.create': BOOK_RECORD,
   'suppliers.update': BOOK_RECORD,
+  'suppliers.archive': BOOK_RECORD,
   // companies:write operations a member does in the app today (requireWrite
   // routes): cash accounts, the till and Peppol registration.
   'cash-accounts.create': BOOK_RECORD,

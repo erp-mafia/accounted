@@ -133,7 +133,10 @@ describe('operationPreviewToken', () => {
         [...op.volatilePreviewKeys!],
       ]),
     )
-    expect(declared).toEqual({ 'arsredovisning.record-signature': ['signed_at'] })
+    expect(declared).toEqual({
+      'arsredovisning.record-signature': ['signed_at'],
+      'suppliers.archive': ['archived_at'],
+    })
   })
 })
 

@@ -515,6 +515,56 @@ describe('DELETE /api/v1/companies/:companyId/suppliers/:id', () => {
     expect(body.error.code).toBe('SUPPLIER_HAS_INVOICES')
     expect(body.error.details.open_invoice_count).toBe(3)
   })
+
+  // The rule moved to lib/suppliers/archive-supplier.ts (crm#1796); the
+  // door keeps its envelope: NOT_FOUND, and a dry run that names the record id.
+  it('answers 404 NOT_FOUND for a supplier the company does not have', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: null, error: null, count: 0 },
+        suppliers: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await deleteSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details.resource).toBe('supplier')
+  })
+
+  it('dry run previews the record as archived and writes nothing', async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: null, error: null, count: 0 },
+      suppliers: { data: SAMPLE_SUPPLIER, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await deleteSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}?dry_run=true`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.id).toBe(SUPPLIER_ID)
+    expect(body.data.preview.supplier_id).toBeUndefined()
+    expect(typeof body.data.preview.archived_at).toBe('string')
+    expect(mock.findCall('suppliers', 'update')).toBeUndefined()
+  })
 })
 
 describe('POST /api/v1/companies/:companyId/suppliers/bulk-create', () => {
