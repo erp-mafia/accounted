@@ -17831,6 +17831,7 @@
   },
   "bankFeed": {
     "failure": {
+      "AFFILIATED_ASPSP_ID_MISSING": "Banken behöver veta vilket kontor kopplingen gäller. Stäng, börja om och välj kontoret i listan under banken.",
       "ACCESS_EXCEEDED": "Åtkomsten till kontot har överskridit det tillåtna antalet per dag.",
       "ACCESS_EXPIRED": "Åtkomsten till banken har gått ut. Koppla banken igen med BankID.",
       "AUTHENTICATION_FAILED": "Autentiseringen misslyckades. Försök igen.",

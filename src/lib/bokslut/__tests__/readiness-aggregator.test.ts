@@ -359,17 +359,34 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.ready).toBe(true)
   })
 
-  it('throws when the fiscal period is missing', async () => {
+  it.each([
+    ['no row for this company', { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }],
+    ['an id that is no uuid', { code: '22P02', message: 'invalid input syntax for type uuid: "undefined"' }],
+  ])('refuses with PERIOD_NOT_FOUND when the fiscal period is missing: %s', async (_name, error) => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({
-      period: { data: null, error: { message: 'not found' } },
+      period: { data: null, error },
       settings: { data: null, error: null },
     })
 
     await expect(
       buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-missing'),
-    ).rejects.toThrow(/not found/i)
+    ).rejects.toMatchObject({ code: 'PERIOD_NOT_FOUND', message: 'Fiscal period not found' })
+  })
+
+  it('a period read that failed is a failure, not a missing period', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    const supabase = makeSupabase({
+      period: { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+      settings: { data: null, error: null },
+    })
+
+    const failure = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1').catch((err: unknown) => err)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toMatch(/read failed.*statement timeout/)
+    expect((failure as { code?: string }).code).toBeUndefined()
   })
 
   it('falls back to companies.entity_type when company_settings is missing', async () => {

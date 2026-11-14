@@ -65,6 +65,7 @@ import {
   TargetPeriodClosedError,
   TargetPeriodLockedError,
   TransactionMissingSekValueError,
+  TransactionLinesNotBalancedError,
   UnattendedCommitLimitExceededError,
   AccrualDraftPostedByScheduleError,
   BookingReviewRequiredError,
@@ -704,6 +705,17 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
     return {
       code: err.code,
       details: { transactionId: err.transactionId, currency: err.currency, date: err.date },
+    }
+  }
+  if (err instanceof TransactionLinesNotBalancedError) {
+    return {
+      code: err.code,
+      details: {
+        transactionId: err.transactionId,
+        totalDebit: err.totalDebit,
+        totalCredit: err.totalCredit,
+        fromLinePattern: err.fromLinePattern,
+      },
     }
   }
   // The two numbers the remediation refers to, as the staged-operation

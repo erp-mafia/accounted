@@ -1333,6 +1333,22 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     },
     retryable: false,
   },
+  // The lines a kontering builds for a bank row do not balance
+  // (TransactionLinesNotBalancedError): refused where the lines are built,
+  // before any draft. In practice a learned line pattern replayed on a row it
+  // does not fit; the categorize doors write a message with the two totals.
+  TX_LINES_NOT_BALANCED: {
+    httpStatus: 400,
+    message_sv:
+      'Konteringen går inte ihop för den här transaktionen: debet och kredit blir olika. Inget är bokfört. Välj en kategori eller ett konto i stället, eller bokför raden manuellt.',
+    message_en:
+      'The booking built for this transaction does not balance: debits and credits differ. Nothing was booked. Pick a category or an account instead, or book the row manually.',
+    remediation: {
+      description:
+        'Nothing was written. details.total_debit and details.total_credit are what the chosen booking would have posted. With details.from_line_pattern true the learned counterparty template (counterparty_template_id) does not fit this row: categorize it with a category, template_id or account_override instead, or post the lines yourself (gnubok_create_voucher) and link the row.',
+    },
+    retryable: false,
+  },
   // gnubok_create_transactions: the shared ingest dedup found the movement
   // already stored (the same external_id, or the same date, amount and text
   // from a bank feed or an import). A second row would invite a second booking.

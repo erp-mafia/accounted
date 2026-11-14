@@ -8,7 +8,7 @@ import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankList, OpenPaymentsBankMark } from '../BankList'
 import { bankReached } from '@/lib/bank-feed/bank-coverage'
 import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
-import type { FlowAction, FlowState } from '../connect-flow-reducer'
+import { bankDetailsSettled, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
 import { AffiliatePicker } from './AffiliatePicker'
 
@@ -47,7 +47,10 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
   // way to the earlier connection that still reads it. The server's answer
   // for this company decides when the list carried one (a pilot company).
   const notReached = state.bank !== null && bankName !== '' && !bankReached(bankName, chosen?.reached)
-  const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached
+  // Continue waits for the bank's details: until they answer nobody knows
+  // whether the bank has offices to choose among, and a start without one is
+  // refused by a bank that needs it (for #208).
+  const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached && bankDetailsSettled(state)
   const affiliates = state.bankDetails?.affiliates ?? []
 
   return (

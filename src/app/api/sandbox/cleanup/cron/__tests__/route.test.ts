@@ -72,6 +72,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
       success: true,
       cleaned: 23,
       failed: 1,
+      kept: 0,
       orphans_removed: 2,
       batches: 4,
     })
@@ -124,7 +125,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
       p_limit: 10,
       p_offset: 11,
     })
-    expect(body).toEqual({ success: true, cleaned: 9, failed: 11, orphans_removed: 0, batches: 3 })
+    expect(body).toEqual({ success: true, cleaned: 9, failed: 11, kept: 0, orphans_removed: 0, batches: 3 })
     expect(h.logError).toHaveBeenCalledWith(
       'sandbox cleanup completed with failures',
       expect.objectContaining({ failed: 11 }),
@@ -169,14 +170,56 @@ describe('GET /api/sandbox/cleanup/cron', () => {
     const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
-    expect(body).toEqual({ success: true, cleaned: 1, failed: 2, orphans_removed: 0, batches: 2 })
-    expect(h.logError).toHaveBeenCalledWith('sandbox teardown failed', { failure: refused })
+    // The user with data in a real company is kept, not failed: counted and
+    // logged at info. The teardown gap is the one failure.
+    expect(body).toEqual({ success: true, cleaned: 1, failed: 1, kept: 1, orphans_removed: 0, batches: 2 })
+    expect(h.logInfo).toHaveBeenCalledWith('sandbox users kept: they have data in a real company', {
+      kept: 1,
+      user_ids: [refused.user_id],
+    })
+    expect(h.logError).not.toHaveBeenCalledWith('sandbox teardown failed', { failure: refused })
     expect(h.logError).toHaveBeenCalledWith('sandbox teardown failed', { failure: blocked })
     expect(h.logError).toHaveBeenCalledWith(
       'sandbox cleanup completed with failures',
-      expect.objectContaining({ failed: 2, failures_logged: 2, failures_omitted: 0 }),
+      expect.objectContaining({ failed: 1, kept: 1, failures_logged: 1, failures_omitted: 0 }),
     )
-    expect(h.logError).toHaveBeenCalledTimes(3)
+    expect(h.logError).toHaveBeenCalledTimes(2)
+  })
+
+  it('a night where the only refused users have data in a real company logs nothing at error level', async () => {
+    const keptUser = (n: number) => ({
+      user_id: `00000000-0000-4000-8000-00000000000${n}`,
+      kind: 'sandbox',
+      sqlstate: 'P0001',
+      message: `User 00000000-0000-4000-8000-00000000000${n} has data in a company that is not a sandbox`,
+    })
+    h.rpc
+      .mockResolvedValueOnce({
+        data: { cleaned: 4, failed: 2, orphans_removed: 0, attempted: 6, next_offset: 2, failures: [keptUser(1), keptUser(2)] },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { cleaned: 0, failed: 0, orphans_removed: 0, attempted: 0, next_offset: 2, failures: [] },
+        error: null,
+      })
+
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body).toEqual({ success: true, cleaned: 4, failed: 0, kept: 2, orphans_removed: 0, batches: 2 })
+    expect(h.logError).not.toHaveBeenCalled()
+    expect(h.logInfo).toHaveBeenCalledWith('sandbox users kept: they have data in a real company', {
+      kept: 2,
+      user_ids: [keptUser(1).user_id, keptUser(2).user_id],
+    })
+    expect(h.logInfo).toHaveBeenCalledWith('sandbox cleanup summary', expect.objectContaining({ failed: 0, kept: 2 }))
+    // The kept users stay at the head of the queue: the next batch starts after them.
+    expect(h.rpc).toHaveBeenNthCalledWith(2, 'cleanup_expired_sandbox_users', {
+      p_max_age_hours: 24,
+      p_limit: 10,
+      p_offset: 2,
+    })
   })
 
   it('logs at most twenty failed users per run and counts the rest', async () => {

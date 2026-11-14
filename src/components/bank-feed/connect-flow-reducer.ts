@@ -70,6 +70,8 @@ export interface FlowState {
   bankLocked: boolean
   /** The bank's details, once read for the chosen BIC: signing approach and sparbanker. */
   bankDetails: OpenPaymentsBankDetails | null
+  /** The BIC whose details could not be read: the flow goes on with what the list said. */
+  bankDetailsFailedBic: string | null
   affiliate: FlowAffiliate | null
   context: AccountContext | null
   method: ConnectMethod
@@ -150,6 +152,7 @@ export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowSta
     bank,
     bankLocked: bank !== null && (mode === 'switch' || mode === 'renew'),
     bankDetails: null,
+    bankDetailsFailedBic: null,
     affiliate: null,
     context: null,
     method: returned ? 'redirect' : 'qr',
@@ -194,6 +197,8 @@ export type FlowAction =
   | { type: 'bank_resolved'; bic: string | null }
   /** The bank's details arrived for the chosen BIC (ignored for another bank). */
   | { type: 'bank_details_loaded'; details: OpenPaymentsBankDetails }
+  /** The details of this BIC could not be read: nothing more to wait for. */
+  | { type: 'bank_details_failed'; bic: string }
   | { type: 'affiliate_picked'; affiliate: FlowAffiliate | null }
   /** A resumed connection told us its bank (the row names it). */
   | { type: 'connection_known'; bank: FlowBank }
@@ -231,6 +236,20 @@ export function pollingActive(state: FlowState): boolean {
   if (state.closing || state.step !== 'bankid' || !state.connectionId || state.pollError) return false
   if (state.mode === 'resume' && state.attempt === null) return state.pollState !== 'failed' && state.pollState !== 'valid'
   return state.attempt !== null && (state.pollState === null || state.pollState === 'pending' || state.pollState === 'partially_authorised')
+}
+
+/**
+ * Whether the chosen bank's details have answered (or failed to): only then
+ * is it known whether the bank has offices or sparbanker to choose among, so
+ * Continue waits for it. A bank started before its picker showed goes out
+ * without an office, which a bank that needs one always refuses (for #208).
+ * A read that failed counts as settled: the flow goes on with what the list
+ * said, as before.
+ */
+export function bankDetailsSettled(state: Pick<FlowState, 'bank' | 'bankDetails' | 'bankDetailsFailedBic'>): boolean {
+  const bic = state.bank?.bic
+  if (!bic) return false
+  return state.bankDetails?.bic === bic || state.bankDetailsFailedBic === bic
 }
 
 /**
@@ -374,6 +393,9 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       const affiliate = state.affiliate ?? action.details.affiliates.find((a) => sameName(a.name, bankName)) ?? null
       return { ...state, bankDetails: action.details, affiliate }
     }
+
+    case 'bank_details_failed':
+      return { ...state, bankDetailsFailedBic: action.bic }
 
     case 'affiliate_picked':
       return { ...state, affiliate: action.affiliate }

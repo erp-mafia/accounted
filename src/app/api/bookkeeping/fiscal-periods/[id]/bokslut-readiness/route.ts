@@ -21,11 +21,14 @@ export const GET = withRouteContext(
       const report = await buildBokslutReadinessReport(supabase, companyId, user.id, id)
       return NextResponse.json({ data: report })
     } catch (err) {
-      opLog.error('bokslut readiness aggregation failed', err as Error)
-      const message = err instanceof Error ? err.message : ''
-      if (/not found/i.test(message)) {
+      // The period is not one of the active company's (a tab left open after
+      // switching company, a period removed since): a 404 the page shows as
+      // its message, logged by errorResponseFromCode at warn. Not an
+      // aggregation failure, so nothing at error level.
+      if ((err as { code?: unknown } | null)?.code === 'PERIOD_NOT_FOUND') {
         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
       }
+      opLog.error('bokslut readiness aggregation failed', err as Error)
       return errorResponseFromCode('YEAR_END_PREVIEW_FAILED', opLog, {
         requestId,
         details: { reason: getErrorMessage(err) },

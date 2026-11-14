@@ -4,7 +4,12 @@ import { bankBookingContext } from './bank-booking-context'
 import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag, mergeDimensionBags } from './dimension-resolver'
 import { roundOre } from '@/lib/money'
-import { InvalidMappingResultError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
+import {
+  InvalidMappingResultError,
+  TransactionLinesNotBalancedError,
+  TransactionMissingSekValueError,
+} from '@/lib/bookkeeping/errors'
+import { lineBalance } from './line-balance'
 import { createLogger } from '@/lib/logger'
 import type { LinkBasisColumns } from '@/lib/links/link-basis'
 import { postingPort } from '@/lib/posting/port'
@@ -72,6 +77,7 @@ function vatBesideBusinessLine(vatLines: VatJournalLine[], businessSide: 'debit'
  * gets the amount net of deductible input VAT while the bank line stays gross.
  * Used both by createTransactionJournalEntry (commit) and by the staged
  * categorization preview, so the lines a user approves are the lines posted.
+ * Lines that do not balance are never returned: TransactionLinesNotBalancedError.
  *
  * Standard expense pattern (domestic purchase with 25% VAT):
  *   Debit  5xxx/6xxx Expense account  [net amount]
@@ -318,6 +324,24 @@ export function buildTransactionEntryLines(
         }),
       )
     }
+  }
+
+  // The lines must balance before anyone previews or posts them. The check is
+  // the engine's own (lineBalance, on the amounts as stored), so nothing that
+  // booked before is refused here: only what the engine would refuse later,
+  // as a failed request. A single pair balances by construction (its business
+  // line is the bank amount net of the moms beside it); a learned line
+  // pattern does not have to, since its lines keep their learned sides beside
+  // the full bank amount. An all-zero entry has no difference and is left to
+  // the engine, which refuses it by its own rule.
+  const balance = lineBalance(lines)
+  if (balance.difference !== 0) {
+    throw new TransactionLinesNotBalancedError(
+      transaction.id,
+      balance.totalDebit,
+      balance.totalCredit,
+      mappingResult.all_lines_complete === true && !mappingResult.default_private,
+    )
   }
 
   return lines

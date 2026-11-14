@@ -37,6 +37,7 @@ export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const TX_MISSING_SEK_VALUE = 'TX_MISSING_SEK_VALUE' as const
+export const TX_LINES_NOT_BALANCED = 'TX_LINES_NOT_BALANCED' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
 export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
@@ -913,6 +914,33 @@ export class TransactionMissingSekValueError extends Error {
 }
 
 /**
+ * The lines a kontering builds for a bank row do not balance, so the booking
+ * is refused where the lines are built (buildTransactionEntryLines), before
+ * any draft: the engine would refuse the same lines (hard rule 3), but only
+ * after the request reached it, as a failure of ours with no word on what to
+ * do. A single debit/credit pair nets its moms against the bank line and
+ * balances by construction; a learned line pattern (all_lines_complete) books
+ * its lines at their own amounts and sides beside the full bank amount, and a
+ * pattern whose lines net on the bank's own side, or whose moms line sits
+ * opposite its cost lines, cannot be replayed on the row.
+ */
+export class TransactionLinesNotBalancedError extends Error {
+  readonly code = TX_LINES_NOT_BALANCED
+  constructor(
+    public readonly transactionId: string,
+    public readonly totalDebit: number,
+    public readonly totalCredit: number,
+    /** The lines came from a learned line pattern, not a single pair. */
+    public readonly fromLinePattern: boolean,
+  ) {
+    super(
+      `The booking built for transaction ${transactionId} does not balance: debits (${totalDebit}) != credits (${totalCredit})`
+    )
+    this.name = 'TransactionLinesNotBalancedError'
+  }
+}
+
+/**
  * A verifikat above the acting API key's unattended ceiling
  * (api_keys.unattended_commit_limit): refused before a voucher number is
  * drawn, so nothing is posted and the series has no gap. A person posts it
@@ -1125,6 +1153,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
+    err instanceof TransactionLinesNotBalancedError ||
     err instanceof UnattendedCommitLimitExceededError ||
     err instanceof BookingReviewRequiredError ||
     err instanceof AccrualDraftPostedByScheduleError ||
@@ -1393,6 +1422,24 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
             transactionId: err.transactionId,
             currency: err.currency,
             date: err.date,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof TransactionLinesNotBalancedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            transactionId: err.transactionId,
+            totalDebit: err.totalDebit,
+            totalCredit: err.totalCredit,
+            fromLinePattern: err.fromLinePattern,
           },
         },
       },
