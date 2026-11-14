@@ -15,6 +15,7 @@ import {
   JournalEntryNotBalancedError,
   TargetPeriodClosedError,
 } from '@/lib/bookkeeping/errors'
+import { OPEN_BANKING_FAILURE_TEXTS } from '@/lib/bank-feed/failure-text'
 
 describe('getErrorMessage: typed bookkeeping error codes', () => {
   it('ACCOUNTS_NOT_IN_CHART → lists accounts to activate', () => {
@@ -1070,5 +1071,42 @@ describe('getErrorMessage: a bank sync held back says when (BANK_SYNC_COOLDOWN, 
       .filter((code) => code.startsWith('BANK_') || code.startsWith('OPEN_BANKING_'))
       .filter((code) => fieldName.test(getErrorEntry(code)?.message_sv ?? ''))
     expect(offenders).toEqual([])
+  })
+})
+
+describe('getErrorMessage: a bank\'s refusal reads in the reader\'s language (BANK_PROVIDER_REFUSED, BANK_PROVIDER_UNAVAILABLE)', () => {
+  // The envelope the bank feed's session routes answer (sessionFailureResponse:
+  // the bank's code in details, its Swedish sentence as the message), as the
+  // connect flow and Synka nu hand it over. An English reader got the
+  // registry's line for every refusal: "The bank did not accept the request.
+  // Check the details and try again."
+  const quiet = { error: () => {}, warn: () => {} }
+  const refusal = (code: string, providerCode: string) => {
+    const text = OPEN_BANKING_FAILURE_TEXTS[providerCode]
+    return errorResponseFromCode(code, quiet, { details: { provider_code: providerCode }, ...(text ? { messageSv: text.sv } : {}) }).json() as Promise<unknown>
+  }
+
+  it('names what the bank said in both languages (Swedbank, 2026-11-12: a BankID session from a cancelled attempt was still open)', async () => {
+    const body = await refusal('BANK_PROVIDER_REFUSED', 'AUTHENTICATION_SESSION_ONGOING')
+    expect(getErrorMessage(body, { locale: 'en' })).toBe('Another login session is already in progress. Wait a few minutes and try again.')
+    expect(getErrorMessage(body, { locale: 'sv' })).toBe('En annan inloggningssession pågår redan. Vänta några minuter och försök igen.')
+  })
+
+  it('every code the bank feed has a sentence for reaches an English reader as that sentence, never the generic line', async () => {
+    for (const code of ['BANK_PROVIDER_REFUSED', 'BANK_PROVIDER_UNAVAILABLE']) {
+      const generic = getErrorEntry(code)?.message_en
+      for (const [providerCode, text] of Object.entries(OPEN_BANKING_FAILURE_TEXTS)) {
+        const body = await refusal(code, providerCode)
+        expect(getErrorMessage(body, { locale: 'en' }), `${code} ${providerCode}`).toBe(text.en)
+        expect(getErrorMessage(body, { locale: 'en' }), `${code} ${providerCode}`).not.toBe(generic)
+        expect(getErrorMessage(body, { locale: 'sv' }), `${code} ${providerCode}`).toBe(text.sv)
+      }
+    }
+  })
+
+  it('a code without a sentence keeps the registry line in both languages', async () => {
+    const body = await refusal('BANK_PROVIDER_REFUSED', 'FORMAT_ERROR')
+    expect(getErrorMessage(body, { locale: 'en' })).toBe(getErrorEntry('BANK_PROVIDER_REFUSED')?.message_en)
+    expect(getErrorMessage(body, { locale: 'sv' })).toBe(getErrorEntry('BANK_PROVIDER_REFUSED')?.message_sv)
   })
 })

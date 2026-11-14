@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, OPEN_BANKING_PERMANENT_FAILURES, consentFailureText, isPermanentConsentFailure, refusalNamesReason } from '../failure-text'
+import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, OPEN_BANKING_PERMANENT_FAILURES, bankRefusalMessage, consentFailureText, isPermanentConsentFailure, refusalNamesReason } from '../failure-text'
 
 const messages = (lang: 'sv' | 'en') =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../messages/${lang}.json`, import.meta.url)), 'utf8')) as {
@@ -70,6 +70,37 @@ describe('refusalNamesReason', () => {
   it('is false when the person would only get the generic line: no code, an unknown one, the provider\'s catch-all', () => {
     for (const code of ['FORMAT_ERROR', 'CONNECTOR_AIS_REFUSED', 'UNEXPECTED_ERROR', ' unexpected_error ', 'toString', '', null, undefined]) {
       expect(refusalNamesReason(code), String(code)).toBe(false)
+    }
+  })
+})
+
+describe('bankRefusalMessage', () => {
+  // Swedbank refused a start on 2026-11-12 because the person's BankID
+  // session from a cancelled attempt was still open: the Swedish reader got
+  // the bank's sentence, an English reader the registry's generic line.
+  it('words the bank\'s code in the reader\'s language, for a refusal and for a bank that does not answer', () => {
+    const details = { provider_code: 'AUTHENTICATION_SESSION_ONGOING' }
+    expect(bankRefusalMessage('BANK_PROVIDER_REFUSED', details, 'en')).toBe('Another login session is already in progress. Wait a few minutes and try again.')
+    expect(bankRefusalMessage('BANK_PROVIDER_REFUSED', details, 'sv')).toBe('En annan inloggningssession pågår redan. Vänta några minuter och försök igen.')
+    expect(bankRefusalMessage('BANK_PROVIDER_UNAVAILABLE', { provider_code: 'BANK_SERVICE_UNAVAILABLE' }, 'en')).toBe(OPEN_BANKING_FAILURE_TEXTS.BANK_SERVICE_UNAVAILABLE.en)
+  })
+
+  it('has every sentence of the table, in both languages, whatever the case of the code', () => {
+    for (const [code, text] of Object.entries(OPEN_BANKING_FAILURE_TEXTS)) {
+      expect(bankRefusalMessage('BANK_PROVIDER_REFUSED', { provider_code: code }, 'sv'), code).toBe(text.sv)
+      expect(bankRefusalMessage('BANK_PROVIDER_REFUSED', { provider_code: ` ${code.toLowerCase()} ` }, 'en'), code).toBe(text.en)
+    }
+  })
+
+  it('is null for a code without a sentence, so the registry line stands', () => {
+    for (const details of [{ provider_code: 'FORMAT_ERROR' }, { provider_code: 'constructor' }, { provider_code: '__proto__' }, { provider_code: '' }, { provider_code: 7 }, {}, null, undefined]) {
+      expect(bankRefusalMessage('BANK_PROVIDER_REFUSED', details, 'en'), JSON.stringify(details)).toBeNull()
+    }
+  })
+
+  it('is null for every other error code, also one whose details name a provider code', () => {
+    for (const code of ['BANK_CONSENT_OVER', 'BANK_CONSENT_CHANGED', 'BANK_SYNC_COOLDOWN', 'PAYMENT_PROVIDER_REFUSED', undefined, null, 42]) {
+      expect(bankRefusalMessage(code, { provider_code: 'CONSENT_EXPIRED' }, 'en'), String(code)).toBeNull()
     }
   })
 })
