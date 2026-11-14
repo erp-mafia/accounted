@@ -30,9 +30,14 @@ export const SKATTEKONTO_NOT_SYNCED_MESSAGE =
 export async function unknownAccountKeyError(
   supabase: SupabaseClient,
   companyId: string,
-  accountKey: string,
+  accountKey: unknown,
 ): Promise<Error> {
-  const parsed = parseAccountKey(accountKey)
+  // No host enforces `required`: a call without account_key reached here and
+  // read back as Unknown account_key "undefined" (15 calls, 12 companies in
+  // 14 days), naming a value nobody sent instead of the missing argument.
+  const missing = accountKey === undefined || accountKey === null || (typeof accountKey === 'string' && accountKey.trim() === '')
+  const sent = typeof accountKey === 'string' && !missing ? accountKey : null
+  const parsed = sent === null ? null : parseAccountKey(sent)
   if (parsed?.kind === 'skattekonto') {
     let token: Awaited<ReturnType<typeof findCompanyTokenUser>> = null
     try {
@@ -70,5 +75,10 @@ export async function unknownAccountKeyError(
   const keys = known.length > 0
     ? ` Known keys: ${known.join(', ')}.`
     : ' No reconciliation accounts yet: connect a bank or Skatteverket, or use manual:<BAS>.'
-  return codedRefusal('VALIDATION_ERROR', `Unknown account_key "${accountKey}" for this company.${format}${keys}`)
+  const lead = missing
+    ? 'account_key is required.'
+    : sent === null
+      ? `account_key must be a string (got ${JSON.stringify(accountKey)}).`
+      : `Unknown account_key "${sent}" for this company.`
+  return codedRefusal('VALIDATION_ERROR', `${lead}${format}${keys}`)
 }

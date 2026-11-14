@@ -87,6 +87,31 @@ describe('gnubok_list_inbox_items', () => {
     expect(outputSchema.required).toEqual(['items', 'count'])
   })
 
+  it('returns each row\'s document_id, the id the document tools take', async () => {
+    // A mail or WhatsApp arrival's document has an id of its own. The list
+    // returned only the item id, so agents sent it as document_id and
+    // gnubok_get_document_content answered NOT_FOUND (72 calls, 25 companies,
+    // 2026-10-29..11-11).
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-mail', source: 'email', document_id: 'doc-of-its-own', created_at: '2026-07-31T12:00:00Z' }),
+        makeInboxItem({ id: 'inbox-empty', source: 'email', document_id: null, created_at: '2026-07-30T12:00:00Z' }),
+      ],
+      error: null,
+    })
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; document_id: string | null }>
+    }
+
+    expect(findCall('invoice_inbox_items', 'select')?.[0]).toMatch(/\bid, document_id,/)
+    expect(result.items.map((item) => [item.id, item.document_id])).toEqual([
+      ['inbox-mail', 'doc-of-its-own'],
+      ['inbox-empty', null],
+    ])
+  })
+
   it('joins the document and returns its file_name on each list row', async () => {
     // The embed is an OBJECT: invoice_inbox_items.document_id is many-to-one.
     // Reading it as an array gave every row file_name null in production

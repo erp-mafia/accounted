@@ -242,6 +242,50 @@ describe('gnubok_get_salary_run', () => {
     })
   })
 
+  // Replays "No salary run for 2026-11 in this company." (78 calls, 35
+  // companies, 2026-10-30..11-12): agents then asked for 2026-10, 2026-09...
+  it('names the runs that do exist when the asked month has none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({
+      data: [
+        { id: 'run-sep', period_year: 2026, period_month: 9, status: 'paid' },
+        { id: 'run-aug', period_year: 2026, period_month: 8, status: 'booked' },
+      ],
+    })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(error.message_en).toBe(
+      'No salary run for 2026-11 in this company. Its latest runs: 2026-09 (paid, salary_run_id run-sep); 2026-08 (booked, salary_run_id run-aug).',
+    )
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_create_salary_run' })
+  })
+
+  it('says so when the company has no salary runs at all', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: [] })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.message_en).toBe(
+      'No salary run for 2026-11 in this company. The company has no salary runs at all, so no other month has one either.',
+    )
+  })
+
+  it('claims nothing about other months when listing them failed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(error.message_en).toBe('No salary run for 2026-11 in this company.')
+  })
+
   it('answers VALIDATION_ERROR for a missing selector', async () => {
     const { supabase } = createQueuedMockSupabase()
     const error = await refusal('gnubok_get_salary_run', {}, supabase)

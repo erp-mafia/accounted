@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 import { findUnknownArgKeys } from '../arg-guard'
+import { toToolError } from '../tool-result'
 
 const companyId = '11111111-1111-4111-8111-111111111111'
 const userId = '22222222-2222-4222-8222-222222222222'
@@ -122,4 +123,76 @@ describe('gnubok_get_document_content include', () => {
   it('declares include, from_page and max_chars, so the argument guard lets them through', () => {
     expect(findUnknownArgKeys(tool.inputSchema, { document_id: documentId, include: ['text'], from_page: 2, max_chars: 1000 })).toEqual([])
   })
+})
+
+/**
+ * Replays of the 72 NOT_FOUND answers this tool gave in 14 days (25
+ * companies, 2026-10-29..11-11): an inbox item id where the document id
+ * belongs (17 of the 31 distinct UUIDs), and ids that are no UUID at all (a
+ * chat client's own file id, 37 calls from one agent).
+ */
+describe('gnubok_get_document_content with an id that is not a document id', () => {
+  const inboxItemId = '55555555-5555-4555-8555-555555555555'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('reads the document an inbox item holds when sent the inbox item id', async () => {
+    const { client, findCalls } = db({
+      // No document has the inbox item's id; the second read is by the held id.
+      document_attachments: [{ data: null }, { data: DOC_ROW }],
+      invoice_inbox_items: { data: [{ id: inboxItemId, document_id: documentId }] },
+    })
+    const result = (await tool.execute({ document_id: inboxItemId }, companyId, userId, client)) as Record<string, unknown>
+
+    expect(result).toMatchObject({ document_id: documentId, file_name: 'faktura-1001.pdf' })
+    expect(result.signed_url).toContain('/api/storage/sign/')
+    expect(findCalls('invoice_inbox_items', 'eq')).toEqual(expect.arrayContaining([['company_id', companyId]]))
+    expect(findCalls('document_attachments', 'eq')).toEqual(
+      expect.arrayContaining([['id', inboxItemId], ['id', documentId]]),
+    )
+  })
+
+  it('reads a document id sent with stray spaces around it', async () => {
+    const { client, findCalls } = db({ document_attachments: { data: DOC_ROW } })
+    const result = (await tool.execute({ document_id: ` ${documentId}\n` }, companyId, userId, client)) as Record<string, unknown>
+
+    expect(result).toMatchObject({ document_id: documentId })
+    expect(findCalls('document_attachments', 'eq')).toEqual(expect.arrayContaining([['id', documentId]]))
+  })
+
+  it('a UUID that is neither stays NOT_FOUND and says where document ids come from', async () => {
+    const { client } = db({ document_attachments: { data: null }, invoice_inbox_items: { data: [] } })
+    const error = await tool.execute({ document_id: inboxItemId }, companyId, userId, client).then(() => null, (err: Error) => err)
+    const envelope = toToolError(error, { toolName: 'gnubok_get_document_content' }).error
+    expect(envelope).toMatchObject({ code: 'NOT_FOUND', retryable: false })
+    expect(envelope.message_en).toContain(`no document with id ${inboxItemId} in this company`)
+    expect(envelope.message_en).toContain('gnubok_list_inbox_items')
+    expect(envelope.message_en).toContain('gnubok_list_records')
+  })
+
+  // The shapes that were sent, with made-up values.
+  it.each(['file_AbCdEfGhIjKlMnOp', 'doc:file_AbCdEfGhIjKlMnOp', 'placeholder', '1a2b3c4d'])(
+    'an id that is no UUID (%s) is named as such, with the upload as the next step, and never reaches the inbox lookup',
+    async (id) => {
+      const { client, tables } = db({ document_attachments: { data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } } })
+      const error = await tool.execute({ document_id: id }, companyId, userId, client).then(() => null, (err: Error) => err)
+      const envelope = toToolError(error, { toolName: 'gnubok_get_document_content' }).error
+      expect(envelope).toMatchObject({
+        code: 'NOT_FOUND',
+        retryable: false,
+        remediation: { tool: 'gnubok_create_document_upload' },
+      })
+      expect(envelope.message_en).toContain(`${JSON.stringify(id)} is not a document id`)
+      expect(envelope.message_en).toContain('only in this conversation is not in Accounted yet')
+      expect(envelope.message_en).not.toContain('invalid input syntax')
+      expect(tables()).toEqual(['document_attachments'])
+    },
+  )
 })

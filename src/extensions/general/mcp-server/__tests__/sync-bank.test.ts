@@ -24,6 +24,7 @@ import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const CONNECTION_ID = '22222222-2222-4222-8222-222222222222'
@@ -165,14 +166,28 @@ describe('gnubok_sync_bank', () => {
     ).rejects.toMatchObject({ code })
   })
 
-  it('passes a blank connection_id through as an empty string (runner answers NOT_FOUND)', async () => {
-    mocks.triggerConnectionSync.mockResolvedValue({ ok: false, code: 'NOT_FOUND', connection_id: '' })
-    await expect(tool.execute({}, COMPANY_ID, 'user-1', {} as never)).rejects.toMatchObject({
-      code: 'NOT_FOUND',
-    })
-    expect(mocks.triggerConnectionSync).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ connectionId: '' }),
+  // Replays the 12 calls (10 companies, 2026-10-29..11-09) that sent no
+  // connection_id: the runner passed '' to a uuid column and the agent read
+  // `invalid input syntax for type uuid: ""`.
+  it.each([
+    [{}, 'connection_id is required'],
+    [{ connection_id: '' }, 'connection_id is required'],
+    [{ connection_id: '  ' }, 'connection_id is required'],
+    [{ connection_id: 'Swedbank' }, 'must be the UUID of a connection from gnubok_connect_bank (got "Swedbank")'],
+  ])('refuses %j before the runner, naming where the id comes from', async (args, expected) => {
+    const error = await tool.execute(args, COMPANY_ID, 'user-1', {} as never).then(
+      () => null,
+      (err: Error) => err,
     )
+    expect(error).not.toBeNull()
+    expect(mocks.triggerConnectionSync).not.toHaveBeenCalled()
+    const envelope = toToolError(error, { toolName: 'gnubok_sync_bank' }).error
+    expect(envelope).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      retryable: false,
+      remediation: { tool: 'gnubok_connect_bank' },
+    })
+    expect(envelope.message_en).toContain(expected)
+    expect(envelope.message_en).not.toContain('invalid input syntax')
   })
 })
