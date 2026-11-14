@@ -15,6 +15,7 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 
 const log = createLogger('deadline-status')
 
@@ -113,12 +114,12 @@ export async function getDeadlinesNeedingAttention(
   actionNeeded: Array<{ id: string; title: string; due_date: string; tax_deadline_type: string | null }>
   overdue: Array<{ id: string; title: string; due_date: string; tax_deadline_type: string | null }>
 }> {
-  const { data: deadlines, error } = await supabase
-    .from('deadlines')
-    .select('id, title, due_date, tax_deadline_type, status')
-    .eq('company_id', companyId)
-    .eq('is_completed', false)
-    .is('dismissed_at', null)
+  const { data: deadlines, error } = await filterOpenDeadlines(
+    supabase
+      .from('deadlines')
+      .select('id, title, due_date, tax_deadline_type, status')
+      .eq('company_id', companyId),
+  )
     .in('status', ['action_needed', 'overdue'])
     .order('due_date', { ascending: true })
 

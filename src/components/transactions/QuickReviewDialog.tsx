@@ -37,6 +37,7 @@ import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { vatWithinGrossCeiling } from '@/lib/bookkeeping/gross-split'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import JournalEntryPreview from './JournalEntryPreview'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -522,7 +523,11 @@ export default function QuickReviewDialog({
     proposal.booking.kind !== 'counterparty' &&
     proposedVatSek > 0 &&
     !previewSekMissing &&
-    (docFacts?.currency ?? previewTx.currency) === previewTx.currency
+    (docFacts?.currency ?? previewTx.currency) === previewTx.currency &&
+    // More moms than the row can hold (a misread, or a document that covers
+    // more than this payment) is refused by the booking, so it is never
+    // offered: the proposal's rate books, as when the document states none.
+    vatWithinGrossCeiling(docVat, previewTx.amount)
   const proposedVatInTxCurrency =
     previewTx && previewSekAmount && Math.abs(previewSekAmount) > 0
       ? proposedVatSek * (Math.abs(previewTx.amount) / Math.abs(previewSekAmount))

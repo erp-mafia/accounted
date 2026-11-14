@@ -1,5 +1,5 @@
 import type { MappingResult, Transaction, VatTreatment } from '@/types'
-import { grossVat } from './gross-split'
+import { maxVatInGross, vatWithinGrossCeiling } from './gross-split'
 import { roundOre } from '@/lib/money'
 import { resolveSekAmount } from './currency-utils'
 import { getVatRate } from './vat-entries'
@@ -32,8 +32,8 @@ export function applyVatAmountOverride(
     throw new Error(`vat_amount must be a positive number, got ${vatAmount}.`)
   }
   const absAmount = Math.abs(transaction.amount)
-  const maxVat = grossVat(absAmount, 0.25)
-  if (vatAmount > maxVat) {
+  const maxVat = maxVatInGross(absAmount)
+  if (!vatWithinGrossCeiling(vatAmount, absAmount)) {
     throw new Error(
       `vat_amount ${vatAmount} exceeds the maximum possible Swedish VAT on ${absAmount} (${maxVat} at 25%). ` +
         'Check the underlag: the override must be the document\'s actual moms.',

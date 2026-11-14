@@ -257,10 +257,15 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     .eq('company_id', companyId)
     .limit(500)
   const runEmployees = await capped((r) => supabase.from('salary_run_employees').select('salary_run_id, employee_id, gross_salary').eq('company_id', companyId).order('id').range(r.from, r.to), 5000)
+  // Open deadlines only, the rule of lib/deadlines/open.ts written out here
+  // (this block does not depend on the deadlines block): the stored status
+  // survives a tick-off and a dismissal, so it cannot say what is open.
   const deadlines = await supabase
     .from('deadlines')
     .select('id, title, due_date, deadline_type, tax_deadline_type, status')
     .eq('company_id', companyId)
+    .eq('is_completed', false)
+    .is('dismissed_at', null)
     .gte('due_date', today)
     .lte('due_date', horizon)
     .in('status', ['upcoming', 'action_needed', 'in_progress', 'overdue'])

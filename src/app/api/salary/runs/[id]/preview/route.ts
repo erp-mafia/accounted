@@ -63,15 +63,35 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Load employees with line items: the columns the booking reads
     // (book-run.ts ROSTER_SELECT), so preview and voucher are built from
     // one input.
-    const { data: employees } = await supabase
+    const { data: employees, error: employeesError } = await supabase
       .from('salary_run_employees')
       .select(
         '*, employee:employees(employment_type, personnel_category, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
       )
       .eq('salary_run_id', id)
 
-    if (!employees || employees.length === 0) {
-      return NextResponse.json({ error: 'Inga beräknade resultat: kör beräkning först' }, { status: 400 })
+    // A failed read must not masquerade as "run without employees".
+    if (employeesError || !employees) {
+      log.error('salary run preview: roster read failed', { salaryRunId: id, message: employeesError?.message })
+      return NextResponse.json({ error: 'Kunde inte läsa lönekörningens anställda' }, { status: 500 })
+    }
+
+    // A run without employees is valid: the calculation accepts an empty
+    // roster (run-calculation.ts, the nolldeklaration month) and the booking
+    // posts nothing for it (book-run.ts isNollkorning). So the preview is the
+    // empty one, every entry null, which the page renders as "inga verifikat
+    // bokförs". This used to answer 400, an error for a state that is not one
+    // (for #206).
+    if (employees.length === 0) {
+      return NextResponse.json({
+        data: {
+          balanced: true,
+          salaryEntry: null,
+          avgifterEntry: null,
+          vacationEntry: null,
+          pensionEntry: null,
+        },
+      })
     }
 
     // The preview IS the booking's line builder (buildSalaryRunEntryLines):

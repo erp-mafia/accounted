@@ -88,6 +88,30 @@ export function grossVat(gross: number, rate: number): number {
   return splitGrossVat(gross, rate).vat
 }
 
+/** The highest Swedish VAT rate (ML 2023:200 9 kap. 2 §): no document states more of its gross as moms. */
+export const HIGHEST_VAT_RATE = 0.25
+
+/**
+ * The most moms a VAT-inclusive amount can hold: its share at the highest
+ * rate (HIGHEST_VAT_RATE), which is 25 % of the net. A mixed-rate document
+ * holds less, never more.
+ */
+export function maxVatInGross(gross: number): number {
+  return grossVat(Math.abs(gross), HIGHEST_VAT_RATE)
+}
+
+/**
+ * Whether a document's stated moms can be the moms inside this gross: at most
+ * maxVatInGross, both taken to the öre. The one ceiling for booking "moms
+ * enligt underlag": the booking refuses a figure above it, and a client asks
+ * here before it sends one, so the two never disagree. A higher figure is a
+ * misread, or a document that covers more than this payment. Both amounts
+ * are in the same currency.
+ */
+export function vatWithinGrossCeiling(vat: number, gross: number): boolean {
+  return roundOre(vat) <= maxVatInGross(gross)
+}
+
 /**
  * The domestic VAT treatment for a decimal rate (0.25, 0.12, 0.06), or null
  * for any other rate.

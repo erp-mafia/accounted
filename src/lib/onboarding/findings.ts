@@ -4,6 +4,7 @@ import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadAiConnection } from '@/lib/onboarding/ai-clients.server'
 import { roundOre } from '@/lib/money'
 import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import { SKATTEKONTO_ACCOUNT_DEFAULT } from '@/lib/skatteverket/skattekonto-account'
 
 /**
@@ -129,13 +130,13 @@ export async function loadBooksFindings(
       .from('skatteverket_tokens')
       .select('status')
       .eq('company_id', companyId),
-    supabase
-      .from('deadlines')
-      .select('tax_deadline_type, due_date')
-      .eq('company_id', companyId)
-      .in('tax_deadline_type', TAX_DEADLINES_OF_INTEREST)
-      .eq('is_completed', false)
-      .is('dismissed_at', null)
+    filterOpenDeadlines(
+      supabase
+        .from('deadlines')
+        .select('tax_deadline_type, due_date')
+        .eq('company_id', companyId)
+        .in('tax_deadline_type', TAX_DEADLINES_OF_INTEREST),
+    )
       .gte('due_date', today)
       .order('due_date', { ascending: true })
       .limit(3),

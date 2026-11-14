@@ -189,6 +189,16 @@ describe('Accounted://company/current query shape', () => {
     expect(argsOf(delivery, 'order')).toContainEqual(['sent_at', { ascending: false }])
   })
 
+  it('lists open deadlines only: neither completed nor dismissed (crm#1848, #207)', async () => {
+    const { supabase, calls } = createRecordingSupabase(emptyResults())
+
+    await companyCurrentResource.read(ctx(supabase))
+
+    const [deadlines] = findCall(calls, 'deadlines')
+    expect(argsOf(deadlines, 'eq')).toContainEqual(['is_completed', false])
+    expect(argsOf(deadlines, 'is')).toEqual([['dismissed_at', null]])
+  })
+
   it('filters categorizations on a source_type the engine actually writes', async () => {
     const { supabase, calls } = createRecordingSupabase(emptyResults())
 

@@ -78,14 +78,33 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 400 when the run has no calculated employees', async () => {
+  it('returns an empty preview, not an error, for a run without employees', async () => {
     enqueue({ data: CALCULATED_RUN }) // salary_runs
-    enqueue({ data: [] }) // salary_run_employees: nothing calculated yet
+    enqueue({ data: [] }) // salary_run_employees: an empty roster is a valid run
     const response = await GET(
       createMockRequest('/api/salary/runs/run-1/preview'),
       createMockRouteParams({ id: 'run-1' }),
     )
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    // The shape the page renders as "no vouchers are posted": every entry null.
+    expect(data).toEqual({
+      balanced: true,
+      salaryEntry: null,
+      avgifterEntry: null,
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+  })
+
+  it('returns 500, not an empty preview, when the roster read fails', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({ data: null, error: { message: 'statement timeout' } }) // salary_run_employees
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(500)
   })
 
   it('returns 500 when the posted-voucher lookup fails for a booked run', async () => {

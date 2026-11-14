@@ -3,7 +3,7 @@ import { bankRowVatLines, getVatRate, type BankRowNature, type ReverseChargeKind
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount } from './invoice-accounts'
 import { roundOre } from '@/lib/money'
-import { grossVat } from '@/lib/bookkeeping/gross-split'
+import { maxVatInGross, vatWithinGrossCeiling } from '@/lib/bookkeeping/gross-split'
 import { ownerSettlementAccount, templateAccountForForm } from '@/lib/company/entity-type'
 import {
   isNotVatRegistered,
@@ -326,8 +326,10 @@ export function buildMappingResultFromCategory(
     // any legitimate document VAT: even on mixed-rate receipts. The bound and
     // the override share the transaction's currency (both come off the
     // underlag), so the comparison stays in that currency.
-    const maxVat = grossVat(absAmount, 0.25)
-    if (vatAmountOverride > maxVat) {
+    // The ceiling is vatWithinGrossCeiling, the one the review asks before
+    // it sends a document's moms.
+    const maxVat = maxVatInGross(absAmount)
+    if (!vatWithinGrossCeiling(vatAmountOverride, absAmount)) {
       const currencyTag = transaction.currency && transaction.currency !== 'SEK'
         ? ` ${transaction.currency}` : ''
       throw new Error(

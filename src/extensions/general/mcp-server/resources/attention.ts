@@ -1,5 +1,6 @@
 import type { McpResource } from './types'
 import { ACTION_NEEDED_THRESHOLD_DAYS } from '@/lib/deadlines/status-engine'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import {
   fetchUnlinkedDocuments,
   UNLINKED_DOCUMENT_SCAN_CAP,
@@ -142,11 +143,14 @@ export const attentionResource: McpResource = {
         .from('voucher_sequences')
         .select('voucher_series, fiscal_period_id')
         .eq('company_id', companyId),
-      supabase
-        .from('deadlines')
-        .select('id, title, due_date, deadline_type, tax_deadline_type, status')
-        .eq('company_id', companyId)
-        .eq('is_completed', false)
+      // Open deadlines only (lib/deadlines/open.ts): a dismissed deadline is
+      // gone from /deadlines and Att göra, so it is gone for the agent too.
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, title, due_date, deadline_type, tax_deadline_type, status')
+          .eq('company_id', companyId),
+      )
         .lte('due_date', horizon)
         .order('due_date', { ascending: true })
         .limit(20),

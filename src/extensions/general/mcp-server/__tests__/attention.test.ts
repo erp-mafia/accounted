@@ -611,3 +611,19 @@ describe('Accounted://attention: today is the Swedish calendar day', () => {
     expect(findCall('fiscal_periods', 'gte')).toEqual(['period_end', today])
   })
 })
+
+/*
+ * crm#1848, #207: the agent's deadline list is the open set /deadlines and
+ * Att göra show. A dismissed deadline stayed in it and read as overdue.
+ */
+describe('Accounted://attention: deadlines are the open ones', () => {
+  it('leaves out completed and dismissed deadlines', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(findCalls('deadlines', 'eq')).toContainEqual(['is_completed', false])
+    expect(findCalls('deadlines', 'is')).toEqual([['dismissed_at', null]])
+  })
+})
