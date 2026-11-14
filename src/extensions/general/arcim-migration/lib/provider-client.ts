@@ -38,6 +38,7 @@ import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent as resolveConsentForIdentity } from '@/lib/providers/resolve-consent'
 import { saveConsentTokens } from '@/lib/providers/consent-tokens'
+import { subscriptionRefusal } from '@/lib/providers/with-provider-call'
 import type { CompanyInformationDto } from '@/lib/providers/dto'
 import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
@@ -419,6 +420,51 @@ export async function peekOAuthState(
   return resolveOAuthStateRow(supabase, row)
 }
 
+/**
+ * Move the logins still open on `fromConsentIds` (states a callback can still
+ * use, under the same predicates as consumeOAuthState and peekOAuthState:
+ * unused, not a handoff row, unexpired) onto `toConsentId`. POST /connect
+ * calls it before deleting the earlier attempts of the same company and
+ * provider, so a login window left open from an earlier click finishes on the
+ * new attempt instead of coming back to a deleted state. Each state keeps its
+ * initiator and origin; only the consent it resolves to changes, within one
+ * company.
+ *
+ * A failed move logs and answers 0: /connect then cleans up as it did before,
+ * which costs the open window, never the new connect.
+ */
+export async function moveOpenLogins(fromConsentIds: string[], toConsentId: string): Promise<number> {
+  if (fromConsentIds.length === 0) return 0
+  const { data, error } = await createServiceClient()
+    .from('provider_otc')
+    .update({ consent_id: toConsentId })
+    .in('consent_id', fromConsentIds)
+    .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
+    .gt('expires_at', new Date().toISOString())
+    .select('code')
+  if (error) {
+    log.warn('open provider logins could not be moved to the new connect', { toConsentId, reason: error.message })
+    return 0
+  }
+  return data?.length ?? 0
+}
+
+/**
+ * Whether the consent already holds provider tokens: the login renews a
+ * connection the company has, rather than making its first one. The OAuth
+ * callback words a licence refusal by it. A failed read answers false.
+ */
+export async function consentHoldsTokens(consentId: string): Promise<boolean> {
+  const { data, error } = await createServiceClient()
+    .from('provider_consent_tokens')
+    .select('consent_id')
+    .eq('consent_id', consentId)
+    .limit(1)
+  return !error && (data?.length ?? 0) > 0
+}
+
 export type OAuthStateRejectionReason = 'unknown' | 'used' | 'expired' | 'handoff'
 
 /**
@@ -770,10 +816,21 @@ export async function ensureConsentSourceIdentity(
     const resolved = await resolveConsentForIdentity(companyId, consentId)
     info = await fetchCompanyInfoDirect(provider, resolved.accessToken, resolved.providerCompanyId)
   } catch (error) {
+    // The customer's subscription at the provider refuses (no API module, no
+    // licence): every register call would too, so the register fetch stops
+    // with that sentence instead of the RPC's bare "identity missing".
+    if (subscriptionRefusal(error)) throw error
+    // Anything else leaves the identity unfilled and the RPC refuses. The
+    // status and the provider's own body say why (a Visma 403 on the company
+    // settings read the same as an inactive module in the log until now).
+    const failed = error as { statusCode?: unknown; status?: unknown; body?: unknown } | null
+    const status = failed?.statusCode ?? failed?.status
     log.warn('provider company information unavailable; source identity not filled', {
       provider,
       consentId,
       reason: error instanceof Error ? error.message : 'unknown',
+      ...(typeof status === 'number' ? { status } : {}),
+      ...(typeof failed?.body === 'string' && failed.body ? { body: failed.body.slice(0, 300) } : {}),
     })
     return 'unavailable'
   }

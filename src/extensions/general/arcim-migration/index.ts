@@ -16,6 +16,8 @@ import {
   consumeOAuthState,
   peekOAuthState,
   oauthStateRejectionReason,
+  moveOpenLogins,
+  consentHoldsTokens,
   mintHandoff,
   consumeHandoff,
   getAuthUrl,
@@ -94,7 +96,13 @@ import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
-import { classifyProviderError, ProviderCallError } from '@/lib/providers/with-provider-call'
+import {
+  classifyProviderError,
+  fortnoxLoginLicenceRefusal,
+  isMissingLicenseError,
+  ProviderCallError,
+  subscriptionRefusal,
+} from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
@@ -135,14 +143,45 @@ const OAUTH_CANCELLED_MESSAGE =
   'Du avbröt anslutningen i leverantörens inloggning. Försök igen om du vill koppla kontot.'
 
 /**
+ * Fortnox's error_missing_license on a first connect: the Fortnox company the
+ * customer logged in to lacks the licence a requested scope needs. A first
+ * connect asks for bokföring, kunder, leverantörer and fakturor, which
+ * Fortnox's scope table ties to Bokföring and to Kundfaktura or Order. Two
+ * customers met it on 2026-11-12; both connected within minutes by logging in
+ * again.
+ */
+const FORTNOX_SCOPE_LICENCE_MESSAGE =
+  'Fortnox nekade anslutningen: Fortnox-företaget du loggade in på saknar licens för något som Accounted läser vid flytten. ' +
+  'Flytten läser bokföring, kunder, leverantörer och fakturor och kräver licenserna Bokföring och Kundfaktura (eller Order) i Fortnox. ' +
+  'Har du flera företag i Fortnox: anslut igen och välj det företag som ska flyttas. ' +
+  'Saknar företaget licenserna kan du flytta bokföringen med SIE-filer i stället.'
+
+/**
+ * The same refusal on a login that renews a connection the company already
+ * has (an expired token, or Hämta underlag asking for Fortnox's archive too).
+ * The callback cannot tell which scopes the login asked for, so it names none;
+ * nothing was exchanged, so the existing connection stands.
+ */
+const FORTNOX_SCOPE_LICENCE_RECONNECT_MESSAGE =
+  'Fortnox nekade inloggningen: Fortnox-företaget saknar licens för något som Accounted bad om att få läsa. ' +
+  'Anslutningen du redan har påverkas inte. ' +
+  'Har du flera företag i Fortnox: försök igen och välj samma företag som förut. ' +
+  'Annars: kontrollera företagets licenser i Fortnox och försök igen.'
+
+/**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
  * Swedish guidance. Falls back to the raw provider message so we never hide
- * unknown errors from the user.
+ * unknown errors from the user. `consentId` is the consent the state was
+ * minted for, read from the state row, never from the query.
  */
-function translateOAuthError(error: string, description: string | null): string {
-  const haystack = `${error} ${description ?? ''}`.toLowerCase()
-
-  if (haystack.includes('missing license') || haystack.includes('not have enough licenses')) {
+async function translateOAuthError(error: string, description: string | null, consentId: string): Promise<string> {
+  // Licence refusals are read where every other provider refusal is
+  // (with-provider-call.ts), not by substrings of their own here.
+  const licence = fortnoxLoginLicenceRefusal(error)
+  if (licence === 'scope') {
+    return (await consentHoldsTokens(consentId)) ? FORTNOX_SCOPE_LICENCE_RECONNECT_MESSAGE : FORTNOX_SCOPE_LICENCE_MESSAGE
+  }
+  if (licence === 'app' || isMissingLicenseError(`${error} ${description ?? ''}`)) {
     return 'Du behöver aktivera tilläggstjänsten "Fortnox Integration" (~149 kr/mån) på ditt Fortnox-konto innan du kan ansluta. Aktivera den under Inställningar → Tilläggstjänster i Fortnox och försök igen.'
   }
 
@@ -602,10 +641,6 @@ export const arcimMigrationExtension: Extension = {
                 })
               }
             }
-            // No tokens found: clean up abandoned consents
-            for (const p of pending) {
-              await deleteConsent(p.id)
-            }
           }
 
           // Create new consent
@@ -616,6 +651,20 @@ export const arcimMigrationExtension: Extension = {
             orgNumber,
             companyName
           )
+
+          // The earlier token-less attempts are abandoned and cleaned up. A
+          // login still open in another window moves onto this attempt first:
+          // deleting its consent took its state with it, and that window then
+          // read "ingen giltig migrationssession" whatever the provider had
+          // answered (2026-11-12: connect clicked twice, the first window's
+          // licence refusal hidden). The new row stays the record of the
+          // attempt, started now (findUnfinishedConnect).
+          if (pending.length > 0) {
+            await moveOpenLogins(pending.map(p => p.id), consent.id)
+            for (const p of pending) {
+              await deleteConsent(p.id)
+            }
+          }
 
           if (ctx.settings) {
             await ctx.settings.set('consent_id', consent.id)
@@ -928,7 +977,7 @@ export const arcimMigrationExtension: Extension = {
           responseOrigin = resolvedState.origin ?? responseOrigin
           const providerError = resolvedHandoff
             ? resolvedHandoff.providerError
-            : oauthError ? translateOAuthError(oauthError, oauthErrorDescription) : null
+            : oauthError ? await translateOAuthError(oauthError, oauthErrorDescription, consentId) : null
           if (resolvedHandoff) code = resolvedHandoff.providerCode
 
           // The state proves this callback belongs to a flow WE started; it
@@ -1120,11 +1169,7 @@ export const arcimMigrationExtension: Extension = {
             // connect time, not after a silently empty migration. Other
             // failures stay soft: the preview is still useful without company
             // info (e.g. SIE-over-API can work with narrower scopes).
-            const classified = classifyProviderError(err)
-            if (classified === 'PROVIDER_API_MODULE_INACTIVE' || classified === 'PROVIDER_LICENSE_MISSING'
-              || classified === 'BOKIO_PLAN_NO_API') {
-              throw err
-            }
+            if (subscriptionRefusal(err)) throw err
             log.info('Company info fetch failed:', err instanceof Error ? err.message : String(err))
           }
 

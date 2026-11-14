@@ -188,6 +188,26 @@ export function isProviderRefusal(error: unknown): boolean {
   return code !== null && REFUSAL_CODES.has(code)
 }
 
+/**
+ * The refusals that are the customer's subscription at the provider: no
+ * licence, no API module, a Bokio plan without API access. Every later call
+ * answers the same until the subscription changes, and each code's registry
+ * sentence says what to change. A door that meets one in a preliminary read
+ * (company information, before the preview or a register fetch) stops with it
+ * instead of carrying on into a vaguer refusal further along.
+ */
+const SUBSCRIPTION_REFUSAL_CODES: ReadonlySet<ProviderCallErrorCode> = new Set<ProviderCallErrorCode>([
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+  'BOKIO_PLAN_NO_API',
+])
+
+/** The subscription refusal `error` is, or null. */
+export function subscriptionRefusal(error: unknown): ProviderCallErrorCode | null {
+  const code = classifyProviderError(error)
+  return code !== null && SUBSCRIPTION_REFUSAL_CODES.has(code) ? code : null
+}
+
 /** Why the provider refused one register. */
 export type ProviderRefusalReason = 'license' | 'permission'
 
@@ -235,6 +255,31 @@ export function isMissingLicenseError(message: string): boolean {
     haystack.includes('missing license') ||
     haystack.includes('not have enough licenses')
   )
+}
+
+/**
+ * Which licence a Fortnox login refusal names, read from the `error` the
+ * authorize redirect carries. Fortnox documents two (developer docs, Errors,
+ * "Error cases during Oauth2 authorization flow"):
+ *
+ *   error_missing_license      "Resource owner is not licensed for the
+ *                              requested scope": the Fortnox company lacks the
+ *                              licence one of the requested scopes needs (the
+ *                              Scopes page lists them: Bokföring for supplier
+ *                              and supplierinvoice, Kundfaktura or Order for
+ *                              invoice and customer).
+ *   error_missing_app_license  "Resource owner does not have enough licenses":
+ *                              the licence of the app itself.
+ *
+ * The migration callback read both with its own copy of two substrings
+ * ("missing license", "not have enough licenses"), which the scope code and
+ * its description miss, so that refusal reached the customer as Fortnox's own
+ * English (2026-11-12, two logins in one day).
+ */
+export function fortnoxLoginLicenceRefusal(error: string): 'scope' | 'app' | null {
+  if (error === 'error_missing_license') return 'scope'
+  if (error === 'error_missing_app_license') return 'app'
+  return null
 }
 
 /**

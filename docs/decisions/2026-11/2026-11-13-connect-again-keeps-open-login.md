@@ -1,0 +1,1 @@
+[2026-11-13] POST /connect clicked again moves a provider login still open in another window onto the new attempt before deleting the old one: the delete took that window's state with it and hid what the provider answered.

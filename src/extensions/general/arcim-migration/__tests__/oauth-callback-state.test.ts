@@ -36,6 +36,7 @@ vi.mock('../lib/provider-client', () => ({
   consumeOAuthState: vi.fn(),
   peekOAuthState: vi.fn(),
   oauthStateRejectionReason: vi.fn(),
+  consentHoldsTokens: vi.fn(),
   mintHandoff: vi.fn(),
   consumeHandoff: vi.fn(),
   getAuthUrl: vi.fn(),
@@ -75,6 +76,7 @@ import {
   consumeOAuthState,
   peekOAuthState,
   oauthStateRejectionReason,
+  consentHoldsTokens,
   mintHandoff,
   consumeHandoff,
   exchangeAuthToken,
@@ -919,6 +921,64 @@ describe('GET /callback: a cancel at the provider keeps the state', () => {
     const replay = await callbackHandler(callbackRequest({ code: 'C', state: 'S' }))
     expect(await replay.text()).toContain(GENERIC_REJECTION)
     expect(exchangeAuthToken).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-11-12 13:36 and 17:11: Fortnox refused the login because the Fortnox
+  // company lacked a licence a requested scope needs. The popup showed
+  // "error_missing_license: Resource owner is not licensed for the requested
+  // scope(s).": the licence check looked for "missing license" with a space.
+  it('names the Fortnox licences when Fortnox refuses a first connect for a scope licence', async () => {
+    useStateRow('S')
+    vi.mocked(consentHoldsTokens).mockResolvedValue(false)
+
+    const res = await callbackHandler(callbackRequest({
+      error: 'error_missing_license',
+      error_description: 'Resource owner is not licensed for the requested scope(s).',
+      state: 'S',
+    }))
+    const html = await res.text()
+
+    expect(html).toContain('Fortnox-företaget du loggade in på saknar licens för något som Accounted läser vid flytten')
+    expect(html).toContain('Bokföring och Kundfaktura (eller Order)')
+    expect(html).not.toContain('Resource owner is not licensed')
+    expect(html).toContain('cancelled: false')
+    expect(consentHoldsTokens).toHaveBeenCalledWith('consent-1')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    // The state is kept: logging in again to the right company finishes the flow.
+    const approved = await callbackHandler(callbackRequest({ code: 'C', state: 'S' }))
+    expect(await approved.text()).toContain('Anslutningen lyckades')
+  })
+
+  // A renewal (an expired token, or Hämta underlag asking for the archive as
+  // well) asked for scopes the callback cannot see: the first-connect licences
+  // and the SIE advice would be wrong there, so it names none.
+  it('names no licence when Fortnox refuses a login that renews an existing connection', async () => {
+    useStateRow('S')
+    vi.mocked(consentHoldsTokens).mockResolvedValue(true)
+
+    const html = await (await callbackHandler(callbackRequest({
+      error: 'error_missing_license',
+      error_description: 'Resource owner is not licensed for the requested scope(s).',
+      state: 'S',
+    }))).text()
+
+    expect(html).toContain('Fortnox-företaget saknar licens för något som Accounted bad om att få läsa')
+    expect(html).toContain('Anslutningen du redan har påverkas inte')
+    expect(html).not.toContain('Kundfaktura')
+    expect(html).not.toContain('SIE-filer')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+  })
+
+  it('keeps the integration sentence for the app licence refusal', async () => {
+    useStateRow('S')
+
+    const html = await (await callbackHandler(callbackRequest({
+      error: 'error_missing_app_license',
+      error_description: 'Resource owner does not have enough licenses.',
+      state: 'S',
+    }))).text()
+
+    expect(html).toContain('Fortnox Integration')
   })
 
   it('gives a cancel with an unknown state the one generic rejection and nothing else', async () => {

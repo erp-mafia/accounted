@@ -29,8 +29,9 @@ export interface UnfinishedConnect {
  *
  * No table of its own: the consent row is the record of the attempt. POST
  * /connect writes a status-0 provider_consents row when the connect step
- * opens and deletes the provider's older token-less status-0 rows first, so
- * the newest status-0 row is the latest attempt. It counts as unfinished when
+ * opens and deletes the provider's older token-less status-0 rows (moving a
+ * login still open in another window onto the new row first, moveOpenLogins),
+ * so the newest status-0 row is the latest attempt. It counts as unfinished when
  * it is older than UNFINISHED_CONNECT_MIN_AGE_MS, has no token row, and the
  * customer has not moved on since: no accepted connection to the same
  * provider, no accepted connection started after it, and no completed SIE
