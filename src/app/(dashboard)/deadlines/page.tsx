@@ -69,10 +69,11 @@ export default function DeadlinesPage() {
   const { customers } = useCustomers({ keepId: editingDeadline?.customer_id })
   const { toast } = useToast()
 
-  // Helårsmoms is due earlier with EU trade, and the yearly row below is
-  // dated by the "Handel med andra EU-länder" setting. When the books show
-  // EU trade (the declaration's EU rutor, /api/settings/eu-trade-signal)
-  // and the setting is off, that row is too late: say so (crm#1171).
+  // Helårsmoms is due earlier with EU trade. The yearly row below follows the
+  // books as well as the "Handel med andra EU-länder" setting
+  // (lib/tax/fiscal-year-eu-trade.ts); when the books show EU trade (the
+  // declaration's EU rutor, /api/settings/eu-trade-signal) and the setting is
+  // off, ask for the setting so it matches (crm#1171).
   const { settings } = useCompanySettings()
   const euTradeCheckApplies =
     !!settings?.vat_registered && settings.moms_period === 'yearly' && !settings.vat_has_eu_trade

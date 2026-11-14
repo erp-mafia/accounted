@@ -7,6 +7,7 @@ import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@
 import { filesIncomeReturn, fiscalYearLockedToCalendar, isEntityType, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 import { nextFiscalYearRange } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getNextBankingDay, isBankingDay } from './swedish-holidays'
+import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -70,6 +71,16 @@ export interface CompanySettingsForDeadlines {
    * Undefined = not resolved (the generator resolves it).
    */
   salaried_employee_since?: string | null
+  /**
+   * Derived, NOT a company_settings column: the helårsmoms periods the
+   * nightly job saw trade with other EU countries in, while the company has
+   * not said so (vat_has_eu_trade), as vat_eu_trade_fiscal_years records them:
+   * keyed by the month the period ends (YYYY-MM, fiscalYearEndKey of
+   * helarsmomsPeriodOf). Their helårsmoms takes the earlier EU-trade date
+   * (helarsmomsHasEuTrade). Undefined = not resolved (the generator resolves
+   * it, lib/tax/fiscal-year-eu-trade.ts).
+   */
+  eu_trade_fiscal_year_ends?: readonly string[]
 }
 
 /**
@@ -493,6 +504,39 @@ export function getVatDeadlineForPeriod(
   }
 }
 
+/** The key a helårsmoms period is known by in eu_trade_fiscal_year_ends: the month it ends, YYYY-MM. */
+export function fiscalYearEndKey(fy: Pick<DeadlineFiscalYear, 'endYear' | 'endMonth'>): string {
+  return isoDate(fy.endYear, fy.endMonth, 1).slice(0, 7)
+}
+
+/**
+ * The period a räkenskapsår's helårsmoms declares, as getVatDeadlineForPeriod
+ * dates it: the räkenskapsår itself, and for a form bound to the calendar year
+ * (enskild firma) the calendar year it ends in, whatever a stored year says,
+ * the key fiscalYearEndMonthIn gives the filing record.
+ */
+export function helarsmomsPeriodOf(fy: DeadlineFiscalYear, settings: FiscalCalendar): DeadlineFiscalYear {
+  if (!boundToCalendarYear(settings)) return fy
+  return { endYear: fy.endYear, endMonth: 12, start: isoDate(fy.endYear, 1, 1) }
+}
+
+/**
+ * A räkenskapsår's helårsmoms deadline, with or without the EU-trade date:
+ * the one placement the generator, the repair's detection and the nightly
+ * pass read (lib/tax/deadline-generator.ts).
+ */
+export function helarsmomsDeadline(
+  fy: DeadlineFiscalYear,
+  settings: CompanySettingsForDeadlines,
+  euTrade: boolean,
+): DeadlineInstance | null {
+  return getVatDeadlineForPeriod('yearly', fy.endYear, 1, {
+    ...settings,
+    fiscal_year_start_month: fy.endMonth === 12 ? 1 : fy.endMonth + 1,
+    vat_has_eu_trade: euTrade,
+  })
+}
+
 function generateAnnualVatDates(
   deadlineYear: number,
   settings: CompanySettingsForDeadlines,
@@ -501,11 +545,12 @@ function generateAnnualVatDates(
 
   // Helårsmoms is declared per beskattningsår, the räkenskapsår (SFL 26 kap.
   // 10-11 §§): an extended first year is one period, dated by its own end.
+  // EU trade the nightly job saw in that period's rutor dates it as the
+  // setting would (eu_trade_fiscal_year_ends).
   for (const fy of fiscalYearsEndingIn([deadlineYear - 1, deadlineYear], settings)) {
-    const instance = getVatDeadlineForPeriod('yearly', fy.endYear, 1, {
-      ...settings,
-      fiscal_year_start_month: fy.endMonth === 12 ? 1 : fy.endMonth + 1,
-    })
+    const booksShowEuTrade =
+      settings.eu_trade_fiscal_year_ends?.includes(fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))) ?? false
+    const instance = helarsmomsDeadline(fy, settings, helarsmomsHasEuTrade(settings.vat_has_eu_trade, booksShowEuTrade))
     if (instance?.year === deadlineYear) results.push(instance)
   }
 

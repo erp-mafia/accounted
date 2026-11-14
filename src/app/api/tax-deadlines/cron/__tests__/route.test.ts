@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     createClient: vi.fn(() => ({ kind: 'service-client' })),
     annual: vi.fn(),
     backfill: vi.fn(),
+    euTrade: vi.fn(),
     log,
   }
 })
@@ -29,6 +30,7 @@ vi.mock('@/lib/auth/cron', () => ({
 vi.mock('@/lib/tax/deadline-generator', () => ({
   generateNewYearDeadlines: mocks.annual,
   backfillMissingTaxDeadlines: mocks.backfill,
+  alignYearlyVatDeadlinesWithBooks: mocks.euTrade,
 }))
 
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -52,6 +54,7 @@ beforeEach(() => {
     totalCreated: 24,
     companiesNotReached: 0,
   })
+  mocks.euTrade.mockResolvedValue({ companiesChecked: 5, companiesMoved: 1, companiesNotReached: 0 })
 })
 
 afterEach(() => {
@@ -83,6 +86,41 @@ describe('GET /api/tax-deadlines/cron', () => {
     await GET(createCronRequest('/api/tax-deadlines/cron'))
 
     expect(mocks.backfill).toHaveBeenCalledWith(expect.anything(), { deadline: startedAt + 240_000 })
+  })
+
+  it('moves helårsmoms rows the books date earlier after the repair, in at most 60 s of the run', async () => {
+    const startedAt = Date.now()
+    const order: string[] = []
+    mocks.backfill.mockImplementation(async () => {
+      order.push('repair')
+      // The repair takes 30 s: the pass's minute starts when it does.
+      vi.advanceTimersByTime(30_000)
+      return { companiesScanned: 10, companiesRepaired: 2, totalCreated: 24, companiesNotReached: 0 }
+    })
+    mocks.euTrade.mockImplementation(async () => {
+      order.push('eu-trade')
+      return { companiesChecked: 5, companiesMoved: 1, companiesNotReached: 0 }
+    })
+
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
+
+    expect(order).toEqual(['repair', 'eu-trade'])
+    expect(mocks.euTrade).toHaveBeenCalledWith(expect.anything(), { deadline: startedAt + 90_000 })
+    await expect(response.json()).resolves.toMatchObject({
+      euTradeCompaniesChecked: 5,
+      euTradeCompaniesMoved: 1,
+      euTradeCompaniesNotReached: 0,
+    })
+  })
+
+  it('a failed pass is logged and the run still answers what the repair did', async () => {
+    mocks.euTrade.mockRejectedValue(new Error('statement timeout'))
+
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ success: true, companiesRepaired: 2, euTradeCompaniesMoved: 0 })
+    expect(mocks.log.error).toHaveBeenCalledWith('helårsmoms EU-trade pass failed', expect.any(Error))
   })
 
   it('reports the companies a run did not reach as an error, and still answers what it did', async () => {

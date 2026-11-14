@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import {
+  alignYearlyVatDeadlinesWithBooks,
   backfillMissingTaxDeadlines,
   generateNewYearDeadlines,
 } from '@/lib/tax/deadline-generator'
@@ -18,6 +19,15 @@ export const maxDuration = 300
  * about 2026-12-13), and 2 January regenerates all of them.
  */
 const RUN_BUDGET_MS = 240_000
+
+/**
+ * The most the helårsmoms pass (alignYearlyVatDeadlinesWithBooks) may take,
+ * after the repair pass and inside the run budget. It reads one period's
+ * declaration per open helårsmoms period and takes the companies in a
+ * different order every day, so a short pass still reaches every company in
+ * a few nights.
+ */
+const EU_TRADE_PASS_BUDGET_MS = 60_000
 
 /**
  * GET /api/tax-deadlines/cron: daily recovery plus annual horizon extension.
@@ -53,6 +63,20 @@ export const GET = withServiceCronContext('cron.tax_deadlines', async (_request,
     throw err
   }
 
+  // Helårsmoms periods whose books now show EU trade with the setting off:
+  // recorded, and their rows moved to the earlier date. Missing rows come
+  // first: this pass only moves dates.
+  let euTrade = { companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 }
+  try {
+    euTrade = await alignYearlyVatDeadlinesWithBooks(supabase, {
+      deadline: Math.min(deadline, Date.now() + EU_TRADE_PASS_BUDGET_MS),
+    })
+  } catch (err) {
+    // The repair above has committed; a pass that only moves dates earlier
+    // must not turn the run into a failure or hide its summary.
+    ctx.log.error('helårsmoms EU-trade pass failed', err as Error)
+  }
+
   const totalCreated = annual.totalCreated + recovery.totalCreated
   // The repair pass is what the next run resumes from: a company the
   // new-year pass did not reach is one of the companies the repair finds.
@@ -78,6 +102,9 @@ export const GET = withServiceCronContext('cron.tax_deadlines', async (_request,
     companiesRepaired: recovery.companiesRepaired,
     companiesNotReached,
     totalCreated,
+    euTradeCompaniesChecked: euTrade.companiesChecked,
+    euTradeCompaniesMoved: euTrade.companiesMoved,
+    euTradeCompaniesNotReached: euTrade.companiesNotReached,
   })
 
   return NextResponse.json({
@@ -88,5 +115,8 @@ export const GET = withServiceCronContext('cron.tax_deadlines', async (_request,
     companiesRepaired: recovery.companiesRepaired,
     companiesNotReached,
     totalCreated,
+    euTradeCompaniesChecked: euTrade.companiesChecked,
+    euTradeCompaniesMoved: euTrade.companiesMoved,
+    euTradeCompaniesNotReached: euTrade.companiesNotReached,
   })
 })

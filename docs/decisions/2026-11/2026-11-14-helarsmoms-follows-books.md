@@ -1,0 +1,1 @@
+[2026-11-14] Helårsmoms rows take the EU-trade date when the räkenskapsår's own rutor show EU trade: the nightly job records it (vat_eu_trade_fiscal_years) while that date is ahead, and list, repair, close check and filing record read one rule (helarsmomsHasEuTrade). Founder go 2026-11-14.

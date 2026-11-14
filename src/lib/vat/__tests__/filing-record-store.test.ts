@@ -19,6 +19,7 @@ import {
 function createStoreSupabase(
   results: { data?: unknown; error?: unknown }[],
   fiscalYears: { period_start: string; period_end: string }[] = [],
+  euTradeYears: string[] | 'unreadable' = [],
 ) {
   const captured: {
     table: string
@@ -29,16 +30,26 @@ function createStoreSupabase(
   }[] = []
   let idx = 0
   const from = (table: string) => {
-    // The recorded räkenskapsår are answered by table and left out of the
-    // record: every entry point reads them, and a test states the company's
-    // years rather than a position in the queue.
-    const isYears = table === 'fiscal_periods'
-    const result = isYears ? { data: fiscalYears, error: null } : (results[idx++] ?? { data: null, error: null })
+    // The recorded räkenskapsår and the years the nightly job saw EU trade in
+    // are answered by table and left out of the record: a test states the
+    // company's years rather than a position in the queue.
+    const byTable =
+      table === 'fiscal_periods'
+        ? { data: fiscalYears, error: null }
+        : table === 'vat_eu_trade_fiscal_years'
+          ? euTradeYears === 'unreadable'
+            ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+            : {
+                data: euTradeYears.map((fiscal_year_end) => ({ company_id: COMPANY, fiscal_year_end, has_eu_trade: true, checked_at: '2026-09-01T02:00:00Z' })),
+                error: null,
+              }
+          : null
+    const result = byTable ?? (results[idx++] ?? { data: null, error: null })
     const entry: (typeof captured)[number] = { table, filters: [] }
-    if (!isYears) captured.push(entry)
+    if (!byTable) captured.push(entry)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'limit', 'maybeSingle', 'single']) {
+    for (const m of ['select', 'limit', 'maybeSingle', 'single', 'range']) {
       b[m] = () => b
     }
     b.order = (...args: unknown[]) => {
@@ -154,6 +165,30 @@ describe('a stale settings month against the recorded räkenskapsår', () => {
     const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED)
     const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
     expect(deadline).toMatchObject({ tax_period: '2025/2026', period_end: '2026-06-30', due_date: '2027-01-18' })
+  })
+
+  it('reads the earlier date for a year the nightly job saw EU trade in, as the generator writes it', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED, ['2026-06'])
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2025/2026', due_date: '2026-08-26' })
+  })
+
+  it('places the date by the setting when the recorded EU trade cannot be read, rather than failing', async () => {
+    const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED, 'unreadable')
+    const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
+    expect(deadline).toMatchObject({ tax_period: '2025/2026', due_date: '2027-01-18' })
+  })
+
+  it('keys an enskild firma by the calendar year it declares, whatever its stored years say', async () => {
+    const ef = { data: { ...CALENDAR_AB.data, entity_type: 'enskild_firma' } }
+    const recorded = createStoreSupabase([ef, { data: null }], RECORDED, ['2025-12'])
+    await expect(
+      vatPeriodDeadline(recorded.supabase, COMPANY, { periodType: 'yearly', year: 2025, period: 1 }),
+    ).resolves.toMatchObject({ tax_period: '2025', due_date: '2026-02-26' })
+    const other = createStoreSupabase([ef, { data: null }], RECORDED, ['2025-06'])
+    await expect(
+      vatPeriodDeadline(other.supabase, COMPANY, { periodType: 'yearly', year: 2025, period: 1 }),
+    ).resolves.not.toMatchObject({ due_date: '2026-02-26' })
   })
 
   it('labels the period for the Skatteverket panel the same way', async () => {
@@ -689,6 +724,22 @@ describe('markVatPeriodFiled for helårsmoms (#2786)', () => {
       is_completed: true,
       status: 'submitted',
     })
+  })
+
+  it('creates the row on the EU-trade date when the nightly job saw EU trade in that räkenskapsår', async () => {
+    const { supabase, captured } = createStoreSupabase(
+      [
+        BROKEN_AB,
+        { data: null },
+        { data: { ...pendingYearRow, id: 'd-new', is_completed: true, completed_at: '2026-08-20T12:00:00.000Z', status: 'submitted' } },
+      ],
+      [],
+      ['2026-06'],
+    )
+    const result = await markVatPeriodFiled(supabase, COMPANY, { ...yearly, filedOn: '2026-08-20' }, { today: TODAY })
+    expect(result).toMatchObject({ ok: true, created: true })
+    // With EU trade: the 26th of the second month after the räkenskapsår ends.
+    expect(captured.find((c) => c.insert)?.insert).toMatchObject({ tax_period: '2025/2026', due_date: '2026-08-26' })
   })
 
   it('never relabels a Skatteverket-confirmed räkenskapsår', async () => {
