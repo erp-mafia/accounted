@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
+import { bankDetailsSettled, displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
 import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
 import { selectionBlocker } from '../account-selection'
 
@@ -128,6 +128,33 @@ describe('the sparbank picker', () => {
     )
     expect(renewing.affiliate).toEqual(SPARBANK)
     expect(displayBankName(renewing)).toBe('Sparbanken Nord')
+  })
+})
+
+describe('Continue waits for the bank\'s details (for #208)', () => {
+  it('is not settled before a bank is chosen, nor while the chosen bank\'s details are on their way', () => {
+    expect(bankDetailsSettled(openFlow('new'))).toBe(false)
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK })
+    expect(bankDetailsSettled(picked)).toBe(false)
+    // A locked bank named by its row has no BIC yet: nothing to read, nothing settled.
+    expect(bankDetailsSettled(openFlow('renew', { bank: { bic: '', name: 'Sparbanken Nord' }, replaceConnectionId: 'old' }))).toBe(false)
+  })
+
+  it('is settled once the details of the chosen bank arrived, so its offices are on screen before anything starts', () => {
+    const loaded = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'bank_details_loaded', details: DETAILS })
+    expect(bankDetailsSettled(loaded)).toBe(true)
+    // Another bank is picked: its details are awaited anew.
+    expect(bankDetailsSettled(flowReducer(loaded, { type: 'bank_picked', bank: REDIRECT_BANK }))).toBe(false)
+  })
+
+  it('a read that failed stops the wait for that bank only: the flow goes on with what the list said', () => {
+    const failed = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'bank_details_failed', bic: SWEDBANK.bic })
+    expect(bankDetailsSettled(failed)).toBe(true)
+    expect(failed.bankDetails).toBeNull()
+    expect(bankDetailsSettled(flowReducer(failed, { type: 'bank_picked', bank: REDIRECT_BANK }))).toBe(false)
+    // A late failure for a bank no longer chosen settles nothing.
+    const late = run(openFlow('new'), { type: 'bank_picked', bank: REDIRECT_BANK }, { type: 'bank_details_failed', bic: SWEDBANK.bic })
+    expect(bankDetailsSettled(late)).toBe(false)
   })
 })
 

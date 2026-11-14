@@ -10,7 +10,11 @@ import {
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
-import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import {
+  BookkeepingDatabaseError,
+  JournalEntryNotBalancedError,
+  TransactionLinesNotBalancedError,
+} from '@/lib/bookkeeping/errors'
 import { CASH_ACCOUNT_BUSY_RETRY } from '@/lib/bookkeeping/cash-account-busy'
 import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { buildCounterpartySuggestion } from '@/lib/transactions/category-suggestions'
@@ -1088,6 +1092,27 @@ describe('POST /api/transactions/[id]/categorize', () => {
       expect(body.error.message).not.toContain('not balanced')
       expect(body.error.message).not.toContain('check constraint')
       expect(findCalls('transactions', 'update')).toEqual([])
+    })
+
+    it('answers lines that do not balance as a 400 that names both totals, before any draft', async () => {
+      enqueueUpToEngine()
+      // Thrown where the lines are built (buildTransactionEntryLines), so the
+      // engine is never handed them.
+      mockCreateTransactionJournalEntry.mockRejectedValue(
+        new TransactionLinesNotBalancedError('tx-1', 800, 1200, true),
+      )
+
+      const { status, body } = await categorize()
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('TX_LINES_NOT_BALANCED')
+      expect(body.error.message).toContain('Den inlärda konteringen för motparten passar inte')
+      expect(body.error.message).toContain('800,00 kr i debet')
+      expect(body.error.message).toContain('1\u00a0200,00 kr i kredit')
+      expect(body.error.message_en).toContain('do not balance')
+      expect(body.error.details).toMatchObject({ total_debit: 800, total_credit: 1200, from_line_pattern: true })
+      expect(findCalls('transactions', 'update')).toEqual([])
+      expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
     })
 
     it('maps untyped errors to the Swedish transaction fallback without leaking the raw text', async () => {

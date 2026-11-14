@@ -68,6 +68,7 @@ import {
   AccountsNotInChartError,
   isBookkeepingError,
   TransactionMissingSekValueError,
+  TransactionLinesNotBalancedError,
   UnattendedCommitLimitExceededError,
   BookingReviewLimitError,
   BookingReviewRequiredError,
@@ -1053,6 +1054,7 @@ export async function categorizeTransaction(
       lines = buildTransactionEntryLines(transaction, mappingResult)
     } catch (err) {
       if (err instanceof TransactionMissingSekValueError) return missingSekRefusal(err, transaction)
+      if (err instanceof TransactionLinesNotBalancedError) return linesNotBalancedRefusal(err, transaction, input)
       throw err
     }
     // An API key's unattended ceiling, which the booking's commit asks: the
@@ -1111,6 +1113,8 @@ export async function categorizeTransaction(
       })
     }
     if (err instanceof TransactionMissingSekValueError) return missingSekRefusal(err, transaction)
+    // The built lines do not balance: refused before any draft, nothing posted.
+    if (err instanceof TransactionLinesNotBalancedError) return linesNotBalancedRefusal(err, transaction, input)
     // Above the API key's unattended ceiling: nothing was posted and the row
     // stays in "Att bokföra" for a person, under the refusal's own code.
     if (err instanceof UnattendedCommitLimitExceededError) {
@@ -1354,6 +1358,53 @@ function missingSekRefusal(err: TransactionMissingSekValueError, transaction: Tr
     currency: err.currency,
   })
   return refuse(err.code, { currency: err.currency, transaction_date: err.date }, { cause: err, transaction })
+}
+
+/**
+ * The refusal for a kontering whose lines do not balance on this row
+ * (TransactionLinesNotBalancedError, thrown where the lines are built): a 400
+ * that names the two totals and what to do instead, where the engine's own
+ * refusal used to come back as a failed booking. Exported for the proposal
+ * preview, which answers what the booking would.
+ */
+export function linesNotBalancedRefusal(
+  err: TransactionLinesNotBalancedError,
+  transaction: Transaction,
+  input: Pick<CategorizeInput, 'counterparty_template_id' | 'template_id' | 'category'>,
+): CategorizeRefusal {
+  // Warn, with what it takes to find the kontering: the person is told what
+  // to do, and a learned pattern that cannot be replayed is ours to look at.
+  log.warn('categorize refused: built lines do not balance', {
+    txId: transaction.id,
+    totalDebit: err.totalDebit,
+    totalCredit: err.totalCredit,
+    fromLinePattern: err.fromLinePattern,
+    counterpartyTemplateId: input.counterparty_template_id ?? null,
+    templateId: input.template_id ?? null,
+    category: input.category ?? null,
+    currency: transaction.currency,
+  })
+  const debit = formatProseAmount(err.totalDebit)
+  const credit = formatProseAmount(err.totalCredit)
+  const message = err.fromLinePattern
+    ? {
+      sv: `Den inlärda konteringen för motparten passar inte den här transaktionen: raderna ger ${debit} kr i debet och ${credit} kr i kredit och går inte ihop. Inget är bokfört. Välj en kategori eller ett konto i stället, eller bokför raden manuellt.`,
+      en: `The learned booking for this counterparty does not fit this transaction: its lines give ${debit} kr in debit and ${credit} kr in credit and do not balance. Nothing was booked. Pick a category or an account instead, or book the row manually.`,
+    }
+    : {
+      sv: `Konteringen går inte ihop för den här transaktionen: raderna ger ${debit} kr i debet och ${credit} kr i kredit. Inget är bokfört. Välj en annan kategori eller mall, eller bokför raden manuellt.`,
+      en: `The booking does not balance for this transaction: its lines give ${debit} kr in debit and ${credit} kr in credit. Nothing was booked. Pick another category or template, or book the row manually.`,
+    }
+  return refuse(
+    err.code,
+    {
+      total_debit: err.totalDebit,
+      total_credit: err.totalCredit,
+      from_line_pattern: err.fromLinePattern,
+      ...(input.counterparty_template_id ? { counterparty_template_id: input.counterparty_template_id } : {}),
+    },
+    { message, cause: err, transaction },
+  )
 }
 
 /**

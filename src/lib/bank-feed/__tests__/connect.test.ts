@@ -18,6 +18,8 @@ import {
   getBankFeedConnect,
   setBankFeedConnectForTests,
   toBankFeedError,
+  AFFILIATED_ASPSP_ID_MISSING,
+  refusalProviderCode,
 } from '../connect'
 
 const UPSTREAM = { baseUrl: 'https://connect.example.se/api/connect/ais', key: 'gnubok_ck_secret' }
@@ -218,6 +220,21 @@ describe('createBankFeedConnect', () => {
     expect(toBankFeedError(new Error('boom'), 'banks')).toBeInstanceOf(BankFeedRefusedError)
     const passthrough = new ConsentOverError('already typed')
     expect(toBankFeedError(passthrough, 'banks')).toBe(passthrough)
+  })
+
+  it('names a refusal over the affiliated-bank header, which the provider answers as a bare FORMAT_ERROR (for #208)', () => {
+    const detail = 'FORMAT_ERROR: X-AffiliatedASPSP-ID header is required for Example Bank.'
+    const refused = (options: { providerCode?: string | null; detail?: string | null; message?: string }) =>
+      toBankFeedError(new ConnectorCallError(options.message ?? 'Connector createConsent: refused', { code: 'CONNECTOR_AIS_REFUSED', retryable: false, status: 422, providerCode: options.providerCode ?? null, detail: options.detail ?? null }), 'createConsent')
+    for (const mapped of [refused({ providerCode: 'FORMAT_ERROR', detail }), refused({ detail }), refused({ providerCode: 'format_error', message: `Connector createConsent: ${detail}` })]) {
+      expect(mapped).toBeInstanceOf(BankFeedRefusedError)
+      expect(mapped.providerCode).toBe(AFFILIATED_ASPSP_ID_MISSING)
+      expect(mapped.retryable).toBe(false)
+    }
+    // Any other format error keeps the provider's code, and a code Connect classified is never overwritten.
+    expect(refused({ providerCode: 'FORMAT_ERROR', detail: 'FORMAT_ERROR: Cannot create consent authorisation when consentStatus is Rejected' }).providerCode).toBe('FORMAT_ERROR')
+    expect(refused({ providerCode: 'PSU_AUTHORISER_ID_MISSING', detail }).providerCode).toBe('PSU_AUTHORISER_ID_MISSING')
+    expect(refusalProviderCode(null, null, undefined)).toBeNull()
   })
 
   it('gives a transactions read the longer timeout and every other call the short one', () => {

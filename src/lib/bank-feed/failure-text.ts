@@ -19,6 +19,13 @@ export interface FailureText {
 }
 
 export const OPEN_BANKING_FAILURE_TEXTS: Readonly<Record<string, FailureText>> = {
+  // Our code (connect.ts refusalProviderCode) for a refusal that names the
+  // X-AffiliatedASPSP-ID header: the bank takes no request without one of its
+  // offices chosen. Chosen in the bank step, so the person starts again there.
+  AFFILIATED_ASPSP_ID_MISSING: {
+    sv: 'Banken behöver veta vilket kontor kopplingen gäller. Stäng, börja om och välj kontoret i listan under banken.',
+    en: 'The bank needs to know which office the connection is for. Close, start again and pick the office in the list under the bank.',
+  },
   ACCESS_EXCEEDED: {
     sv: 'Åtkomsten till kontot har överskridit det tillåtna antalet per dag.',
     en: 'The account has been read more times today than the consent allows.',

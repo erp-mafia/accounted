@@ -218,7 +218,9 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
         if (!cancelled) setBankDetails(details)
       })
       .catch(() => {
-        // Without the details the flow goes on with what the list said.
+        // Without the details the flow goes on with what the list said; the
+        // bank step stops waiting for them.
+        if (!cancelled) dispatch({ type: 'bank_details_failed', bic: chosenBic })
       })
     return () => {
       cancelled = true

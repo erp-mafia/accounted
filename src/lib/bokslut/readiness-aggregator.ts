@@ -8,6 +8,7 @@ import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { createLogger } from '@/lib/logger'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
@@ -265,6 +266,12 @@ async function periodHoldsImportedHistory(
   }
 }
 
+/**
+ * PostgREST's and Postgres's ways of saying the period row is not there:
+ * .single() on no rows (PGRST116) and an id that is not a uuid (22P02).
+ */
+const PERIOD_ABSENT_CODES: ReadonlySet<string> = new Set(['PGRST116', '22P02'])
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -308,8 +315,15 @@ export async function buildBokslutReadinessReport(
   ])
 
   const checks = await checksRead
-  if (periodResult.error || !periodResult.data || !checks) {
-    throw new Error('Fiscal period not found')
+  // No such period for this company (a tab left open after switching company,
+  // a period removed since, an id that is no uuid) is an answer, not a
+  // failure: a coded refusal the route turns into a 404. Only a read that
+  // failed for another reason is an error.
+  if (periodResult.error && !PERIOD_ABSENT_CODES.has(periodResult.error.code ?? '')) {
+    throw new Error(`Fiscal period read failed: ${periodResult.error.message}`)
+  }
+  if (!periodResult.data || !checks) {
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
   const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead } =
     checks

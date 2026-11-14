@@ -301,6 +301,16 @@ export async function probeCompanyGrants(
 const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
 
 /**
+ * Whether a refusal on a grant the register still lists is news for this
+ * company: the connection row does not carry it yet. The stored last_error is
+ * the state compared with, so every later run of the hourly crons finds it
+ * there and writes and reports nothing.
+ */
+export function grantRefusalIsNew(lastError: string | null | undefined): boolean {
+  return lastError !== GRANT_ACTIVE_REFUSAL
+}
+
+/**
  * A background read on system credentials was refused for this behorighet
  * (OMBUD_GRANT_MISSING). The api client names every unexplained system-mode
  * 403 so, which proves nothing about the grant by itself: the ombudsregister
@@ -309,8 +319,11 @@ const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
  *   - Withdrawn there: the behorighet is denied and the status follows the
  *     grants, so the next run uses the user token if there is one.
  *   - Still listed: the grant stays. Skatteverket then refuses a grant it
- *     lists, which only we can chase, so the first such refusal reaches error
- *     tracking and last_error keeps it.
+ *     lists: a state this function handles (the grant is kept, the cron
+ *     reports grant_refused) and that a company can stay in for days, so
+ *     it is a warning, not an error. It is reported once per state
+ *     (grantRefusalIsNew): last_error keeps it until another probe result
+ *     for the company replaces it.
  *   - Register or ownership proof unreachable or unreadable: nothing
  *     changes; the next run asks again.
  * It never writes 'revoked', the status of the user's own "Koppla från",
@@ -343,8 +356,8 @@ export async function recordGrantRefusal(
     return 'withdrawn'
   }
   if (probe?.status !== 'granted') return 'unverified'
-  if (connection.last_error !== GRANT_ACTIVE_REFUSAL) {
-    log.error('Skatteverket refused a system read on a grant the ombudsregister lists', { companyId, behorighet })
+  if (grantRefusalIsNew(connection.last_error)) {
+    log.warn('Skatteverket refused a system read on a grant the ombudsregister lists', { companyId, behorighet })
     await recordProbeResult({ ...record, error: GRANT_ACTIVE_REFUSAL })
   }
   return 'active'

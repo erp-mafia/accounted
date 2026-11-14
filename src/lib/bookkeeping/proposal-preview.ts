@@ -22,6 +22,7 @@ import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   buildCategorizeMapping,
+  linesNotBalancedRefusal,
   resolveCategorizeContext,
   type CategorizeInput,
   type CategorizeRefusal,
@@ -31,7 +32,7 @@ import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
-import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
+import { TransactionLinesNotBalancedError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { Logger } from '@/lib/logger'
@@ -112,6 +113,9 @@ async function previewForTransaction(
     return { ok: true, lines: toProposalLines(transaction, buildTransactionEntryLines(transaction, mapped.mappingResult)) }
   } catch (err) {
     if (err instanceof TransactionMissingSekValueError) return missingSek(err)
+    // The review shows the refusal the booking would answer, not lines that
+    // cannot post.
+    if (err instanceof TransactionLinesNotBalancedError) return linesNotBalancedRefusal(err, transaction, booking)
     throw err
   }
 }

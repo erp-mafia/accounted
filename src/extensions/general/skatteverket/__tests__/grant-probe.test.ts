@@ -48,7 +48,7 @@ vi.mock('@/lib/logger', async (importOriginal) => ({
   createLogger: () => log,
 }))
 
-import { probeCompanyGrants, probeViaOmbudsregister, recordGrantRefusal } from '../lib/grant-probe'
+import { grantRefusalIsNew, probeCompanyGrants, probeViaOmbudsregister, recordGrantRefusal } from '../lib/grant-probe'
 import { SkatteverketAuthError } from '../lib/api-client'
 
 const ORG = '165560000000'
@@ -538,12 +538,13 @@ describe('recordGrantRefusal: a refused system read asks the register before tou
     expect(log.error).not.toHaveBeenCalled()
   })
 
-  it('still listed: the grant stays, and the first such refusal reaches error tracking', async () => {
+  it('still listed: the grant stays, and the first such refusal is a warning with the same fields, never an error', async () => {
     registryAnswers([LASOMBUD])
     await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('active')
     expect(recorded()).toEqual([{ companyId: 'company-1', environment: 'test', orgNumber: ORG, error: 'SKV_403_GRANT_ACTIVE' }])
-    expect(log.error).toHaveBeenCalledTimes(1)
-    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('grant the ombudsregister lists'), { companyId: 'company-1', behorighet: 'lasombud' })
+    const reported = log.warn.mock.calls.filter(([message]) => String(message).includes('grant the ombudsregister lists'))
+    expect(reported).toEqual([[expect.any(String), { companyId: 'company-1', behorighet: 'lasombud' }]])
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('still listed and already recorded: nothing is written or reported again', async () => {
@@ -552,6 +553,15 @@ describe('recordGrantRefusal: a refused system read asks the register before tou
     await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('active')
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
     expect(log.error).not.toHaveBeenCalled()
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('a refusal is news once per stored state', () => {
+    expect(grantRefusalIsNew(null)).toBe(true)
+    expect(grantRefusalIsNew(undefined)).toBe(true)
+    // Another probe result replaced the state: the next refusal is reported again.
+    expect(grantRefusalIsNew('OMBUD_GRANT_MISSING')).toBe(true)
+    expect(grantRefusalIsNew('SKV_403_GRANT_ACTIVE')).toBe(false)
   })
 
   it('register unreachable: nothing changes, and no read probe stands in for it', async () => {

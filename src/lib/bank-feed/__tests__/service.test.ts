@@ -883,6 +883,15 @@ describe('restartBankFeedConsent', () => {
       expect(connect.startConsentSigning).toHaveBeenCalledTimes(1)
     })
 
+    it('a refusal over the missing office is said as that, and no new consent is created for it (for #208)', async () => {
+      const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValue(refusal('AFFILIATED_ASPSP_ID_MISSING')) })
+      mocks.connect.mockReturnValue(connect)
+      const { supabase } = stub({ bank_connections: [{ data: failed(), error: null }], ...orgAnswers() })
+      const result = await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, now: NOW })
+      expect(result).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'AFFILIATED_ASPSP_ID_MISSING' }, messageSv: expect.stringContaining('vilket kontor') })
+      expect(connect.createConsent).not.toHaveBeenCalled()
+    })
+
     it('a bank that does not answer is not a refusal: the same consent is there for the next try', async () => {
       const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', { code: 'CONNECTOR_AIS_PROVIDER_FAILED', status: 502, providerCode: 'TIMEOUT' })) })
       mocks.connect.mockReturnValue(connect)

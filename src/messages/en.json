@@ -17833,6 +17833,7 @@
   },
   "bankFeed": {
     "failure": {
+      "AFFILIATED_ASPSP_ID_MISSING": "The bank needs to know which office the connection is for. Close, start again and pick the office in the list under the bank.",
       "ACCESS_EXCEEDED": "The account has been read more times today than the consent allows.",
       "ACCESS_EXPIRED": "Access to the bank has expired. Connect the bank again with BankID.",
       "AUTHENTICATION_FAILED": "Authentication failed. Try again.",

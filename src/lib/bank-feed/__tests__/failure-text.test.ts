@@ -62,7 +62,7 @@ describe('consentFailureText', () => {
 
 describe('refusalNamesReason', () => {
   it('is true for a code with a sentence of its own, whatever its case', () => {
-    for (const code of ['AUTHENTICATION_SESSION_ONGOING', 'KYC_INVALID', 'PSU_AUTHORISER_ID_MISSING', ' psu_rights_missing ']) {
+    for (const code of ['AUTHENTICATION_SESSION_ONGOING', 'KYC_INVALID', 'PSU_AUTHORISER_ID_MISSING', 'AFFILIATED_ASPSP_ID_MISSING', ' psu_rights_missing ']) {
       expect(refusalNamesReason(code), code).toBe(true)
     }
   })

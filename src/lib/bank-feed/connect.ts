@@ -121,6 +121,30 @@ export class BankFeedRefusedError extends BankFeedError {
   }
 }
 
+/**
+ * Our code for a refusal that names the X-AffiliatedASPSP-ID header: the bank
+ * takes no request without one of its offices chosen (for #208). The provider
+ * answers it as a bare FORMAT_ERROR with the reason only in its prose, and
+ * Connect relays that prose as the envelope's `detail` without a code of its
+ * own for it (it has one for the PSU-Authoriser-ID header:
+ * PSU_AUTHORISER_ID_MISSING). Until Connect classifies it, the refusal is
+ * named here, the one place a Connect answer becomes a feed error.
+ */
+export const AFFILIATED_ASPSP_ID_MISSING = 'AFFILIATED_ASPSP_ID_MISSING'
+
+const AFFILIATED_ASPSP_HEADER = /x-affiliatedaspsp-id/i
+
+/**
+ * The provider code a refusal is known by: the relayed one, unless the
+ * refusal's prose names the affiliated-bank header. A code Connect already
+ * classified to something other than the provider's format error is kept.
+ */
+export function refusalProviderCode(providerCode: string | null, ...prose: Array<string | null | undefined>): string | null {
+  const unclassified = !providerCode || providerCode.trim().toUpperCase() === 'FORMAT_ERROR'
+  if (unclassified && prose.some((text) => typeof text === 'string' && AFFILIATED_ASPSP_HEADER.test(text))) return AFFILIATED_ASPSP_ID_MISSING
+  return providerCode
+}
+
 /** What a failed Connect call means for the feed, in the feed's terms. */
 export function toBankFeedError(error: unknown, operation: AisOperation): BankFeedError {
   if (error instanceof BankFeedError) return error
@@ -142,7 +166,7 @@ export function toBankFeedError(error: unknown, operation: AisOperation): BankFe
     case 'CONNECTOR_AIS_NOT_FOUND':
       return new BankFeedRefusedError(error.message, { code: BANK_FEED_NOT_FOUND, status, providerCode: error.providerCode })
     case 'CONNECTOR_AIS_REFUSED':
-      return new BankFeedRefusedError(error.message, { code: error.code, status, providerCode: error.providerCode })
+      return new BankFeedRefusedError(error.message, { code: error.code, status, providerCode: refusalProviderCode(error.providerCode, error.detail, error.message) })
     case 'CONNECTOR_AIS_OUTCOME_UNKNOWN':
     case 'CONNECTOR_AIS_PROVIDER_UNAVAILABLE':
     case 'CONNECTOR_AIS_PROVIDER_FAILED':
