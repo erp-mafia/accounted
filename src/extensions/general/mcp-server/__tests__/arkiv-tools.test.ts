@@ -89,6 +89,7 @@ describe('Arkiv tools', () => {
   it('search_records says how many documents are not read yet and how to reach them, so an empty answer is not taken for no document', async () => {
     process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
     enqueue({ data: [] }) // page hits
+    enqueue({ data: [] }) // file names
     enqueue({ count: 10 }) // unread documents
     const out = (await tool('gnubok_search_records').execute({ query: 'faktura' }, CO, 'user-1', supabase)) as { count: number; unread: number; hint: string | null }
     expect(out).toMatchObject({ count: 0, unread: 10 })
@@ -97,6 +98,7 @@ describe('Arkiv tools', () => {
 
   it('search_records combines page hits, agreements and facts into record refs', async () => {
     enqueue({ data: [{ document_id: DOC, page_no: 2, file_name: 'hyresavtal.pdf', headline: 'Hyran uppgår till' }] })
+    enqueue({ data: [] }) // file names
     enqueue({ data: [{ id: AGR, title: 'Hyresavtal Vasagatan 12', counterparty_name: 'Kvarnen AB', kind: 'rental', ends_on: '2028-12-31' }] })
     enqueue({ data: [{ id: 'f1', predicate: 'amount', value_text: '12500', subject_kind: 'agreement', subject_id: AGR, source_document_id: DOC }] })
     const out = (await tool('gnubok_search_records').execute({ query: 'hyra' }, CO, 'user-1', supabase)) as { items: Array<{ record_ref: string; kind: string; page: number | null }>; count: number }
@@ -136,6 +138,7 @@ describe('Arkiv tools', () => {
   it('outside the brain search_records searches documents only, whatever kinds are asked for', async () => {
     delete process.env.ARKIV_BRAIN_COMPANY_IDS
     enqueue({ data: [{ document_id: DOC, page_no: 1, file_name: 'lån.pdf', headline: 'lån 400 000', rank: 1 }] })
+    enqueue({ data: [] }) // file names
     const out = (await tool('gnubok_search_records').execute({ query: 'lån', kinds: ['agreement', 'fact', 'document'] }, CO, 'user-1', supabase)) as { items: Array<{ kind: string }> }
     expect(out.items.map((i) => i.kind)).toEqual(['document'])
     expect(mock.findCalls('agreements', 'select')).toEqual([])

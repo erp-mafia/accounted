@@ -48,6 +48,7 @@ import {
   AdjustmentsHorizontalIcon,
   BookOpenIcon,
   ChatBubbleLeftIcon,
+  CheckIcon,
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   ChevronLeftIcon,
@@ -1414,17 +1415,21 @@ export default function JournalEntryList({
           </DialogContent>
         </Dialog>
         {/* Row density: comfortable vs compact, persisted per company. A toggle
-            (aria-pressed) rather than a mode buried in the filter dialog. */}
+            (aria-pressed) rather than a mode buried in the filter dialog. It
+            carries its name like the Filter button beside it: as a bare icon
+            the only way to learn what it did was to press it, and people
+            pressed it back and forth. On is a check, not the tint alone. A
+            phone keeps the icon only; the toolbar has no room there. */}
         <Button
           variant="outline"
-          size="icon-sm"
+          size="sm"
           onClick={toggleDensity}
           aria-pressed={compact}
           aria-label={t('density_compact')}
-          title={t('density_compact')}
-          className={cn('shrink-0', compact ? 'bg-secondary text-foreground' : 'text-muted-foreground')}
+          className={cn('gap-2 shrink-0', compact ? 'bg-secondary text-foreground' : 'text-muted-foreground')}
         >
-          <QueueListIcon className="h-3.5 w-3.5" />
+          {compact ? <CheckIcon className="h-3.5 w-3.5" /> : <QueueListIcon className="h-3.5 w-3.5" />}
+          <span className="hidden sm:inline">{t('density_compact')}</span>
         </Button>
         {/* The page context picker (convention 8): fiscal-year scope as a
             chip-dropdown far right in the toolbar, one click to change,
