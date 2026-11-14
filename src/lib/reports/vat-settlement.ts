@@ -120,6 +120,10 @@ export interface VatSettlementProposal {
   entry_date_reason: VatSettlementDateReason | null
   /** Proposed verifikationstext, e.g. "Momsredovisning Kvartal 1 2026". */
   description: string
+  /**
+   * The verifikat that settles the period. With partly_settled it is only
+   * what the period's posted momsredovisningar left on the accounts.
+   */
   lines: VatSettlementProposalLine[]
   /** Ruta 49 as filed (whole kronor, signed: positive = att betala). */
   filed_net: number
@@ -127,6 +131,13 @@ export interface VatSettlementProposal {
   rounding_amount: number
   /** True when the period has no VAT activity to clear. */
   is_empty: boolean
+  /**
+   * True when the momsredovisningar already posted for the period (the
+   * posted ones in existing_entries) cleared only part of its VAT
+   * (crm#1855): `lines` then clears what is left, never again what they
+   * moved. They still gate booking (#984).
+   */
+  partly_settled: boolean
   existing_entries: VatSettlementExistingEntry[]
 }
 
@@ -226,28 +237,36 @@ async function resolveSettlementEntryDate(
 }
 
 /**
- * The momsredovisning lines of a period's ledger: every 26xx account the
- * declaration reads cleared at exact öre, the whole-krona filed net on
- * 2650/1650, the öre gap on 3740. Pure.
+ * The period's balance on every 26xx account the declaration reads, credit
+ * minus debit (positive = owed), accounts without one left out. The company's
+ * own momsruta accounts are among them: their balance is in the filed net,
+ * and leaving them out would put the whole amount on 3740.
  */
-function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts' | 'rutor'>): {
-  lines: VatSettlementProposalLine[]
-  filed_net: number
-  rounding_amount: number
-} {
-  const { net: filedNet } = buildFiledAmounts(ledger.rutor)
-
-  // Clear every 26xx account the declaration reads from, at exact öre, so the
-  // accounts land on zero for the period. A positive (credit) balance clears
-  // with a debit and vice versa: the same formula handles credit-note-heavy
-  // periods where an account sits on the "wrong" side. The company's own
-  // momsruta accounts are cleared too: their balance is in the filed net, and
-  // leaving them out would put the whole amount on 3740.
-  const lines: VatSettlementProposalLine[] = []
+function clearingBalances(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts'>): Array<[string, number]> {
+  const balances: Array<[string, number]> = []
   for (const account of vatClearingAccounts(ledger.dynamicVatAccounts)) {
     const t = ledger.totals.get(account)
     if (!t) continue
     const balance = roundOre(t.credit - t.debit)
+    if (balance !== 0) balances.push([account, balance])
+  }
+  return balances
+}
+
+/**
+ * The verifikat that clears these balances at exact öre, so the accounts
+ * land on zero, and moves `net` to 2650 (positive, att betala) or 1650
+ * (negative, att återfå); the öre gap between the two goes on 3740. A
+ * positive (credit) balance clears with a debit and vice versa: the same
+ * formula handles credit-note-heavy periods where an account sits on the
+ * "wrong" side. Pure.
+ */
+function clearingLines(balances: ReadonlyArray<readonly [string, number]>, net: number): {
+  lines: VatSettlementProposalLine[]
+  rounding_amount: number
+} {
+  const lines: VatSettlementProposalLine[] = []
+  for (const [account, balance] of balances) {
     if (balance > 0) {
       lines.push({ account_number: account, debit_amount: balance, credit_amount: 0 })
     } else if (balance < 0) {
@@ -256,17 +275,17 @@ function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicV
   }
 
   if (lines.length > 0) {
-    if (filedNet > 0) {
+    if (net > 0) {
       lines.push({
         account_number: VAT_SETTLEMENT_ACCOUNT,
         debit_amount: 0,
-        credit_amount: filedNet,
+        credit_amount: net,
         line_description: 'Moms att betala',
       })
-    } else if (filedNet < 0) {
+    } else if (net < 0) {
       lines.push({
         account_number: VAT_REFUND_ACCOUNT,
-        debit_amount: -filedNet,
+        debit_amount: -net,
         credit_amount: 0,
         line_description: 'Moms att återfå',
       })
@@ -290,7 +309,72 @@ function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicV
     }
   }
 
-  return { lines, filed_net: filedNet, rounding_amount: roundingAmount }
+  return { lines, rounding_amount: roundingAmount }
+}
+
+/**
+ * The momsredovisning lines of a period's ledger: every 26xx account the
+ * declaration reads cleared at exact öre, the whole-krona filed net on
+ * 2650/1650, the öre gap on 3740. Pure.
+ */
+function settlementLines(ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts' | 'rutor'>): {
+  lines: VatSettlementProposalLine[]
+  filed_net: number
+  rounding_amount: number
+} {
+  const { net: filedNet } = buildFiledAmounts(ledger.rutor)
+  return { ...clearingLines(clearingBalances(ledger), filedNet), filed_net: filedNet }
+}
+
+/**
+ * What is left of each period balance after the period's own posted
+ * momsredovisningar (crm#1855). `cleared` is what they moved on the account,
+ * debit minus credit as clearedByAccount sums it. A momsredovisning that
+ * clears more than the period put on an account (it also took a balance
+ * carried in from before the period) leaves nothing there, never a balance
+ * on the other side; one that moves an account the wrong way (no clearing at
+ * all) leaves the period's balance as it is. Pure.
+ */
+export function balanceLeftToClear(balance: number, cleared: number): number {
+  const after = roundOre(balance - cleared)
+  if (balance > 0) return Math.min(balance, Math.max(after, 0))
+  if (balance < 0) return Math.max(balance, Math.min(after, 0))
+  return 0
+}
+
+/**
+ * The lines for what is still left of the period's VAT when the period's own
+ * posted momsredovisningar cleared only part of it (crm#1855): a settlement
+ * that came with an import mid-period, a verifikat added after the period
+ * was settled, a quarter settled month by month and not finished. The full
+ * period's lines would clear a second time what those verifikat already
+ * moved. Each account keeps what the settlements left on it
+ * (balanceLeftToClear), and the net is the filed net less what they covered.
+ *
+ * Null, and the full-period lines stand, when the period has no posted
+ * momsredovisning of its own (nothing is read then), when those cleared the
+ * period in full (under a krona left on every account: a settlement booked
+ * in whole kronor), or when they moved none of the period's balances.
+ */
+async function remainingSettlementLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledger: Pick<VatDeclarationLedger, 'totals' | 'dynamicVatAccounts'>,
+  filedNet: number,
+  settlementIds: string[],
+): Promise<{ lines: VatSettlementProposalLine[]; rounding_amount: number } | null> {
+  if (settlementIds.length === 0) return null
+  const moved = await clearedByAccount(supabase, companyId, settlementIds)
+  const cleared = new Map<string, number>()
+  for (const accounts of moved.values()) {
+    for (const [account, amount] of accounts) cleared.set(account, roundOre((cleared.get(account) ?? 0) + amount))
+  }
+  const balances = clearingBalances(ledger)
+  const left = balances.map(([account, balance]) => [account, balanceLeftToClear(balance, cleared.get(account) ?? 0)] as const)
+  if (left.every(([, rest]) => Math.abs(rest) < FILED_ROUNDING)) return null
+  if (left.every(([, rest], i) => rest === balances[i][1])) return null
+  const covered = roundOre(balances.reduce((sum, [, balance], i) => sum + balance - left[i][1], 0))
+  return clearingLines(left, roundOre(filedNet - covered))
 }
 
 const NET_LINE_ACCOUNTS = new Set([VAT_SETTLEMENT_ACCOUNT, VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT])
@@ -594,9 +678,9 @@ export async function buildVatSettlementProposal(
   const balances = periodBalances(supabase, companyId, { period: range, ledger })
 
   // Shape-detected settlements (manual momsomföring, SIE imports) gate the
-  // booking button exactly like tagged ones (#984): the proposal re-clears the
-  // FULL period, so booking on top of a manual settlement would corrupt the
-  // 26xx balances. Stornos are the CANCELLATION of a settlement and must not
+  // booking button exactly like tagged ones (#984): the period already has a
+  // momsredovisning, and a second verifikat on top of a manual settlement
+  // would corrupt the 26xx balances. Stornos are the CANCELLATION of a settlement and must not
   // gate, or annullera could never re-enable the button. Only posted entries
   // gate: the shape of an unposted draft has no balance effect.
   const shapedExisting = ledger.settlementShapedEntries.filter(
@@ -637,6 +721,16 @@ export async function buildVatSettlementProposal(
     ...shapedExisting,
   ].filter((e) => !earlier.has(e.id) && !carriedOver.has(e.id))
 
+  // The period's own posted momsredovisningar may have cleared only part of
+  // it: the lines shown are then what is left, not the full period again.
+  const remaining = await remainingSettlementLines(
+    supabase,
+    companyId,
+    ledger,
+    filedNet,
+    existing.filter((e) => e.status === 'posted').map((e) => e.id),
+  )
+
   // No posted momsredovisning for the period yet: one dated after it may
   // settle it by amount, and booking another would clear its accounts twice.
   if (lines.length > 0 && !findPostedVatSettlement(existing)) {
@@ -664,10 +758,11 @@ export async function buildVatSettlementProposal(
     entry_date: entryDate.entry_date,
     entry_date_reason: entryDate.entry_date_reason,
     description,
-    lines,
+    lines: remaining?.lines ?? lines,
     filed_net: filedNet,
-    rounding_amount: roundingAmount,
+    rounding_amount: remaining?.rounding_amount ?? roundingAmount,
     is_empty: lines.length === 0,
+    partly_settled: remaining !== null,
     existing_entries: existingEntries,
   }
 }

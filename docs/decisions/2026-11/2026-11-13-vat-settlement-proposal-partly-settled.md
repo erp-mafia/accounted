@@ -1,0 +1,1 @@
+[2026-11-13] A partly settled momsperiod's proposal shows only what is left on the 26xx accounts (partly_settled), but its posted settlement still gates booking: opening the gate for the rest is a founder decision (crm#1855).

@@ -90,13 +90,14 @@ export const reportsVatSettlementProposal = defineOperation({
   docs: {
     summary: 'The proposed momsredovisning verifikat for a VAT period: clear 26xx to 2650 or 1650.',
     description:
-      'Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period\'s last day, or the first open day after it when that day is closed or locked (entry_date_reason says why). existing_entries lists the settlements already booked or drafted for the period: dated inside it (tagged vat_settlement or recognised by shape) unless it clears exactly the previous period\'s balances instead, or dated after it and clearing exactly this period\'s balances (late_settlement set); booking_status sums them up. fingerprint identifies these exact lines. Read-only.',
+      'Builds the settlement entry for a momsperiod from the same ledger totals as the momsdeklaration: every output VAT account (261x-263x, reverse charge and import included) debited and every input VAT account (264x) credited by its period balance at exact öre, the net to 2650 (att betala, credit) or 1650 (att återfå, debit) at the whole-krona amount the declaration is filed with (ruta 49), and the öre gap on 3740. Dated the period\'s last day, or the first open day after it when that day is closed or locked (entry_date_reason says why). existing_entries lists the settlements already booked or drafted for the period: dated inside it (tagged vat_settlement or recognised by shape) unless it clears exactly the previous period\'s balances instead, or dated after it and clearing exactly this period\'s balances (late_settlement set); booking_status sums them up. When the posted ones cleared only part of the period\'s VAT (a settlement that came with an import mid-period, a verifikat added after the period was settled), partly_settled is true and lines hold only what is left on the accounts, with the net less what they already moved. fingerprint identifies these exact lines. Read-only.',
     useWhen: 'Before booking the VAT for a period (POST /vat/settlement), to review what will be posted.',
     doNotUseFor: 'The declaration rutor themselves (GET /reports/vat-declaration) or paying the VAT (the skattekonto payment is booked separately).',
     pitfalls: [
       'booking_status booked means a posted settlement exists: booking again is refused; reverse that verifikat first if the period must be re-booked.',
       'is_empty true means the period has no VAT to clear.',
-      'The proposal clears the WHOLE period, not the change since an earlier settlement.',
+      'lines clear the WHOLE period, also when booking_status is booked and the period is settled in full. Only with partly_settled true are they what is left after the settlements already posted: booking is still refused then (booking_status booked), so the rest is posted as an ordinary verifikat or the earlier settlement is reversed and the period booked whole.',
+      'An ordinary verifikat stays out of the declaration rutor as a momsredovisning only when it has a 2650 or 1650 line (or is a pure 26xx movement against 1630): two 26xx accounts against each other count as VAT of the period.',
     ],
     example: {
       request: { period_type: 'quarterly', year: 2026, period: 1 },
@@ -111,6 +112,7 @@ export const reportsVatSettlementProposal = defineOperation({
           filed_net: 18749,
           rounding_amount: 0.6,
           is_empty: false,
+          partly_settled: false,
           existing_entries: [],
           booking_status: 'none',
           fingerprint: '3f9a…',
@@ -139,6 +141,9 @@ export const reportsVatSettlementProposal = defineOperation({
     filed_net: z.number().describe('Ruta 49 as filed, whole kronor; positive = att betala.'),
     rounding_amount: z.number().describe('Signed öre gap balanced on 3740 (positive = credited).'),
     is_empty: z.boolean(),
+    partly_settled: z
+      .boolean()
+      .describe('True when the settlements already posted for the period cleared only part of its VAT: lines are then what is left, not the whole period.'),
     existing_entries: z.array(ExistingEntry),
     booking_status: z.enum(['booked', 'draft', 'none']),
     fingerprint: z.string(),

@@ -54,6 +54,7 @@ vi.mock('@/lib/reports/vat-settlement', async (importOriginal) => {
       filed_net: 200,
       rounding_amount: 0,
       is_empty: false,
+      partly_settled: false,
       existing_entries: [],
     }),
   }
