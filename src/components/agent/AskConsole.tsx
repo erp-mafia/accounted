@@ -11,6 +11,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { composerMayAutoFocus } from './composer-focus'
 
 /**
  * The single-call chat console for general.help (audit Option A / rip).
@@ -74,8 +75,8 @@ function useMarkdownReady(): boolean {
 const ANSWER_PROSE =
   'prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0'
 
-// Mirrors ChatEmptyState's three so the in-console empty state and the /chat
-// index offer the same way in.
+// The suggested questions of the empty console. The /chat start page mounts
+// this console directly, so this is the one list.
 const SUGGESTIONS: { label: string; prompt: string }[] = [
   {
     label: 'Vad är min största utgiftspost den här månaden?',
@@ -110,6 +111,12 @@ interface AskConsoleProps {
   onConversationCreated?: (id: string) => void
   /** Vertical padding override for the scroller (the full-page chat uses px-6 py-8). */
   scrollerClassName?: string
+  /**
+   * Put the cursor in the composer on mount. For a start page whose whole
+   * purpose is to ask (/chat): never for a resumed thread or the docked
+   * panel, and never on a touch device (see composerMayAutoFocus).
+   */
+  autoFocusComposer?: boolean
 }
 
 export default function AskConsole({
@@ -119,6 +126,7 @@ export default function AskConsole({
   seedUserMessage,
   onConversationCreated,
   scrollerClassName,
+  autoFocusComposer = false,
 }: AskConsoleProps) {
   const hasAi = useCapability(CAPABILITY.ai)
   // The page the user is looking at when they ask (the panel docks beside it
@@ -136,6 +144,13 @@ export default function AskConsole({
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const seedFiredRef = useRef(false)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (!autoFocusComposer) return
+    if (!composerMayAutoFocus(window.matchMedia?.bind(window))) return
+    composerRef.current?.focus({ preventScroll: true })
+  }, [autoFocusComposer])
 
   // Keep the newest turn in view. A resumed thread lands at the bottom too,
   // which is where the composer is.
@@ -267,6 +282,7 @@ export default function AskConsole({
         >
           <div className="flex items-end gap-2">
             <textarea
+              ref={composerRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Skriv din fråga…"

@@ -48,7 +48,7 @@ describe('aiTaskHref', () => {
   it('opens the company\'s own inbox for the inbox row, the fixed page for the rest', () => {
     expect(aiTaskHref('inbox_document', '/inkorg')).toBe('/inkorg')
     expect(aiTaskHref('inbox_document', null)).toBe('/e/general/invoice-inbox')
-    expect(aiTaskHref('book_transaction', '/inkorg')).toBe('/transactions')
+    expect(aiTaskHref('book_transaction', '/inkorg')).toBe('/transactions?view=inbox')
   })
 })
 

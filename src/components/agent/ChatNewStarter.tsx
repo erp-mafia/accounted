@@ -17,9 +17,12 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 export default function ChatNewStarter({
   intentId,
   seedUserMessage,
+  autoFocusComposer = false,
 }: {
   intentId: string
   seedUserMessage?: string
+  /** The /chat start page: the cursor starts in the text box (not on touch). */
+  autoFocusComposer?: boolean
 }) {
   const router = useRouter()
   const { identity } = useAgentSheet()
@@ -58,6 +61,7 @@ export default function ChatNewStarter({
             seedUserMessage={seedUserMessage}
             initialConversationId={null}
             onConversationCreated={swapToConversation}
+            autoFocusComposer={autoFocusComposer}
             scrollerClassName="px-6 py-8"
           />
         ) : (

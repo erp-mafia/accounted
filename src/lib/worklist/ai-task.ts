@@ -41,8 +41,10 @@ export const AI_TASK_ORDER: readonly AiTaskCategory[] = [
 
 /** The page each row opens: the same hrefs as the Att göra rows on Hem. */
 export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
-  book_transaction: '/transactions',
-  book_skattekonto: '/transactions?source=skatteverket',
+  // ?view=inbox: these rows count what waits to be booked, so they open the
+  // to-book view even for someone whose remembered view is Alla.
+  book_transaction: '/transactions?view=inbox',
+  book_skattekonto: '/transactions?source=skatteverket&view=inbox',
   inbox_document: '/e/general/invoice-inbox',
   // The Registrerade tab: what attest still accepts, the very invoices the
   // count holds (crm#1631).
