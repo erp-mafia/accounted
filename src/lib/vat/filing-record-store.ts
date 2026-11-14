@@ -15,12 +15,16 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  fiscalYearEndKey,
   fiscalYearEndMonthIn,
   fiscalYearsEndingIn,
   getVatDeadlineForPeriod,
   type VatDeadlineCalculationSettings,
 } from '@/lib/tax/deadline-config'
 import { createLinkedReportPeriod } from '@/lib/tax/deadline-generator'
+import { readRecordedEuTradeYears } from '@/lib/tax/fiscal-year-eu-trade'
+import { helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
+import { createLogger } from '@/lib/logger'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatDateISO } from '@/lib/calendar/utils'
 import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
@@ -37,6 +41,26 @@ import {
   type VatFilingPeriodType,
   type VatFilingRecord,
 } from './filing-record'
+
+const log = createLogger('vat/filing-record-store')
+
+/**
+ * Whether the nightly job recorded EU trade for the helårsmoms period ending
+ * in that month. A failed read is logged and read as not recorded: the date
+ * only places a row the generator has not written, and a filing or the
+ * forecast must not fail over it.
+ */
+async function recordedEuTrade(supabase: SupabaseClient, companyId: string, key: string): Promise<boolean> {
+  try {
+    return ((await readRecordedEuTradeYears(supabase, companyId)).byCompany.get(companyId) ?? []).includes(key)
+  } catch (err) {
+    log.warn('recorded EU trade could not be read; the helårsmoms date follows the setting', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
+}
 
 export type VatFilingErrorCode =
   | 'VAT_FILING_PERIOD_NOT_ENDED'
@@ -475,7 +499,7 @@ export async function vatPeriodDeadline(
   const row = await findPeriodRow(supabase, companyId, input, settings)
   return {
     ...placement(input, settings),
-    due_date: row?.due_date ?? generatedDueDate(input, settings)?.dueDate ?? null,
+    due_date: row?.due_date ?? (await generatedDueDate(supabase, companyId, input, settings))?.dueDate ?? null,
     filed: row?.is_completed === true,
   }
 }
@@ -492,18 +516,28 @@ export async function vatPeriodTaxLabel(
 
 /**
  * The period's statutory day as the generator places it (lib/tax/deadline-config.ts),
- * moved to the next banking day; null when it cannot be placed.
+ * moved to the next banking day; null when it cannot be placed. A helårsmoms
+ * period the nightly job saw EU trade in takes the earlier date, as on the
+ * generator's row (vat_eu_trade_fiscal_years); read only for a yearly period
+ * with the setting off, the one case it changes.
  */
-function generatedDueDate(
+async function generatedDueDate(
+  supabase: SupabaseClient,
+  companyId: string,
   input: VatFilingPeriodInput,
   settings: FilingSettings,
-): { instance: NonNullable<ReturnType<typeof getVatDeadlineForPeriod>>; dueDate: string } | null {
+): Promise<{ instance: NonNullable<ReturnType<typeof getVatDeadlineForPeriod>>; dueDate: string } | null> {
   const row = settings.row
+  const endMonth = settings.fiscalYearEndMonth(input.year)
+  const booksShowEuTrade =
+    input.periodType === 'yearly' && row?.vat_has_eu_trade === false
+      ? await recordedEuTrade(supabase, companyId, fiscalYearEndKey({ endYear: input.year, endMonth }))
+      : false
   const instance = getVatDeadlineForPeriod(input.periodType, input.year, input.period, {
     vat_taxable_base_over_40m: row?.vat_taxable_base_over_40m === true,
     entity_type: (row?.entity_type ?? null) as VatDeadlineCalculationSettings['entity_type'],
-    fiscal_year_start_month: settings.fiscalYearEndMonth(input.year) % 12 + 1,
-    vat_has_eu_trade: row?.vat_has_eu_trade ?? null,
+    fiscal_year_start_month: endMonth % 12 + 1,
+    vat_has_eu_trade: row ? helarsmomsHasEuTrade(row.vat_has_eu_trade, booksShowEuTrade) : null,
     vat_filing_method: (row?.vat_filing_method ?? null) as VatDeadlineCalculationSettings['vat_filing_method'],
   })
   if (!instance) return null
@@ -531,7 +565,7 @@ async function insertCompletedPeriodRow(
     userId: string | null
   },
 ): Promise<DeadlineRow> {
-  const placed = generatedDueDate(input, settings)
+  const placed = await generatedDueDate(supabase, companyId, input, settings)
   // Only a yearly period can land here: its due date needs the company's
   // legal form and filing profile, and a company without a settings row has
   // neither (none in production on 2026-09-27).

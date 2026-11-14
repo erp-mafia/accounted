@@ -12,12 +12,24 @@ import { AGI_RECEIPT_STATUSES } from '@/lib/deadlines/agi-filed'
 
 const log = createLogger('deadline-generator')
 import {
+  fiscalYearEndKey,
+  fiscalYearsEndingIn,
   getApplicableDeadlineConfigs,
+  helarsmomsDeadline,
+  helarsmomsPeriodOf,
   type CompanySettingsForDeadlines,
+  type DeadlineFiscalYear,
   type DeadlineInstance,
   type FiscalYearForDeadlines,
   type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
+import {
+  fiscalYearsWithEuTrade,
+  needsEuTradeEvidence,
+  readEuTradeChecks,
+  readRecordedEuTradeYears,
+  recordEuTradeChecks,
+} from './fiscal-year-eu-trade'
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
 import { formatDateISO, parseDate } from '@/lib/calendar/utils'
 
@@ -130,6 +142,7 @@ export function toDeadlineSettings(
     tax_assessment_notices: settings.tax_assessment_notices,
     fiscal_years: settings.fiscal_years,
     salaried_employee_since: settings.salaried_employee_since,
+    eu_trade_fiscal_year_ends: settings.eu_trade_fiscal_year_ends,
   }
 }
 
@@ -221,6 +234,18 @@ async function hydrateFiscalYears(
   return settingsRows.map((settings) => ({
     ...settings,
     fiscal_years: byCompany.get(settings.company_id) ?? [],
+  }))
+}
+
+/** Every company's recorded EU-trade years (CompanySettingsForDeadlines.eu_trade_fiscal_year_ends), in one read. */
+async function hydrateRecordedEuTradeYears(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const { byCompany } = await readRecordedEuTradeYears(supabase)
+  return settingsRows.map((settings) => ({
+    ...settings,
+    eu_trade_fiscal_year_ends: byCompany.get(settings.company_id) ?? [],
   }))
 }
 
@@ -337,12 +362,15 @@ export function shouldRegenerateTaxDeadlines(
  * conservative choice for a compliance surface: a stale filing date is a
  * missed filing, a lost title edit is cosmetic.
  */
+// due_date is read, never inherited: an open helårsmoms row's date decides
+// whether a recorded EU-trade period still dates it (euTradeYearsInForce).
 const SUPERSEDED_ROW_SELECT =
-  'tax_deadline_type, tax_period, status, status_changed_at, notes, due_time, priority, customer_id' as const
+  'tax_deadline_type, tax_period, due_date, status, status_changed_at, notes, due_time, priority, customer_id' as const
 
 interface SupersededDeadlineRow {
   tax_deadline_type: string | null
   tax_period: string | null
+  due_date: string | null
   status: DeadlineStatus | null
   status_changed_at: string | null
   notes: string | null
@@ -452,6 +480,16 @@ export async function generateTaxDeadlinesForUser(
     settings = { ...settings, salaried_employee_since: since }
   }
 
+  // A helårsmoms period the nightly job saw EU trade in takes the earlier
+  // date, as the setting would give it (vat_eu_trade_fiscal_years,
+  // alignYearlyVatDeadlinesWithBooks). Read only when it can matter.
+  if (settings.eu_trade_fiscal_year_ends === undefined) {
+    const recorded = needsEuTradeEvidence(settings)
+      ? (await readRecordedEuTradeYears(supabase, companyId)).byCompany.get(companyId) ?? []
+      : []
+    settings = { ...settings, eu_trade_fiscal_year_ends: recorded }
+  }
+
   // Recurring deadlines use the current rolling window. Explicit tax notices
   // also include their own due-date years so a newly entered overdue notice is
   // represented instead of disappearing only because its exact date has passed.
@@ -548,6 +586,17 @@ export async function generateTaxDeadlinesForUser(
   const supersededByKey = new Map<string, SupersededDeadlineRow>()
   for (const row of (supersededRows ?? []) as SupersededDeadlineRow[]) {
     supersededByKey.set(`${row.tax_deadline_type}:${row.tax_period}`, row)
+  }
+
+  // A recorded EU-trade period whose earlier date has passed while its open
+  // row is still ahead keeps that row (euTradeYearsInForce).
+  settings = {
+    ...settings,
+    eu_trade_fiscal_year_ends: euTradeYearsInForce(
+      settings,
+      (supersededRows ?? []) as SupersededDeadlineRow[],
+      todayIso,
+    ),
   }
 
   const nowIso = new Date().toISOString()
@@ -929,6 +978,22 @@ export function getExpectedUpcomingDeadlineKeys(
   return new Set(keysByTypeAndPeriod.values())
 }
 
+function groupRowsByCompany(rows: readonly UpcomingDeadlineCompanyRow[]): Map<string, UpcomingDeadlineCompanyRow[]> {
+  const byCompany = new Map<string, UpcomingDeadlineCompanyRow[]>()
+  for (const row of rows) byCompany.set(row.company_id, [...(byCompany.get(row.company_id) ?? []), row])
+  return byCompany
+}
+
+/** Detection reads euTradeYearsInForce from the same open rows the generator replaces. */
+function withEuTradeInForce(
+  settings: CompanySettingsForDeadlines,
+  rows: readonly UpcomingDeadlineCompanyRow[],
+  todayIso: string,
+): CompanySettingsForDeadlines {
+  const open = rows.filter((row) => !row.is_completed && !row.dismissed_at)
+  return { ...settings, eu_trade_fiscal_year_ends: euTradeYearsInForce(settings, open, todayIso) }
+}
+
 export function findSettingsMissingUpcomingDeadlines(
   settingsRows: DeadlineSettingsRow[],
   upcomingDeadlineRows: UpcomingDeadlineCompanyRow[],
@@ -937,6 +1002,8 @@ export function findSettingsMissingUpcomingDeadlines(
 ): DeadlineSettingsRow[] {
   const actualKeysByCompany = new Map<string, Set<string>>()
   const completedKeysByCompany = new Map<string, Set<string>>()
+  const rowsByCompany = groupRowsByCompany(upcomingDeadlineRows)
+  const todayIso = todayIsoStockholm(fromDate)
   for (const row of upcomingDeadlineRows) {
     const keys = actualKeysByCompany.get(row.company_id) ?? new Set<string>()
     keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date))
@@ -952,7 +1019,7 @@ export function findSettingsMissingUpcomingDeadlines(
   return settingsRows.filter((settings) => {
     try {
       const expectedKeys = getExpectedUpcomingDeadlineKeys(
-        toDeadlineSettings(settings),
+        withEuTradeInForce(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
         years,
         fromDate,
       )
@@ -1015,12 +1082,13 @@ export function findSettingsWithStaleUpcomingDeadlines(
     replaceableByCompany.set(row.company_id, rows)
   }
 
+  const rowsByCompany = groupRowsByCompany(upcomingDeadlineRows)
   return settingsRows.filter((settings) => {
     const rows = replaceableByCompany.get(settings.company_id)
     if (!rows) return false
     try {
       const expectedKeys = getExpectedUpcomingDeadlineKeys(
-        toDeadlineSettings(settings),
+        withEuTradeInForce(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
         windowYears,
         fromDate,
       )
@@ -1069,11 +1137,14 @@ export async function generateNewYearDeadlines(
   options: DeadlinePassOptions = {},
 ): Promise<{ usersProcessed: number; totalCreated: number; companiesNotReached: number }> {
   const newYear = stockholmYearMonth().year
-  const allSettings = await hydrateSalariedEmployeeSince(
+  const allSettings = await hydrateRecordedEuTradeYears(
     supabase,
-    await hydrateFiscalYears(
+    await hydrateSalariedEmployeeSince(
       supabase,
-      await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
+      await hydrateFiscalYears(
+        supabase,
+        await hydrateTaxAssessmentNotices(supabase, await fetchAllDeadlineSettings(supabase)),
+      ),
     ),
   )
 
@@ -1143,15 +1214,19 @@ export async function backfillMissingTaxDeadlines(
         .range(from, to),
     ),
   ])
-  // Fiscal years and the employee evidence must be hydrated here exactly as
-  // the generator resolves them: if detection expected a räkenskapsår (or an
-  // AGI row) the generator refuses to create, or missed one it creates, the
-  // company would be regenerated every night.
-  const allSettings = await hydrateSalariedEmployeeSince(
+  // Fiscal years, the employee evidence and the recorded EU-trade years must
+  // be hydrated here exactly as the generator resolves them: if detection
+  // expected a räkenskapsår (an AGI row, a helårsmoms date) the generator
+  // refuses to create, or missed one it creates, the company would be
+  // regenerated every night.
+  const allSettings = await hydrateRecordedEuTradeYears(
     supabase,
-    await hydrateFiscalYears(
+    await hydrateSalariedEmployeeSince(
       supabase,
-      await hydrateTaxAssessmentNotices(supabase, rawSettings),
+      await hydrateFiscalYears(
+        supabase,
+        await hydrateTaxAssessmentNotices(supabase, rawSettings),
+      ),
     ),
   )
 
@@ -1192,4 +1267,156 @@ export async function backfillMissingTaxDeadlines(
     totalCreated,
     companiesNotReached,
   }
+}
+
+/** needsEuTradeEvidence over a raw settings row, before toDeadlineSettings fills its defaults. */
+function needsEuTradeEvidenceRow(row: DeadlineSettingsRow): boolean {
+  return needsEuTradeEvidence({
+    vat_registered: row.vat_registered ?? false,
+    moms_period: row.moms_period ?? null,
+    vat_has_eu_trade: row.vat_has_eu_trade ?? false,
+  })
+}
+
+/** An instance's due date as the rows carry it: moved to the next banking day. */
+function dueIso(instance: DeadlineInstance): string {
+  return formatDateISO(adjustDeadlineToNextBankingDay(new Date(instance.year, instance.month, instance.day)))
+}
+
+/**
+ * The recorded EU-trade periods that date a helårsmoms row today. A period
+ * whose EU-trade date has passed while its open row is still on a later date
+ * is left out, so that row stays where it is: the generator writes no row in
+ * the past, so with the period in, the repair would replace the row by none.
+ * That state is reached when the row was not moved before the earlier date
+ * passed: a regeneration that failed after the period was recorded, a row
+ * filed and then unmarked, a revert. The generator and the repair's detection
+ * both read this, from the same open rows, so they agree.
+ */
+export function euTradeYearsInForce(
+  settings: CompanySettingsForDeadlines,
+  openRows: ReadonlyArray<{ tax_deadline_type: string | null; tax_period: string | null; due_date: string | null }>,
+  todayIso: string,
+): readonly string[] | undefined {
+  const recorded = settings.eu_trade_fiscal_year_ends
+  if (!recorded || recorded.length === 0) return recorded
+  const openAhead = new Set(
+    openRows
+      .filter((row) => row.tax_deadline_type === 'moms_yearly' && row.due_date !== null && row.due_date >= todayIso)
+      .map((row) => row.tax_period),
+  )
+  if (openAhead.size === 0) return recorded
+  const passed = new Set<string>()
+  const endYears = Array.from(new Set(recorded.map((key) => Number(key.slice(0, 4)))))
+  for (const fy of fiscalYearsEndingIn(endYears, settings)) {
+    const key = fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))
+    if (!recorded.includes(key)) continue
+    const instance = helarsmomsDeadline(fy, settings, true)
+    if (instance && openAhead.has(instance.period) && dueIso(instance) < todayIso) passed.add(key)
+  }
+  return passed.size === 0 ? recorded : recorded.filter((key) => !passed.has(key))
+}
+
+/**
+ * The helårsmoms periods (helarsmomsPeriodOf) of the räkenskapsår the
+ * generator dates for `years` that the books can still move: started, not
+ * recorded with EU trade, and with the EU-trade date still ahead. Without EU
+ * trade the date is later, so once the EU-trade date has passed the row stays
+ * where it is (euTradeYearsInForce).
+ */
+function periodsTheBooksCanMove(
+  settings: CompanySettingsForDeadlines,
+  years: readonly number[],
+  recorded: readonly string[],
+  todayIso: string,
+): DeadlineFiscalYear[] {
+  const periods = new Map<string, DeadlineFiscalYear>()
+  const endYears = Array.from(new Set(years.flatMap((year) => [year - 1, year])))
+  for (const fy of fiscalYearsEndingIn(endYears, settings)) {
+    const period = helarsmomsPeriodOf(fy, settings)
+    const key = fiscalYearEndKey(period)
+    if (recorded.includes(key) || period.start > todayIso) continue
+    const instance = helarsmomsDeadline(fy, settings, true)
+    if (instance && dueIso(instance) >= todayIso) periods.set(key, period)
+  }
+  return Array.from(periods.values())
+}
+
+/**
+ * Read the open helårsmoms periods' books for the yearly filers that have not
+ * said they trade within the EU, write what each read found
+ * (vat_eu_trade_fiscal_years), and regenerate each company a period with EU
+ * trade was found for, so its row takes the earlier date the VAT close check
+ * names. Nothing else would: booking an EU purchase changes no setting, and
+ * the generator and the repair's detection read only what is recorded.
+ *
+ * A period is read while its EU-trade date is still ahead and until it is
+ * found with EU trade; it is never read again after that. One read of a
+ * declaration per open period, so the companies whose periods were read
+ * longest ago (never read first) come first, and none is started after
+ * `options.deadline`: a run that stops early leaves the most recently read
+ * ones to the next, and every company is reached in turn.
+ */
+export async function alignYearlyVatDeadlinesWithBooks(
+  supabase: SupabaseClient,
+  options: DeadlinePassOptions = {},
+): Promise<{ companiesChecked: number; companiesMoved: number; companiesNotReached: number }> {
+  const nothing = { companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 }
+  // The reads below count against the budget too: none of them when it is spent.
+  if (pastDeadline(options)) return nothing
+  const candidates = (await fetchAllDeadlineSettings(supabase)).filter(
+    (row) => isEntityType(row.entity_type) && needsEuTradeEvidenceRow(row),
+  )
+  if (candidates.length === 0) return nothing
+  const checks = await readEuTradeChecks(supabase)
+  // Deployed before its migration: nowhere to record yet.
+  if (!checks.available) return nothing
+  if (pastDeadline(options)) return nothing
+
+  const todayIso = todayIsoStockholm()
+  const currentYear = stockholmYearMonth().year
+  const years = [currentYear, currentYear + 1]
+  const queue = (await hydrateFiscalYears(supabase, candidates))
+    .map((row) => {
+      const settings = toDeadlineSettings(row)
+      const recorded = checks.recorded.get(row.company_id) ?? []
+      const open = periodsTheBooksCanMove(settings, years, recorded, todayIso)
+      const checkedAt = checks.checkedAt.get(row.company_id)
+      // '' sorts first: a period never read.
+      const oldestRead = open.map((period) => checkedAt?.get(fiscalYearEndKey(period)) ?? '').sort()[0] ?? ''
+      return { companyId: row.company_id, settings, recorded, open, oldestRead }
+    })
+    .filter((entry) => entry.open.length > 0)
+    .sort((a, b) => a.oldestRead.localeCompare(b.oldestRead) || a.companyId.localeCompare(b.companyId))
+
+  let companiesChecked = 0
+  let companiesMoved = 0
+  for (const [index, entry] of queue.entries()) {
+    if (pastDeadline(options)) {
+      return { companiesChecked, companiesMoved, companiesNotReached: queue.length - index }
+    }
+    try {
+      companiesChecked++
+      const found = await fiscalYearsWithEuTrade(supabase, entry.companyId, entry.open, todayIso)
+      await recordEuTradeChecks(
+        supabase,
+        entry.companyId,
+        entry.open.map((period) => {
+          const key = fiscalYearEndKey(period)
+          return { key, hasEuTrade: found.includes(key) }
+        }),
+      )
+      if (found.length === 0) continue
+      // A failed regeneration is repaired by the next run's detection, which
+      // reads the periods just recorded.
+      await regenerateTaxDeadlinesForUser(supabase, entry.companyId, {
+        ...entry.settings,
+        eu_trade_fiscal_year_ends: [...entry.recorded, ...found],
+      })
+      companiesMoved++
+    } catch (err) {
+      log.error(`Error reading EU trade for the helårsmoms of company ${entry.companyId}:`, err)
+    }
+  }
+  return { companiesChecked, companiesMoved, companiesNotReached: 0 }
 }

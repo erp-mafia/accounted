@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   ANNUAL_HORIZON_DAYS,
   RECURRING_HORIZON_DAYS,
+  alignYearlyVatDeadlinesWithBooks,
   backfillMissingTaxDeadlines,
   generateNewYearDeadlines,
   findSettingsMissingUpcomingDeadlines,
@@ -14,6 +15,14 @@ import {
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 import { createRowsMockSupabase } from '@/tests/helpers'
+import { fiscalYearsWithEuTrade } from '../fiscal-year-eu-trade'
+
+// The books' answer on EU trade (one read of a period's declaration each):
+// none unless a test says otherwise.
+vi.mock('../fiscal-year-eu-trade', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../fiscal-year-eu-trade')>()),
+  fiscalYearsWithEuTrade: vi.fn(async () => []),
+}))
 
 // log.error is what reaches the error tracker: the fallback to two
 // statements must be reported, once per process. Other levels stay silent.
@@ -68,6 +77,7 @@ function nextMonthPeriod(): string {
 type SupersededRow = {
   tax_deadline_type: string
   tax_period: string
+  due_date?: string | null
   status?: string
   status_changed_at?: string | null
   notes?: string | null
@@ -99,6 +109,10 @@ function makeRecordingSupabase(opts: {
   agiDeclarations?: Array<Record<string, unknown>>
   /** employees rows, answered through the filters the generator applies. */
   employees?: Array<Record<string, unknown>>
+  /** vat_eu_trade_fiscal_years rows: the years the nightly pass saw EU trade in. */
+  euTradeYears?: Array<{ company_id: string; fiscal_year_end: string }>
+  /** The read of vat_eu_trade_fiscal_years fails with this. */
+  euTradeYearsError?: { code: string; message: string }
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
@@ -132,6 +146,19 @@ function makeRecordingSupabase(opts: {
       periods.order = vi.fn(() => periods)
       periods.range = vi.fn(async () => ({ data: opts.fiscalPeriods ?? [], error: null }))
       return periods
+    }
+    if (table === 'vat_eu_trade_fiscal_years') {
+      // The years the nightly pass recorded (paginated).
+      const years: Record<string, ReturnType<typeof vi.fn>> = {}
+      years.select = vi.fn(() => years)
+      years.eq = vi.fn(() => years)
+      years.order = vi.fn(() => years)
+      years.range = vi.fn(async () =>
+        opts.euTradeYearsError
+          ? { data: null, error: opts.euTradeYearsError }
+          : { data: opts.euTradeYears ?? [], error: null },
+      )
+      return years
     }
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
     let isDelete = false
@@ -186,6 +213,92 @@ function makeRecordingSupabase(opts: {
     getInsertPayload: () => insertPayload,
     getReplaceArgs: () => replaceArgs,
   }
+}
+
+/**
+ * Table-routed mock: paginated reads (.range) answer from `tables`
+ * through the eq filters applied; the generator's own deadline reads
+ * answer empty; inserts and upserts are recorded.
+ */
+function makeSupabase(
+  tables: Record<string, Array<Record<string, unknown>>>,
+  /** A paginated read of these tables fails with the error given. */
+  errors: Record<string, { code: string; message: string }> = {},
+) {
+  const inserts: Array<Array<Record<string, unknown>>> = []
+  const upserts: Array<{ table: string; rows: Array<Record<string, unknown>>; options?: Record<string, unknown> }> = []
+  const updates: Array<{ table: string; row: Record<string, unknown>; filters: Array<[string, unknown]> }> = []
+  const from = vi.fn((table: string) => {
+    const chain: Record<string, unknown> = {}
+    const filters: Array<[string, unknown]> = []
+    let deleting = false
+    for (const method of ['is', 'gte', 'lte', 'or', 'not', 'order', 'in']) {
+      chain[method] = vi.fn(() => chain)
+    }
+    chain.eq = vi.fn((column: string, value: unknown) => {
+      filters.push([column, value])
+      return chain
+    })
+    chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
+    // A page (.range) answers from the table through every eq filter, those
+    // chained after .range too, as PostgREST's builder allows.
+    let paged = false
+    chain.range = vi.fn(() => {
+      paged = true
+      return chain
+    })
+    chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
+      inserts.push(rows)
+      return { select: vi.fn(async () => ({ data: rows.map((_, i) => ({ id: `new-${i}` })), error: null })) }
+    })
+    chain.upsert = vi.fn(async (rows: Array<Record<string, unknown>>, options?: Record<string, unknown>) => {
+      upserts.push({ table, rows, options })
+      return { data: null, error: null }
+    })
+    chain.update = vi.fn((row: Record<string, unknown>) => {
+      updates.push({ table, row, filters })
+      return chain
+    })
+    chain.delete = vi.fn(() => {
+      deleting = true
+      return chain
+    })
+    chain.then = (resolve: (value: unknown) => unknown) =>
+      Promise.resolve(
+        !paged
+          ? { data: [], error: null }
+          : errors[table]
+            ? { data: null, error: errors[table] }
+            : {
+                data: (tables[table] ?? []).filter((row) => filters.every(([column, value]) => row[column] === value)),
+                error: null,
+              },
+      ).then(resolve)
+    return chain
+  })
+  // The replacement of a company's set (replace_system_tax_deadlines).
+  const rpc = vi.fn(async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
+    if (args.p_rows.length > 0) inserts.push(args.p_rows)
+    return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
+  })
+  return { supabase: { from, rpc } as unknown as SupabaseClient, inserts, upserts, updates }
+}
+
+function storedRows(companyId: string, settings: CompanySettingsForDeadlines) {
+  return Array.from(getExpectedUpcomingDeadlineKeys(settings), (key, index) => {
+    const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
+    return {
+      id: `${companyId}-${index}`,
+      company_id: companyId,
+      source: 'system',
+      deadline_type: 'tax',
+      tax_deadline_type: taxDeadlineType,
+      tax_period: taxPeriod,
+      due_date: dueDate,
+      is_completed: false,
+      dismissed_at: null,
+    }
+  })
 }
 
 beforeEach(() => {
@@ -1178,66 +1291,6 @@ describe('AGI rows for an active salaried employee before the first salary run (
   })
 
   describe('the nightly backfill', () => {
-    /**
-     * Table-routed mock: paginated reads (.range) answer from `tables`
-     * through the eq filters applied; the generator's own deadline reads
-     * answer empty; inserts are recorded.
-     */
-    function makeSupabase(tables: Record<string, Array<Record<string, unknown>>>) {
-      const inserts: Array<Array<Record<string, unknown>>> = []
-      const from = vi.fn((table: string) => {
-        const chain: Record<string, unknown> = {}
-        const filters: Array<[string, unknown]> = []
-        let deleting = false
-        for (const method of ['is', 'gte', 'lte', 'or', 'not', 'order', 'in']) {
-          chain[method] = vi.fn(() => chain)
-        }
-        chain.eq = vi.fn((column: string, value: unknown) => {
-          filters.push([column, value])
-          return chain
-        })
-        chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
-        chain.range = vi.fn(async () => ({
-          data: (tables[table] ?? []).filter((row) => filters.every(([column, value]) => row[column] === value)),
-          error: null,
-        }))
-        chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
-          inserts.push(rows)
-          return { select: vi.fn(async () => ({ data: rows.map((_, i) => ({ id: `new-${i}` })), error: null })) }
-        })
-        chain.delete = vi.fn(() => {
-          deleting = true
-          return chain
-        })
-        chain.then = (resolve: (value: unknown) => unknown) =>
-          Promise.resolve({ data: [], error: null }).then(resolve)
-        return chain
-      })
-      // The replacement of a company's set (replace_system_tax_deadlines).
-      const rpc = vi.fn(async (_name: string, args: { p_rows: Array<Record<string, unknown>> }) => {
-        if (args.p_rows.length > 0) inserts.push(args.p_rows)
-        return { data: [{ created: args.p_rows.length, deleted: 0 }], error: null }
-      })
-      return { supabase: { from, rpc } as unknown as SupabaseClient, inserts }
-    }
-
-    function storedRows(companyId: string, settings: CompanySettingsForDeadlines) {
-      return Array.from(getExpectedUpcomingDeadlineKeys(settings), (key, index) => {
-        const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
-        return {
-          id: `${companyId}-${index}`,
-          company_id: companyId,
-          source: 'system',
-          deadline_type: 'tax',
-          tax_deadline_type: taxDeadlineType,
-          tax_period: taxPeriod,
-          due_date: dueDate,
-          is_completed: false,
-          dismissed_at: null,
-        }
-      })
-    }
-
     it('adds the AGI rows to the company missing them, once, and leaves the rest alone', async () => {
       const { fiscal_years: _fy, tax_assessment_notices: _tan, ...raw } = UNATTESTED
       // What every company held before the fix: no AGI rows.
@@ -1344,6 +1397,390 @@ describe('AGI rows for an active salaried employee before the first salary run (
         expect(result).toMatchObject({ usersProcessed: 1, companiesNotReached: 2 })
         expect(inserts).toHaveLength(1)
       })
+    })
+  })
+})
+
+describe('helårsmoms follows the EU trade recorded from the books', () => {
+  // An enskild firma, helårsmoms, the setting "Handel med andra EU-länder"
+  // off, on 14 November 2026. Without EU trade its 2026 VAT is due with the
+  // income return (12 May 2027), with EU trade on 26 February 2027.
+  const EF_YEARLY: CompanySettingsForDeadlines = {
+    ...SETTINGS,
+    entity_type: 'enskild_firma',
+    moms_period: 'yearly',
+    pays_salaries: false,
+    preliminary_tax_monthly: null,
+    fiscal_years: [],
+    tax_assessment_notices: [],
+    salaried_employee_since: null,
+  }
+  // An aktiebolag whose räkenskapsår ends in October: with EU trade its
+  // helårsmoms is due on 26 December 2026 (a Saturday, so 28 December), a
+  // calendar year before the date without it.
+  const AB_OCTOBER: CompanySettingsForDeadlines = {
+    ...SETTINGS,
+    moms_period: 'yearly',
+    pays_salaries: false,
+    fiscal_year_start_month: 11,
+    fiscal_years: [{ start: '2025-11-01', end: '2026-10-31' }],
+    tax_assessment_notices: [],
+    salaried_employee_since: null,
+  }
+  const booksRead = vi.mocked(fiscalYearsWithEuTrade)
+  const key = (period: { endYear: number; endMonth: number }) => `${period.endYear}-${String(period.endMonth).padStart(2, '0')}`
+  /** The books: each company's periods with EU trade, answered from the periods actually read. */
+  const booksWithTrade = (trade: Record<string, string[]>) =>
+    booksRead.mockImplementation(async (_supabase, companyId, periods) =>
+      periods.map(key).filter((k) => (trade[companyId] ?? []).includes(k)),
+    )
+  const periodsRead = () => booksRead.mock.calls.map(([, companyId, periods]) => `${companyId}:${periods.map(key).join(',')}`)
+  const yearly = (rows: Array<Record<string, unknown>> | null | undefined) =>
+    (rows ?? []).filter((row) => row.tax_deadline_type === 'moms_yearly').map((row) => `${row.tax_period}:${row.due_date}`)
+  const recordedFor = (companyId: string, ...keys: string[]) =>
+    keys.map((fiscal_year_end) => ({ company_id: companyId, fiscal_year_end, has_eu_trade: true, checked_at: '2026-11-01T02:00:00.000Z' }))
+  const readWithout = (companyId: string, fiscal_year_end: string, checked_at: string) => ({
+    company_id: companyId,
+    fiscal_year_end,
+    has_eu_trade: false,
+    checked_at,
+  })
+  const yearsReads = (supabase: SupabaseClient) =>
+    (supabase.from as ReturnType<typeof vi.fn>).mock.calls.filter(([table]) => table === 'vat_eu_trade_fiscal_years')
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 14, 12))
+  })
+
+  afterEach(() => {
+    booksRead.mockImplementation(async () => [])
+    vi.useRealTimers()
+  })
+
+  describe('the generator', () => {
+    it('dates a period recorded with EU trade by the earlier date', async () => {
+      const { supabase, getInsertPayload } = makeRecordingSupabase({ euTradeYears: recordedFor('company-1', '2026-12') })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+      expect(yearly(getInsertPayload())).toEqual(['2026:2027-02-26'])
+    })
+
+    it('keeps the date of the setting when nothing is recorded', async () => {
+      const { supabase, getInsertPayload } = makeRecordingSupabase()
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+      expect(yearly(getInsertPayload())).toEqual(['2026:2027-05-12'])
+    })
+
+    it('never reads the books itself', async () => {
+      const { supabase } = makeRecordingSupabase({ euTradeYears: recordedFor('company-1', '2026-12') })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+      expect(booksRead).not.toHaveBeenCalled()
+    })
+
+    it('reads no recorded periods when the setting says EU trade or the company files monthly', async () => {
+      const { supabase } = makeRecordingSupabase({ euTradeYears: recordedFor('company-1', '2026-12') })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', { ...EF_YEARLY, vat_has_eu_trade: true })
+      await generateTaxDeadlinesForUser(supabase, 'company-1', { ...EF_YEARLY, moms_period: 'monthly' })
+
+      expect(yearsReads(supabase)).toEqual([])
+    })
+
+    it('keeps the date of the setting while the table is not in the database yet', async () => {
+      const { supabase, getInsertPayload } = makeRecordingSupabase({
+        euTradeYearsError: { code: 'PGRST205', message: "Could not find the table 'public.vat_eu_trade_fiscal_years'" },
+      })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+      expect(yearly(getInsertPayload())).toEqual(['2026:2027-05-12'])
+    })
+
+    it('replaces nothing when the recorded periods cannot be read', async () => {
+      const { supabase, calls } = makeRecordingSupabase({
+        euTradeYearsError: { code: '57014', message: 'canceling statement due to statement timeout' },
+      })
+
+      await expect(generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)).rejects.toThrow(/statement timeout/)
+      expect(calls).not.toContain('replace')
+    })
+
+    it('keys an enskild firma on recorded broken years by the calendar year it declares', async () => {
+      const { supabase, getInsertPayload } = makeRecordingSupabase({ euTradeYears: recordedFor('company-1', '2026-12') })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', {
+        ...EF_YEARLY,
+        fiscal_years: [
+          { start: '2025-09-01', end: '2026-08-31' },
+          { start: '2026-09-01', end: '2027-08-31' },
+        ],
+      })
+
+      expect(yearly(getInsertPayload())).toEqual(['2026:2027-02-26'])
+    })
+
+    it('moves a period whose EU-trade date falls in the calendar year before its later date', async () => {
+      const without = makeRecordingSupabase()
+      await generateTaxDeadlinesForUser(without.supabase, 'company-1', AB_OCTOBER)
+      const later = yearly(without.getInsertPayload()).filter((row) => row.startsWith('2025/2026:'))
+      expect(later).toHaveLength(1)
+      expect(later[0] > '2025/2026:2027').toBe(true)
+
+      const { supabase, getInsertPayload } = makeRecordingSupabase({ euTradeYears: recordedFor('company-1', '2026-10') })
+      await generateTaxDeadlinesForUser(supabase, 'company-1', AB_OCTOBER)
+
+      expect(yearly(getInsertPayload()).filter((row) => row.startsWith('2025/2026:'))).toEqual(['2025/2026:2026-12-28'])
+    })
+
+    describe('once a recorded period\'s earlier date has passed', () => {
+      beforeEach(() => {
+        vi.setSystemTime(new Date(2027, 2, 1, 12))
+      })
+
+      it('keeps its open row on the later date instead of replacing it by none', async () => {
+        // Recorded, but the row was never moved: a failed regeneration, a row
+        // filed and then unmarked, a revert.
+        const { supabase, getInsertPayload } = makeRecordingSupabase({
+          euTradeYears: recordedFor('company-1', '2026-12'),
+          supersededRows: [{ tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-05-12' }],
+        })
+
+        await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+        expect(yearly(getInsertPayload())).toContain('2026:2027-05-12')
+      })
+
+      it('writes no second row when its row is on the earlier date', async () => {
+        const { supabase, getInsertPayload } = makeRecordingSupabase({
+          euTradeYears: recordedFor('company-1', '2026-12'),
+          supersededRows: [{ tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-02-26', status: 'overdue' }],
+        })
+
+        await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+        expect(yearly(getInsertPayload()).filter((row) => row.startsWith('2026:'))).toEqual([])
+      })
+    })
+  })
+
+  describe('the nightly repair', () => {
+    const { fiscal_years: _fy, tax_assessment_notices: _tan, salaried_employee_since: _since, ...raw } = EF_YEARLY
+    const settingsRow = { company_id: 'company-1', ...raw }
+    const recorded = { ...EF_YEARLY, eu_trade_fiscal_year_ends: ['2026-12'] }
+    const withRecord = { ...settingsRow, eu_trade_fiscal_year_ends: ['2026-12'] }
+
+    it('expects the recorded date, so a row on the later date is missing and stale', () => {
+      const later = storedRows('company-1', EF_YEARLY)
+
+      expect(findSettingsMissingUpcomingDeadlines([withRecord], later)).toEqual([withRecord])
+      expect(findSettingsWithStaleUpcomingDeadlines([withRecord], later)).toEqual([withRecord])
+      expect(findSettingsMissingUpcomingDeadlines([withRecord], storedRows('company-1', recorded))).toEqual([])
+      expect(findSettingsWithStaleUpcomingDeadlines([withRecord], storedRows('company-1', recorded))).toEqual([])
+    })
+
+    it('leaves a recorded period\'s later row alone once the earlier date has passed', () => {
+      vi.setSystemTime(new Date(2027, 1, 27, 12))
+      const later = storedRows('company-1', EF_YEARLY)
+      expect(yearly(later)).toContain('2026:2027-05-12')
+
+      expect(findSettingsMissingUpcomingDeadlines([withRecord], later)).toEqual([])
+      expect(findSettingsWithStaleUpcomingDeadlines([withRecord], later)).toEqual([])
+    })
+
+    it('moves the row once and then leaves the company alone', async () => {
+      const first = makeSupabase({
+        company_settings: [settingsRow],
+        deadlines: storedRows('company-1', EF_YEARLY),
+        vat_eu_trade_fiscal_years: recordedFor('company-1', '2026-12'),
+      })
+
+      expect(await backfillMissingTaxDeadlines(first.supabase)).toMatchObject({ companiesRepaired: 1 })
+      expect(yearly(first.inserts[0])).toEqual(['2026:2027-02-26'])
+
+      const second = makeSupabase({
+        company_settings: [settingsRow],
+        deadlines: storedRows('company-1', recorded),
+        vat_eu_trade_fiscal_years: recordedFor('company-1', '2026-12'),
+      })
+      expect(await backfillMissingTaxDeadlines(second.supabase)).toMatchObject({ companiesRepaired: 0 })
+      expect(booksRead).not.toHaveBeenCalled()
+    })
+
+    it('never deletes the later row of a period recorded too late to move it', async () => {
+      vi.setSystemTime(new Date(2027, 1, 27, 12))
+      const { supabase, inserts } = makeSupabase({
+        company_settings: [settingsRow],
+        deadlines: storedRows('company-1', EF_YEARLY),
+        vat_eu_trade_fiscal_years: recordedFor('company-1', '2026-12'),
+      })
+
+      expect(await backfillMissingTaxDeadlines(supabase)).toMatchObject({ companiesRepaired: 0 })
+      expect(inserts).toEqual([])
+    })
+  })
+
+  describe('the nightly pass', () => {
+    const { fiscal_years: _fy, tax_assessment_notices: _tan, salaried_employee_since: _since, ...raw } = EF_YEARLY
+
+    it('records what it read for each company and moves the row of the one with EU trade', async () => {
+      booksWithTrade({ 'company-1': ['2026-12'] })
+      const { supabase, inserts, upserts, updates } = makeSupabase({
+        company_settings: [
+          { company_id: 'company-1', ...raw },
+          { company_id: 'company-2', ...raw },
+          // The setting says EU trade: nothing for the books to move.
+          { company_id: 'company-3', ...raw, vat_has_eu_trade: true },
+        ],
+        deadlines: ['company-1', 'company-2', 'company-3'].flatMap((id) => storedRows(id, EF_YEARLY)),
+      })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toEqual({ companiesChecked: 2, companiesMoved: 1, companiesNotReached: 0 })
+      expect(periodsRead().sort()).toEqual(['company-1:2026-12', 'company-2:2026-12'])
+      expect(upserts).toEqual([
+        {
+          table: 'vat_eu_trade_fiscal_years',
+          rows: [{ company_id: 'company-1', fiscal_year_end: '2026-12', has_eu_trade: true, checked_at: expect.any(String) }],
+          options: { onConflict: 'company_id,fiscal_year_end' },
+        },
+        {
+          table: 'vat_eu_trade_fiscal_years',
+          rows: [{ company_id: 'company-2', fiscal_year_end: '2026-12', has_eu_trade: false, checked_at: expect.any(String) }],
+          options: { onConflict: 'company_id,fiscal_year_end', ignoreDuplicates: true },
+        },
+      ])
+      // A read without EU trade only touches rows that say no.
+      expect(updates).toHaveLength(1)
+      expect(updates[0].filters).toEqual(
+        expect.arrayContaining([['company_id', 'company-2'], ['has_eu_trade', false]]),
+      )
+      expect(inserts).toHaveLength(1)
+      expect(new Set(inserts[0].map((row) => row.company_id))).toEqual(new Set(['company-1']))
+      expect(yearly(inserts[0])).toEqual(['2026:2027-02-26'])
+    })
+
+    it('reads only the periods still open: started, not recorded, EU-trade date ahead', async () => {
+      const { supabase } = makeSupabase({ company_settings: [{ company_id: 'company-1', ...raw }] })
+
+      await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      // 2025 was due by 26 February 2026 with EU trade: passed. 2027 has not started.
+      expect(periodsRead()).toEqual(['company-1:2026-12'])
+      expect(booksRead.mock.calls[0][2]).toEqual([{ endYear: 2026, endMonth: 12, start: '2026-01-01' }])
+    })
+
+    it('does not read a period already recorded', async () => {
+      const { supabase, inserts } = makeSupabase({
+        company_settings: [{ company_id: 'company-1', ...raw }],
+        vat_eu_trade_fiscal_years: recordedFor('company-1', '2026-12'),
+      })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toEqual({ companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 })
+      expect(booksRead).not.toHaveBeenCalled()
+      expect(inserts).toEqual([])
+    })
+
+    it('reads a period on its EU-trade date and moves the row to that day', async () => {
+      vi.setSystemTime(new Date(2027, 1, 26, 12))
+      booksWithTrade({ 'company-1': ['2026-12'] })
+      const { supabase, inserts } = makeSupabase({
+        company_settings: [{ company_id: 'company-1', ...raw }],
+        deadlines: storedRows('company-1', EF_YEARLY),
+      })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toMatchObject({ companiesMoved: 1 })
+      expect(yearly(inserts[0])).toEqual(['2026:2027-02-26'])
+    })
+
+    it('takes the companies read longest ago first, never read before all', async () => {
+      const { supabase } = makeSupabase({
+        company_settings: ['company-a', 'company-b', 'company-c'].map((company_id) => ({ company_id, ...raw })),
+        vat_eu_trade_fiscal_years: [
+          readWithout('company-a', '2026-12', '2026-11-13T02:00:00.000Z'),
+          readWithout('company-b', '2026-12', '2026-11-01T02:00:00.000Z'),
+        ],
+      })
+
+      await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(periodsRead()).toEqual(['company-c:2026-12', 'company-b:2026-12', 'company-a:2026-12'])
+    })
+
+    it('records an aktiebolag year whose EU-trade date falls in the calendar year before its later date', async () => {
+      const { fiscal_years: _years, tax_assessment_notices: _n, salaried_employee_since: _s, ...abRaw } = AB_OCTOBER
+      booksWithTrade({ 'company-1': ['2026-10'] })
+      const { supabase, inserts, upserts } = makeSupabase({
+        company_settings: [{ company_id: 'company-1', ...abRaw }],
+        fiscal_periods: [{ company_id: 'company-1', period_start: '2025-11-01', period_end: '2026-10-31' }],
+        deadlines: storedRows('company-1', AB_OCTOBER),
+      })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toMatchObject({ companiesMoved: 1 })
+      // The year that ended and the one running since 1 November.
+      expect(periodsRead()).toEqual(['company-1:2026-10,2027-10'])
+      expect(upserts.map((upsert) => upsert.rows.map((row) => `${row.fiscal_year_end}:${row.has_eu_trade}`))).toEqual([
+        ['2026-10:true'],
+        ['2027-10:false'],
+      ])
+      expect(yearly(inserts[0]).filter((row) => row.startsWith('2025/2026:'))).toEqual(['2025/2026:2026-12-28'])
+    })
+
+    it('does nothing while the table is not in the database yet', async () => {
+      const { supabase, upserts } = makeSupabase(
+        { company_settings: [{ company_id: 'company-1', ...raw }] },
+        { vat_eu_trade_fiscal_years: { code: '42P01', message: 'relation "public.vat_eu_trade_fiscal_years" does not exist' } },
+      )
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toEqual({ companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 })
+      expect(booksRead).not.toHaveBeenCalled()
+      expect(upserts).toEqual([])
+    })
+
+    it('reads nothing when its budget is already spent', async () => {
+      const { supabase } = makeSupabase({ company_settings: [{ company_id: 'company-1', ...raw }] })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase, { deadline: Date.now() - 1 })
+
+      expect(result).toEqual({ companiesChecked: 0, companiesMoved: 0, companiesNotReached: 0 })
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('starts no company after its deadline and counts the ones left', async () => {
+      const { supabase } = makeSupabase({
+        company_settings: ['company-1', 'company-2'].map((company_id) => ({ company_id, ...raw })),
+      })
+      // The budget runs out while the räkenskapsår are read: no company is started.
+      const reads = supabase.from as ReturnType<typeof vi.fn>
+      const realFrom = reads.getMockImplementation() as (table: string) => unknown
+      let deadline = Date.now() + 60_000
+      reads.mockImplementation((table: string) => {
+        if (table === 'fiscal_periods') deadline = Date.now() - 1
+        return realFrom(table)
+      })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase, {
+        get deadline() {
+          return deadline
+        },
+      })
+
+      expect(result).toEqual({ companiesChecked: 0, companiesMoved: 0, companiesNotReached: 2 })
+      expect(booksRead).not.toHaveBeenCalled()
     })
   })
 })

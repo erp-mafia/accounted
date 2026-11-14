@@ -31,7 +31,7 @@ import { applyVatCheckReviews, isReviewableVatCheck, type VatCheckReview, type V
 import { isFilingBlocked, type RcBasisGapScan, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 import { findUnattributedEuSales, type PsWarning } from '@/lib/reports/periodisk-sammanstallning'
-import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
+import { euTradeInRutor, formatEuTradeBoxes, helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { computeSettlementAccountDrift, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
@@ -1030,7 +1030,7 @@ export async function computeVatCloseCheck(
     const fiscalYearMatches = calendarYearOnly
       ? reportEndMonth === 12
       : configuredStartMonth === reportStartMonth
-    const euTrade = settings.vat_has_eu_trade === true || periodHasEuTrade
+    const euTrade = helarsmomsHasEuTrade(settings.vat_has_eu_trade, periodHasEuTrade)
     const filingMethodRequired = !calendarYearOnly && !euTrade
     const filingProfileComplete = (euTrade || typeof settings.vat_has_eu_trade === 'boolean')
       && (!filingMethodRequired
@@ -1117,9 +1117,9 @@ export async function computeVatCloseCheck(
       hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
     })
   }
-  // The deadline above already follows the books; the stored deadline rows
-  // (deadline list, reminders, client overview) follow the setting, so say
-  // which one is wrong and how to fix it.
+  // The deadline above follows the books. The stored deadline rows follow them
+  // once the nightly pass has recorded the year's EU trade
+  // (vat_eu_trade_fiscal_years), while the earlier date is still ahead.
   if (periodType === 'yearly' && periodHasEuTrade && settings?.vat_has_eu_trade !== true) {
     blockers.push({
       kind: 'eu_trade_setting_off',
@@ -1128,8 +1128,8 @@ export async function computeVatCloseCheck(
       message:
         `Perioden har handel med andra EU-länder (${formatEuTradeBoxes(ledgerEuTrade)}) men inställningen ` +
         'Handel med andra EU-länder är av. Med EU-handel ska årsmomsen lämnas tidigare' +
-        `${deadline ? `, senast ${deadline.label}` : ''}; deadlinelistan visar ett senare datum tills inställningen slås på.`,
-      hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så räknas deadlines om.',
+        `${deadline ? `, senast ${deadline.label}` : ''}. Deadlinelistan flyttar datumet när den nattliga körningen ser EU-handeln i bokföringen, så länge det tidigare datumet inte har passerat.`,
+      hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så stämmer inställningen med bokföringen.',
     })
   }
   // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal

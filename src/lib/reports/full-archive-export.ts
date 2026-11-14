@@ -1568,6 +1568,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   ledger_account_days: 'sums of the journal per account and day, derived by triggers and rebuilt from it; the journal itself is exported',
+  vat_eu_trade_fiscal_years: 'which räkenskapsår the nightly pass saw EU trade in, derived from the journal exported here; it only dates the helårsmoms deadline',
   ledger_dimension_days: 'the same sums per dimension value, derived from the journal lines exported here',
   ledger_account_days_companies: 'which companies the derived ledger sums are built for; no accounting content',
   ledger_account_entries: 'which verifikat have lines on which account, derived by triggers from the journal exported here',
