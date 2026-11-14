@@ -15,7 +15,7 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { ink2sBuildingRows, type INK2Declaration } from '@/lib/reports/ink2/types'
+import { ink2sBuildingRows, ink2sSchablonintaktRows, type INK2Declaration } from '@/lib/reports/ink2/types'
 import {
   INK2R_RUTA_LABELS,
   INK2R_ASSET_CODES,
@@ -286,9 +286,16 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
         </div>
         <div className="px-1 pt-2">
           <p className="text-sm text-muted-foreground mb-4">
-            Grundläggande justeringar och de återläggningar som sparats i bokslutet
-            beräknas automatiskt. Kontrollera övriga deklarationsjusteringar med din
-            redovisningskonsult.
+            Här fylls bara de punkter som visas nedan i: årets resultat, de
+            justeringar som sparats i bokslutet och schablonintäkten på
+            periodiseringsfonder (punkt 4.6a). Den räknas på fonderna vid
+            årets ingång, även för brutet, förkortat och förlängt
+            räkenskapsår. Börjar eller slutar året mitt i en månad räknas den
+            inte ut: då står det som en varning ovan. Punkt 4.14a är det underskott som angetts i
+            bokslutet, det hämtas inte från förra årets deklaration. Övriga
+            punkter på INK2S och upplysningarna om årsredovisningen (biträde av
+            uppdragstagare, revision) ingår inte i SRU-filen: fyll i dem i
+            Skatteverkets e-tjänst.
           </p>
           <Table>
             <TableHeader>
@@ -328,6 +335,9 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 label="Andra ej skattepliktiga intäkter"
                 amount={data.ink2s['7754']}
               />
+              {ink2sSchablonintaktRows(data.ink2s).map((row) => (
+                <DeclarationRutaRow key={row.field} code="4.6a" label={row.label} amount={row.amount} />
+              ))}
               {ink2sBuildingRows(data.ink2s).map((row) => (
                 <DeclarationRutaRow key={row.field} code="4.9" label={row.label} amount={row.amount} />
               ))}
