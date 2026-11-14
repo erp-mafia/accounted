@@ -1921,6 +1921,78 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(body.error.details.reason).toBe('race')
   })
 
+  // The rules moved into lib/supplier-invoices/update-header.ts (crm#1848);
+  // the four below pin what this endpoint answered before the move.
+  function patchSI(rows: unknown, body: Record<string, unknown>, query = '') {
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: rows as TableResp | TableResp[],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const response = updateSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}${query}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    return { mock, response }
+  }
+
+  it('a dry run answers the merged record alone and writes nothing', async () => {
+    const { mock, response } = patchSI({ data: SAMPLE_SI, error: null }, { due_date: '2026-07-31' }, '?dry_run=true')
+    const res = await response
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview).toEqual({ ...SAMPLE_SI, due_date: '2026-07-31' })
+    expect(mock.payloads('supplier_invoices', 'update')).toEqual([])
+  })
+
+  it('leaves the status label alone when the due date moves into the past', async () => {
+    const { mock, response } = patchSI({ data: SAMPLE_SI, error: null }, { due_date: '2000-01-01' })
+    expect((await response).status).toBe(200)
+    expect(mock.payloads('supplier_invoices', 'update')).toEqual([{ due_date: '2000-01-01' }])
+  })
+
+  it('a register-only key cannot edit an invoice that has a verifikat (403 INSUFFICIENT_SCOPE)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['suppliers:read', 'suppliers:register'],
+      mode: 'live',
+    })
+    const { mock, response } = patchSI(
+      { data: { ...SAMPLE_SI, registration_journal_entry_id: JE_ID }, error: null },
+      { due_date: '2026-07-31' },
+    )
+    const res = await response
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(mock.payloads('supplier_invoices', 'update')).toEqual([])
+  })
+
+  it('a lost race that is not the verifikat lock reads as SI_NOT_DRAFT, and a body without a header field as 400', async () => {
+    const raced = patchSI(
+      [{ data: SAMPLE_SI, error: null }, { data: null, error: null }, { data: { ...SAMPLE_SI, status: 'paid' }, error: null }],
+      { notes: 'x' },
+    )
+    const res = await raced.response
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_NOT_DRAFT')
+    expect(body.error.details.reason).toBe('race')
+
+    const empty = patchSI({ data: SAMPLE_SI, error: null }, { auto_debit: true })
+    const emptyRes = await empty.response
+    expect(emptyRes.status).toBe(400)
+    expect((await emptyRes.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(empty.mock.payloads('supplier_invoices', 'update')).toEqual([])
+  })
+
   it('rejects unknown body keys (V4.5 strict schema)', async () => {
     mockServiceClient.mockReturnValue(
       supabaseFor({

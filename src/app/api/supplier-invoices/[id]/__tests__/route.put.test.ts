@@ -117,6 +117,17 @@ describe('PUT /api/supplier-invoices/[id]', () => {
     expect(response.status).toBe(404)
   })
 
+  it('answers the 404 in the canonical envelope (crm#1848: the rule is shared with v1 and MCP)', async () => {
+    singleResults.push({ data: null, error: null })
+
+    const response = await putRequest({ notes: 'x' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SI_NOT_FOUND')
+    expect(updatePayloads).toHaveLength(0)
+  })
+
   it('returns 400 for a settled invoice', async () => {
     singleResults.push(existingRow({ status: 'paid' }))
 

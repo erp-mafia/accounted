@@ -101,6 +101,9 @@ const RISK_TIERS = {
   book_counterparty_setoff: 'high',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
+  // Header only (due date, reference, numbers, notes), nothing booked; medium
+  // like update_invoice: the due date and the reference steer the payment.
+  update_supplier_invoice: 'medium',
   update_supplier_invoice_item_account: 'high',
   // Operation registry, wave 3: documents, transactions, rättelse, filing.
   delete_document: 'medium',

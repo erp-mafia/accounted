@@ -1030,6 +1030,14 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
     },
   },
+  // Header change on a booked, unpaid invoice: the due date moves, the
+  // fields the registration verifikat carries are not sent.
+  gnubok_update_supplier_invoice: {
+    args: { due_date: '2099-12-31' },
+    rows: {
+      supplier_invoices: { status: 'registered', due_date: '2099-11-30', remaining_amount: 125, is_credit_note: false, is_self_billed: false, approved_at: null, registration_journal_entry_id: SOME_UUID },
+    },
+  },
   // Line move on an invoice whose registration verifikat is posted in an
   // open 2026: the preview plans the strike-and-replace and replays the
   // inline rättelse rules as reads (no correct_entry_lines_inline, no backfill).

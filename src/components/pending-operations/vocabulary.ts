@@ -190,6 +190,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   record_customer_loss: 'warning_record_customer_loss',
   delete_supplier_invoice: 'warning_delete_supplier_invoice',
   uncredit_supplier_invoice: 'warning_uncredit_supplier_invoice',
+  update_supplier_invoice: 'warning_update_supplier_invoice',
   update_supplier_invoice_item_account: 'warning_update_supplier_invoice_item_account',
   delete_dimension: 'warning_delete_dimension',
   create_invoice: 'warning_create_invoice',

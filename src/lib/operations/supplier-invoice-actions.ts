@@ -1,12 +1,16 @@
 /**
  * Supplier-invoice actions outside create/approve/book/pay/credit: delete an
- * unbooked invoice, undo a credit, move one line to another account (inline
- * rättelse of the registration verifikat), and the "inlagd i banken" mark.
- * Rules live in lib/supplier-invoices/manage.ts and
+ * unbooked invoice, undo a credit, change the header (numbers, dates,
+ * reference, notes), move one line to another account (inline rättelse of the
+ * registration verifikat), and the "inlagd i banken" mark. Rules live in
+ * lib/supplier-invoices/manage.ts, lib/supplier-invoices/update-header.ts and
  * lib/supplier-invoices/item-account.ts, shared with the dashboard routes
  * under /api/supplier-invoices/[id].
  *
- * MCP: delete, uncredit and the line move stage for approval. The bank mark
+ * MCP: delete, uncredit, the header change and the line move stage for
+ * approval. The header change has no v1 binding of its own: the hand-written
+ * PATCH /supplier-invoices/{id} is its v1 door (it keeps a narrower public
+ * contract) and calls the same service. The bank mark
  * is v1 only: it books nothing, and an agent that paid an invoice records the
  * payment instead (mark-paid or the bank match).
  */
@@ -19,6 +23,8 @@ import {
   uncreditSupplierInvoice,
 } from '@/lib/supplier-invoices/manage'
 import { moveSupplierInvoiceItemAccount } from '@/lib/supplier-invoices/item-account'
+import { updateSupplierInvoiceHeader } from '@/lib/supplier-invoices/update-header'
+import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -184,6 +190,124 @@ export const supplierInvoicesUncredit = defineOperation({
         changed: outcome.data.changed,
       },
     }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// supplier-invoices.update
+// ---------------------------------------------------------------------------
+
+const HEADER = UpdateSupplierInvoiceSchema.shape
+
+/** What the header change reads and answers: the header, and the columns its rules need. */
+const HEADER_COLUMNS =
+  'id, arrival_number, supplier_invoice_number, invoice_date, due_date, delivery_date, payment_reference, notes, status, currency, total, remaining_amount, registration_journal_entry_id, is_credit_note, is_self_billed, approved_at'
+
+const SupplierInvoiceHeaderState = SupplierInvoiceState.extend({
+  delivery_date: z.string().nullable(),
+  payment_reference: z.string().nullable(),
+  notes: z.string().nullable(),
+})
+
+/** The stored row under the qualified id, without the columns only the rules read. */
+function toHeaderState(row: Record<string, unknown>): Record<string, unknown> {
+  const { id, is_credit_note: _creditNote, is_self_billed: _selfBilled, approved_at: _approvedAt, ...header } = row
+  return { supplier_invoice_id: id, ...header }
+}
+
+export const supplierInvoicesUpdate = defineOperation({
+  id: 'supplier-invoices.update',
+  kind: 'write',
+  scope: 'suppliers:write',
+  // Medium although nothing is booked: the due date and the payment reference
+  // decide when and with which reference the invoice is paid.
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Change the header of an unpaid supplier invoice: number, dates, payment reference, notes.',
+    description:
+      'Changes the header of a supplier invoice that is still unsettled (registered, approved or overdue): due_date, delivery_date, payment_reference, notes, and, while no registration verifikat exists, invoice_date and supplier_invoice_number. Never an amount, an account or a line, and never a journal entry: once the registration verifikat is posted, invoice_date and supplier_invoice_number are on it and are refused here. The overdue label follows the new due date at once. Dry-runnable: the preview answers the resulting header with `changes` (each changed field, from and to).',
+    useWhen:
+      'The due date, the OCR or payment reference, the delivery date or the notes of an unpaid supplier invoice are wrong or missing, e.g. a reading that found no due date and fell back on invoice date + 30 days.',
+    doNotUseFor:
+      'Amounts, VAT or lines (credit the invoice and register a new one), the account of a line (gnubok_update_supplier_invoice_item_account), paid, credited or reversed invoices, or the date and number of a booked invoice (correct the verifikat: gnubok_correct_entry).',
+    pitfalls: [
+      'A paid, partially paid, credited or reversed invoice answers 400 SI_EDIT_INVALID_STATUS.',
+      'invoice_date or supplier_invoice_number on an invoice with a registration verifikat answers 400 SI_EDIT_VERIFIKAT_LOCKED with details.fields and details.journal_entry_id. Resending the stored value is accepted.',
+      'An issued self-billing invoice keeps its number and date: 409 SI_SELF_BILL_IMMUTABLE.',
+      'At least one field beside supplier_invoice_id is required: otherwise 400 VALIDATION_ERROR.',
+      'A payment, attest or booking that lands between staging and approval answers 409 SI_EDIT_CONFLICT (or SI_EDIT_VERIFIKAT_LOCKED): read the invoice again and stage anew.',
+    ],
+    example: {
+      request: { due_date: '2026-10-15' },
+      response: {
+        data: {
+          supplier_invoice_id: '3b4c…',
+          arrival_number: 118,
+          supplier_invoice_number: '55012',
+          status: 'approved',
+          invoice_date: '2026-09-03',
+          due_date: '2026-10-15',
+          delivery_date: null,
+          payment_reference: '5501200018',
+          notes: null,
+          currency: 'SEK',
+          total: 6250,
+          remaining_amount: 6250,
+          registration_journal_entry_id: '6d7e…',
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    supplier_invoice_id: SUPPLIER_INVOICE_ID,
+    due_date: HEADER.due_date.describe('New due date, YYYY-MM-DD.'),
+    payment_reference: HEADER.payment_reference.describe('OCR or other payment reference.'),
+    notes: HEADER.notes,
+    delivery_date: HEADER.delivery_date.describe('Delivery date, YYYY-MM-DD.'),
+    invoice_date: HEADER.invoice_date.describe('Only while the invoice has no registration verifikat.'),
+    supplier_invoice_number: HEADER.supplier_invoice_number.describe(
+      "The supplier's own invoice number. Only while the invoice has no registration verifikat.",
+    ),
+  }),
+  output: SupplierInvoiceHeaderState,
+  errorCodes: [
+    'SI_NOT_FOUND',
+    'VALIDATION_ERROR',
+    'SI_EDIT_INVALID_STATUS',
+    'SI_SELF_BILL_IMMUTABLE',
+    'SI_EDIT_VERIFIKAT_LOCKED',
+    'SI_EDIT_CONFLICT',
+  ],
+  mcp: {
+    name: 'gnubok_update_supplier_invoice',
+    title: 'Update Supplier Invoice',
+    description:
+      'Stage a change to the header of an unpaid supplier invoice: due_date, payment_reference, notes, delivery_date. invoice_date and supplier_invoice_number only before the registration verifikat exists. Never amounts, accounts or lines; books nothing.',
+    keywords: [
+      'ändra förfallodatum',
+      'förfallodag leverantörsfaktura',
+      'ändra leverantörsfaktura',
+      'uppdatera leverantörsfaktura',
+      'ocr leverantörsfaktura',
+      'betalningsreferens',
+      'update supplier invoice',
+      'due date',
+    ],
+    stage: {
+      pendingType: 'update_supplier_invoice',
+      title: (_input, preview) => {
+        const number = preview?.supplier_invoice_number ?? (preview?.arrival_number != null ? `ankomst ${String(preview.arrival_number)}` : '')
+        return `Ändra leverantörsfaktura ${String(number)}`.trim()
+      },
+    },
+  },
+  run: async (ctx, { supplier_invoice_id, ...patch }, { dryRun }) => {
+    const outcome = await updateSupplierInvoiceHeader(ctx, supplier_invoice_id, patch, { dryRun, columns: HEADER_COLUMNS })
+    if (!outcome.ok) return outcome
+    if (outcome.dryRun) return { ok: true, dryRun: true, preview: toHeaderState(outcome.preview) }
+    return { ok: true, data: toHeaderState(outcome.data) as z.infer<typeof SupplierInvoiceHeaderState> }
   },
 })
 

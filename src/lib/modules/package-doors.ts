@@ -444,6 +444,7 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
     'op:supplier-invoices.mark-bank-entered',
     'op:supplier-invoices.reject',
     'op:supplier-invoices.uncredit',
+    'op:supplier-invoices.update',
     'op:supplier-invoices.update-item-account',
     'op:supplier-payees.confirm',
     'op:supplier-payment-batches.cancel',
