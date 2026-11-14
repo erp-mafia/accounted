@@ -8,6 +8,7 @@
 
 import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
 import { canApproveSupplierInvoice } from './lifecycle'
+import { isAttestedAwaitingPayment } from './reported-status'
 import { openPaymentMarker, type OpenPaymentInstruction, type OpenPaymentMarker } from './stages'
 
 export interface ListTabInvoice {
@@ -34,6 +35,16 @@ const AT_THE_BANK: ReadonlySet<OpenPaymentMarker> = new Set(['bank_payment', 'ba
  */
 export function isAwaitingAttestInList(invoice: ListTabInvoice): boolean {
   return canApproveSupplierInvoice(invoice)
+}
+
+/**
+ * Attesterade: attested and nothing paid yet (isAttestedAwaitingPayment). An
+ * attested invoice past its due date is stored as 'overdue' and is still
+ * attested, so it stays here; the tab used to read the stored status and lost
+ * it the day after the due date (for #207).
+ */
+export function isAttestedInList(invoice: ListTabInvoice): boolean {
+  return isAttestedAwaitingPayment(invoice)
 }
 
 /**

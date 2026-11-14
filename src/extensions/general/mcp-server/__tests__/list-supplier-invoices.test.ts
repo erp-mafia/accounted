@@ -232,6 +232,31 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     expect(accrual.findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
   })
 
+  // For #207: an attested invoice the nightly flip stored as overdue is
+  // still attested, and a part-paid invoice past its due date is overdue.
+  it('status=approved reads the attest mark and returns an attested invoice stored as overdue', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'overdue', approved_at: '2026-03-20T09:00:00Z' })], count: 1 })
+    const result = (await tool().execute({ status: 'approved' }, COMPANY, USER, supabase as never)) as ListResult
+    expect(result.invoices[0]).toMatchObject({ status: 'overdue', approved_at: '2026-03-20T09:00:00Z' })
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', ['registered', 'approved', 'overdue']])
+    expect(findCall('supplier_invoices', 'or')).toEqual(['status.eq.approved,approved_at.not.is.null'])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'approved'])
+    expect(findCalls('company_settings', 'select')).toHaveLength(0)
+  })
+
+  it('status=overdue is computed, so a part-paid invoice past its due date is returned', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'partially_paid', remaining_amount: 850 })], count: 1 })
+    const result = (await tool().execute({ status: 'overdue' }, COMPANY, USER, supabase as never)) as ListResult
+    expect(result.invoices[0]).toMatchObject({ status: 'partially_paid', remaining_amount: 850 })
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0.005])
+    expect(findCall('supplier_invoices', 'lt')).toEqual(['due_date', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+  })
+
   it('reads the accounting method only for to_pay', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [invoiceRow({ status: 'registered' })], count: 1 })

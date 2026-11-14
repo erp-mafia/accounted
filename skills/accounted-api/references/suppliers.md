@@ -1533,7 +1533,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 **Pitfalls:**
 - Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.
 - remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.
-- status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.
+- status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there), or filter ?status=approved, which returns every attested invoice nothing is paid on, the overdue ones included. ?status=overdue also returns a part-paid invoice past its due date. bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.
 - An invoice a bank payment or a payment file already covers keeps its status (approved, overdue) and remaining_amount until the payment lands: read open_payment, null when nothing covers it. payment_order.provider_status RCVD means the payment waits at the bank unsigned.
 - arrival_number is internal book-keeping, not the seller's invoice number: use supplier_invoice_number for matching to received documents.
 - Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller's invoice date.
@@ -1542,7 +1542,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `status` | query | `"registered" \| "approved" \| "paid" \| "partially_paid" \| "overdue" \| "disputed" \| "credited" \| "reversed"` | no | Only supplier invoices in this status. |
+| `status` | query | `"registered" \| "approved" \| "paid" \| "partially_paid" \| "overdue" \| "disputed" \| "credited" \| "reversed"` | no | Only supplier invoices in this status. approved = attested and nothing paid yet, past due or not (the row's status may read overdue). overdue = past due with money left, a part-paid one included (its status reads partially_paid). Every other value matches the stored status. |
 | `supplier_id` | query | `string` | no | Only invoices from this supplier (id). |
 | `currency` | query | `string` | no | 3-letter ISO 4217 code, uppercase (e.g. SEK, EUR). |
 | `date_from` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or after this date. |

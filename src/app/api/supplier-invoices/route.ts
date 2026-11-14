@@ -8,6 +8,7 @@ import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
 import { payableSupplierInvoiceStatuses } from '@/lib/supplier-invoices/lifecycle'
+import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
 
 export const GET = withRouteContext(
   'supplier_invoice.list',
@@ -53,7 +54,9 @@ export const GET = withRouteContext(
             // One the supplier debits itself has nothing to pay (crm#1463).
             query = query.in('status', [...toPayStatuses]).eq('auto_debit', false)
           } else {
-            query = query.eq('status', status)
+            // approved and overdue are read from the attest mark and the due
+            // date, every other status as stored (reported-status.ts).
+            query = filterSupplierInvoicesByReportedStatus(query, status)
           }
         }
 

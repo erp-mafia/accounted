@@ -201,6 +201,7 @@ import { invoiceTotalSek } from '@/lib/supplier-invoices/attest-policy'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
 import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { eventBus } from '@/lib/events/bus'
@@ -12805,7 +12806,10 @@ export const tools: McpTool[] = [
           // (auto_debit, crm#1463).
           query = query.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('auto_debit', false)
         } else {
-          query = query.eq('status', status)
+          // approved and overdue are read from the attest mark and the due
+          // date, so an attested invoice past due is in both and its status
+          // field still reads overdue (reported-status.ts, for #207).
+          query = filterSupplierInvoicesByReportedStatus(query, status)
         }
       }
 
