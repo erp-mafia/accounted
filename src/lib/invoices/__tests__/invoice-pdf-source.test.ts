@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   findArchivedInvoiceDelivery,
+  invoiceArchivedPdfUrl,
   invoiceDocumentCaveat,
   invoicePaymentConfirmationUrl,
   invoiceRerenderUrl,
@@ -38,6 +39,29 @@ describe('resolveInvoicePdfSource', () => {
       sentAt: '2026-07-23T09:15:00.000Z',
     })
     expect(invoiceDocumentCaveat(source)).toBeNull()
+  })
+
+  it('serves the same archived delivery through the invoice for the invoicing-only role, which never reaches /api/documents (for #206)', () => {
+    const source = resolveInvoicePdfSource({
+      invoiceId: INVOICE_ID,
+      invoiceStatus: 'sent',
+      deliveriesLoaded: true,
+      deliveries: [emailDelivery()],
+      archivedThroughInvoice: true,
+    })
+
+    expect(source).toEqual({
+      kind: 'archived',
+      url: `/api/invoices/${INVOICE_ID}/archived-pdf?delivery=delivery-1`,
+      deliveryId: 'delivery-1',
+      sentAt: '2026-07-23T09:15:00.000Z',
+    })
+    expect(invoiceArchivedPdfUrl(INVOICE_ID, 'delivery-1')).toBe(source.kind === 'archived' ? source.url : null)
+    // Every other outcome is the same as for any role: the flag only moves the archived copy's address.
+    const unsent = { invoiceId: INVOICE_ID, invoiceStatus: 'draft', deliveriesLoaded: true, deliveries: [] }
+    expect(resolveInvoicePdfSource({ ...unsent, archivedThroughInvoice: true })).toEqual(resolveInvoicePdfSource(unsent))
+    const unreadable = { invoiceId: INVOICE_ID, invoiceStatus: 'sent', deliveriesLoaded: false, deliveries: [] }
+    expect(resolveInvoicePdfSource({ ...unreadable, archivedThroughInvoice: true })).toEqual(resolveInvoicePdfSource(unreadable))
   })
 
   it('picks the newest completed delivery, ignoring pending and failed attempts', () => {

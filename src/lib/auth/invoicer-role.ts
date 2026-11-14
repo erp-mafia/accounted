@@ -107,6 +107,18 @@ export const INVOICER_ROUTES: Readonly<Record<string, InvoicerRouteAccess>> = {
   'PATCH /api/invoices/[id]': 'scoped',
   'DELETE /api/invoices/[id]': 'scoped',
   'POST /api/invoices/[id]/send': 'scoped',
+  // Numbers a draft the role saved: what POST /api/invoices does when it
+  // creates the invoice numbered. Books nothing.
+  'POST /api/invoices/[id]/finalize': 'scoped',
+  // Issues without sending: books what send books, never more. The route
+  // refuses the role paid_at_issue, which would also register a payment.
+  'POST /api/invoices/[id]/mark-sent': 'scoped',
+  // The delivery history (masked recipients). The definer reader admits any
+  // member of the company by its own session.
+  'GET /api/invoices/[id]/deliveries': 'session',
+  // The archived PDF of a delivery of this invoice, and nothing else in the
+  // document archive (/api/documents stays closed).
+  'GET /api/invoices/[id]/archived-pdf': 'scoped',
   'POST /api/invoices/[id]/convert': 'scoped',
   'POST /api/invoices/[id]/convert-to-order': 'scoped',
   'POST /api/invoices/[id]/quote-status': 'scoped',

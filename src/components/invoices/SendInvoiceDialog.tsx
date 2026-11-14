@@ -34,6 +34,7 @@ import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
 import { getDeductionShareBookedByPayout } from '@/lib/invoices/rot-rut-payout-recognition'
@@ -102,7 +103,7 @@ export default function SendInvoiceDialog({
   // A file still uploading to the invoice's attachments holds the send.
   const [attachmentsBusy, setAttachmentsBusy] = useState(false)
   // The same rule as the editor's confirm (#79).
-  const showAttachments = offersInvoiceAttachments({ channel: mode, status: invoice.status, isSandbox, canEmail })
+  const showAttachments = offersInvoiceAttachments({ channel: mode, status: invoice.status, isSandbox, canEmail, invoicer: isInvoicerRole(role) })
   // Session-cached reference data (lib/reference-data), seeded by the
   // dashboard layout: settings, the period containing the invoice date and
   // the chart are known on the first paint, so opening the dialog costs no

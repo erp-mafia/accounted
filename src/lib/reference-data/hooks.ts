@@ -24,6 +24,7 @@
 
 import { useMemo } from 'react'
 import useSWR, { type SWRConfiguration } from 'swr'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { paymentBankRow } from '@/lib/cash-accounts/primary'
@@ -136,10 +137,14 @@ export function usePaymentBankLedger(): string {
 
 export function useAccounts(activeOnly = true): ReferenceListState & { accounts: BASAccount[] } {
   const companyId = useActiveCompanyId()
+  // The invoicing-only role never reaches the chart of accounts
+  // (lib/auth/invoicer-role.ts): no key, so no request the server refuses
+  // and SWR then retries without end (for #206). Its pickers get no accounts.
+  const invoicer = useIsInvoicer()
   // One cache entry serves both variants, as for cash accounts: a page with
   // an account picker (active) and account labels (all) paid two requests to
   // the same route per load. Inactive rows are under 1% of prod charts.
-  const { items, ...state } = useReferenceList(refKeys.accounts(companyId, false), () =>
+  const { items, ...state } = useReferenceList(invoicer ? null : refKeys.accounts(companyId, false), () =>
     fetchAccounts(false),
   )
   const accounts = useMemo(() => selectAccounts(items, activeOnly), [items, activeOnly])

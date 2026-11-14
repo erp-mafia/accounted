@@ -37,6 +37,13 @@ export interface ArchivedInvoicePdfOptions {
    * refuses anyone else). Without it the read is the session's own.
    */
   serviceActorUserId?: string
+  /**
+   * Read the archived file of this delivery of the invoice instead of the
+   * latest completed email delivery: the link on one row of the delivery
+   * history. A delivery of another invoice, or one that kept no file, is no
+   * archived copy.
+   */
+  deliveryId?: string
 }
 
 export async function loadArchivedInvoicePdf(
@@ -63,9 +70,15 @@ export async function loadArchivedInvoicePdf(
     log.error('archived invoice PDF: failed to read the delivery history', deliveriesError)
     return unavailable
   }
-  const archived = findArchivedInvoiceDelivery(
-    (deliveries ?? []) as Array<InvoicePdfDelivery & { attachment_filename: string | null }>,
-  )
+  // The history is this invoice's own (the reader filters on it), so a
+  // delivery id from anywhere else finds nothing.
+  const history = (deliveries ?? []) as Array<InvoicePdfDelivery & { attachment_filename: string | null }>
+  const named = options.deliveryId ? history.find((delivery) => delivery.id === options.deliveryId) : undefined
+  const archived = options.deliveryId
+    ? named?.document_attachment_id
+      ? { ...named, document_attachment_id: named.document_attachment_id }
+      : null
+    : findArchivedInvoiceDelivery(history)
   if (!archived) return { ok: false, code: 'INVOICE_RESEND_NO_ARCHIVED_COPY' }
 
   const { data: document, error: documentError } = await supabase

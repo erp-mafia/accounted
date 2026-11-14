@@ -92,6 +92,7 @@ import {
   XCircleIcon,
 } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -227,6 +228,11 @@ const ROW_ACTION_CLASS =
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
   const { company, isSandbox, role: companyRole } = useCompany()
+  // The invoicing-only role reaches the invoice and nothing around it
+  // (lib/auth/invoicer-role.ts): the panels whose reads the server refuses
+  // for it (collections, kundförlust, the reminder ladder, Peppol and
+  // mailbox status, underlag, bilagor) are left out instead of failing.
+  const isInvoicer = useIsInvoicer()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
@@ -431,7 +437,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // invoice of our own can have one; the read is an obligation path and
   // renders an open case whatever the start gates say.
   const collectionEligible =
-    !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !isCreditNoteDocument(invoice) && !invoice.is_self_billed
+    !isInvoicer && !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !isCreditNoteDocument(invoice) && !invoice.is_self_billed
   const collection = useInvoiceCollection(id, collectionEligible)
   const { tp: tCollections, words: collectionWords } = useCaseWords(collection.data?.availability.displayName ?? null)
   const [showCollectionDialog, setShowCollectionDialog] = useState(false)
@@ -490,7 +496,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the policy reminds those too.
   const reminderLadder = useInvoiceReminderLadder(
     id,
-    autoRemindersEnabled === true && invoice?.id === id && isInvoiceOwed(invoice),
+    !isInvoicer && autoRemindersEnabled === true && invoice?.id === id && isInvoiceOwed(invoice),
     reminders.length,
   )
 
@@ -522,10 +528,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     const eligible = (!invoice.document_type || invoice.document_type === 'invoice')
       && !isCreditNoteDocument(invoice)
       && !invoice.is_self_billed
-    if (!eligible) return
+    if (!eligible || isInvoicer) return
     void loadPeppolDeliveries()
     void loadMailbox()
-  }, [id, invoice?.id, invoice?.status, invoice?.invoice_number]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, invoice?.id, invoice?.status, invoice?.invoice_number, isInvoicer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Read the delivery history, keeping "read failed" distinct from "nothing
@@ -1211,6 +1217,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         invoiceStatus: invoice.status,
         deliveriesLoaded: !deliveriesUnreadable,
         deliveries,
+        archivedThroughInvoice: isInvoicer,
       }),
     )
   }
@@ -1658,6 +1665,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         invoiceStatus: invoice.status,
         deliveriesLoaded: !deliveriesUnreadable,
         deliveries,
+        archivedThroughInvoice: isInvoicer,
       }),
     )
   }
@@ -1676,6 +1684,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       invoiceStatus: invoice.status,
       deliveriesLoaded: result.ok,
       deliveries: result.deliveries,
+      archivedThroughInvoice: isInvoicer,
     })
     // The retry is a second attempt at what the user asked for, not a switch to
     // the other mechanism. A preview retry re-resolves the source first, so the
@@ -2118,7 +2127,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the customer already; the send decides the rest from fresh facts.
   const collectionsConnected = collection.data?.availability.connection?.state === 'active'
   const showReminderItem =
-    REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop && !collectionsConnected
+    !isInvoicer && REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop && !collectionsConnected
   const showCustomerLossItem = customerLoss.view?.menuVisible === true
   const showRecoveryItem = customerLoss.view?.recovery?.available === true
   // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
@@ -3235,7 +3244,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Underlag (accounted#42): the documents the invoice rests on, in
           every state, since the question usually comes after it went out. */}
-      {isRealInvoice && <InvoiceUnderlagSection invoiceId={invoice.id} canWrite={canWrite} />}
+      {isRealInvoice && !isInvoicer && <InvoiceUnderlagSection invoiceId={invoice.id} canWrite={canWrite} />}
 
       {/* Payment: shown for paid and partially paid alike, so a partly paid
           invoice always exposes paid / remaining and the payment events. */}
@@ -3462,6 +3471,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {isRealInvoice && !isSelfBilled && !deliveriesUnreadable && (
         <InvoiceDeliveryHistory
           deliveries={deliveries}
+          pdfThroughInvoiceId={isInvoicer ? invoice.id : undefined}
           mailboxDispatches={mailboxView.dispatches}
           showLegacyEmptyState={[
             'sent',
@@ -3562,7 +3572,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </AttnLine>
           )}
           {/* Bilagor ride inside the e-faktura on a draft (crm#1545). */}
-          {canWrite && offersInvoiceAttachments({ channel: 'peppol', status: invoice.status, isSandbox, canEmail }) && (
+          {canWrite && offersInvoiceAttachments({ channel: 'peppol', status: invoice.status, isSandbox, canEmail, invoicer: isInvoicer }) && (
             <InvoiceAttachmentsSection
               target={{ kind: 'invoice', invoiceId: invoice.id }}
               channel="peppol"

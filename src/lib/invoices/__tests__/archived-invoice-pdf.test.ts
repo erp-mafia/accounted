@@ -83,6 +83,22 @@ describe('loadArchivedInvoicePdf', () => {
     ).toEqual({ ok: false, code: 'INVOICE_RESEND_NO_ARCHIVED_COPY' })
   })
 
+  it('reads the file of a named delivery of the invoice, and finds no copy for one that is not in its history or kept no file (for #206)', async () => {
+    const OLDER = { ...DELIVERY, id: 'delivery-0', document_attachment_id: 'doc-0', attachment_filename: 'Faktura-first.pdf', sent_at: '2026-09-01T08:00:00.000Z' }
+    const MARKED = { ...DELIVERY, id: 'delivery-m', status: 'marked_sent', document_attachment_id: null, attachment_filename: null }
+    const history = () =>
+      createTableMockSupabase({
+        'rpc:list_invoice_delivery_summaries': { data: [MARKED, DELIVERY, OLDER] },
+        document_attachments: { data: { ...DOCUMENT, id: 'doc-0' } },
+      })
+    const read = (deliveryId: string) =>
+      loadArchivedInvoicePdf(history().supabase as unknown as SupabaseClient, 'company-1', 'inv-1', log, { deliveryId })
+
+    expect(await read('delivery-0')).toMatchObject({ ok: true, value: { filename: 'Faktura-first.pdf', delivery: { id: 'delivery-0' }, document: { id: 'doc-0' } } })
+    expect(await read('delivery-m')).toEqual({ ok: false, code: 'INVOICE_RESEND_NO_ARCHIVED_COPY' })
+    expect(await read('delivery-of-another-invoice')).toEqual({ ok: false, code: 'INVOICE_RESEND_NO_ARCHIVED_COPY' })
+  })
+
   it('refuses a file that does not match its stored checksum', async () => {
     mockComputeSHA256.mockResolvedValue('sha-other')
     const mock = world()

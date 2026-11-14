@@ -61,6 +61,10 @@ describe('withRouteContext: the invoicer role', () => {
       ['GET', '/api/events'],
       ['POST', `/api/invoices/${ID}/mark-paid`],
       ['GET', '/api/bookkeeping/accounts'],
+      ['POST', `/api/invoices/${ID}/attachments`],
+      ['GET', `/api/invoices/${ID}/underlag`],
+      ['POST', `/api/invoices/${ID}/book`],
+      ['GET', `/api/documents/${ID}/inline`],
     ]) {
       const res = await route(new Request(`http://localhost${path}`, { method }), PARAMS)
       expect(res.status, path).toBe(403)
@@ -79,6 +83,29 @@ describe('withRouteContext: the invoicer role', () => {
       expect.anything(),
     )
     expect(seen.supabase).toBe(state.scoped)
+  })
+
+  it('gives finalize, mark-sent and the archived PDF the company-scoped client, never the bare service role (for #206)', async () => {
+    for (const [method, path] of [
+      ['POST', `/api/invoices/${ID}/finalize`],
+      ['POST', `/api/invoices/${ID}/mark-sent`],
+      ['GET', `/api/invoices/${ID}/archived-pdf`],
+    ]) {
+      vi.mocked(createCompanyScopedClient).mockClear()
+      const { route, seen } = routeSeeingClient()
+      const res = await route(new Request(`http://localhost${path}`, { method }), PARAMS)
+      expect(res.status, path).toBe(200)
+      expect(createCompanyScopedClient, path).toHaveBeenCalledWith({ companyId: 'company-1', userId: 'user-1' }, expect.anything())
+      expect(seen.supabase, path).toBe(state.scoped)
+    }
+  })
+
+  it('reads the delivery history on the user session, where the definer reader checks the membership itself', async () => {
+    const { route, seen } = routeSeeingClient()
+    const res = await route(new Request(`http://localhost/api/invoices/${ID}/deliveries`, { method: 'GET' }), PARAMS)
+    expect(res.status).toBe(200)
+    expect(createCompanyScopedClient).not.toHaveBeenCalled()
+    expect(seen.supabase).toBe(state.supabase)
   })
 
   it('keeps the user session on a session route', async () => {

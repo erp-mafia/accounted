@@ -9,6 +9,7 @@ import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { MarkInvoiceSentPaidAtIssueSchema } from '@/lib/api/schemas'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import type {
   CompanySettings,
   CreditNote,
@@ -36,7 +37,7 @@ import type {
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
-  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, user, companyId, role, log, requestId }, { params }) => {
   const { id } = await params
 
   // Optional body. Backwards-compat: callers may POST with no body. Read it
@@ -102,6 +103,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
   }
   const paidAtIssue = paidAtIssueResult.data.paid_at_issue
+  // The invoicing-only role issues an invoice here as it does by sending it
+  // (lib/auth/invoicer-role.ts). Issuing it paid also registers the payment
+  // on a 19xx account, which the role cannot do anywhere else (mark-paid is
+  // outside its routes), so it is refused here too.
+  if (paidAtIssue && isInvoicerRole(role)) {
+    return errorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      messageSv: 'Rollen Fakturering kan inte registrera en faktura som betald.',
+      messageEn: 'The Invoicing role cannot register an invoice as paid.',
+      details: { code: 'INVOICER_PAID_AT_ISSUE_NOT_ALLOWED' },
+    })
+  }
   // issueAndBookInvoice refuses every document it cannot issue paid, for
   // every door; a kreditfaktura never reaches it, so it is refused here by
   // the same rule.

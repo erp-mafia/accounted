@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
@@ -625,7 +626,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         rows={confirmRows}
         voucher={confirmVoucher}
         attachments={
-          canWrite && offersInvoiceAttachments({ channel: confirmChannel, status: null, isSandbox, canEmail })
+          canWrite && offersInvoiceAttachments({ channel: confirmChannel, status: null, isSandbox, canEmail, invoicer: isInvoicerRole(role) })
             ? { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
             : null
         }
