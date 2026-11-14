@@ -6,6 +6,7 @@ import { isInboxItemTaken, isOpenInboxItem, whereInboxItemFree, whereInboxItemOp
 import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
+import { isArchiveOnlyUpload } from '@/lib/documents/archive-only'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -93,6 +94,7 @@ interface DocumentRow {
   created_at?: string | null
   journal_entry_id: string | null
   extracted_data: Record<string, unknown> | null
+  extraction_model?: string | null
   upload_source?: string | null
   file_name?: string | null
   sha256_hash?: string | null
@@ -114,7 +116,7 @@ export async function routeClassifiedDocument(
 ): Promise<RouteOutcome> {
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, user_id, journal_entry_id, extracted_data, created_at, upload_source, file_name, sha256_hash')
+    .select('id, user_id, journal_entry_id, extracted_data, extraction_model, created_at, upload_source, file_name, sha256_hash')
     .eq('id', input.documentId)
     .eq('company_id', input.companyId)
     .maybeSingle()
@@ -159,6 +161,10 @@ export async function routeClassifiedDocument(
       return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
     }
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() > QUEUE_NEW_WITHIN_MS) return 'left'
+    // An agent archived it for a verifikat that is already posted and links it next (archive_only on the MCP upload,
+    // lib/documents/archive-only.ts): the model's type files nothing in Underlag meanwhile. A person's type in
+    // Dokument still queues it, and it stays listed in Dokument and in gnubok_list_records either way.
+    if (input.decidedBy !== 'human' && isArchiveOnlyUpload(d)) return 'left'
     // A byte-identical copy of a document that is already booked or already has its place in the queue gets no
     // second item: queueing it is a double-booking risk. Not every upload door dedupes on content, so the routing
     // that would put the copy in front of a person checks it here.
