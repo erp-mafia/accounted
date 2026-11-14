@@ -1047,6 +1047,7 @@
     "type_unmark_vat_period_filed": "Ångra inlämnad momsperiod",
     "type_mark_vat_check_reviewed": "Markera momsvarning som granskad",
     "type_mark_agi_period_filed": "Markera arbetsgivardeklaration som inlämnad",
+    "type_complete_deadline": "Bocka av deadline",
     "type_send_payslips": "Skicka lönebesked",
     "type_revert_salary_run": "Återställ lönekörning till utkast",
     "type_unapprove_salary_run": "Återkalla godkänd lönekörning",

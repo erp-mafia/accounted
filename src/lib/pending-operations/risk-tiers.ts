@@ -151,6 +151,9 @@ const RISK_TIERS = {
   // figures change.
   mark_vat_check_reviewed: 'low',
   mark_agi_period_filed: 'low',
+  // A tick on a deadline, or its undo (crm#1848): a reminder, no verifikat,
+  // period or filing.
+  complete_deadline: 'low',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   send_payslips: 'medium',
   revert_salary_run: 'low',

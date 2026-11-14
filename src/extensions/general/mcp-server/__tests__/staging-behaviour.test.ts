@@ -1093,6 +1093,13 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       deadlines: { tax_deadline_type: 'arbetsgivardeklaration', tax_period: '2026-08', due_date: '2026-09-12', is_completed: false, completed_at: null, status: 'upcoming' },
     },
   },
+  // A hand-added deadline still open, ticked off by its id (crm#1848).
+  gnubok_complete_deadline: {
+    args: { deadline_id: SOME_UUID, is_completed: true },
+    rows: {
+      deadlines: { title: 'Skicka underlag till revisorn', due_date: '2026-11-20', is_completed: false, completed_at: null, status: 'upcoming', dismissed_at: null },
+    },
+  },
   // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing
   // on a payslip, both payout accounts in the chart, an unbooked SEK outflow
   // equal to the claim for the bank match.
