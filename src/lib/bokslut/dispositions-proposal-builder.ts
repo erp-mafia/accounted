@@ -237,6 +237,16 @@ export async function buildDispositionsProposal(
   // the SLR table, so an unmapped year cannot break its bokslut.
   const ateforing = ateforingDispositions(state)
   proposals.push(...ateforing.proposals)
+  const undatedFondAccounts = state.existingFonder
+    .filter((fond) => fond.cohort_year === null && fond.balance > 0)
+    .map((fond) => fond.account_number)
+  if (undatedFondAccounts.length > 0) {
+    // The account names no avsättningsår, so the six-year limit (IL 30 kap
+    // 7 §) cannot be checked here: say so instead of staying silent.
+    warnings.push(
+      `Periodiseringsfond på konto ${undatedFondAccounts.join(', ')} saknar avsättningsår i kontoplanen. Schablonintäkten är medräknad, men kontrollera själv om fonden har nått sexårsgränsen och ska återföras.`,
+    )
+  }
   const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
 
   const overavskrivningar = await calculateOveravskrivningar({

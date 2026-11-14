@@ -199,6 +199,25 @@ describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
     )
   })
 
+  it('counts a fond on an account without a year (2110) and says the six-year limit is unchecked', async () => {
+    vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([
+      { ...fond2120(100_000), account_number: '2110', cohort_year: null },
+    ])
+    const supabase = supabaseFor({ period_start: '2024-01-01', period_end: '2024-12-31' })
+
+    const proposal = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manualAdjustments: expect.objectContaining({ schablonintaktPeriodiseringsfond: 2_620 }),
+      }),
+    )
+    expect(proposal.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('konto 2110 saknar avsättningsår')]),
+    )
+    expect(proposal.proposals.some((p) => p.kind === 'periodiseringsfond_ateforing')).toBe(false)
+  })
+
   it('fails closed with the typed registry error when fonder exist and the year is unmapped', async () => {
     vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([fond2120(100_000)])
     const supabase = supabaseFor({ period_start: '2019-01-01', period_end: '2019-12-31' })
