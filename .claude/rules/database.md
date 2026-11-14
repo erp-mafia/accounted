@@ -14,7 +14,7 @@ Use the `/supabase-migration` skill for new migrations.
 
 1. Enable RLS + policies using `user_company_ids()` for company-scoped data
 2. Add `updated_at` trigger via `update_updated_at_column()`
-3. UUID PKs: `DEFAULT uuid_generate_v4()`
+3. UUID PKs: `DEFAULT gen_random_uuid()`
 4. Company ownership: `company_id UUID REFERENCES companies NOT NULL` + `user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL`. The cascade never fires: deleted accounts keep their `auth.users` row as a tombstone, so classify every new FK to `auth.users` in `tests/pg/account-erasure.pg.test.ts` (erase it in `erase_user_personal_data`, or retain it for the company).
 5. Merging to `main` is the only way a migration reaches prod; nothing goes there by hand (no `apply_migration`, no DDL through `execute_sql`). CI's `migrations-production` job (`.gitlab-ci.yml`, push to `main` only) runs `supabase db push --include-all` against prod and logs the applied versions before and after; after the merge, confirm there that your version landed. `--include-all` also applies a file older than prod's newest version, but out of repo order: if `main` landed a newer migration while yours was open, rename yours above prod's newest version before merging.
 6. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure

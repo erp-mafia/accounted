@@ -113,4 +113,4 @@ A-skatt: withhold tax + pay avgifter. F-skatt: neither. FA-skatt: split. No F-sk
 
 ## Rate update schedule
 
-Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually. PBB 2027: SCB has calculated 59,600 SEK; not yet formally set by the government.
+Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually. PBB 2027: 59,600 SEK, set by the government in September 2026.

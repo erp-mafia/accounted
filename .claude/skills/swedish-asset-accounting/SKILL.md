@@ -66,4 +66,4 @@ From fiscal years starting after 2025-12-31 (BFNAR 2025:2 amending K2; BFNAR 202
 | 2024 | 57,300 | 28,650 |
 | 2025 | 58,800 | 29,400 |
 | 2026 | 59,200 | 29,600 |
-| 2027 | 59,600 | 29,800 (calculated by SCB, not yet formally set) |
+| 2027 | 59,600 | 29,800 |

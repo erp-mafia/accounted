@@ -61,7 +61,7 @@ Two failure classes, two remedies:
   `npx tsx scripts/export-docs-to-website.mts`. It writes `*.generated.ts` into
   `~/gnubok-website`.
 - **Hand-copied pages stale** (`changelog.md`, `versioning.md`, `webhooks.md`, `cookbook/*`):
-  copy the exported markdown constants from `lib/docs/content/` in erp-base over the website
+  copy the exported markdown constants from this repo's `src/lib/docs/content/` over the website
   repo's duplicates in `lib/docs/content/`. Mechanical copy only; if the two sides have diverged
   in structure (not just content), escalate with `loop:needs-human` instead.
 
@@ -74,7 +74,7 @@ git -C ~/gnubok-website worktree add /tmp/loop-docs-freshness-wt -b loop/docs-fr
 ```
 
 Re-run the export/copy against the worktree, commit, push, and open a PR **in
-`jakobwennberg/gnubok-website`** whose body links the erp-base drift issue and embeds the same
+`jakobwennberg/gnubok-website`** whose body links this repo's drift issue and embeds the same
 fingerprint marker. Then remove the worktree. Never merge; the founder deploys the website.
 
 **404s on pages whose routes exist on the website's origin/main** (seen 2026-08-09 for every
