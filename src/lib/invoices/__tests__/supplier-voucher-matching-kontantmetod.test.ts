@@ -116,6 +116,86 @@ describe('validateVoucherForSupplierInvoiceLink: bank_credit side', () => {
     if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_NO_BANK_CREDIT')
   })
 
+  describe('a purchase the owner paid privately (crm#1817)', () => {
+    const ownerPaidLines = (total: number, account = '2018') => [
+      { account_number: '6230', debit_amount: total * 0.8, credit_amount: 0, currency: 'SEK' },
+      { account_number: '2641', debit_amount: total * 0.2, credit_amount: 0, currency: 'SEK' },
+      { account_number: account, debit_amount: 0, credit_amount: total, currency: 'SEK' },
+    ]
+
+    it.each(['2018', '2893'])('accepts Dr cost, Dr 2641 / Cr %s without reading the invoice lines', async (account) => {
+      const result = await validate(sekInvoice(1250), [
+        { data: voucher({ source_type: 'manual' }) },
+        { data: ownerPaidLines(1250, account) },
+        { data: [] }, // payment rows on the voucher (capacity)
+        { data: [] }, // already linked to this invoice?
+      ])
+      expect(result).toMatchObject({ ok: true, settlementSide: 'bank_credit', paymentAmount: 1250, isFullyPaid: true })
+    })
+
+    it.each([
+      ['an owner deposit', [
+        { account_number: '1930', debit_amount: 1250, credit_amount: 0, currency: 'SEK' },
+        { account_number: '2018', debit_amount: 0, credit_amount: 1250, currency: 'SEK' },
+      ]],
+      ['a skuld the owner cleared', [
+        { account_number: '2440', debit_amount: 1250, credit_amount: 0, currency: 'SEK' },
+        { account_number: '2893', debit_amount: 0, credit_amount: 1250, currency: 'SEK' },
+      ]],
+    ])('refuses %s: no purchase is booked, also after reading the invoice lines', async (_label, lines) => {
+      const result = await validate(sekInvoice(1250), [
+        { data: voucher({ source_type: 'manual' }) },
+        { data: lines },
+        { data: [{ id: 'item-1', account_number: '6230' }] }, // the invoice's line accounts
+      ])
+      expect(result).toEqual({ ok: false, code: 'LINK_SI_VOUCHER_NO_BANK_CREDIT' })
+    })
+
+    it('accepts an inventarie on the account the invoice line posts to', async () => {
+      const result = await validate(sekInvoice(1250), [
+        { data: voucher({ source_type: 'manual' }) },
+        {
+          data: [
+            { account_number: '1220', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+            { account_number: '2641', debit_amount: 250, credit_amount: 0, currency: 'SEK' },
+            { account_number: '2893', debit_amount: 0, credit_amount: 1250, currency: 'SEK' },
+          ],
+        },
+        { data: [{ id: 'item-1', account_number: '1220' }] },
+        { data: [] },
+        { data: [] },
+      ])
+      expect(result).toMatchObject({ ok: true, paymentAmount: 1250 })
+    })
+
+    it('counts only the 19xx part of a verifikat that books no purchase', async () => {
+      const result = await validate(sekInvoice(1250), [
+        { data: voucher({ source_type: 'manual' }) },
+        {
+          data: [
+            { account_number: '2440', debit_amount: 1250, credit_amount: 0, currency: 'SEK' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 800, currency: 'SEK' },
+            { account_number: '2018', debit_amount: 0, credit_amount: 450, currency: 'SEK' },
+          ],
+        },
+        { data: [] }, // the invoice's line accounts
+        { data: [] },
+        { data: [] },
+      ])
+      expect(result).toMatchObject({ ok: true, apDebitAmount: 800, paymentAmount: 800, isFullyPaid: false })
+    })
+
+    it('an employee utlägg (2820) and a 2890 credit are not read', async () => {
+      for (const account of ['2820', '2890']) {
+        const result = await validate(sekInvoice(1250), [
+          { data: voucher({ source_type: 'manual' }) },
+          { data: ownerPaidLines(1250, account) },
+        ])
+        expect(result).toEqual({ ok: false, code: 'LINK_SI_VOUCHER_NO_BANK_CREDIT' })
+      }
+    })
+  })
+
   it('names the bank side when the voucher type is excluded', async () => {
     const result = await validate(sekInvoice(1250), [{ data: voucher({ source_type: 'storno' }) }])
     expect(result.ok).toBe(false)
@@ -326,7 +406,10 @@ describe('findMatchingVouchersForSupplierInvoice: bank_credit side', () => {
       invoice() as never,
     )
 
-    expect(findCalls('journal_entry_lines', 'like')).toEqual([['account_number', '19%']])
+    // 19xx, and the owner's private funds (crm#1817).
+    expect(findCalls('journal_entry_lines', 'or')).toEqual([
+      ['account_number.like.19%,account_number.eq.2018,account_number.eq.2893'],
+    ])
     expect(findCalls('journal_entry_lines', 'gt')).toEqual([['credit_amount', 0]])
     // candidateAmountBand(1250, 1250): ±(1% + 0.02).
     expect(findCalls('journal_entry_lines', 'gte')).toEqual([['credit_amount', 1237.48]])
@@ -360,6 +443,71 @@ describe('findMatchingVouchersForSupplierInvoice: bank_credit side', () => {
     )
 
     expect(result.map((c) => c.journal_entry_id)).toEqual(['je-free'])
+  })
+
+  describe('a purchase the owner paid privately (crm#1817)', () => {
+    const ownerLine = (entryId: string, credit: number, account = '2018') => ({
+      ...bankLine(entryId, credit),
+      account_number: account,
+    })
+    const fullLine = (id: string, entryId: string, account: string, debit: number, credit: number) => ({
+      id,
+      journal_entry_id: entryId,
+      account_number: account,
+      debit_amount: debit,
+      credit_amount: credit,
+    })
+
+    it('offers the verifikat that books the purchase against 2018, not an owner deposit of the same amount', async () => {
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [entry('je-purchase'), entry('je-deposit', 'Egen insättning')] },
+        { data: [ownerLine('je-purchase', 1250), ownerLine('je-deposit', 1250)] },
+        // The purchase guard reads every line of the vouchers that credit owner funds.
+        {
+          data: [
+            fullLine('l1', 'je-purchase', '6230', 1000, 0),
+            fullLine('l2', 'je-purchase', '2641', 250, 0),
+            fullLine('l3', 'je-purchase', '2018', 0, 1250),
+            fullLine('l4', 'je-deposit', '1930', 1250, 0),
+            fullLine('l5', 'je-deposit', '2018', 0, 1250),
+          ],
+        },
+        { data: [{ id: 'item-1', account_number: '6230' }] }, // the invoice's line accounts, for the undecided one
+        { data: [] }, // payment rows on the candidate vouchers
+        { data: [{ id: 'period-1', is_closed: false, locked_at: null }] },
+      ])
+
+      const result = await findMatchingVouchersForSupplierInvoice(
+        supabase as never,
+        'company-1',
+        invoice() as never,
+      )
+
+      expect(findCalls('supplier_invoice_items', 'eq')).toEqual([['supplier_invoice_id', 'si-1']])
+      expect(result.map((c) => c.journal_entry_id)).toEqual(['je-purchase'])
+      expect(result[0]).toMatchObject({ settlement_side: 'bank_credit', ap_debit_amount: 1250 })
+    })
+
+    it('reads no further voucher lines when every candidate is a plain 19xx credit', async () => {
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: [entry('je-1')] },
+        { data: [bankLine('je-1', 1250)] },
+        { data: [] },
+        { data: [{ id: 'period-1', is_closed: false, locked_at: null }] },
+      ])
+
+      const result = await findMatchingVouchersForSupplierInvoice(
+        supabase as never,
+        'company-1',
+        invoice() as never,
+      )
+
+      expect(result).toHaveLength(1)
+      // One read of journal_entry_lines: the candidate search itself.
+      expect(findCalls('journal_entry_lines', 'in')).toHaveLength(1)
+    })
   })
 
   it('takes a side the caller already resolved instead of looking it up again', async () => {

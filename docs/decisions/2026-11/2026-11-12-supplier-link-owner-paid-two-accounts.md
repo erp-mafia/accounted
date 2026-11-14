@@ -1,0 +1,1 @@
+[2026-11-12] Supplier voucher link reads an owner-paid purchase on 2018 and 2893 only, kontantmetoden only, and only when the verifikat debits a cost or the invoice line's account: a wrong link marks an invoice paid; 2820, 2890 and faktureringsmetoden wait for a founder decision (crm#1817, crm#1807).

@@ -15997,7 +15997,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_find_voucher_candidates_for_supplier_invoice',
     keywords: ['verifikat', 'koppla'],
     title: 'Find Voucher Candidates (Supplier Invoice)',
-    description: "List posted verifikat that could be this supplier invoice's payment (debit 244x; kontantmetoden with no registration verifikat: credit 19xx). Call before gnubok_link_supplier_invoice_to_voucher to mark the leverantörsfaktura paid (no new bokföring).",
+    description: "List posted verifikat that could be this supplier invoice's payment (debit 244x; unbooked kontantmetod invoice: credit 19xx, or 2018/2893 when the owner paid privately). Call before gnubok_link_supplier_invoice_to_voucher to mark it paid (no new bokföring).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16064,7 +16064,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_supplier_invoice_to_voucher',
     keywords: ['koppla leverantörsfaktura', 'verifikat'],
     title: 'Link Supplier Invoice to Voucher',
-    description: 'Markera en leverantörsfaktura som betald via länk till en befintlig verifikation (debiterar 244x; kontantmetoden utan registreringsverifikat: krediterar 19xx). Skapar ingen ny verifikation. Kör gnubok_find_voucher_candidates_for_supplier_invoice först. Stages.',
+    description: 'Markera leverantörsfaktura som betald via länk till befintlig verifikation (debiterar 244x; obokförd kontantmetodfaktura: krediterar 19xx, eller 2018/2893 om ägaren betalat privat). Ingen ny verifikation. Kör gnubok_find_voucher_candidates_for_supplier_invoice först. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

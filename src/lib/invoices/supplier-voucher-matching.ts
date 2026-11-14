@@ -13,7 +13,9 @@
  * kontantmetod company's invoice with no registration verifikat, the 19xx
  * credit (`bank_credit`): there Dr cost, Dr 2641 / Cr 1930 IS the payment of
  * the invoice, and refusing it left mark-paid, which books the cost and the
- * moms a second time, as the only way to close the invoice (issue #2854).
+ * moms a second time, as the only way to close the invoice (issue #2854). A
+ * purchase the owner paid with private money credits 2018 or 2893 instead and
+ * settles the same way, on a verifikat that books a purchase (crm#1817).
  *
  * A voucher without the settlement side is rejected with
  * LINK_SI_VOUCHER_NO_AP_DEBIT / LINK_SI_VOUCHER_NO_BANK_CREDIT.
@@ -48,7 +50,13 @@ import {
   type RegistrationFirstRefusal,
 } from '@/lib/supplier-invoices/registration-first'
 import {
+  SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX,
   resolveSupplierSettlementSide,
+  settlesOnAccount,
+  supplierInvoiceLinePostingAccounts,
+  voucherBooksPurchase,
+  vouchersBookingPurchase,
+  type PurchaseCheckLine,
   type SupplierSettlementSide,
   type SupplierSettlementSideName,
 } from './supplier-settlement-side'
@@ -175,6 +183,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     remainingAmount,
     side: {
       accountPrefix: settlement.accountPrefix,
+      alsoAccounts: SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[settlement.side],
       entrySide: settlement.entrySide,
       bankSide: settlement.side === 'bank_credit',
     },
@@ -185,6 +194,35 @@ export async function findMatchingVouchersForSupplierInvoice(
     logContext,
   })
   if (byEntry.size === 0) return []
+
+  // A credit on the owner's private funds (2018, 2893) is a payment only on a
+  // verifikat that books a purchase, as the validator and the RPC judge it
+  // (voucherBooksPurchase, crm#1817): never an owner's deposit or loan that
+  // happens to fit the amount. Only vouchers that carry such a credit are
+  // read; a 19xx credit counts as it always did. A failed read offers none of
+  // them.
+  const onOwnerFunds = Array.from(byEntry).filter(([, voucher]) => voucher.beyondPrefix)
+  if (onOwnerFunds.length > 0) {
+    let purchases = new Set<string>()
+    try {
+      purchases = await vouchersBookingPurchase(supabase, invoice.id, onOwnerFunds.map(([entryId]) => entryId))
+    } catch (error) {
+      log.warn('purchase guard read failed; no owner-funds voucher candidates', {
+        ...logContext,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+    for (const [entryId, voucher] of onOwnerFunds) {
+      if (purchases.has(entryId)) continue
+      // Not a purchase: only the 19xx part of the voucher settles. Through
+      // the SEK-booked fallback the parts are not told apart, so it is not
+      // offered.
+      const bankPart = voucher.sekBooked ? 0 : roundOre(voucher.amount - (voucher.beyondPrefix?.amount ?? 0))
+      if (bankPart <= AMOUNT_TOLERANCE) byEntry.delete(entryId)
+      else voucher.amount = bankPart
+    }
+    if (byEntry.size === 0) return []
+  }
 
   // Every payment row on a voucher counts, whichever invoice it belongs to,
   // and the candidate is scored on what the voucher has LEFT, as the RPC
@@ -381,6 +419,33 @@ export async function validateVoucherForSupplierInvoiceLink(
   // below still compares the RAW invoice.currency, so a NULL row is rejected
   // exactly as before rather than newly failing as "unconvertible".
   const invoiceCurrency = documentCurrency(invoice.currency)
+
+  // A credit on the owner's private funds settles only on a verifikat that
+  // books a purchase, as the RPC's supplier_invoice_voucher_books_purchase()
+  // judges it (crm#1817). The invoice's line accounts are read only when the
+  // verifikat carries such a credit and debits no cost account.
+  const purchaseLines = lines as PurchaseCheckLine[]
+  let booksPurchase = onBankCredit && voucherBooksPurchase(purchaseLines, [])
+  const creditsOwnerFunds = purchaseLines.some(
+    (line) =>
+      Number(line.credit_amount) > 0 &&
+      SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[settlement.side].includes(line.account_number ?? ''),
+  )
+  if (onBankCredit && !booksPurchase && creditsOwnerFunds) {
+    try {
+      booksPurchase = voucherBooksPurchase(
+        purchaseLines,
+        await supplierInvoiceLinePostingAccounts(supabase, invoice.id),
+      )
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_DB_ERROR',
+        details: { reason: error instanceof Error ? error.message : String(error) },
+      }
+    }
+  }
+
   let apDebitTotal = 0
   let lineCurrency: string | null = null
   // A settlement-side line that carries no amount in the invoice's currency.
@@ -398,7 +463,7 @@ export async function validateVoucherForSupplierInvoiceLink(
       currency: string | null
       amount_in_currency: number | string | null
     }
-    if (!line.account_number?.startsWith(settlement.accountPrefix)) continue
+    if (!settlesOnAccount(settlement, line.account_number, booksPurchase)) continue
     const rawDebit =
       Number(settlement.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
     sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawDebit })
