@@ -129,6 +129,16 @@ describe('atomic bank disconnect', () => {
       .rejects.toMatchObject({ code: '42501' })
   })
 
+  it('releases a deleted company\'s connection as service_role, the owner who deleted it the actor', async () => {
+    // What company.deleted does after the archive (lib/events/handlers/
+    // company-deleted-bank-feed-handler.ts): members stay on an archived company.
+    await client.query('UPDATE companies SET archived_at=now() WHERE id=$1', [owner.companyId])
+    const expected = await token()
+    await asRole('service_role', '')
+    expect(await disconnect(expected)).toMatchObject({ connection_id: connectionId, session_id: sessionId })
+    expect((await state()).connection).toMatchObject({ status: 'revoked', session_id: null })
+  })
+
   it('refuses a missing connection', async () => {
     await expect(disconnect(await token(), client, owner.userId, randomUUID())).rejects.toMatchObject({ code: 'P0002' })
   })

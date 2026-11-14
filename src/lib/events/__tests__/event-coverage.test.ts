@@ -28,7 +28,6 @@ const UNCONSUMED: readonly CoreEventType[] = [
   'account.deleted',
   'article.created',
   'article.updated',
-  'company.deleted',
   // Annual report filing (Bolagsverket).
   'arsredovisning.forelagd',
   'arsredovisning.registered',

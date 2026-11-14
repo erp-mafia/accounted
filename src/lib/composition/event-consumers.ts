@@ -22,6 +22,7 @@ import { cancelAccrualsOnOriginReversal } from '@/lib/bookkeeping/handlers/cance
 import { WEBHOOKS_EVENT_CONSUMER } from '@/lib/composition/async-event-consumers'
 import { eventConsumer, type EventConsumer } from '@/lib/events/consumers'
 import { relayAgentFeedback } from '@/lib/events/handlers/agent-feedback-relay-handler'
+import { endBankFeedsOfDeletedCompany } from '@/lib/events/handlers/company-deleted-bank-feed-handler'
 import { enqueueDocumentRead } from '@/lib/events/handlers/document-read-handler'
 import { proposeInboxBankMatches } from '@/lib/events/handlers/inbox-bank-match-handler'
 import { realiseForecastRowsOnArrival } from '@/lib/events/handlers/forecast-realise-handler'
@@ -111,6 +112,15 @@ export const EVENT_CONSUMERS: readonly EventConsumer[] = Object.freeze([
     owner: 'agent',
     eventTypes: ['agent.feedback'],
     handle: (event) => relayAgentFeedback(event.payload),
+  }),
+  // A deleted company's Open Payments connections are disconnected and their
+  // consents ended at the bank, as a person's disconnect does: nobody can
+  // reach them once the company is hidden, and each live consent is billed.
+  eventConsumer({
+    id: 'deleted-company-bank-feeds',
+    owner: 'bank-feed',
+    eventTypes: ['company.deleted'],
+    handle: (event) => endBankFeedsOfDeletedCompany(event.payload),
   }),
   // One webhook_deliveries row per matching webhook of the company. Declared
   // with the consumers the outbox dispatcher may run (./async-event-consumers.ts):
