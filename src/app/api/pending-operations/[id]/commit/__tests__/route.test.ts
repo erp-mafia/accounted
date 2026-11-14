@@ -281,13 +281,18 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
       const response = await POST(request, routeParams)
-      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; details: { operation_status: string } }
+      }>(response)
 
       expect(status).toBe(409)
-      // Known-pattern translation of the executor's English message (#337).
-      expect(body.error).toBe(
+      // The structured refusal (#206): the code, Swedish for a person (#337),
+      // and that this refusal closed the proposal.
+      expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+      expect(body.error.message).toBe(
         'Transaktionen är redan bokförd. Ångra kategoriseringen om du vill ändra den.',
       )
+      expect(body.error.details.operation_status).toBe('rejected')
     })
   })
 
