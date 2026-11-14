@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { DocumentMagnifyingGlassIcon, InboxIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
+import { RowSelectCheckbox } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -18,11 +19,14 @@ import { doorOf, itemHeadline, type InkorgItem, type InkorgView } from '@/lib/in
 import { useDoorName } from './door-icon'
 import { ROW_CLASS, RowChevron, RowTitle } from './row-parts'
 import type { LoadState } from './use-inkorg-data'
+import type { BulkSelection } from '@/lib/hooks/use-bulk-selection'
 
 /**
  * The selected view as rows: the sender's mark, its name over the door and
  * the time it came, the document's own line (the mail subject, else its
  * number), where it stands and the amount. A row opens the focus view.
+ * With a `selection`, the rows in `selectableIds` carry the lists' shared
+ * selection checkbox (shift-click extends the range), for removing several.
  */
 export function InkorgList({
   view,
@@ -32,6 +36,8 @@ export function InkorgList({
   onRetry,
   lastOpenedId,
   bankMatches,
+  selection,
+  selectableIds,
 }: {
   view: InkorgView
   items: InkorgItem[]
@@ -42,6 +48,10 @@ export function InkorgList({
   lastOpenedId: string | null
   /** What the focus view read since about each item's bank row (a match, null for none); it wins over the list's own. */
   bankMatches: ReadonlyMap<string, BankMatch | null>
+  /** The list's bulk selection; left out, no row can be picked (a viewer). */
+  selection?: BulkSelection
+  /** The rows that can be picked: those the focus view would let a person remove. */
+  selectableIds?: ReadonlySet<string>
 }) {
   const t = useTranslations('inkorg')
 
@@ -75,7 +85,16 @@ export function InkorgList({
   return (
     <ul className="stagger-enter border-t border-border">
       {items.map((item) => (
-        <InkorgRow key={item.id} item={item} onOpen={onOpen} marked={item.id === lastOpenedId} bankMatch={bankMatches.get(item.id)} />
+        <InkorgRow
+          key={item.id}
+          item={item}
+          onOpen={onOpen}
+          marked={item.id === lastOpenedId}
+          bankMatch={bankMatches.get(item.id)}
+          selected={selection?.selectedIds.has(item.id) ?? false}
+          anySelected={(selection?.selectedIds.size ?? 0) > 0}
+          onToggleSelect={selection && selectableIds?.has(item.id) ? selection.toggle : undefined}
+        />
       ))}
     </ul>
   )
@@ -86,16 +105,25 @@ function InkorgRow({
   onOpen,
   marked,
   bankMatch,
+  selected,
+  anySelected,
+  onToggleSelect,
 }: {
   item: InkorgItem
   onOpen: (id: string) => void
   marked: boolean
   bankMatch: BankMatch | null | undefined
+  selected: boolean
+  /** Something in the list is picked: every checkbox shows solid. */
+  anySelected: boolean
+  /** Picks or unpicks the row (true extends the range); left out, the row has no checkbox. */
+  onToggleSelect?: (id: string, extend?: boolean) => void
 }) {
   const t = useTranslations('inkorg')
   const tKind = useTranslations('inbox_workspace')
   const doorName = useDoorName(item.channel_context?.mail_provider ?? null)
   const locale = useLocale()
+  const shiftHeld = useRef(false)
   const headline = itemHeadline(item)
   const status = rowStatus(item, bankMatch)
   const invoiceNumber = item.extracted_data?.invoice?.invoiceNumber?.trim() || null
@@ -141,14 +169,29 @@ function InkorgRow({
   const amount = headline.amount != null ? formatCurrency(headline.amount, headline.currency) : ''
 
   return (
-    <li id={`inkorg-row-${item.id}`}>
+    <li id={`inkorg-row-${item.id}`} className="group relative">
+      {/* The lists' selection checkbox (transactions-page pattern): it hangs in
+          the left margin, beside the row and never inside its button, so the
+          row keeps its columns and a click on the box never opens the item. */}
+      {onToggleSelect && (
+        <RowSelectCheckbox
+          checked={selected}
+          revealed={anySelected}
+          onClick={(e) => {
+            shiftHeld.current = e.shiftKey
+          }}
+          onCheckedChange={() => onToggleSelect(item.id, shiftHeld.current)}
+          aria-label={t('bulk_select_row', { name: headline.name ?? t('row_unknown') })}
+          className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
+        />
+      )}
       <button
         type="button"
         onClick={() => onOpen(item.id)}
         className={cn(
           ROW_CLASS,
           'grid-cols-[28px_minmax(0,1fr)_auto] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_auto_7.5rem_1rem]',
-          marked && 'bg-secondary/35',
+          (marked || selected) && 'bg-secondary/35',
         )}
       >
         {headline.name ? (
