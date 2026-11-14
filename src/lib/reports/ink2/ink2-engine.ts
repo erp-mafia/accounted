@@ -26,6 +26,7 @@ import {
   INK2R_SIGN_TWINS,
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
+import { computePeriodiseringsfondSchablonintakt } from './schablonintakt'
 
 import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 import { companyIdentityFrom } from '@/lib/company/org-number'
@@ -49,7 +50,8 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2R contains the full balance sheet + income statement.
  * INK2S auto-derives basic fields (result + tax → taxable result), as well as
  * periodiseringsfond and överavskrivningar when those have been posted via the
- * bokslut-dispositions calculators in lib/bokslut/.
+ * bokslut-dispositions calculators in lib/bokslut/, and the schablonintäkt on
+ * the opening periodiseringsfonder (4.6a) for räkenskapsår of whole months.
  *
  * Balances come from generateTrialBalance, never from a raw journal scan, and
  * the two sides of INK2R read DIFFERENT views of the same period:
@@ -457,9 +459,19 @@ export async function generateINK2Declaration(
   // 4.9: the book depreciation and write-downs on fast egendom added back,
   // the tax plan's deduction taken (IL 19-20 kap.), filed net.
   const buildingAdjustment = Math.trunc(buildingTax.net)
+  // 4.6a: schablonintäkt on the periodiseringsfonder held at the start of the
+  // year (IL 30 kap. 6 a §). Never booked, so it is read off the opening
+  // balances; left at 0 with a warning when it cannot be settled (see
+  // ./schablonintakt).
+  const schablonintakt = computePeriodiseringsfondSchablonintakt(
+    closedTrialBalance.rows,
+    period.period_start as string,
+    period.period_end as string,
+  )
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
+    + schablonintakt.amount
     + buildingAdjustment
     - deficitCarryforward
 
@@ -479,6 +491,7 @@ export async function generateINK2Declaration(
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
+    '7654': schablonintakt.amount,
     '7666': buildingAdjustment > 0 ? buildingAdjustment : 0,
     '7765': buildingAdjustment < 0 ? -buildingAdjustment : 0,
     '7763': deficitCarryforward,
@@ -502,6 +515,7 @@ export async function generateINK2Declaration(
     )
   }
 
+  warnings.push(...schablonintakt.warnings)
   warnings.push(...buildingTax.warnings)
 
   // The underskottsregister's spärrar are netted into the 4.14 a deducted

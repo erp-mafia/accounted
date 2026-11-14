@@ -12,7 +12,7 @@
     "ledger -> skatteverket": 5,
     "ledger -> transactions": 11,
     "ledger -> vat": 20,
-    "ledger -> year-end": 10,
+    "ledger -> year-end": 11,
     "platform -> payroll": 1
   },
   "undeclaredBlockToBlock": {

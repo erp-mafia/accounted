@@ -120,6 +120,7 @@ export interface INK2SRutor {
   '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
+  '7654': number  // 4.6a Schablonintäkt på periodiseringsfonder vid beskattningsårets ingång
   '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
   '7666': number  // 4.9 (+) Skattemässig justering för avskrivning på byggnader och annan fast egendom
   '7765': number  // 4.9 (-) Skattemässig justering för avskrivning på byggnader och annan fast egendom
@@ -141,6 +142,21 @@ export function ink2sBuildingRows(
   ] as const)
     .filter(([field]) => ink2s[field] > 0)
     .map(([field, label]) => ({ field, label, amount: ink2s[field] }))
+}
+
+/**
+ * The INK2S 4.6a row as the form names it (Skatteverket's label, Swedish in
+ * every locale); empty when there is no schablonintäkt to show.
+ */
+export function ink2sSchablonintaktRows(
+  ink2s: Pick<INK2SRutor, '7654'>,
+): { field: '7654'; label: string; amount: number }[] {
+  if (!(ink2s['7654'] > 0)) return []
+  return [{
+    field: '7654',
+    label: 'Beräknad schablonintäkt på periodiseringsfonder vid beskattningsårets ingång',
+    amount: ink2s['7654'],
+  }]
 }
 
 // Account mapping configuration for INK2R

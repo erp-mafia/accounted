@@ -98,6 +98,8 @@ function makeSupabase(options?: {
   closingEntryId?: string | null
   closingEntryStatus?: string
   isClosed?: boolean
+  periodStart?: string
+  periodEnd?: string
 }): SupabaseStub {
   const closingEntryId =
     options?.closingEntryId === undefined ? CLOSING_ENTRY_ID : options.closingEntryId
@@ -113,8 +115,8 @@ function makeSupabase(options?: {
                   data: {
                     id: PERIOD_ID,
                     name: 'Räkenskapsår 1',
-                    period_start: '2025-01-01',
-                    period_end: '2025-12-31',
+                    period_start: options?.periodStart ?? '2025-01-01',
+                    period_end: options?.periodEnd ?? '2025-12-31',
                     is_closed: options?.isClosed ?? true,
                     closing_entry_id: closingEntryId,
                   },
@@ -299,6 +301,69 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     // taxable result: it already reduced årets resultat.
     expect(result.ink2r['7525']).toBe(100_000)
     expect(result.ink2s['7670']).toBe(506_000)
+  })
+})
+
+describe('generateINK2Declaration: schablonintäkt on periodiseringsfonder (INK2S 4.6a)', () => {
+  /** The same year, with a fond of 200 000 already there when the year opened. */
+  function withOpeningFond(rows: TrialBalanceRow[]): TrialBalanceRow[] {
+    return [...rows, { ...row('2124', 'Periodiseringsfond 2024', -200_000), opening_credit: 200_000, period_credit: 0 }]
+  }
+
+  it('adds the schablonintäkt to the taxable result and files it on 7654', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    // 200 000 x 1,96 % (statslåneräntan 30 nov 2024) = 3 920. 506 000 + 3 920.
+    expect(result.ink2s['7654']).toBe(3_920)
+    expect(result.ink2s['7670']).toBe(509_920)
+    expect(result.ink2['7104']).toBe(509_920)
+    const sru = generateSRUSubmission(result).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7654 3920')
+    expect(validateInk2BlanketterSru(sru).errors).toEqual([])
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('yields nothing for a fond avsatt in this year\'s bokslut', async () => {
+    // The default fixture: 2125 has a closing balance but opened at 0.
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2s['7654']).toBe(0)
+    expect(result.ink2s['7670']).toBe(506_000)
+    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('computes 4.6a for a brutet räkenskapsår with the rate of the year it ends in', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ periodStart: '2025-03-01', periodEnd: '2026-02-28' })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    // Ends 2026: 200 000 x 2,55 % (statslåneräntan 30 nov 2025) = 5 100.
+    expect(result.ink2s['7654']).toBe(5_100)
+    expect(result.ink2s['7670']).toBe(511_100)
+    expect(generateSRUSubmission(result).blanketterSru).toContain('#UPPGIFT 7654 5100')
+    expect(result.warnings.join(' ')).not.toMatch(/4\.6a/)
+  })
+
+  it('leaves 4.6a to the user for a year that ends mid-month and says so', async () => {
+    stubTrialBalances(withOpeningFond(CLOSED_ROWS), withOpeningFond(PRE_CLOSING_ROWS))
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ periodStart: '2025-01-01', periodEnd: '2025-10-15' })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2s['7654']).toBe(0)
+    expect(result.ink2s['7670']).toBe(506_000)
+    expect(generateSRUSubmission(result).blanketterSru).not.toContain('#UPPGIFT 7654')
+    expect(result.warnings).toContainEqual(expect.stringMatching(/200000 kr vid beskattningsårets ingång.*punkt 4\.6a/))
   })
 })
 

@@ -160,6 +160,7 @@ export const reportsInk2 = defineOperation({
       'Only for aktiebolag: another legal form answers 400 TAX_DECL_INK2_WRONG_LEGAL_FORM.',
       'Amounts are whole kronor as Skatteverket takes them; codes with no amount are 0.',
       'Run it after the year-end closing: before bokslut the tax (8910) and bokslutsdispositioner are missing, and warnings say so.',
+      'ink2s is not the whole INK2S. Computed: 7650/7750 (4.1/4.2), 7651 (4.3a), 7653 (4.3c) and 7754 (4.5c) from the year-end adjustments, 7654 (4.6a, schablonintäkt on the opening periodiseringsfonder: statslåneräntan of 30 November the year before the calendar year the räkenskapsår ends in, at least 0.5 %, times whole months / 12, so brutet, short and long years are covered; a year that starts or ends mid-month, or whose rate is not published yet, gets 0 with a warning naming the opening fonder), 7666/7765 (4.9), 7763 (4.14a) and 7670/7770 (4.15/4.16). 7763 is the deficit saved in the year-end flow or the underskottsregister, never read from last year\'s return: 0 means none was entered, not that none exists. Every other INK2S row and the upplysningar about the årsredovisning (8040/8041 uppdragstagare, 8044/8045 revision) are neither computed nor in the SRU file; they are entered in Skatteverket\'s e-tjänst.',
       'A period id from another company answers 404 FISCAL_PERIOD_NOT_FOUND.',
     ],
     example: {

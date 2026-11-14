@@ -102,6 +102,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date, orgNumbe
     '7651',
     '7653',
     '7754',
+    '7654',
     '7666',
     '7765',
     '7763',
