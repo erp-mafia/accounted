@@ -255,7 +255,8 @@ export interface SettlementSearchSide {
   accountPrefix: string
   /**
    * Whole account numbers that settle besides the prefix: 2013 (the owner's
-   * private funds) on the customer 19xx side (settlesOnAccount, crm#1580).
+   * private funds) on the customer 19xx side (settlesOnAccount, crm#1580),
+   * 2018 and 2893 on the supplier 19xx side (crm#1817).
    */
   alsoAccounts?: readonly string[]
   /** The side of that line that settles the invoice. */
@@ -279,6 +280,13 @@ export interface SettlementVoucher {
   lineCurrency: string | null
   /** Set when the voucher settles through the SEK-booked fallback. */
   sekBooked?: { sekTotal: number }
+  /**
+   * Set when lines on SettlementSearchSide.alsoAccounts are part of `amount`:
+   * how much of it they carry, in the invoice's currency (all of it on the
+   * SEK-booked fallback). The supplier side counts those lines only on a
+   * verifikat that books a purchase (crm#1817).
+   */
+  beyondPrefix?: { amount: number }
 }
 
 export interface SettlementVoucherSearch {
@@ -377,7 +385,14 @@ export async function collectSettlementVouchers(
 
   const pending = new Map<
     string,
-    { entry: VoucherRow; amount: number; lineCurrency: string | null; sideLines: SettlementSideLine[]; unconvertible: boolean }
+    {
+      entry: VoucherRow
+      amount: number
+      lineCurrency: string | null
+      sideLines: SettlementSideLine[]
+      unconvertible: boolean
+      beyondPrefix: number | null
+    }
   >()
   for (const line of lines) {
     const entry = line.journal_entries
@@ -387,9 +402,11 @@ export async function collectSettlementVouchers(
     if (rawSide <= 0) continue
     let voucher = pending.get(entry.id)
     if (!voucher) {
-      voucher = { entry, amount: 0, lineCurrency: null, sideLines: [], unconvertible: false }
+      voucher = { entry, amount: 0, lineCurrency: null, sideLines: [], unconvertible: false, beyondPrefix: null }
       pending.set(entry.id, voucher)
     }
+    const beyondPrefix = !!line.account_number && !line.account_number.startsWith(side.accountPrefix)
+    if (beyondPrefix) voucher.beyondPrefix ??= 0
     voucher.sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawSide })
     // The settlement side quoted in the INVOICE's currency: the SEK column on
     // a SEK invoice, amount_in_currency on a foreign one, null for a line that
@@ -402,6 +419,7 @@ export async function collectSettlementVouchers(
     if (amount <= 0) continue
     if (voucher.amount === 0) voucher.lineCurrency = line.currency
     voucher.amount += amount
+    if (beyondPrefix) voucher.beyondPrefix = (voucher.beyondPrefix ?? 0) + amount
   }
 
   const fxRate = Number(invoice.exchange_rate)
@@ -411,14 +429,21 @@ export async function collectSettlementVouchers(
         ? sekBookedSettlement(voucher.sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
         : null
       if (!fallback?.eligible) continue
+      const amount = roundOre(fallback.sekTotal / fxRate)
       byEntry.set(entryId, {
         entry: voucher.entry,
-        amount: roundOre(fallback.sekTotal / fxRate),
+        amount,
         lineCurrency: null,
         sekBooked: { sekTotal: fallback.sekTotal },
+        ...(voucher.beyondPrefix === null ? {} : { beyondPrefix: { amount } }),
       })
     } else if (voucher.amount > 0) {
-      byEntry.set(entryId, { entry: voucher.entry, amount: voucher.amount, lineCurrency: voucher.lineCurrency })
+      byEntry.set(entryId, {
+        entry: voucher.entry,
+        amount: voucher.amount,
+        lineCurrency: voucher.lineCurrency,
+        ...(voucher.beyondPrefix === null ? {} : { beyondPrefix: { amount: voucher.beyondPrefix } }),
+      })
     }
   }
   return byEntry

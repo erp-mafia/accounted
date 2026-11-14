@@ -360,11 +360,14 @@ describe('link_supplier_invoice_to_voucher: kontantmetoden, the 19xx credit', ()
   it('refuses a verifikat that does not credit 19xx, naming the bank side', async () => {
     const company = await seedCompanyWithMethod('cash')
     const invoiceId = await seedSupplierInvoice({ company, total: 1250 })
+    // A credit on the owner's private funds (2018, 2893) is a payment since
+    // 20261114070000 (link-supplier-invoice-voucher-owner-paid.pg.test.ts);
+    // a skuld to the supplier is not.
     const noBank = await seedVoucher({
       company,
       lines: [
         { accountNumber: '4010', debitAmount: 1250, creditAmount: 0 },
-        { accountNumber: '2893', debitAmount: 0, creditAmount: 1250 },
+        { accountNumber: '2440', debitAmount: 0, creditAmount: 1250 },
       ],
     })
     // Money coming INTO the bank is not a payment of a supplier invoice.

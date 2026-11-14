@@ -8881,9 +8881,9 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
   LINK_SI_VOUCHER_NO_BANK_CREDIT: {
     httpStatus: 400,
     message_sv:
-      'Verifikationen krediterar inget kassa- eller bankkonto (19xx), så den kan inte vara betalningen av fakturan. Välj verifikationen där pengarna lämnade kontot.',
+      'Verifikationen krediterar inget kassa- eller bankkonto (19xx) och bokför inte heller ett köp som ägaren betalat privat (kredit 2018 eller 2893), så den kan inte vara betalningen av fakturan. Välj verifikationen där köpet betalades.',
     message_en:
-      'The journal entry does not credit a cash or bank account (19xx), so it cannot be the payment of this invoice. On kontantmetoden the payment verifikat is the one where the money left the account (Dr cost, Dr 2641 / Cr 19xx).',
+      'The journal entry does not credit a cash or bank account (19xx), nor does it book a purchase the owner paid privately (Dr cost / Cr 2018 or 2893), so it cannot be the payment of this invoice. On kontantmetoden the payment verifikat is the one that paid the purchase (Dr cost, Dr 2641 / Cr 19xx, or Cr 2018 / 2893 when the owner paid with private money).',
   },
   LINK_SI_VOUCHER_FULLY_ALLOCATED: {
     httpStatus: 409,

@@ -260,13 +260,15 @@ describe('supplier voucher link: matcher, validator and RPC give one answer', ()
     expect(answer).toMatchObject({ ok: false, code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED', offered: false })
   })
 
-  it('kontantmetoden: a payout larger than the remainder, and a verifikat with no 19xx credit', async () => {
+  it('kontantmetoden: a payout larger than the remainder, and a verifikat with no payment credit', async () => {
     const company = await seedCompanyWithMethod('cash')
     const invoiceId = await seedInvoice(company, 1250)
     const tooLarge = await seedVoucher(company, cashLines(5000))
+    // A credit on 2440 is no payment under kontantmetoden. (A purchase the
+    // owner paid privately, credit 2018 or 2893, links since crm#1817.)
     const noBank = await seedVoucher(company, [
       { accountNumber: '4010', debitAmount: 1250, creditAmount: 0 },
-      { accountNumber: '2893', debitAmount: 0, creditAmount: 1250 },
+      { accountNumber: '2440', debitAmount: 0, creditAmount: 1250 },
     ])
 
     expect((await askAllThree(company, invoiceId, tooLarge)).code).toBe('LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING')
