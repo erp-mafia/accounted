@@ -4959,6 +4959,14 @@ export interface InvoiceExtractionResult {
   // Matching treats such a total as fallback-grade; cleared when a user edits
   // totals.total.
   totalSource?: 'prominent' | null
+  // Set by the reader (never the model) when the seller it read off an
+  // invoice or a credit note is the receiving company itself: the company's
+  // own sales invoice, mailed or uploaded to the inbox (crm#1830). The
+  // supplier block is emptied and documentKind is 'other' on such a reading,
+  // so nothing treats it as a purchase. Read through isOwnIssuedInvoice
+  // (lib/documents/inbox-kind.ts), which stops counting it once a person
+  // names a seller or types the document.
+  sellerIsOwnCompany?: boolean
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before

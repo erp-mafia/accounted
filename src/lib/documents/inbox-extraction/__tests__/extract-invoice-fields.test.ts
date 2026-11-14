@@ -1136,6 +1136,33 @@ describe('stripOwnCompanyAsSupplier', () => {
     expect(result.documentKind).toBe('other')
     expect(result.totals.total).toBe(2500)
     expect(result.prominentAmounts).toEqual([{ amount: 2500, label: 'Engångspris' }])
+    // A bank agreement that prints the customer is no sales invoice: nothing says "own invoice".
+    expect(result.sellerIsOwnCompany).toBeUndefined()
+  })
+
+  it("reads an invoice or a credit note the company itself issued as its own, never as a supplier's (crm#1830)", () => {
+    for (const documentKind of ['supplier_invoice', 'credit_note'] as const) {
+      const base = withSupplier({ name: 'Testbrand AB', vatNumber: 'SE556677889901' })
+      const result = stripOwnCompanyAsSupplier({ ...base, documentKind, totals: { ...base.totals, total: 1250 } }, own)
+      expect(result.supplier, documentKind).toEqual(strippedSupplier)
+      expect(result.documentKind, documentKind).toBe('other')
+      expect(result.sellerIsOwnCompany, documentKind).toBe(true)
+      expect(result.totals.total, documentKind).toBe(1250)
+    }
+  })
+
+  it('leaves a receipt, a letter and an unclassified reading as they were read when the seller is stripped', () => {
+    for (const documentKind of ['receipt', 'government_letter', null] as const) {
+      const result = stripOwnCompanyAsSupplier({ ...withSupplier({ name: 'Testbrand AB' }), documentKind }, own)
+      expect(result.supplier, String(documentKind)).toEqual(strippedSupplier)
+      expect(result.documentKind, String(documentKind)).toBe(documentKind)
+      expect(result.sellerIsOwnCompany, String(documentKind)).toBeUndefined()
+    }
+  })
+
+  it("never marks another seller's invoice as the company's own", () => {
+    const data = { ...withSupplier({ name: 'Något AB', orgNumber: '5591234567' }), documentKind: 'supplier_invoice' as const }
+    expect(stripOwnCompanyAsSupplier(data, own)).toBe(data)
   })
 })
 

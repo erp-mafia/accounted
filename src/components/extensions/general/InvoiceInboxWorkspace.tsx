@@ -78,6 +78,8 @@ import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { isUnderlagDivergent, itemStage } from '@/lib/documents/inbox-item-state'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import {
+  inboxKindLabelKey,
+  isOwnIssuedInvoice,
   resolveInboxKind,
 } from '@/lib/documents/inbox-kind'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
@@ -2420,7 +2422,7 @@ function InboxRow({
                   the AI classification. Nothing when neither is known. */}
               {kind && (
                 <Badge variant="outline" className="font-normal shrink-0">
-                  {t(`doc_kind_${kind}`)}
+                  {t(inboxKindLabelKey(kind, item.extracted_data) ?? `doc_kind_${kind}`)}
                 </Badge>
               )}
               {isExtracting ? (
@@ -3113,9 +3115,10 @@ function FieldsRail({
           {resolvedKind && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
-              <span>{t(`doc_kind_${resolvedKind}`)}</span>
+              <span>{t(inboxKindLabelKey(resolvedKind, data) ?? `doc_kind_${resolvedKind}`)}</span>
             </div>
           )}
+          {isOwnIssuedInvoice(data) && <p className="text-muted-foreground">{t('own_invoice_note')}</p>}
           {data?.payment?.method && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('payment_label')}</span>
@@ -3276,7 +3279,7 @@ function FieldsRail({
             Suppressed while extraction is in flight: a proposal computed from
             empty fields would be an invitation to book nothing. */}
         {/* What was bought, beside how it is booked: a label, never the booking. */}
-        {!inFlight && data && item.purchase_category !== undefined && (
+        {!inFlight && data && !isOwnIssuedInvoice(data) && item.purchase_category !== undefined && (
           <PurchaseCategoryChip
             itemId={item.id}
             value={item.purchase_category}

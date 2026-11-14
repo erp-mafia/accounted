@@ -68,7 +68,7 @@
  * (./inkorg-book.ts) writes through the shared internals.
  */
 import type { InvoiceExtractionResult } from '@/types'
-import type { InboxDocumentKind } from '@/lib/documents/inbox-kind'
+import { isOwnIssuedInvoice, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { SE_PURCHASE_CATEGORY_PACK } from '@/lib/bookkeeping/bas-data/purchase-category-accounts'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
@@ -154,6 +154,7 @@ export type OneClickReason =
   // No one-click answer for this item.
   | 'no_bank_row'
   | 'credit_note'
+  | 'own_invoice'
   | 'not_read'
   | 'cash_method_unpaid'
   | 'package_off_unpaid'
@@ -447,6 +448,8 @@ function situation(input: OneClickInput): Situation {
   const { kind, bank, reading } = input
   if (kind === 'credit_note') return { form: null, reason: 'credit_note' }
   if (!reading) return { form: null, reason: 'not_read' }
+  // The company's own sales invoice is no purchase: one click never books a cost for it (crm#1830).
+  if (isOwnIssuedInvoice(reading)) return { form: null, reason: 'own_invoice' }
   if (bank) {
     if (bank.source === 'matched') return { form: 'direct', reason: 'linked' }
     if (kind !== 'supplier_invoice') return { form: 'direct', reason: 'receipt' }

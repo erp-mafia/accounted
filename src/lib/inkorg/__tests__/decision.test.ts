@@ -603,3 +603,31 @@ describe('focusDecision: who paid a document not read as an invoice', () => {
     expect(d.actions.length).toBeLessThanOrEqual(MAX_DECISION_ACTIONS)
   })
 })
+
+describe("the company's own invoice (crm#1830)", () => {
+  const own = () => ({ ...reading({ documentKind: 'other', invoice: { invoiceDate: '2026-10-01', dueDate: '2026-10-30' }, totals: { total: 1250 } }), sellerIsOwnCompany: true })
+  const bankMatch = { transaction_id: 'tx-1', date: '2026-10-02', amount: -1250, currency: 'SEK', counterparty: 'X', basis: 'rule_amount_date', evidence_level: 'trolig' } as never
+
+  it('is never asked about as a purchase: it is linked to its payment or dropped, also when mailed to the supplier address', () => {
+    for (const kind_hint of [null, 'supplier_invoice', 'receipt']) {
+      const d = focusDecision(makeItem({ kind_hint, extracted_data: own() }), { today: '2026-11-20' })
+      expect(d.question, String(kind_hint)).toBe('own_invoice')
+      expect(d.evidence, String(kind_hint)).toEqual({ kind: 'own_invoice' })
+      expect(d.actions, String(kind_hint)).toEqual(['match_purchase', 'not_underlag'])
+      expect(d.quietActions, String(kind_hint)).toEqual([])
+      expect(d.editorEscape, String(kind_hint)).toBe(true)
+    }
+  })
+
+  it('is not settled against a bank row that looks like a purchase, and its row says neither paid nor overdue', () => {
+    const item = makeItem({ kind_hint: 'supplier_invoice', extracted_data: own() })
+    expect(focusDecision(item, { bankMatch }).question).toBe('own_invoice')
+    expect(rowStatus(item, bankMatch, '2026-11-20')).toEqual({ kind: 'waiting' })
+  })
+
+  it('is a purchase again once a person names the seller', () => {
+    const data = own()
+    const d = focusDecision(makeItem({ kind_hint: 'supplier_invoice', extracted_data: { ...data, supplier: { ...data.supplier, name: 'Leverantören AB' } } }), { today: '2026-10-20' })
+    expect(d.question).toBe('invoice_paid')
+  })
+})

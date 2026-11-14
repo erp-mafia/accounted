@@ -23,6 +23,9 @@
  *     failed and, where the company can read documents, for one never read;
  *   - credit: InboxCreditNotePanel (POST /api/supplier-invoices/:id/credit);
  *   - open_entry, open_supplier_invoice, open_matched_entry: links;
+ *   - the company's own sales invoice (isOwnIssuedInvoice) is no purchase:
+ *     match_purchase picks the payment it is the underlag of, not_underlag
+ *     drops it, and nothing else is offered;
  *   - attach_to_booking: the half of a purchase whose other half is booked
  *     already (./pairs.ts pairWithBookedHalves) is added to that booking's
  *     verifikat as one more underlag (POST /api/inkorg/items/:id/companion),
@@ -58,7 +61,7 @@
  * Pure: codes out, the component turns them into words.
  */
 import type { ExtractedPaymentMethod } from '@/types'
-import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
+import { isOwnIssuedInvoice, resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { cardEvidence } from '@/lib/documents/bank-match/card-token'
 import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
@@ -99,6 +102,7 @@ export type DecisionQuestion =
   | 'invoice_paid'
   | 'who_paid'
   | 'credit_note'
+  | 'own_invoice'
   | 'book_purchase'
   | 'underlag_off_entry'
   | 'booked'
@@ -126,6 +130,7 @@ export type DecisionEvidence =
   | { kind: 'linked_purchase' }
   | { kind: 'underlag_status'; status: Exclude<UnderlagStatus, 'anchored'> }
   | { kind: 'credit_note' }
+  | { kind: 'own_invoice' }
   | { kind: 'booked' }
   | {
       /** The other half of the purchase is booked: on this verifikat, its period open or locked. */
@@ -333,6 +338,17 @@ export function focusDecision(
     }
   }
 
+  // The company's own sales invoice, sent in from another invoicing system
+  // (crm#1830): no purchase, so nobody is asked who paid it and nothing
+  // offers to register it as a supplier invoice or an utlägg. It is the
+  // underlag of the payment it brought in (the bank row is picked), or it
+  // has no place here. A reading that got the seller wrong is put right in
+  // the fields (a seller named on it makes it a purchase again), which is
+  // why the editor stays one link away.
+  if (isOwnIssuedInvoice(item.extracted_data)) {
+    return { question: 'own_invoice', evidence: { kind: 'own_invoice' }, actions: ['match_purchase', 'not_underlag'], quietActions: [], editorEscape: true }
+  }
+
   // Waiting for the first decision.
   const kind = itemHeadline(item).kind
   const match = context.bankMatch
@@ -510,6 +526,8 @@ export function rowStatus(
   if (stage === 'linked') return { kind: 'linked' }
   const headline = itemHeadline(item)
   const kind = headline.kind
+  // The company's own invoice is never "paid" by a purchase's bank row (focusDecision).
+  if (isOwnIssuedInvoice(item.extracted_data)) return { kind: 'waiting' }
   if (bankMatch && kind !== 'credit_note') return { kind: 'looks_paid' }
   if (paidByReceipt(item)) return { kind: 'paid_by_receipt' }
   const due = kind === 'supplier_invoice' ? invoiceDue(item, today) : null

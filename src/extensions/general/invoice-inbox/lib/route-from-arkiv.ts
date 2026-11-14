@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
-import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
+import { isOwnIssuedInvoice, resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
 import { isInboxItemTaken, isOpenInboxItem, whereInboxItemFree, whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
@@ -28,10 +28,12 @@ export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_not
  * a receipt or supplier invoice, or an amount on a government letter or on a document Arkiv could only call
  * "other". Where the two readers disagree, a person decides, and a person only sees Underlag. Prod 2026-09-25:
  * congestion-tax bills typed as Skatteverket decisions, credit notes typed "other" and supplier invoices typed
- * as customer invoices left the queue for a section their companies could not open.
+ * as customer invoices left the queue for a section their companies could not open. The company's own sales
+ * invoice stays too (crm#1830): Underlag is where it is linked to the payment it brought in, or dropped.
  */
 export function inboxSawABill(extracted: Record<string, unknown> | null | undefined, arkivType: string): boolean {
   if (!extracted) return false
+  if (isOwnIssuedInvoice(extracted)) return true
   const kind = typeof extracted.documentKind === 'string' ? extracted.documentKind : null
   if (kind === 'receipt' || kind === 'supplier_invoice' || kind === 'credit_note') return true
   const totals = extracted.totals as { total?: unknown } | null | undefined
