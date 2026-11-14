@@ -98,8 +98,10 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     expect(result.totalCredit).toBe(700)
     expect(result.isBalanced).toBe(false)
 
+    // The one journal read is the lookup of an unlinked IB verifikat (the
+    // period has no opening_balance_entry_id); no lines are read.
     const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
-    expect(tables).not.toContain('journal_entries')
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
     expect(tables).not.toContain('journal_entry_lines')
     expect(rpcArgs()).toEqual({
       p_company_id: 'company-1',
@@ -151,6 +153,51 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     // IB from the OB entry survives an empty activity result.
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0]).toMatchObject({ account_number: '1930', opening_debit: 100, closing_debit: 100 })
+  })
+
+  it('counts an unlinked IB verifikat once when earlier years exist (crm#1845)', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      // The lookup of the year's posted IB verifikat: entries, then lines.
+      journal_entries: [{ data: [{ id: 'ib-unlinked' }], error: null }],
+      journal_entry_lines: [
+        {
+          data: [
+            { id: 'l1', journal_entry_id: 'ib-unlinked', account_number: '1930', debit_amount: 400, credit_amount: 0, dimensions: null },
+            { id: 'l2', journal_entry_id: 'ib-unlinked', account_number: '2081', debit_amount: 0, credit_amount: 400, dimensions: null },
+          ],
+          error: null,
+        },
+      ],
+      // The same balances carried in from the earlier years.
+      'rpc:compute_prior_opening_balances': [
+        {
+          data: [
+            { account_number: '1930', debit: 400, credit: 0 },
+            { account_number: '2081', debit: 0, credit: 400 },
+          ],
+          error: null,
+        },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        { data: [{ bucket: 'period', account_number: '1930', debit: 50, credit: 0 }], error: null },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    // The verifikat is the IB, so the period movement leaves it out.
+    expect(rpcArgs()).toMatchObject({ p_exclude_entry_id: 'ib-unlinked' })
+    const bank = result.rows.find((r) => r.account_number === '1930')
+    expect(bank).toMatchObject({ opening_debit: 400, period_debit: 50, closing_debit: 450 })
+    const equity = result.rows.find((r) => r.account_number === '2081')
+    expect(equity).toMatchObject({ opening_credit: 400, closing_credit: 400 })
+    // Read once, by generateTrialBalance; getOpeningBalances is handed the result.
+    const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
   })
 
   it('folds the rollforward bucket into IB and keeps the period bucket as activity', async () => {
@@ -286,8 +333,10 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'exclude-all-year-end' })
 
+    // Only the unlinked IB lookup reads journal_entries.
     const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
-    expect(tables).not.toContain('journal_entries')
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
+    expect(tables).not.toContain('journal_entry_lines')
     expect(rpcArgs()).toMatchObject({ p_closing_mode: 'exclude-all-year-end' })
   })
 

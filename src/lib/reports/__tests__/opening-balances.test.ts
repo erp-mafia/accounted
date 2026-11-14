@@ -26,6 +26,10 @@ function createSupabaseWithRpc(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // No journal rows unless a test queues them: on the fallback path the first
+  // entry read is the lookup of an unlinked IB verifikat.
+  mockFetchAllRows.mockReset()
+  mockFetchAllRows.mockResolvedValue([])
   // The seeded registry: projekt (6) accumulates, everything else resets.
   mockAccumulating.mockResolvedValue(new Set(['6']))
 })
@@ -390,6 +394,148 @@ describe('getOpeningBalances', () => {
           { dimensions: { '6': 'P1' } }
         )
       ).rejects.toThrow(/dimension registry/)
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('a posted IB verifikat the period does not point at (crm#1845)', () => {
+    const period = { period_start: '2026-05-01', opening_balance_entry_id: null }
+    const unlinked = {
+      entryId: 'ib-unlinked',
+      lines: [
+        { account_number: '1930', debit_amount: 400, credit_amount: 0, dimensions: null },
+        { account_number: '1630', debit_amount: 30, credit_amount: 0, dimensions: null },
+        { account_number: '2081', debit_amount: 0, credit_amount: 430, dimensions: null },
+      ],
+    }
+
+    it('opens an account with earlier history on the history alone, and the rest on the verifikat', async () => {
+      // 1930 and 2081 were carried in from the earlier years; the IB verifikat
+      // restates them. 1630 has no history: its IB line is its opening balance.
+      const supabase = createSupabaseWithRpc(async () => ({
+        data: [
+          { account_number: '1930', debit: 400, credit: 0 },
+          { account_number: '2081', debit: 0, credit: 400 },
+        ],
+        error: null,
+      }))
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period, { unlinked })
+
+      expect(balances.get('1930')).toEqual({ debit: 400, credit: 0 })
+      expect(balances.get('2081')).toEqual({ debit: 0, credit: 400 })
+      expect(balances.get('1630')).toEqual({ debit: 30, credit: 0 })
+      // The caller leaves the verifikat out of the period movement.
+      expect(obEntryId).toBe('ib-unlinked')
+      expect(mockFetchAllRows).not.toHaveBeenCalled()
+    })
+
+    it('opens on the verifikat when the company has no earlier history', async () => {
+      const supabase = createSupabaseWithRpc(async () => ({ data: [], error: null }))
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period, { unlinked })
+
+      expect(balances.get('1930')).toEqual({ debit: 400, credit: 0 })
+      expect(balances.get('1630')).toEqual({ debit: 30, credit: 0 })
+      expect(balances.get('2081')).toEqual({ debit: 0, credit: 430 })
+      expect(obEntryId).toBe('ib-unlinked')
+    })
+
+    it('looks the verifikat up itself when the caller has not', async () => {
+      const supabase = createSupabaseWithRpc(async () => ({
+        data: [{ account_number: '1930', debit: 400, credit: 0 }],
+        error: null,
+      }))
+      mockFetchAllRows
+        .mockResolvedValueOnce([{ id: 'ib-unlinked' }])
+        .mockResolvedValueOnce([
+          { id: 'l1', journal_entry_id: 'ib-unlinked', account_number: '1930', debit_amount: 400, credit_amount: 0, dimensions: null },
+          { id: 'l2', journal_entry_id: 'ib-unlinked', account_number: '2081', debit_amount: 0, credit_amount: 400, dimensions: null },
+        ])
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period)
+
+      expect(obEntryId).toBe('ib-unlinked')
+      expect(balances.get('1930')).toEqual({ debit: 400, credit: 0 })
+      expect(balances.get('2081')).toEqual({ debit: 0, credit: 400 })
+    })
+
+    it('is handed null: no lookup, the derived balances as before', async () => {
+      const supabase = createSupabaseWithRpc(async () => ({
+        data: [{ account_number: '1930', debit: 400, credit: 0 }],
+        error: null,
+      }))
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period, { unlinked: null })
+
+      expect(obEntryId).toBeNull()
+      expect([...balances.keys()]).toEqual(['1930'])
+      expect(mockFetchAllRows).not.toHaveBeenCalled()
+    })
+
+    it('never looks for one when the period points at its IB, whatever the history holds', async () => {
+      const supabase = createSupabaseWithRpc(async () => ({
+        data: [{ account_number: '1930', debit: 999, credit: 0 }],
+        error: null,
+      }))
+      // The linked entry's read: the entry, then its lines.
+      mockFetchAllRows
+        .mockResolvedValueOnce([{ id: 'ib-linked' }])
+        .mockResolvedValueOnce([{ id: 'l1', account_number: '1930', debit_amount: 400, credit_amount: 0 }])
+
+      const { balances, obEntryId } = await getOpeningBalances(
+        supabase,
+        'company-1',
+        { period_start: '2026-05-01', opening_balance_entry_id: 'ib-linked' },
+        // A stale lookup result is ignored too: the pointer decides.
+        { unlinked },
+      )
+
+      expect(obEntryId).toBe('ib-linked')
+      expect(balances.get('1930')).toEqual({ debit: 400, credit: 0 })
+      expect(balances.size).toBe(1)
+      // Nothing but the linked entry's read: no lookup, no derived balances.
+      expect(mockFetchAllRows).toHaveBeenCalledTimes(2)
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('under a project filter decides history on all lines, and opens on the tagged IB lines only', async () => {
+      // 1470 has earlier history, though none of it on P1; 1510 has none.
+      const supabase = createSupabaseWithRpc(async (_fn, args) => ({
+        data: args.p_dimensions ? [] : [{ account_number: '1470', debit: 100, credit: 0 }],
+        error: null,
+      }))
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period, {
+        dimensions: { '6': 'P1' },
+        unlinked: {
+          entryId: 'ib-unlinked',
+          lines: [
+            { account_number: '1470', debit_amount: 100, credit_amount: 0, dimensions: { '6': 'P1' } },
+            { account_number: '1510', debit_amount: 50, credit_amount: 0, dimensions: { '6': 'P1' } },
+            { account_number: '1510', debit_amount: 70, credit_amount: 0, dimensions: { '6': 'P2' } },
+            { account_number: '2611', debit_amount: 0, credit_amount: 20, dimensions: { '6': 'P1' } },
+          ],
+        },
+      })
+
+      expect(obEntryId).toBe('ib-unlinked')
+      expect(balances.has('1470')).toBe(false)
+      expect(balances.get('1510')).toEqual({ debit: 50, credit: 0 })
+      // VAT accounts are never split per object.
+      expect(balances.has('2611')).toBe(false)
+    })
+
+    it('keeps the verifikat out of the period under a filter on a dimension that resets annually', async () => {
+      const supabase = createSupabaseWithRpc(async () => ({ data: [], error: null }))
+
+      const { balances, obEntryId } = await getOpeningBalances(supabase, 'company-1', period, {
+        dimensions: { '1': 'K1' },
+        unlinked,
+      })
+
+      expect(balances.size).toBe(0)
+      expect(obEntryId).toBe('ib-unlinked')
       expect(supabase.rpc).not.toHaveBeenCalled()
     })
   })

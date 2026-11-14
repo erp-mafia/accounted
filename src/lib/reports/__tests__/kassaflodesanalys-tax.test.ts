@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+
+// The period's unlinked IB verifikat has its own tests
+// (opening-balance/unlinked.test.ts, opening-balances.test.ts); here the
+// year has none, so the queued journal reads stay the report's own.
+vi.mock('@/lib/import/opening-balance/unlinked', () => ({
+  findUnlinkedOpeningBalance: vi.fn(async () => null),
+}))
 import { generateKassaflodesanalys } from '../kassaflodesanalys'
 import { generateTrialBalance } from '../trial-balance'
 import { CashFlowTaxAllocationError } from '../cash-flow-tax'

@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+
+// The period's unlinked IB verifikat has its own tests
+// (opening-balance/unlinked.test.ts, opening-balances.test.ts); here the
+// year has none, so the queued journal reads stay the report's own.
+vi.mock('@/lib/import/opening-balance/unlinked', () => ({
+  findUnlinkedOpeningBalance: vi.fn(async () => null),
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import type { AccountMapping } from '@/lib/import/types'
