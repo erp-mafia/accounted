@@ -135,6 +135,21 @@ Three causes covered most of it:
 
 `/login` alone ships 479 kB (2 032 kB raw): a motion library pulled in with the icon set, the error-text registry and the PostHog SDK are in every page's first load. That floor is the largest fixed cost of a hard load and is not addressed here.
 
+### After, live (2026-11-14, the same company)
+
+!1430 and !1432 deployed on 2026-11-12 (the migration applied as 20261112100013, !1451). Read the same way as above, as the company's user, read-only:
+
+| Page | Before | After |
+|---|---|---|
+| `/invoices` | 33 reads in series: 32 pages at 2 788 ms, about 89 s before any row | 2 reads in series: the first 1 000 rows in 183 ms, the older ones behind them |
+| `/bookkeeping` | list RPC 610 to 840 ms a page; the list waited for a re-read of fiscal years first | 340 to 370 ms (warm), and the list request starts on mount |
+| `/transactions`, `/reports/*`, momsdeklaration | the first request waited for a session-token fetch and a re-read of seeded data | it starts on mount |
+| `/` | an exact count of every verifikat on each load: 228 ms warm, 968 ms cold | a one-row probe, only while the setup checklist is open |
+| Detail pages requested per list load (Vercel invocations; 10 to 12 Nov against 13 Nov) | `/bookkeeping/[id]` 3.95, `/invoices/[id]` 1.24, `/supplier-invoices/[id]` 0.88 | 0.79, 0.38, 0.19 |
+| JavaScript per page | 842 to 939 kB brotli | unchanged (within 1 kB) |
+
+The list RPC takes about 150 ms more than its new body did when run as a plain query with the values written in (190 ms, 2026-11-12). Why the function form costs that has not been measured yet; it is the next thing to look at for `/bookkeeping`.
+
 ### The checks
 
 - **JavaScript per page**: `node scripts/perf/page-js.mjs --check` in the `build` job of every merge request pipeline fails when a page ships more than its budget in `scripts/perf/page-budgets.json`, or has none. It counts every script the page's document references before any interaction; chunks behind `next/dynamic` are not counted, which is how a page gets back under its budget.

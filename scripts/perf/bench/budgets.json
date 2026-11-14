@@ -44,44 +44,44 @@
       "note": "Over the 100 ms target: the same id joins without a company filter (document_attachments, supplier_invoice_payments, invoices) scan every company's rows."
     },
     "page.bookkeeping.list": {
-      "warm": 1500,
-      "mixed": 2500,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+      "warm": 370,
+      "mixed": 800,
+      "note": "Over the 100 ms target: the list counts the year's verifikat for its total (50 000 in the fixture year). Warm p95 244.8 ms, mixed 398.9 ms on the first run on main, 2026-11-14; production for the largest company (79 000 in the year) 340 to 370 ms the same day."
     },
     "page.invoices.list": {
-      "warm": 600,
-      "mixed": 1000,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+      "warm": 100,
+      "mixed": 180,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 56.9 ms, mixed 87.4 ms."
     },
     "page.invoices.payout_requests": {
-      "warm": 50,
-      "mixed": 100,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+      "warm": 10,
+      "mixed": 20,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 0.5 ms, mixed 0.7 ms."
     },
     "page.invoices.deduction_lines": {
-      "warm": 50,
-      "mixed": 100,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
-    },
-    "page.supplier_invoices.list": {
-      "warm": 250,
-      "mixed": 500,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
-    },
-    "page.transactions.window": {
-      "warm": 500,
-      "mixed": 900,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
-    },
-    "page.transactions.pending": {
-      "warm": 300,
-      "mixed": 600,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
-    },
-    "page.hem.overdue_invoices": {
       "warm": 100,
       "mixed": 200,
-      "note": "Provisional: about three times the read's time for the largest company in production on 2026-11-12. Merge request pipelines never run the benchmark (its switch is a protected variable), so the first run on main after the merge replaces it by the rule above."
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 59.3 ms, mixed 96.4 ms, for an empty answer: production answers the same read in 5 to 9 ms through the partial index on (company_id, deduction_total), so the fixture's plan differs. Look at that plan before raising this."
+    },
+    "page.supplier_invoices.list": {
+      "warm": 85,
+      "mixed": 130,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 40.4 ms, mixed 60.9 ms."
+    },
+    "page.transactions.window": {
+      "warm": 85,
+      "mixed": 140,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 41.6 ms, mixed 65.2 ms."
+    },
+    "page.transactions.pending": {
+      "warm": 20,
+      "mixed": 30,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 9.4 ms, mixed 10.3 ms."
+    },
+    "page.hem.overdue_invoices": {
+      "warm": 10,
+      "mixed": 20,
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 4.1 ms, mixed 8.9 ms."
     },
     "tb.ytd.include": {
       "warm": 50,
