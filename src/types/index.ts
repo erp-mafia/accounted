@@ -280,6 +280,10 @@ export interface UserUiState {
   // Kom igång steps this user chose to skip, keyed per company
   // (companyId -> step ids, lib/onboarding/checklist SKIPPABLE_SETUP_STEPS).
   setup_skipped?: Record<string, string[]>
+  // One-time Discord invite card (components/community/DiscordInviteCard):
+  // ISO timestamp of when the user closed it or clicked through. Per user,
+  // not per company: it is one community.
+  discord_invite_dismissed_at?: string
 }
 
 export type AgentPanelMode = 'docked' | 'floating'

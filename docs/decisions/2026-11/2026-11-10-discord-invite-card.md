@@ -1,0 +1,1 @@
+[2026-11-10] Discord invite card sits in the sidebar above the user menu, in flow, achromatic, once per user via ui_state, shown on load from the first visit: Jakob picked it over a bottom-right float (covers no page content) and asked for it right away; design.md bans brand colours.

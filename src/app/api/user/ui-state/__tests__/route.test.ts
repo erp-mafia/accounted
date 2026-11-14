@@ -291,4 +291,25 @@ describe('POST /api/user/ui-state', () => {
     const res = await POST(request({ tx_columns: { order: ['date'] } }))
     expect(res.status).toBe(400)
   })
+
+  it('stores the Discord invite dismissal beside the existing keys', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
+    enqueue({ data: null })
+    const dismissedAt = '2026-11-10T12:00:00.000Z'
+
+    const { status, body } = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ discord_invite_dismissed_at: dismissedAt })),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state).toEqual({
+      tx_columns: { hidden: ['date'] },
+      discord_invite_dismissed_at: dismissedAt,
+    })
+  })
+
+  it('returns 400 when discord_invite_dismissed_at is not an ISO timestamp', async () => {
+    const res = await POST(request({ discord_invite_dismissed_at: 'yes' }))
+    expect(res.status).toBe(400)
+  })
 })

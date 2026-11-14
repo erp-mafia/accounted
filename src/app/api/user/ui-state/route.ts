@@ -54,6 +54,9 @@ const BodySchema = z
     setup_skipped: z
       .record(z.string().uuid(), z.array(z.enum(SKIPPABLE_SETUP_STEPS)).max(SKIPPABLE_SETUP_STEPS.length))
       .optional(),
+    // One-time Discord invite card: when it was closed or used. Plain
+    // top-level value, so the default spread below replaces it.
+    discord_invite_dismissed_at: z.string().datetime().optional(),
     // Transaktioner column visibility. Replaced whole, never merged:
     // the list IS the preference.
     tx_columns: z

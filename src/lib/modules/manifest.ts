@@ -693,6 +693,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'branding',
   'browser',
   'calendar',
+  // Accounted's own community (the Discord invite in the sidebar): app shell,
+  // not a bookkeeping module.
+  'community',
   'composition',
   'connect',
   // The run ledger of the scheduled jobs and the watch job that reports a
