@@ -199,6 +199,8 @@ setBankFeedConnectForTests({
 process.env.ARKIV_BRAIN_COMPANY_IDS = '11111111-1111-4111-8111-111111111111'
 const USER_ID = '22222222-2222-4222-8222-222222222222'
 const SOME_UUID = '33333333-3333-4333-8333-333333333333'
+/** A second row of the same table, for a tool that reads two (rowsById). */
+const OTHER_INVOICE_UUID = '44444444-4444-4444-8444-444444444444'
 
 /** The only tables a staging tool may write: the staged row and its replay cache. */
 const ALLOWED_MUTATION_TABLES = new Set(['pending_operations', 'idempotency_keys'])
@@ -295,10 +297,11 @@ function createRecordingClient(
   rows: Record<string, Record<string, unknown>> = {},
   counts: Record<string, number> = {},
   empty: readonly string[] = [],
+  rowsById: Record<string, Record<string, Record<string, unknown>>> = {},
 ): { client: never; recording: Recording } {
   const recording: Recording = { mutations: [], rpcs: [] }
   const builder = (table: string): unknown => {
-    const row = { id: SOME_UUID, company_id: COMPANY_ID, status: 'draft', ...(rows[table] ?? {}) }
+    let row: Record<string, unknown> = { id: SOME_UUID, company_id: COMPANY_ID, status: 'draft', ...(rows[table] ?? {}) }
     // Faithful to PostgREST: a query resolves to an ARRAY unless the chain
     // asked for one row. Tools that .map() or spread a list need that.
     let single = false
@@ -323,6 +326,14 @@ function createRecordingClient(
           if (prop === 'insert' || prop === 'update' || prop === 'delete' || prop === 'upsert') {
             return () => {
               recording.mutations.push({ table, op: prop })
+              return chain
+            }
+          }
+          if (prop === 'eq') {
+            // A read by id of a table with per-id rows answers that id's row.
+            return (column: string, value: unknown) => {
+              const byId = column === 'id' ? rowsById[table]?.[String(value)] : undefined
+              if (byId) row = { ...row, id: value, ...byId }
               return chain
             }
           }
@@ -392,10 +403,12 @@ interface Fixture {
   counts?: Record<string, number>
   /** Tables whose queries find nothing (an empty list, a null row, count 0). */
   empty?: string[]
+  /** Per table: fields for the row a read `.eq('id', <id>)` answers with, for a tool that reads two different rows of one table. */
+  rowsById?: Record<string, Record<string, Record<string, unknown>>>
 }
 
 async function observe(tool: Tool, fixture: Fixture = {}): Promise<BehaviourVerdict> {
-  const { client, recording } = createRecordingClient(fixture.rows, fixture.counts, fixture.empty)
+  const { client, recording } = createRecordingClient(fixture.rows, fixture.counts, fixture.empty, fixture.rowsById)
   // A service that reads a service-role-only table (the aktiebok's party
   // identities) asks createServiceClient for its client: it gets the same
   // recording client, so its reads find the fixture rows and any write it
@@ -1014,6 +1027,20 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // Makulera a quote (accounted#20): a sent quote; the preview reads it and writes nothing.
   gnubok_cancel_quote_or_proforma: {
     rows: { invoices: { document_type: 'quote', status: 'sent', quote_status: 'open', invoice_number: 'OF-007' } },
+  },
+  // Link an existing credit note to its original (crm#1852): an unlinked
+  // credit note and an unpaid, unbooked invoice of the same customer under
+  // kontantmetoden, no credit note on the invoice yet; the preview reads
+  // both and writes nothing.
+  gnubok_link_credit_note_to_invoice: {
+    args: { credit_note_id: OTHER_INVOICE_UUID },
+    rows: {
+      invoices: { document_type: 'invoice', status: 'sent', total: 1250, paid_amount: 0, customer_id: SOME_UUID, currency: 'SEK', journal_entry_id: null, credited_invoice_id: null, paid_at: null, deduction_total: 0 },
+      company_settings: { accounting_method: 'cash' },
+    },
+    rowsById: { invoices: { [OTHER_INVOICE_UUID]: { status: 'credited', total: -1250 } } },
+    counts: { invoices: 0 },
+    empty: ['invoice_write_offs'],
   },
   // Supplier-invoice actions (lib/supplier-invoices/manage.ts, item-account.ts).
   // Delete: an unbooked, unpaid invoice with nothing hanging off it.

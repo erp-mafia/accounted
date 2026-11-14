@@ -295,6 +295,10 @@ const RISK_TIERS = {
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
+  // An existing credit note linked to the invoice it credits (crm#1852): no
+  // verifikat, but the invoice leaves the open kundreskontra and no call
+  // unlinks it (lib/invoices/link-credit-note.ts).
+  link_credit_note_to_invoice: 'medium',
   match_transaction_invoice: 'medium',
   // Skatteverkets ROT/RUT utbetalning matched to its begäran: one bank row
   // booked debit 19xx / credit 1513 and linked. Storno-reversible, but

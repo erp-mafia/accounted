@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 469 endpoints.
+  pagination, scopes), and all 470 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 469 operations. Paths are shown without
+API version `2026-05-12`, 470 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -364,7 +364,7 @@ POST /companies/{companyId}/tax-loss-carryforwards : Save one fiscal year of the
 GET /companies/{companyId}/tax-loss-carryforwards/{id} : One fiscal year of the underskottsregister, checked against the year before it [scope:reports:read risk:low idempotent]
 ```
 
-### Invoices (AR) (31)
+### Invoices (AR) (32)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -384,6 +384,7 @@ GET /companies/{companyId}/invoices/{id}/collection : Read an invoice's collecti
 POST /companies/{companyId}/invoices/{id}/collection : Hand an overdue customer invoice over to the company's collections provider [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/collection/actions : Act on an invoice's open collection case: pause, resume, withdraw, mark disputed, or answer what the provider waits for [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfaktura) against an invoice [scope:invoices:write risk:high idempotent dry-run]
+POST /companies/{companyId}/invoices/{id}/link-credit-note : Link an existing credit note to the existing invoice it credits [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-paid : Record a payment against an invoice [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-sent : Transition a draft invoice to sent (without emailing) [scope:invoices:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/invoices/{id}/pdf : Download the rendered invoice PDF [scope:invoices:read risk:low idempotent]

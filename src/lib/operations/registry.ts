@@ -92,6 +92,7 @@ import {
   supplierInvoicesBook,
 } from './invoice-booking'
 import { invoicesCancel } from './invoice-cancel'
+import { invoicesLinkCreditNote } from './invoice-credit-link'
 import { invoicesUnderlagAttach, invoicesUnderlagDetach, invoicesUnderlagList } from './invoice-underlag'
 import { invoicesLatePaymentInterestGet } from './late-payment-interest'
 import {
@@ -358,6 +359,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   supplierInvoicesBook,
   // invoice-cancel (makulera a quote or proforma; the dashboard route calls the same service)
   invoicesCancel,
+  // invoice-credit-link (an existing credit note linked to the invoice it credits, crm#1852)
+  invoicesLinkCreditNote,
   // late-payment-interest (dröjsmålsränta per invoice; the dashboard route calls the same service)
   invoicesLatePaymentInterestGet,
   // underlag behind an invoice (accounted#42): a reference, never sent

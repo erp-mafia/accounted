@@ -250,6 +250,29 @@ async function findExistingCreditJournalEntry(
 }
 
 /**
+ * The kundreskontra side of a credit: the credited invoice moves to
+ * 'credited', compare-and-set on the statuses a credit may leave. One write
+ * for every door that credits an invoice: issuing a credit note here, and
+ * linking an existing one to its original afterwards (link-credit-note.ts).
+ * `moved` is false when the read failed or no row was in one of those
+ * statuses (changed since it was read).
+ */
+export async function markOriginalInvoiceCredited(
+  supabase: SupabaseClient,
+  companyId: string,
+  originalInvoiceId: string,
+): Promise<{ moved: boolean; error: { message: string; code?: string } | null }> {
+  const { data, error } = await supabase
+    .from('invoices')
+    .update({ status: 'credited' })
+    .eq('id', originalInvoiceId)
+    .eq('company_id', companyId)
+    .in('status', ['sent', 'paid', 'overdue'])
+    .select('id')
+  return { moved: !error && !!data && data.length > 0, error: error ?? null }
+}
+
+/**
  * Completes the accounting side of credit-note issuance after the caller has
  * won the draft-to-sent compare-and-set. Every step is idempotent so a sent
  * credit note with incomplete bookkeeping can be repaired without creating a
@@ -453,15 +476,13 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
 
   let originalStatusChanged = false
   if (originalInvoice.status !== 'credited') {
-    const { data: updatedOriginal, error: originalStatusError } = await supabase
-      .from('invoices')
-      .update({ status: 'credited' })
-      .eq('id', originalInvoice.id)
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'paid', 'overdue'])
-      .select('id')
+    const { moved, error: originalStatusError } = await markOriginalInvoiceCredited(
+      supabase,
+      companyId,
+      originalInvoice.id,
+    )
 
-    if (originalStatusError || !updatedOriginal || updatedOriginal.length === 0) {
+    if (!moved) {
       log.error('failed to mark original invoice as credited', originalStatusError ?? undefined, {
         originalInvoiceId: originalInvoice.id,
         creditNoteId: creditNote.id,

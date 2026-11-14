@@ -29,6 +29,7 @@ export default {
     'lib/bookkeeping/registered-from-books.ts': 'A linked credit note on a registration has no rows of its own: a read of the link.',
     'lib/email/invoice-templates.ts': wording,
     'lib/invoices/book-invoice-deferred.ts': 'A compare-and-set on a write: the refusal by identity runs before it.',
+    'lib/invoices/link-credit-note.ts': 'A compare-and-set on the write that fills the link: the refusals by identity run before it.',
     'lib/invoices/is-editable-draft.ts': 'A linked draft mirrors its original; an unlinked one mirrors nothing and stays editable.',
     'lib/invoices/pdf-template.tsx': wording,
     // The v1 download's loader, shared with gnubok_get_invoice_pdf (crm#1593).
