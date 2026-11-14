@@ -3551,6 +3551,7 @@
     "download": "Ladda ner arkiv"
   },
   "settings_billing": {
+    "landed_from_assistant": "Du kom hit från Assistenten. Den ingår i abonnemanget här nedanför.",
     "compare_plans": "Jämför planer",
     "load_failed": "Abonnemangsuppgifterna kunde inte läsas in, så din status kan inte visas just nu.",
     "load_retry": "Försök igen",

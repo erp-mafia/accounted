@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { billingHref } from '@/lib/entitlements/upgrade-reason'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import { employeeFieldValue, loadActiveEmployeeCount } from '@/lib/agent/composer/employee-facts'
 import AgentOnboarding from '@/components/onboarding/agent/AgentOnboarding'
@@ -22,10 +23,10 @@ export default async function AgentOnboardingPage() {
   if (!companyId) redirect('/onboarding')
 
   // Paywall: the build flow drives the gated composer stream (ai capability).
-  // Send non-payers to billing where the assistant is pitched, instead of a
-  // build sequence that 403s mid-stream.
+  // Send non-payers to billing instead of a build sequence that 403s
+  // mid-stream, with the reason, so the page can say what brought them there.
   if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) {
-    redirect('/settings/billing')
+    redirect(billingHref('assistant'))
   }
 
   // Everything that doesn't depend on the TIC snapshot loads in one batch:

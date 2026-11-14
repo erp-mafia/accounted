@@ -11,6 +11,7 @@ import { AGENT_FAB_PROPS } from '@/components/ui/fab-clearance'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { billingHref } from '@/lib/entitlements/upgrade-reason'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -256,7 +257,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       return
     }
     if (!hasAi) {
-      router.push('/settings/billing')
+      router.push(billingHref('assistant'))
       return
     }
     openAgentSheet({
