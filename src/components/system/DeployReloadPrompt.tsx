@@ -3,6 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { onStaleDeploy } from '@/lib/browser/stale-deploy'
+import {
+  attemptedIn,
+  installDeployNavigation,
+  reloadCardDelayMs,
+} from '@/lib/browser/deploy-navigation'
 import { Button } from '@/components/ui/button'
 import { POPOVER_ENTER_UP_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
@@ -18,8 +23,10 @@ const VERSION_BACKSTOP_MS = 30 * 60 * 1000
 
 /**
  * Detects when a newer deploy is live while this tab is still running an old JS
- * bundle, and offers a one-click reload. This is why a just-shipped change can
- * appear "missing" in a long-open tab until the whole app is reloaded.
+ * bundle. The tab then takes the new build by itself on the next page change
+ * (lib/browser/deploy-navigation.ts: the link click becomes a full document
+ * load), and the one-click reload card is the fallback for a tab that stays on
+ * one page. It never reloads under the person: no timer, no reload on focus.
  *
  * Compares the build id baked into this bundle against /api/version (the
  * running deployment's id), re-checking when the tab becomes visible again
@@ -28,7 +35,11 @@ const VERSION_BACKSTOP_MS = 30 * 60 * 1000
  */
 export function DeployReloadPrompt() {
   const t = useTranslations('common')
-  const [stale, setStale] = useState(false)
+  // null: not known to be behind. Otherwise the live build's id, or '' when
+  // a failed Server Action is all we know.
+  const [liveBuildId, setLiveBuildId] = useState<string | null>(null)
+  const stale = liveBuildId !== null
+  const [cardDue, setCardDue] = useState(false)
   // A full reload keeps this page on screen until the new document answers
   // (median 0.8 s, p90 1.7 s in production), so the click looked dead and
   // people clicked again; every extra reload() restarts that request. The
@@ -46,7 +57,7 @@ export function DeployReloadPrompt() {
         return id ?? ''
       },
       onResult: (id) => {
-        if (id && id !== BUILD_ID) setStale(true)
+        if (id && id !== BUILD_ID) setLiveBuildId(id)
       },
       intervalMs: () => VERSION_BACKSTOP_MS,
       staleAfterMs: () => VERSION_RECHECK_MS,
@@ -63,9 +74,29 @@ export function DeployReloadPrompt() {
 
   // A Server Action this build knows but the server no longer has: the tab
   // is behind a deploy whether or not /api/version has said so yet.
-  useEffect(() => onStaleDeploy(window, () => setStale(true)), [])
+  useEffect(() => onStaleDeploy(window, () => {
+    setLiveBuildId((known) => known ?? '')
+    // The click just died: the way out is shown now, not after the wait.
+    setCardDue(true)
+  }), [])
 
-  if (!stale) return null
+  // While behind: hand the next in-app link click to the browser, and hold
+  // the card back for a tab that can update that way (see reloadCardDelayMs
+  // for the cases that show it at once, as before).
+  useEffect(() => {
+    if (liveBuildId === null) return
+    const uninstall = BUILD_ID
+      ? installDeployNavigation(window, { currentBuildId: BUILD_ID, liveBuildId })
+      : () => {}
+    const delay = reloadCardDelayMs({ currentBuildId: BUILD_ID, liveBuildId, attempted: attemptedIn(window) })
+    const timer = window.setTimeout(() => setCardDue(true), delay)
+    return () => {
+      uninstall()
+      window.clearTimeout(timer)
+    }
+  }, [liveBuildId])
+
+  if (!stale || !cardDue) return null
 
   return (
     // The wrapper spans the full width at the same z-index as the docked
