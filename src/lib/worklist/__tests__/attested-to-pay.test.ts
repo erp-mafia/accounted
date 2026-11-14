@@ -24,10 +24,11 @@ const invoice = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 function seed(invoices: unknown[], orders: unknown[]) {
   const mock = createTableMockSupabase()
+  // One company's policy and method, read as one row each (loadToPayQueue).
   mock.setTable('company_attest_policies', {
-    data: [{ company_id: 'c1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null }],
+    data: { company_id: 'c1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null },
   })
-  mock.setTable('company_settings', { data: [{ company_id: 'c1', accounting_method: 'accrual' }] })
+  mock.setTable('company_settings', { data: { company_id: 'c1', accounting_method: 'accrual' } })
   mock.setTable('supplier_invoices', { data: invoices })
   mock.setTable('payment_orders', { data: orders })
   mock.setTable('supplier_payment_batch_items', { data: [] })
@@ -59,7 +60,7 @@ describe('listAttestedToPayDue (attested_to_pay)', () => {
 
   it('keeps an invoice the payment_failed row does not show (past its scan), so none falls between the two rows', async () => {
     const supabase = seed([invoice('unscanned')], [{ supplier_invoice_id: 'unscanned', status: 'failed', created_at: '2026-10-30T10:00:00Z', supplier_invoice_payment_id: null }])
-    expect(await listAttestedToPayDue(supabase, 'c1', { today: '2026-10-31', paymentsFailed: [] })).toEqual({ count: 1, next_due: '2026-11-19', overdue: 0, attested: true })
+    expect(await listAttestedToPayDue(supabase, 'c1', { today: '2026-10-31', paymentsFailed: [] })).toEqual({ count: 1, next_due: '2026-11-19', overdue: 0 })
   })
 
   it('counts it again once a newer payment of it is made and fails no more, and counts a part-paid one', async () => {
@@ -71,14 +72,14 @@ describe('listAttestedToPayDue (attested_to_pay)', () => {
         { supplier_invoice_id: 'retried', status: 'cancelled', created_at: '2026-10-30T10:00:00Z', supplier_invoice_payment_id: null },
       ],
     )
-    expect(await listAttestedToPayDue(supabase, 'c1', { today: '2026-10-31' })).toEqual({ count: 2, next_due: '2026-11-19', overdue: 0, attested: true })
+    expect(await listAttestedToPayDue(supabase, 'c1', { today: '2026-10-31' })).toEqual({ count: 2, next_due: '2026-11-19', overdue: 0 })
   })
 })
 
 /** A company no attest policy governs: no policy row, and its accounting method. */
 function seedWithoutPolicy(accountingMethod: 'cash' | 'accrual', invoices: unknown[], orders: unknown[] = []) {
   const mock = createTableMockSupabase()
-  mock.setTable('company_attest_policies', { data: [] })
+  mock.setTable('company_attest_policies', { data: null })
   mock.setTable('company_settings', { data: { accounting_method: accountingMethod } })
   mock.setTable('supplier_invoices', { data: invoices })
   mock.setTable('payment_orders', { data: orders })
@@ -100,7 +101,6 @@ describe('listAttestedToPayDue without an attest queue (crm#1631)', () => {
       count: 3,
       next_due: '2026-10-20',
       overdue: 1,
-      attested: false,
     })
   })
 
@@ -120,20 +120,23 @@ describe('listAttestedToPayDue without an attest queue (crm#1631)', () => {
     )
     expect(
       await listAttestedToPayDue(supabase as unknown as SupabaseClient, 'c1', { today: '2026-10-31', paymentsFailed: [shownAsFailed('refused')] }),
-    ).toEqual({ count: 1, next_due: '2026-11-30', overdue: 0, attested: false })
+    ).toEqual({ count: 1, next_due: '2026-11-30', overdue: 0 })
   })
 
-  it('counts approved invoices on faktureringsmetoden without a policy, and leaves an unapproved one to the approval row', async () => {
+  // Without an attest policy attest is not a step before payment: the payment
+  // file pays an unattested invoice, so the row counts it, as the Att betala
+  // tab it opens lists it (lib/supplier-invoices/to-pay.ts). crm#1631 counted
+  // only the approved one, and the tab showed three.
+  it('counts unattested invoices on faktureringsmetoden without a policy, as the Att betala tab lists them', async () => {
     const { supabase } = seedWithoutPolicy('accrual', [
       invoice('approved'),
       registered('not-approved'),
       registered('aged-unapproved', { status: 'overdue', due_date: '2026-10-01' }),
     ])
     expect(await listAttestedToPayDue(supabase as unknown as SupabaseClient, 'c1', { today: '2026-10-31', paymentsFailed: [] })).toEqual({
-      count: 1,
-      next_due: '2026-11-19',
-      overdue: 0,
-      attested: false,
+      count: 3,
+      next_due: '2026-10-01',
+      overdue: 1,
     })
   })
 
@@ -147,17 +150,15 @@ describe('listAttestedToPayDue without an attest queue (crm#1631)', () => {
   it('counts kontantmetoden this way even where an attest policy is on: there is no attest step', async () => {
     const mock = createTableMockSupabase()
     mock.setTable('company_attest_policies', {
-      data: [{ company_id: 'c1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null }],
+      data: { company_id: 'c1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null },
     })
-    // Read twice: by the attest queues (every governed company), then for this company.
-    mock.setTable('company_settings', [{ data: [{ company_id: 'c1', accounting_method: 'cash' }] }, { data: { accounting_method: 'cash' } }])
+    mock.setTable('company_settings', { data: { accounting_method: 'cash' } })
     mock.setTable('supplier_invoices', { data: [registered('kontant')] })
     mock.setTable('payment_orders', { data: [] })
     expect(await listAttestedToPayDue(mock.supabase as unknown as SupabaseClient, 'c1', { today: '2026-10-31', paymentsFailed: [] })).toEqual({
       count: 1,
       next_due: '2026-11-19',
       overdue: 0,
-      attested: false,
     })
   })
 })

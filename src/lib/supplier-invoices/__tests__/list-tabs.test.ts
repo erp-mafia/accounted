@@ -18,6 +18,13 @@ describe('Registrerade: what can still be attested', () => {
 })
 
 describe('Att betala: what the payment file pays', () => {
+  it('leaves out what the attest policy holds, a credit note and an invoice with nothing left (lib/supplier-invoices/to-pay.ts)', () => {
+    expect(isToPayInList({ status: 'registered', waits_for_attest: true })).toBe(false)
+    expect(isToPayInList({ status: 'registered', waits_for_attest: false })).toBe(true)
+    expect(isToPayInList({ status: 'approved', is_credit_note: true })).toBe(false)
+    expect(isToPayInList({ status: 'partially_paid', remaining_amount: 0 })).toBe(false)
+  })
+
   it('lists a part-paid attested invoice: 4 000 kr matched of 10 000 kr leaves 6 000 kr to pay', () => {
     expect(isToPayInList({ status: 'partially_paid', approved_at: '2026-10-31T10:00:00Z' })).toBe(true)
     expect(isToPayInList({ status: 'approved' })).toBe(true)

@@ -7,8 +7,11 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
-import { payableSupplierInvoiceStatuses } from '@/lib/supplier-invoices/lifecycle'
 import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
+import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
+import type { AttestInvoiceFacts } from '@/lib/supplier-invoices/attest-policy'
+import { readAttestHold } from '@/lib/supplier-invoices/attest-hold'
+import { isToPayInList, type ListTabInvoice } from '@/lib/supplier-invoices/list-tabs'
 
 export const GET = withRouteContext(
   'supplier_invoice.list',
@@ -22,20 +25,11 @@ export const GET = withRouteContext(
     // Paged: the list used to end at 1,000 invoices.
     let data: unknown[]
     try {
-      // to_pay is the rows Markera som betald is offered for, which hangs on
-      // whether the company attests (kontantmetoden does not, crm#1141).
-      let toPayStatuses: readonly string[] = []
-      if (status === 'to_pay') {
-        const { data: settings, error: settingsError } = await supabase
-          .from('company_settings')
-          .select('accounting_method')
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (settingsError) throw settingsError
-        toPayStatuses = payableSupplierInvoiceStatuses(
-          (settings?.accounting_method as string | null | undefined) ?? null,
-        )
-      }
+      // What the attest policy holds back from payment (paymentWaitsForAttest,
+      // the payment file's attest_required): each unsettled row says so, and
+      // the Att betala tab and to_pay leave those out (lib/supplier-invoices/to-pay.ts).
+      // Never throws (a failed read answers "not held"), so it runs beside the list read.
+      const waitsForAttestRead = readAttestHold(supabase, companyId)
 
       data = await fetchAllRows<unknown>(({ from, to }) => {
         let query = supabase
@@ -51,8 +45,8 @@ export const GET = withRouteContext(
 
         if (status && status !== 'all') {
           if (status === 'to_pay') {
-            // One the supplier debits itself has nothing to pay (crm#1463).
-            query = query.in('status', [...toPayStatuses]).eq('auto_debit', false)
+            // The statuses a payment may be made in; isToPayInList below decides.
+            query = query.in('status', [...PAYABLE_SUPPLIER_INVOICE_STATUSES]).eq('auto_debit', false)
           } else {
             // approved and overdue are read from the attest mark and the due
             // date, every other status as stored (reported-status.ts).
@@ -66,10 +60,19 @@ export const GET = withRouteContext(
       // covers it (an open bank payment or payment file), read the same way
       // as the lifecycle stage, so a person deciding what to pay sees that a
       // payment is under way (crm#1243). Null when nothing covers it.
-      const rows = data as Array<{ id: string; status: string }>
+      const rows = data as Array<AttestInvoiceFacts & ListTabInvoice & { id: string; approved_at: string | null }>
       const unsettledIds = rows.filter((r) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status)).map((r) => r.id)
-      const open = await loadOpenPaymentInstructions(supabase, companyId, unsettledIds)
-      data = rows.map((r) => ({ ...r, open_payment: open.get(r.id) ?? null }))
+      const [open, waitsForAttest] = await Promise.all([
+        loadOpenPaymentInstructions(supabase, companyId, unsettledIds),
+        waitsForAttestRead,
+      ])
+      const listed = rows.map((r) => ({
+        ...r,
+        open_payment: open.get(r.id) ?? null,
+        waits_for_attest: SETTLED_SUPPLIER_INVOICE_STATUSES.has(r.status) ? false : waitsForAttest(r),
+      }))
+      // to_pay is the Att betala tab, row for row (isToPayInList).
+      data = status === 'to_pay' ? listed.filter((r) => isToPayInList(r)) : listed
     } catch (error) {
       log.error('supplier_invoice list failed', error)
       return errorResponse(error, log, { requestId })

@@ -306,8 +306,8 @@ export async function HemPanesSection({
   // And for supplier invoices whose bank payment did not go through: one row
   // per invoice, the count is the list's length.
   const paymentsFailedPromise = listPaymentsFailedDue(supabase, companyId)
-  // And the attested invoices the attesters handed back for payment: one
-  // Betala row, without the ones the failed-payment rows above already show.
+  // And the supplier invoices that wait to be paid: one Betala row, without
+  // the ones the failed-payment rows above already show.
   const attestedToPayPromise = listAttestedToPayDue(supabase, companyId, { paymentsFailed: paymentsFailedPromise })
   // And the open suggestions: one Förslag card each (at most three); the
   // count is the list's length.

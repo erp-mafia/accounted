@@ -382,18 +382,13 @@ export const WORKLIST_CATEGORIES = [
    */
   'payment_failed',
   /**
-   * Supplier invoices the attest policy held back and the attesters have now
-   * released ("Betala 3 attesterade fakturor"), one grouped row: the hand-
-   * back from whoever attests (often a byrå's client) to whoever pays.
-   * Pending:  the ready queue of lib/supplier-invoices/attest-queues.ts: an
-   *           invoice the policy governs, attested (approved_at set), still
-   *           owed (registered, approved or overdue with remaining_amount
-   *           above zero), not debited by the supplier itself (auto_debit)
-   *           and without an open bank payment. A company the policy does
-   *           not govern (no policy, policy off, kontantmetoden) gets the
-   *           same row over every unpaid invoice whose approval is done or
-   *           not part of the method ("Betala N leverantörsfakturor",
-   *           loadToPayQueue, crm#1631).
+   * Supplier invoices that wait to be paid ("Betala 3 leverantörsfakturor"),
+   * one grouped row, the invoices the Att betala tab lists.
+   * Pending:  waitsToBePaid of lib/supplier-invoices/to-pay.ts (loadToPayQueue):
+   *           a payable status with money left, not a credit note, not
+   *           debited by the supplier itself (auto_debit), not at the bank,
+   *           not held back by the attest policy; less what the
+   *           payment_failed row shows.
    * Done:     paid (a bank payment opens, or the invoice is settled).
    * Counts INVOICES, but the total takes the row as one thing to do (one
    * payment run), like overdue_invoice.
@@ -534,14 +529,10 @@ export interface SupplierInvoiceAttestDue {
 
 /**
  * The supplier invoices waiting to be paid: the Att göra row "Betala N
- * attesterade fakturor" (attested_to_pay), or "Betala N
- * leverantörsfakturor" where no attest policy governs the company. Null when
- * there are none.
+ * leverantörsfakturor" (attested_to_pay). Null when there are none.
  */
 export interface AttestedToPayDue {
   count: number
-  /** True when the attest policy put them there (the attested ready queue); false without an attest queue (crm#1631). */
-  attested: boolean
   /** The earliest due date among them (ISO yyyy-MM-dd). */
   next_due: string
   /** How many have passed their due date. */

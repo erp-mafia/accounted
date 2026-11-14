@@ -24,6 +24,12 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+// What the attest policy holds back from payment: nothing unless a test says so.
+const readAttestHoldMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supplier-invoices/attest-hold', () => ({
+  readAttestHold: (...args: unknown[]) => readAttestHoldMock(...args),
+}))
+
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -112,6 +118,7 @@ function resetAll() {
   reset()
   eventBus.clear()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  readAttestHoldMock.mockResolvedValue(() => false)
 }
 
 describe('GET /api/supplier-invoices', () => {
@@ -137,7 +144,7 @@ describe('GET /api/supplier-invoices', () => {
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null })))
+    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null, waits_for_attest: false })))
   })
 
   it('marks each unsettled invoice with the payment instruction that already covers it (crm#1243)', async () => {
@@ -240,38 +247,57 @@ describe('GET /api/supplier-invoices', () => {
     }
   })
 
-  it('handles to_pay virtual status', async () => {
+  it('reads the statuses a payment may be made in for to_pay, one the supplier debits itself left out', async () => {
     setTable('supplier_invoices', { data: [] })
-    setTable('company_settings', { data: { accounting_method: 'accrual' } })
 
-    const request = createMockRequest('/api/supplier-invoices', {
-      searchParams: { status: 'to_pay' },
-    })
-    const response = await GET(request)
-    const { status } = await parseJsonResponse(response)
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'to_pay' } }))
 
-    expect(status).toBe(200)
-    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['approved', 'overdue', 'partially_paid']])
-    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(response.status).toBe(200)
+    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
     // One the supplier debits itself has nothing to pay (crm#1463).
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
   })
 
-  // crm#1141: kontantmetoden has no attest step, so registered is to pay.
-  it('includes registered invoices in to_pay under kontantmetoden', async () => {
-    setTable('supplier_invoices', { data: [] })
-    setTable('company_settings', { data: { accounting_method: 'cash' } })
-
-    const request = createMockRequest('/api/supplier-invoices', {
-      searchParams: { status: 'to_pay' },
+  // to_pay is the Att betala tab, row for row (lib/supplier-invoices/to-pay.ts):
+  // an unattested invoice is to pay unless the attest policy holds it; what the
+  // bank has, a credit note and one with nothing left are not.
+  it('lists for to_pay exactly what waits to be paid', async () => {
+    readAttestHoldMock.mockResolvedValue((invoice: { id: string }) => invoice.id === 'si-held')
+    setTable('supplier_invoices', {
+      data: [
+        makeSupplierInvoice({ id: 'si-unattested', status: 'registered', approved_at: null }),
+        makeSupplierInvoice({ id: 'si-held', status: 'registered', approved_at: null }),
+        makeSupplierInvoice({ id: 'si-bank', status: 'approved' }),
+        makeSupplierInvoice({ id: 'si-credit', status: 'approved', is_credit_note: true }),
+        makeSupplierInvoice({ id: 'si-nothing-left', status: 'partially_paid', remaining_amount: 0 }),
+      ],
     })
-    const response = await GET(request)
+    setTable('payment_orders', {
+      data: [{ id: 'order-1', supplier_invoice_id: 'si-bank', status: 'accepted', created_at: '2026-10-15T13:54:35Z', supplier_invoice_payment_id: null }],
+    })
 
-    expect(response.status).toBe(200)
-    expect(findCall('supplier_invoices', 'in')).toEqual([
-      'status',
-      ['registered', 'approved', 'overdue', 'partially_paid'],
-    ])
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'to_pay' } }))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; waits_for_attest: boolean }> }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.map((row) => row.id)).toEqual(['si-unattested'])
+    // Lenient: an unreadable policy must not fail the whole list (no strict option).
+    expect(readAttestHoldMock).toHaveBeenCalledWith(expect.anything(), 'company-1')
+  })
+
+  it('says on each unsettled invoice whether the attest policy holds it', async () => {
+    readAttestHoldMock.mockResolvedValue((invoice: { id: string }) => invoice.id === 'si-held')
+    setTable('supplier_invoices', {
+      data: [
+        makeSupplierInvoice({ id: 'si-held', status: 'registered', approved_at: null }),
+        makeSupplierInvoice({ id: 'si-free', status: 'registered', approved_at: null }),
+      ],
+    })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'all' } }))
+    const { body } = await parseJsonResponse<{ data: Array<{ id: string; waits_for_attest: boolean }> }>(response)
+
+    expect(new Map(body.data.map((row) => [row.id, row.waits_for_attest]))).toEqual(new Map([['si-held', true], ['si-free', false]]))
   })
 
   it('applies supplier_id filter', async () => {
@@ -285,7 +311,7 @@ describe('GET /api/supplier-invoices', () => {
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null })))
+    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null, waits_for_attest: false })))
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['supplier_id', 'supplier-1'])
   })
 

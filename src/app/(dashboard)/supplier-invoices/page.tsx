@@ -271,9 +271,10 @@ export default function SupplierInvoicesPage() {
     fetchInvoices()
   }
 
-  // "Att betala" is the full payment queue: registered invoices are already
-  // booked as debt (2440), so they belong here too. Approval stays the gate
-  // for paying, not for visibility; unapproved rows get a hover approve.
+  // "Att betala" is what waits to be paid (lib/supplier-invoices/to-pay.ts):
+  // registered invoices are booked as debt (2440) and the payment file pays
+  // them, so they belong here, unless the attest policy holds them back;
+  // unapproved rows get a hover approve.
   // "I betalning" is what is already set up for payment (isToPayInList).
   const filteredInvoices = invoices.filter((inv) => {
     const matchesTab = (() => {
@@ -479,7 +480,7 @@ export default function SupplierInvoicesPage() {
         setInvoices((prev) =>
           prev.map((inv) =>
             inv.id === id
-              ? { ...inv, status: approved.status!, approved_at: approved.approved_at! }
+              ? { ...inv, status: approved.status!, approved_at: approved.approved_at!, waits_for_attest: false }
               : inv,
           ),
         )

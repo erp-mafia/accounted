@@ -11127,7 +11127,6 @@
     "row_expense_payout": "Pay out expenses to {name}",
     "row_expense_payout_detail_one": "1 receipt · {date}",
     "row_expense_payout_detail_other": "{count} receipts · oldest {date}",
-    "row_attested_to_pay": "{count, plural, one {Pay # attested invoice} other {Pay # attested invoices}}",
     "row_supplier_invoices_to_pay": "{count, plural, one {Pay # supplier invoice} other {Pay # supplier invoices}}",
     "row_attested_to_pay_detail": "Next due {date}",
     "row_attested_to_pay_detail_overdue": "{overdue, plural, one {One overdue} other {# overdue}} since {date}",
