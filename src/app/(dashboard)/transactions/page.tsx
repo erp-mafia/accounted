@@ -93,6 +93,11 @@ import {
   resolveEffectiveSourceFilter,
   writeStoredSourceFilter,
 } from '@/components/transactions/source-filter-storage'
+import {
+  readStoredViewMode,
+  resolveInitialViewMode,
+  writeStoredViewMode,
+} from '@/components/transactions/view-mode-storage'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -500,6 +505,33 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mode, setMode] = useState<ViewMode>('inbox')
+  // The view is remembered per company (view-mode-storage.ts) and applied
+  // once per company and per ?view= link, after mount: reading localStorage
+  // in the initial state would differ from the server render. Only the tabs
+  // write the choice; the highlight widening, the review nudge and the
+  // "show ignored" toast change the view in memory only.
+  const appliedViewKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!companyId) return
+    const urlView = searchParams.get('view')
+    const key = `${companyId}|${urlView ?? ''}`
+    if (appliedViewKeyRef.current === key) return
+    appliedViewKeyRef.current = key
+    setMode(
+      resolveInitialViewMode({
+        urlView,
+        hasHighlight: Boolean(searchParams.get('highlight')),
+        stored: readStoredViewMode(companyId),
+      }),
+    )
+  }, [companyId, searchParams])
+  const handleModeChange = useCallback(
+    (next: ViewMode) => {
+      setMode(next)
+      if (companyId) writeStoredViewMode(companyId, next)
+    },
+    [companyId],
+  )
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -4596,7 +4628,7 @@ export default function TransactionsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={mode}
-          onChange={setMode}
+          onChange={handleModeChange}
           options={[
             { value: 'inbox', label: t('mode_inbox'), count: inboxScope.inScope },
             { value: 'history', label: t('mode_all') },

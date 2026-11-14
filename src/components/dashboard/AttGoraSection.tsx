@@ -692,7 +692,7 @@ export default function AttGoraSection({
                   <div>
                     {counts.book_transaction > 0 && (
                       <WorklistRow
-                        href="/transactions"
+                        href="/transactions?view=inbox"
                         action={aiAction('book_transaction', counts.book_transaction)}
                         icon={ArrowsRightLeftIcon}
                         label={t('row_book_transactions')}
@@ -701,7 +701,7 @@ export default function AttGoraSection({
                     )}
                     {counts.book_skattekonto > 0 && (
                       <WorklistRow
-                        href="/transactions?source=skatteverket"
+                        href="/transactions?source=skatteverket&view=inbox"
                         action={aiAction('book_skattekonto', counts.book_skattekonto)}
                         icon={BuildingLibraryIcon}
                         label={t('row_book_skattekonto')}
