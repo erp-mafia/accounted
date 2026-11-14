@@ -16,8 +16,9 @@
  *   - linking the verifikat to the row is the way on: the row is then booked
  *     once, by its pointer;
  *   - a verifikat that names the row only in its bank booking context is not
- *     read yet: as the caller, that probe cannot use its index (see
- *     readBookedFromRows; #205 flips that case).
+ *     read by the gate: as the caller, that probe cannot use its index (see
+ *     readBookedFromRows). The database refuses a second verifikat over the
+ *     row where it is posted (guard_bank_row_single_booking, #205).
  *
  * What is not real: the HTTP hop to PostgREST (tests/pg/postgrest-over-pg.ts).
  * bank_row_anchors and the work lists still read the row as open; that is
@@ -129,7 +130,7 @@ describe('a row a posted verifikat names, with no pointer and no link', () => {
     })
   }, 30000)
 
-  it('is not refused yet when a verifikat names it only in its bank booking context', async () => {
+  it('reads open to the gate when a verifikat names it only in its bank booking context, and the database refuses a second verifikat', async () => {
     const b = await books()
     const tx = await insertTransaction({ companyId: b.companyId, userId: b.userId, date: DATE, amount: -AMOUNT, cashAccountId: b.cash })
     const { rows: context } = await getPool().query(
@@ -155,6 +156,25 @@ describe('a row a posted verifikat names, with no pointer and no link', () => {
     const naming = await getPool().query(`SELECT e FROM public.posted_entries_naming_bank_row($1, $2) e`, [b.companyId, tx])
     expect(naming.rows.map((r) => r.e)).toEqual([manual])
     expect(await gate(b, tx)).toBe('open')
+
+    // So a door gets as far as posting, and the database refuses it there
+    // (#205): nothing posted, the draft keeps no number.
+    await expect(
+      insertPostedBankJournalEntry({
+        userId: b.userId,
+        companyId: b.companyId,
+        fiscalPeriodId: b.period,
+        entryDate: DATE,
+        voucherNumber: 33,
+        transactionId: tx,
+        lines: bankLines(-AMOUNT),
+      }),
+    ).rejects.toMatchObject({ code: 'PT409', message: 'BANK_ROW_ALREADY_BOOKED' })
+    const bookedFrom = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.journal_entries WHERE source_type = 'bank_transaction' AND source_id = $1`,
+      [tx],
+    )
+    expect(bookedFrom.rows[0].n).toBe(0)
   }, 30000)
 
   it('opens again once the verifikat is reversed: the storno names nothing', async () => {
@@ -225,15 +245,22 @@ describe('the #203 pairs as they stand: the second booking holds the pointer, th
   it('never replaces the second while the first books the row too', async () => {
     const b = await books()
     const { tx, first } = await unclaimed(b)
-    const second = await insertPostedBankJournalEntry({
-      userId: b.userId,
-      companyId: b.companyId,
-      fiscalPeriodId: b.period,
-      entryDate: DATE,
-      voucherNumber: 33,
-      transactionId: tx,
-      lines: bankLines(-AMOUNT),
-    })
+    // Posted before guard_bank_row_single_booking (#205), which refuses it now.
+    await getPool().query('ALTER TABLE public.journal_entries DISABLE TRIGGER guard_bank_row_single_booking')
+    let second: string
+    try {
+      second = await insertPostedBankJournalEntry({
+        userId: b.userId,
+        companyId: b.companyId,
+        fiscalPeriodId: b.period,
+        entryDate: DATE,
+        voucherNumber: 33,
+        transactionId: tx,
+        lines: bankLines(-AMOUNT),
+      })
+    } finally {
+      await getPool().query('ALTER TABLE public.journal_entries ENABLE TRIGGER guard_bank_row_single_booking')
+    }
     await setPointer(tx, second)
 
     expect(await gate(b, tx)).toEqual({ via: 'pointer', journalEntryId: second, voucher: 'A33' })

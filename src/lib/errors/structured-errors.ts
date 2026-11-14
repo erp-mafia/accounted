@@ -11146,6 +11146,20 @@ const DB_CONFLICTS = {
     message_en: 'Another change to the bank accounts is in progress. Wait a moment and retry.',
     retryable: true,
   },
+  // 20261113133511 (guard_bank_row_single_booking, #205): the verifikat names
+  // a bank row another posted verifikat already books. Usually the same row
+  // booked twice at once (a double click, two tabs), and the reload shows the
+  // other booking. Rarely that verifikat was booked from the row and never
+  // linked to it, so the row still reads open: the way on is the one the
+  // gate's named refusal gives. Nothing was posted and no voucher number was
+  // used. The database detail names the other verifikat.
+  BANK_ROW_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd på en annan verifikation, så ingenting bokfördes. Ladda om sidan. Står transaktionen ändå kvar som obokförd är verifikationen bokförd från den men aldrig kopplad till den: koppla den under Avstämning, Matcha manuellt, eller återför den (storno).',
+    message_en:
+      'The bank transaction is already booked on another voucher, so nothing was booked. Reload the page. If the transaction still reads unbooked, that voucher was booked from it but never linked to it: link it under Avstämning, Matcha manuellt, or reverse it (storno).',
+  },
   // resolve_bank_ingest_route: an enabled account of the connection has no
   // bound cash account, or its stored ledger differs from the bound one.
   // Retrying never helps; saving the account picker rewrites both sides. The
