@@ -26,10 +26,11 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 const log = createLogger('auth-logout')
 
 const LogoutSchema = z.object({
-  // 'global' (every device) is supabase-js's signOut() default, which every
-  // sign-out button used; 'local' ends only this browser's session (the
-  // session-timeout controller).
-  scope: z.enum(['global', 'local']).default('global'),
+  // 'local' ends this browser's session: every sign-out button. 'global' ends
+  // every session of the user, on every device: Säkerhet's "Logga ut från
+  // alla enheter". The default was supabase-js's global until 2026-11-13,
+  // which signed users out on their other devices too.
+  scope: z.enum(['global', 'local']).default('local'),
 })
 
 /**
@@ -52,7 +53,7 @@ const SESSION_BOUND_COOKIES = [
 /**
  * POST /api/auth/logout
  *
- * Revokes the session at GoTrue (scope global or local) and deletes the
+ * Revokes the session at GoTrue (scope local or global) and deletes the
  * HttpOnly session cookie, which page scripts cannot do any more. Replaces
  * every browser supabase.auth.signOut() call.
  *

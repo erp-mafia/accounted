@@ -16,6 +16,12 @@ export type SessionTimeoutReason = 'idle' | 'absolute'
  */
 export const SESSION_ENDED_REASON = 'ended'
 
+/**
+ * The /login `reason` after "Logga ut från alla enheter" that the auth server
+ * did not confirm: this browser is signed out, the other devices may not be.
+ */
+export const SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON = 'everywhere_unconfirmed'
+
 export interface SessionTimeoutClientState {
   enabled: boolean
   idleTimeoutMs: number
