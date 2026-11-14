@@ -947,6 +947,10 @@ describe('tools/list payload size guard', () => {
     // paid for on the same tool (invoice_id bare, shorter notes on
     // payment_date and allow_duplicate). Measured 63 077 (full catalog
     // 67 528). Ceiling unchanged.
+    // 2026-11-13 (crm#1848): archive_only on gnubok_complete_document_upload,
+    // paid for on the two upload tools (shorter mime_type, upload_id and
+    // deduplicated notes). Measured 63 092 (full catalog 67 542; main 63 096
+    // and 67 547). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

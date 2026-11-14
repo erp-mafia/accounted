@@ -66,6 +66,30 @@ describe('routeClassifiedDocument', () => {
     expect(await classified('supplier_invoice')).toBe('queued')
   })
 
+  // crm#1848: an agent archived the underlag of a posted verifikat and links it next (archive_only on the MCP
+  // upload). Arkiv types it within minutes, before the link is approved.
+  it('files nothing for an archive-only upload the model typed as a receipt', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:archive_only', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    expect(await classified('receipt', 'admitted', 'model')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+  })
+
+  it('queues an archive-only upload when a person types it in Dokument', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:archive_only', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await retypedByPerson('receipt')).toBe('queued')
+    expect(findCall('invoice_inbox_items', 'insert')).toBeDefined()
+  })
+
+  it('queues a loose upload whose reading was skipped for any other reason', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:opted_out', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await classified('receipt', 'admitted', 'model')).toBe('queued')
+  })
+
   it("queues a receipt that arrived any other way, with the Underlag reader's read when it ran", async () => {
     enqueue({ data: doc })
     enqueue({ data: [] })

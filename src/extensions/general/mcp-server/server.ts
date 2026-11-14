@@ -743,6 +743,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
+import { ARCHIVE_ONLY_SKIP } from '@/lib/documents/archive-only'
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -1863,6 +1864,9 @@ interface DocumentInboxResult {
   duplicate_of?: string
   /** No AI reading was made (the company lacks the AI capability): extracted_data is the empty skeleton. */
   extraction_skipped?: boolean
+  /** Archived without an inbox item and without a reading, as the caller asked (archiveOnlyResult). */
+  archive_only?: boolean
+  next?: { tool: string; hint: string }
 }
 
 /**
@@ -1926,6 +1930,39 @@ async function alreadyArchivedResult(supabase: SupabaseClient, companyId: string
     matched_supplier_id: item?.matched_supplier_id ?? null,
     deduplicated: true,
     duplicate_of: documentId,
+  }
+}
+
+/**
+ * The answer for an archive-only upload (crm#1848, lib/documents/archive-only.ts):
+ * the document is in the archive and nothing else was made. No inbox item, no
+ * AI reading; the stamp on the row keeps Arkiv from queueing it in Underlag
+ * while the link is on its way. A retry of the same upload finds the stamp and
+ * leaves the row alone; a document that was read since keeps its reading.
+ *
+ * Nothing in Underlag shows such a document: until it is linked it is listed
+ * in Dokument (for companies that see the section) and in gnubok_list_records,
+ * so the answer names the link as the next call.
+ */
+async function archiveOnlyResult(document: { id: string; extraction_model?: string | null }): Promise<DocumentInboxResult> {
+  // Stamped once. 'skipped:opted_out' is what the document-extraction extension wrote on this upload's own event
+  // (extractionOwner 'none'), also when an earlier attempt died before the stamp; any other stamp is a reading
+  // made since, which stays.
+  const stamp = document.extraction_model ?? null
+  if (stamp === null || stamp === 'skipped:opted_out') {
+    await mirrorExtractionToDocument(document.id, { data: null, rawText: null, model: null, skipped: ARCHIVE_ONLY_SKIP })
+  }
+  return {
+    document_id: document.id,
+    inbox_item_id: null,
+    status: 'archived',
+    extracted_data: {},
+    matched_supplier_id: null,
+    archive_only: true,
+    next: {
+      tool: 'gnubok_link_documents_to_vouchers',
+      hint: 'Archived only: no inbox item, no AI reading, nothing booked. Link document_id to its posted verifikat (one: gnubok_link_document_to_voucher). Until then it is listed only in gnubok_list_records.',
+    },
   }
 }
 
@@ -17459,7 +17496,7 @@ export const tools: McpTool[] = [
         mime_type: {
           type: 'string',
           enum: [...MCP_DOCUMENT_MIME_TYPES],
-          description: 'MIME type. Optional when it can be inferred from the file extension.',
+          description: 'Optional: inferred from the file extension.',
         },
       },
       required: ['file_name'],
@@ -17508,7 +17545,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_complete_document_upload',
     keywords: ['ladda upp', 'underlag', 'dokument'],
     title: 'Complete Document Upload',
-    description: 'Validate and archive bytes sent to the URL from gnubok_create_document_upload, run AI extraction if entitled and create the inbox item. Idempotent: safe to retry with the same upload_id.',
+    description: 'Validate and archive bytes sent to the URL from gnubok_create_document_upload, run AI extraction if entitled and create the inbox item (archive_only=true: neither). Idempotent: safe to retry with the same upload_id.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17516,7 +17553,7 @@ export const tools: McpTool[] = [
         upload_id: {
           type: 'string',
           format: 'uuid',
-          description: 'Reserved UUID returned by gnubok_create_document_upload',
+          description: 'From gnubok_create_document_upload',
         },
         file_name: {
           type: 'string',
@@ -17527,7 +17564,11 @@ export const tools: McpTool[] = [
         mime_type: {
           type: 'string',
           enum: [...MCP_DOCUMENT_MIME_TYPES],
-          description: 'MIME type. Optional when it can be inferred from the file extension.',
+          description: 'Optional: inferred from the file extension.',
+        },
+        archive_only: {
+          type: 'boolean',
+          description: 'Underlag of a posted verifikat: no inbox item, no AI reading. Link document_id next.',
         },
       },
       required: ['upload_id'],
@@ -17539,11 +17580,11 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         document_id: { type: 'string' },
-        inbox_item_id: { type: ['string', 'null'], description: 'Null when the bytes were already archived without an inbox item.' },
+        inbox_item_id: { type: ['string', 'null'], description: 'Null when archived without an inbox item.' },
         status: { type: 'string' },
         extracted_data: { type: 'object' },
         matched_supplier_id: { type: ['string', 'null'] },
-        deduplicated: { type: 'boolean', description: 'True when the same bytes were already in the archive: document_id is the existing document and nothing new was created.' },
+        deduplicated: { type: 'boolean', description: 'Same bytes already archived: document_id is that document, nothing new was created.' },
       },
       required: ['document_id', 'status'],
     },
@@ -17553,6 +17594,10 @@ export const tools: McpTool[] = [
       if (typeof uploadId !== 'string' || !isUuid(uploadId)) {
         throw codedError('VALIDATION_ERROR', 'upload_id is required: the upload_id gnubok_create_document_upload returned.')
       }
+      if (args.archive_only !== undefined && typeof args.archive_only !== 'boolean') {
+        throw badArgument('archive_only', 'archive_only must be true or false.')
+      }
+      const archiveOnly = args.archive_only === true
 
       const existingInbox = await findCompletedDocumentInboxItem(
         supabase,
@@ -17585,10 +17630,16 @@ export const tools: McpTool[] = [
         fileName,
         mimeType,
         undefined,
-        { extractionOwner: 'invoice-inbox', dedupeByContent: true },
+        // Archive only (crm#1848): nobody reads it for a booking, so the
+        // document-extraction extension is told to stand down too ('none', as
+        // every upload that already knows its verifikat).
+        { extractionOwner: archiveOnly ? 'none' : 'invoice-inbox', dedupeByContent: true },
       )
       if (completed.document.deduplicated) {
         return withMcpUploadArrival(supabase, companyId, userId, actor, await alreadyArchivedResult(supabase, companyId, completed.document.id))
+      }
+      if (archiveOnly) {
+        return withMcpUploadArrival(supabase, companyId, userId, actor, await archiveOnlyResult(completed.document))
       }
       return withMcpUploadArrival(supabase, companyId, userId, actor, await createDocumentInboxItem(
         supabase,

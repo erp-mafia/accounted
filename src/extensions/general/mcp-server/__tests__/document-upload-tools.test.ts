@@ -267,6 +267,159 @@ describe('MCP model-free document upload tools', () => {
     expect(mocks.extractInvoiceFields).toHaveBeenCalledOnce()
   })
 
+  // crm#1848: underlag of verifikat that are already posted, uploaded to be
+  // linked in bulk. Each file used to get an inbox item and, with the AI
+  // package, a paid reading nobody would use.
+  describe('archive_only', () => {
+    const noInboxItem = () => {
+      const lookups = [makeQueryBuilder({ data: null, error: null })]
+      const inboxInserts: unknown[] = []
+      const from = vi.fn((table: string) => {
+        if (table === 'invoice_inbox_items') {
+          const builder = lookups.shift() ?? makeQueryBuilder({ data: null, error: null })
+          ;(builder.insert as ReturnType<typeof vi.fn>).mockImplementation((row: unknown) => {
+            inboxInserts.push(row)
+            return builder
+          })
+          return builder
+        }
+        // The arrival's read of the document; the arrival itself is best effort.
+        if (table === 'document_attachments') return makeQueryBuilder({ data: null, error: null })
+        throw new Error(`Unexpected table: ${table}`)
+      })
+      return { from, inboxInserts }
+    }
+    const complete = (from: unknown, args: Record<string, unknown> = {}) =>
+      findTool('gnubok_complete_document_upload').execute(
+        { upload_id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf', archive_only: true, ...args },
+        companyId,
+        userId,
+        { from } as never,
+      )
+
+    it('archives the document, files no inbox item, reads nothing and names the link as the next call', async () => {
+      const { from, inboxInserts } = noInboxItem()
+
+      const result = await complete(from)
+
+      expect(mocks.completePendingDocumentUpload).toHaveBeenCalledWith(
+        expect.anything(),
+        companyId,
+        userId,
+        uploadId,
+        'invoice.pdf',
+        'application/pdf',
+        undefined,
+        // 'none': the document-extraction extension stands down as well.
+        { extractionOwner: 'none', dedupeByContent: true },
+      )
+      expect(inboxInserts).toEqual([])
+      expect(mocks.extractInvoiceFields).not.toHaveBeenCalled()
+      expect(mocks.hasCapability).not.toHaveBeenCalled()
+      // The stamp Arkiv's routing reads (lib/documents/archive-only.ts).
+      expect(mocks.mirrorExtractionToDocument).toHaveBeenCalledExactlyOnceWith(uploadId, {
+        data: null,
+        rawText: null,
+        model: null,
+        skipped: 'archive_only',
+      })
+      expect(result).toMatchObject({
+        document_id: uploadId,
+        inbox_item_id: null,
+        status: 'archived',
+        archive_only: true,
+        next: { tool: 'gnubok_link_documents_to_vouchers' },
+      })
+    })
+
+    it('a retry of the same upload answers the same and leaves the stamped row alone', async () => {
+      mocks.completePendingDocumentUpload.mockResolvedValue({
+        document: { ...makeDocumentAttachment({ id: uploadId, user_id: userId, company_id: companyId }), extraction_model: 'skipped:archive_only' },
+        buffer: new ArrayBuffer(0),
+      })
+      const { from, inboxInserts } = noInboxItem()
+
+      const result = await complete(from)
+
+      expect(mocks.mirrorExtractionToDocument).not.toHaveBeenCalled()
+      expect(inboxInserts).toEqual([])
+      expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: null, archive_only: true })
+    })
+
+    it('stamps on a retry whose first attempt died after the extension stood down', async () => {
+      mocks.completePendingDocumentUpload.mockResolvedValue({
+        document: { ...makeDocumentAttachment({ id: uploadId, user_id: userId, company_id: companyId }), extraction_model: 'skipped:opted_out' },
+        buffer: new ArrayBuffer(0),
+      })
+
+      await complete(noInboxItem().from)
+
+      expect(mocks.mirrorExtractionToDocument).toHaveBeenCalledExactlyOnceWith(uploadId, expect.objectContaining({ skipped: 'archive_only' }))
+    })
+
+    it('never stamps a document that was read since: its reading stays', async () => {
+      mocks.completePendingDocumentUpload.mockResolvedValue({
+        document: { ...makeDocumentAttachment({ id: uploadId, user_id: userId, company_id: companyId }), extraction_model: 'some-model' },
+        buffer: new ArrayBuffer(0),
+      })
+
+      await complete(noInboxItem().from)
+
+      expect(mocks.mirrorExtractionToDocument).not.toHaveBeenCalled()
+    })
+
+    it('deduplicates as any upload: the archived document is answered and not stamped', async () => {
+      const archivedId = '44444444-4444-4444-8444-444444444444'
+      mocks.completePendingDocumentUpload.mockResolvedValue({
+        document: { ...makeDocumentAttachment({ id: archivedId, user_id: userId, company_id: companyId }), deduplicated: true },
+        buffer: new ArrayBuffer(0),
+      })
+      const { from, inboxInserts } = noInboxItem()
+
+      const result = await complete(from)
+
+      expect(result).toMatchObject({ document_id: archivedId, deduplicated: true, duplicate_of: archivedId })
+      expect(result).not.toHaveProperty('archive_only')
+      expect(mocks.mirrorExtractionToDocument).not.toHaveBeenCalled()
+      expect(inboxInserts).toEqual([])
+    })
+
+    it('refuses a value that is not a boolean before anything is archived', async () => {
+      await expect(complete(vi.fn(), { archive_only: 'yes' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+      expect(mocks.completePendingDocumentUpload).not.toHaveBeenCalled()
+    })
+
+    it('is opt-in: false is the ordinary upload', async () => {
+      const lookups = [
+        makeQueryBuilder({ data: null, error: null }),
+        makeQueryBuilder({ data: null, error: null }),
+        queuedItems([]),
+        makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null }),
+      ]
+      const from = vi.fn((table: string) => {
+        if (table === 'invoice_inbox_items') return lookups.shift()
+        if (table === 'suppliers') return makeQueryBuilder({ data: null, error: null })
+        if (table === 'document_attachments') return makeQueryBuilder({ data: { journal_entry_id: null }, error: null })
+        throw new Error(`Unexpected table: ${table}`)
+      })
+
+      const result = await complete(from, { archive_only: false })
+
+      expect(mocks.completePendingDocumentUpload).toHaveBeenCalledWith(
+        expect.anything(),
+        companyId,
+        userId,
+        uploadId,
+        'invoice.pdf',
+        'application/pdf',
+        undefined,
+        { extractionOwner: 'invoice-inbox', dedupeByContent: true },
+      )
+      expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: uploadId })
+      expect(result).not.toHaveProperty('archive_only')
+    })
+  })
+
   // crm#1474: hosts do not enforce inputSchema.required, and complete with
   // only upload_id crashed "Cannot read properties of undefined (reading
   // 'split')" although the reservation already holds the name.
