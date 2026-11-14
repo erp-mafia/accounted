@@ -4717,6 +4717,28 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
     message_en:
       'The period was filed through the Skatteverket connection with a receipt and cannot be unmarked.',
   },
+  // Ticking a deadline off or putting it back (lib/deadlines/completion.ts,
+  // crm#1848): the dashboard's /deadlines and gnubok_complete_deadline.
+  DEADLINE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Deadline hittades inte.',
+    message_en: 'Deadline not found.',
+    remediation: {
+      description:
+        'List the deadlines (gnubok_list_deadlines) and use a deadline_id from the answer. A deadline the company removed from its list is not found.',
+    },
+  },
+  DEADLINE_CONFIRMED_BY_SKATTEVERKET: {
+    httpStatus: 409,
+    message_sv:
+      'Deadlinen är klar genom en inlämning med kvittens via Skatteverket-kopplingen och kan inte sättas tillbaka härifrån.',
+    message_en:
+      'The deadline was completed by a filing Skatteverket confirmed through the connection and cannot be put back from here.',
+    remediation: {
+      description:
+        'Leave it completed. A person can put it back under Deadlines in the app if the confirmation is wrong.',
+    },
+  },
   // The server-side "Kontroll av underlaget" gate (vatFilingVerdict,
   // lib/reports/vat-close-check.ts) refused: nothing was sent to Skatteverket.
   // A staged submit that meets it at approval is consumed, not released.

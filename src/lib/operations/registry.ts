@@ -216,6 +216,7 @@ import {
 } from './vat-filings'
 import { vatCheckReviewsMark } from './vat-check-reviews'
 import { agiFilingsMark } from './agi-filings'
+import { deadlinesComplete, deadlinesList } from './deadlines'
 import {
   arsredovisningAddSignatory,
   arsredovisningCreateVersion,
@@ -486,6 +487,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   vatCheckReviewsMark,
   // agi-filings (MCP only: the dashboard completes a deadline by id)
   agiFilingsMark,
+  // deadlines (MCP only: the dashboard ticks a deadline through the same service)
+  deadlinesList,
+  deadlinesComplete,
   // arsredovisning
   arsredovisningUpdateNarrative,
   arsredovisningUpdateCompliance,

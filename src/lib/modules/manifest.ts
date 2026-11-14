@@ -575,7 +575,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'foundation',
     uses: [],
     libFolders: ['tax', 'deadlines'],
-    operationPrefixes: [],
+    // deadlines.list and deadlines.complete (lib/operations/deadlines.ts).
+    operationPrefixes: ['deadlines'],
     v1Segments: [],
     jurisdictions: SE,
   },

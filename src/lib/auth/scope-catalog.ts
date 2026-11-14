@@ -390,6 +390,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_fiscal_periods:             'reports:read',
   gnubok_get_reconciliation_status:       'reports:read',
   gnubok_list_accrual_schedules:          'reports:read',
+  gnubok_list_deadlines:                  'reports:read',
   // Dimensions (kostnadsställe/projekt) registry: dimensions:read, which
   // reports:read and invoices:read include; the staged value-create is a
   // bookkeeping write (dimensions PR3).
@@ -496,6 +497,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_unmark_vat_period_filed: 'bookkeeping:write',
   gnubok_mark_vat_check_reviewed: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',
+  gnubok_complete_deadline: 'bookkeeping:write',
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   gnubok_send_payslips: 'payroll:write',
   gnubok_revert_salary_run: 'payroll:write',

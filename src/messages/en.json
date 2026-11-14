@@ -1059,6 +1059,7 @@
     "type_unmark_vat_period_filed": "Unmark filed VAT period",
     "type_mark_vat_check_reviewed": "Mark VAT warning as reviewed",
     "type_mark_agi_period_filed": "Mark AGI period as filed",
+    "type_complete_deadline": "Tick off deadline",
     "type_send_payslips": "Send payslips",
     "type_revert_salary_run": "Revert payroll run to draft",
     "type_unapprove_salary_run": "Recall payroll run approval",
