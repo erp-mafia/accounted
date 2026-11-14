@@ -1,0 +1,1 @@
+[2026-11-13] A bank row is booked once, enforced where the verifikat is posted: guard_bank_row_single_booking refuses a posting naming a row another posted verifikat books (pointer, link, source or bank_booking_context): two bookings that both passed the app gate were both posted.
