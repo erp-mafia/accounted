@@ -1277,7 +1277,7 @@ Example response `200`:
 **Record a payment against an invoice.**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit the bank account (the one the invoice asked to be paid to, else the company's primary bank account) / Credit 1510 under faktureringsmetoden, or Debit the bank account / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).
+Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit the bank account (`payment_account` when the body names one, else the one the invoice asked to be paid to, else the company's primary bank account) / Credit 1510 under faktureringsmetoden, or Debit the bank account / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).
 
 **Use when:** A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.
 **Do not use for:** Reverting a payment: the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments: those flow through the transactions endpoints.
@@ -1285,6 +1285,7 @@ Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Boo
 **Pitfalls:**
 - Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.
 - Not payable: a quote (400 INVOICE_QUOTE_NOT_PAYABLE), a delivery note, a document outside sent/overdue/partially_paid, or an invoice with an active credit note, a draft included (400 INVOICE_PAID_NOT_PAYABLE; details.reason says which). A payment_date after today (Swedish calendar day) returns 400 PAYMENT_DATE_IN_FUTURE. All of these fire under dry-run too.
+- `payment_account` is the 19xx account the money landed on, for a company that receives customer payments on another bank account than the invoice names or the primary. It must be the ledger account of one of the company's own enabled cash accounts (GET /cash-accounts): anything else returns 400 INVOICE_PAID_PAYMENT_ACCOUNT_INVALID with details.available_payment_accounts and books nothing, under dry-run too. It is not sent together with `lines` (400 VALIDATION_ERROR). The dry run answers the resolved account as payment_account.
 - Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.
 - For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice's booked rate) to book the FX adjustment correctly: the bank takes that figure plus the delta, 1510 clears what it carries and the gap lands on 3960/7960. Omitting it on a non-SEK invoice books the bank at what 1510 carries, with no FX gain/loss.
 - Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. A line total equal to what 1510 carries pays the whole remainder, any other its share of that (at `invoice.exchange_rate` when the ledger cannot say); a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.
@@ -1306,7 +1307,8 @@ Request body:
   exchange_rate_difference?: number,
   notes?: string,
   lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, dimensions?: Record<string, string> }[],
-  force?: boolean
+  force?: boolean,
+  payment_account?: string
 }
 ```
 

@@ -943,6 +943,10 @@ describe('tools/list payload size guard', () => {
     // the same two tools (shorter field notes, the attach tool's "approver
     // sees both sides" went). Measured 63 096 on the main of 2026-11-11.
     // Ceiling unchanged.
+    // 2026-11-12 (crm#1823): payment_account on gnubok_mark_invoice_as_paid,
+    // paid for on the same tool (invoice_id bare, shorter notes on
+    // payment_date and allow_duplicate). Measured 63 077 (full catalog
+    // 67 528). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

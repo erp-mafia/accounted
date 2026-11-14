@@ -10,7 +10,7 @@ import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-pay
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
-import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePaymentAccount } from '@/lib/invoices/invoice-payee'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
@@ -40,7 +40,7 @@ async function creditNoteRefundResponse(
   } catch {
     // Empty / invalid body: the whole refund, today.
   }
-  let body: { payment_date?: string; lines?: RefundCustomLine[]; force?: boolean } = {}
+  let body: { payment_date?: string; lines?: RefundCustomLine[]; force?: boolean; payment_account?: string } = {}
   if (rawBody) {
     const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
     if (!parsed.success) {
@@ -57,10 +57,16 @@ async function creditNoteRefundResponse(
     body = parsed.data
   }
 
+  // The account the refund leaves: the one the caller names, else the credit
+  // note's payee, else the primary bank account.
+  const refundAccount = await resolveInvoicePaymentAccount(supabase, companyId, creditNote, body.payment_account)
+  if (!refundAccount.ok) {
+    return errorResponseFromCode(refundAccount.code, opLog, { requestId, details: refundAccount.details })
+  }
   const result = await refundCreditNote(supabase, companyId, user.id, {
     creditNote,
     refundDate: body.payment_date || todayIsoStockholm(),
-    settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, creditNote),
+    settlementAccountNumber: refundAccount.account,
     customLines: body.lines,
     force: body.force === true,
   })
@@ -131,6 +137,7 @@ export const POST = withRouteContext(
     let bodyPaymentDate: string | undefined
     let customLines: { account_number: string; debit_amount: number; credit_amount: number; line_description?: string }[] | undefined
     let force = false
+    let paymentAccount: string | undefined
     let rawBody: unknown
     try {
       const text = await request.text()
@@ -154,6 +161,7 @@ export const POST = withRouteContext(
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
       force = parsed.data.force === true
+      paymentAccount = parsed.data.payment_account
     }
 
     // The Swedish calendar day, as on the v1 and agent doors: near midnight
@@ -303,9 +311,14 @@ export const POST = withRouteContext(
     // duplicate-payment guard, so the guard comparison and the ledger math run
     // in the same unit as remaining_amount.
     // The generated debit lands on the bank account the invoice asked to be
-    // paid to (the primary bank account when none was chosen). Custom lines
-    // carry their own.
-    const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId!, invoice as Invoice)
+    // paid to (the primary bank account when none was chosen), or on the
+    // account the caller says the money landed on (payment_account, crm#1823).
+    // Custom lines carry their own.
+    const settlementAccount = await resolveInvoicePaymentAccount(supabase, companyId!, invoice as Invoice, paymentAccount)
+    if (!settlementAccount.ok) {
+      return errorResponseFromCode(settlementAccount.code, opLog, { requestId, details: settlementAccount.details })
+    }
+    const settlementAccountNumber = settlementAccount.account
     const result = await settleInvoicePayment(supabase, companyId!, user.id, {
       invoice: invoice as Invoice & { customer?: { name?: string | null } | null },
       paymentAmountInInvoiceCurrency,

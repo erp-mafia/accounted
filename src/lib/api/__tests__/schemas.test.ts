@@ -733,6 +733,31 @@ describe('MarkInvoicePaidSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  // crm#1823: the account the payment landed on.
+  it('accepts a 19xx payment_account', () => {
+    const result = MarkInvoicePaidSchema.safeParse({ payment_account: '1931' })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.payment_account).toBe('1931')
+  })
+
+  it('rejects a payment_account outside 19xx, or sent as a number', () => {
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: '1686' }).success).toBe(false)
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: '2440' }).success).toBe(false)
+    expect(MarkInvoicePaidSchema.safeParse({ payment_account: 1931 }).success).toBe(false)
+  })
+
+  it('rejects payment_account together with custom lines', () => {
+    const result = MarkInvoicePaidSchema.safeParse({
+      payment_account: '1931',
+      lines: [
+        { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+        { account_number: '1510', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues[0].path).toEqual(['payment_account'])
+  })
+
   it('rejects invalid payment_date format', () => {
     const result = MarkInvoicePaidSchema.safeParse({ payment_date: '15/07/2024' })
     expect(result.success).toBe(false)

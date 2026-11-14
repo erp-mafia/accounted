@@ -186,7 +186,7 @@ import {
 } from '@/lib/email/invoice-templates'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
-import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePayeeChoice, resolveInvoicePaymentAccount, snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { describeMissingInvoicePaymentAccount, invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import {
   exceedsInvoiceEmailRecipientLimit,
@@ -2607,6 +2607,8 @@ async function commitMarkInvoicePaid(
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
   const paymentDate = (params.payment_date as string) || todayIsoStockholm()
+  // The account the staging call said the money landed on (crm#1823).
+  const paymentAccount = typeof params.payment_account === 'string' ? params.payment_account : undefined
 
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
@@ -2618,7 +2620,7 @@ async function commitMarkInvoicePaid(
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
   // A kreditfaktura: the refund paid back to the customer (Dr 1510 / Cr bank).
   if (invoice.credited_invoice_id) {
-    return commitCreditNoteRefund(supabase, userId, companyId, invoice as Invoice, paymentDate, params.allow_duplicate === true)
+    return commitCreditNoteRefund(supabase, userId, companyId, invoice as Invoice, paymentDate, params.allow_duplicate === true, paymentAccount)
   }
   // The one answer of every door. 409 like the credit-note guard above: the
   // dispatcher records it as rejected (a state refusal), not failed (an
@@ -2699,10 +2701,13 @@ async function commitMarkInvoicePaid(
   // rather than the full total (which would double-count a prior partial).
   const inv = invoice as { remaining_amount?: number | null; paid_amount?: number | null }
   const paymentAmount = inv.remaining_amount ?? (invoice.total - (inv.paid_amount ?? 0))
-  // Debit the bank account the invoice asked to be paid to (the primary bank
-  // account when none was chosen): an agent marking a 1931-invoice paid must
-  // not land it on 1930.
-  const settlementAccountNumber = await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice)
+  // Debit the account the staging call named, else the bank account the
+  // invoice asked to be paid to (the primary bank account when none was
+  // chosen): an agent marking a 1931-invoice paid must not land it on 1930.
+  // The named account is checked again here: it may have been disabled since.
+  const settlementAccount = await resolveInvoicePaymentAccount(supabase, companyId, invoice as Invoice, paymentAccount)
+  if (!settlementAccount.ok) return paymentAccountRefusalResult(settlementAccount)
+  const settlementAccountNumber = settlementAccount.account
   const settled = await settleInvoicePayment(supabase, companyId, userId, {
     invoice: invoice as Invoice,
     paymentAmountInInvoiceCurrency: paymentAmount,
@@ -2786,6 +2791,20 @@ async function commitMarkInvoicePaid(
   }
 }
 
+/** A payment_account that is not one of the company's enabled cash accounts: nothing was written. */
+function paymentAccountRefusalResult(
+  refusal: Extract<Awaited<ReturnType<typeof resolveInvoicePaymentAccount>>, { ok: false }>,
+): ExecutorResult {
+  const available = (refusal.details.available_payment_accounts as string[] | undefined) ?? []
+  return {
+    error:
+      (getErrorEntry(refusal.code)?.message_sv ?? refusal.code) +
+      (available.length > 0 ? ` Möjliga konton: ${available.join(', ')}.` : ''),
+    errorCode: refusal.code,
+    status: 409,
+  }
+}
+
 /**
  * The approved refund of a kreditfaktura (gnubok_mark_invoice_as_paid on a
  * credit note): the whole amount the customer has tillgodo, out of the credit
@@ -2800,11 +2819,14 @@ async function commitCreditNoteRefund(
   creditNote: Invoice,
   paymentDate: string,
   force: boolean,
+  paymentAccount?: string,
 ): Promise<ExecutorResult> {
+  const refundAccount = await resolveInvoicePaymentAccount(supabase, companyId, creditNote, paymentAccount)
+  if (!refundAccount.ok) return paymentAccountRefusalResult(refundAccount)
   const refund = await refundCreditNote(supabase, companyId, userId, {
     creditNote: creditNote as unknown as RefundCreditNoteRow,
     refundDate: paymentDate,
-    settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, creditNote),
+    settlementAccountNumber: refundAccount.account,
     force,
   })
   if (!refund.ok) {

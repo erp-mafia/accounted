@@ -6,6 +6,7 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 
 const log = createLogger('invoices/payee')
 
@@ -176,4 +177,52 @@ export async function resolveInvoiceSettlementAccount(
     return resolvePrimaryBankAccount(supabase, companyId, log)
   }
   return ledger
+}
+
+export type InvoicePaymentAccountResult =
+  | { ok: true; account: string }
+  | { ok: false; code: 'INVOICE_PAID_PAYMENT_ACCOUNT_INVALID'; details: Record<string, unknown> }
+
+/**
+ * The BAS account a manual "mark as paid" debits when the caller may name it
+ * (payment_account on the dashboard, v1 and agent doors; crm#1823): a company
+ * with one account for customer receipts and another for expenses says where
+ * the money landed instead of taking the invoice's payee or the primary.
+ *
+ * A named account must be one of the company's own enabled cash accounts on a
+ * 19xx ledger (kassa, giro, bank): never a PSP clearing account a payout
+ * clears, a disabled account, or a ledger the company holds no cash account
+ * for. A refusal lists the accounts that can be named. No name is
+ * resolveInvoiceSettlementAccount, unchanged. A failed read throws, as there.
+ */
+export async function resolveInvoicePaymentAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Partial<Pick<Invoice, 'payment_cash_account_id'>>,
+  paymentAccount: string | null | undefined,
+): Promise<InvoicePaymentAccountResult> {
+  if (!paymentAccount) {
+    return { ok: true, account: await resolveInvoiceSettlementAccount(supabase, companyId, invoice) }
+  }
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account, enabled')
+    .eq('company_id', companyId)
+  if (error) throw new BookkeepingDatabaseError('resolve_settlement_account', error.message)
+  const rows = ((data ?? []) as Array<{ ledger_account?: string | null; enabled?: boolean | null }>)
+    .filter((row): row is { ledger_account: string; enabled?: boolean | null } => isCashLedger(row.ledger_account))
+  const named = rows.find((row) => row.ledger_account === paymentAccount)
+  if (named && named.enabled !== false) return { ok: true, account: named.ledger_account }
+  return {
+    ok: false,
+    code: 'INVOICE_PAID_PAYMENT_ACCOUNT_INVALID',
+    details: {
+      payment_account: paymentAccount,
+      reason: !isCashLedger(paymentAccount) ? 'not_cash_ledger' : named ? 'disabled' : 'not_found',
+      available_payment_accounts: rows
+        .filter((row) => row.enabled !== false)
+        .map((row) => row.ledger_account)
+        .sort(),
+    },
+  }
 }

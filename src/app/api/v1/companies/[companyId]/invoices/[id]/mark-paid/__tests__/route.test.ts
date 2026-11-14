@@ -833,6 +833,80 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(mockPayment).not.toHaveBeenCalled()
   })
 
+  // crm#1823: the caller names the account the money landed on.
+  describe('payment_account', () => {
+    const tables = () => ({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      cash_accounts: {
+        data: [
+          { ledger_account: '1930', enabled: true },
+          { ledger_account: '1931', enabled: true },
+          { ledger_account: '1935', enabled: true },
+        ],
+        error: null,
+      },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+    })
+    const url = (dryRun: boolean) =>
+      `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid${dryRun ? '?dry_run=true' : ''}`
+
+    it('dry-run names the account the body asked for', async () => {
+      mockServiceClient.mockReturnValue(createTableMockSupabase(tables()).supabase)
+      const res = await markPaid(
+        makeRequest(url(true), { payment_date: '2026-05-12', payment_account: '1930' }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.preview.payment_account).toBe('1930')
+      expect(mockPayment).not.toHaveBeenCalled()
+    })
+
+    it('the commit debits it', async () => {
+      mockServiceClient.mockReturnValue(createTableMockSupabase(tables()).supabase)
+      mockPayment.mockResolvedValueOnce({ id: 'je-1' })
+      const res = await markPaid(
+        makeRequest(url(false), { payment_date: '2026-05-12', payment_account: '1930' }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+      expect(res.status).toBe(200)
+      expect(mockPayment.mock.calls[0][8]).toBe('1930')
+    })
+
+    it('refuses an account the company holds no cash account for, on a dry run too, booking nothing', async () => {
+      for (const dryRun of [true, false]) {
+        mockServiceClient.mockReturnValue(createTableMockSupabase(tables()).supabase)
+        const res = await markPaid(
+          makeRequest(url(dryRun), { payment_date: '2026-05-12', payment_account: '1940' }),
+          detailParams(COMPANY_ID, INVOICE_ID),
+        )
+        expect(res.status).toBe(400)
+        const body = await res.json()
+        expect(body.error.code).toBe('INVOICE_PAID_PAYMENT_ACCOUNT_INVALID')
+        expect(body.error.details.available_payment_accounts).toEqual(['1930', '1931', '1935'])
+      }
+      expect(mockPayment).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 VALIDATION_ERROR when sent together with custom lines', async () => {
+      mockServiceClient.mockReturnValue(createTableMockSupabase(tables()).supabase)
+      const res = await markPaid(
+        makeRequest(url(false), {
+          payment_account: '1930',
+          lines: [
+            { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 12500 },
+          ],
+        }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+      expect(mockPayment).not.toHaveBeenCalled()
+    })
+  })
+
   it('dry-run previews the post-payment state without booking', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

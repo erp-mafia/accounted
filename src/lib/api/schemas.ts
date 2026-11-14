@@ -1423,6 +1423,19 @@ export const MarkInvoicePaidSchema = z.object({
   // none of them are this payment. v1 callers must use a fresh
   // Idempotency-Key on the retry: the original is body-hash bound.
   force: z.boolean().optional(),
+  // crm#1823: the 19xx account the payment landed on, when it is not the one
+  // the invoice asked to be paid to. One of the company's own enabled cash
+  // accounts (resolveInvoicePaymentAccount). Custom lines carry their own
+  // accounts, so the two are not sent together.
+  payment_account: accountNumber
+    .refine(isPaidAtIssueAccount, { message: 'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish)' })
+    .optional()
+    .describe(
+      'The 19xx account the payment landed on (on a credit note: the account the refund left). One of the company\'s own enabled cash accounts, else 400 INVOICE_PAID_PAYMENT_ACCOUNT_INVALID with the accounts that can be named. Omitted: the account the invoice asked to be paid to, else the company\'s primary bank account. Not combinable with lines.',
+    ),
+}).refine((body) => !(body.payment_account && body.lines), {
+  path: ['payment_account'],
+  message: 'payment_account and lines are not sent together: custom lines carry their own accounts',
 })
 
 export const MarkInvoiceSentSchema = z.object({

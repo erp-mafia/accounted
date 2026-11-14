@@ -10,7 +10,8 @@
  *   - Kontantmetoden (cash): Debit the bank / Credit 30xx + Credit 26xx. Revenue
  *     recognition happens here (no entry at :mark-sent under cash basis).
  *   The bank is the account the invoice asked to be paid to, else the company's
- *   primary bank account (resolveInvoiceSettlementAccount).
+ *   primary bank account; payment_account names another of the company's
+ *   cash accounts when the money landed there (resolveInvoicePaymentAccount).
  *   - Faktureringsmetoden with defer_invoice_booking: an invoice sent without
  *     its verifikat gets its sale booked first by the :book step (dated on
  *     the invoice date), then the clearing above (lib/invoices/sale-first.ts).
@@ -20,6 +21,7 @@
  *   - payment_date              ISO date; defaults to today
  *   - exchange_rate_difference  SEK adjustment for foreign-currency invoices
  *   - lines                     Custom balanced journal lines (partial payments)
+ *   - payment_account           The 19xx cash account the payment landed on
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
@@ -39,7 +41,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
-import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePaymentAccount } from '@/lib/invoices/invoice-payee'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -99,7 +101,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit the bank account (the one the invoice asked to be paid to, else the company\'s primary bank account) / Credit 1510 under faktureringsmetoden, or Debit the bank account / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).',
+    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit the bank account (`payment_account` when the body names one, else the one the invoice asked to be paid to, else the company\'s primary bank account) / Credit 1510 under faktureringsmetoden, or Debit the bank account / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
@@ -107,6 +109,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
     'Not payable: a quote (400 INVOICE_QUOTE_NOT_PAYABLE), a delivery note, a document outside sent/overdue/partially_paid, or an invoice with an active credit note, a draft included (400 INVOICE_PAID_NOT_PAYABLE; details.reason says which). A payment_date after today (Swedish calendar day) returns 400 PAYMENT_DATE_IN_FUTURE. All of these fire under dry-run too.',
+    '`payment_account` is the 19xx account the money landed on, for a company that receives customer payments on another bank account than the invoice names or the primary. It must be the ledger account of one of the company\'s own enabled cash accounts (GET /cash-accounts): anything else returns 400 INVOICE_PAID_PAYMENT_ACCOUNT_INVALID with details.available_payment_accounts and books nothing, under dry-run too. It is not sent together with `lines` (400 VALIDATION_ERROR). The dry run answers the resolved account as payment_account.',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly: the bank takes that figure plus the delta, 1510 clears what it carries and the gap lands on 3960/7960. Omitting it on a non-SEK invoice books the bank at what 1510 carries, with no FX gain/loss.',
     'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. A line total equal to what 1510 carries pays the whole remainder, any other its share of that (at `invoice.exchange_rate` when the ledger cannot say); a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
@@ -185,6 +188,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         }[]
       | undefined
     let force = false
+    let paymentAccount: string | undefined
     if (rawBody) {
       const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
@@ -192,6 +196,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
       force = parsed.data.force === true
+      paymentAccount = parsed.data.payment_account
     }
 
     // Pre-flight: fetch invoice with relations needed for journal entry.
@@ -224,6 +229,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
+    // The account the entry debits (a refund credits): the one the caller
+    // names, else the invoice's payee, else the primary bank account. Asked
+    // before anything is written, on the dry run too.
+    const settlementAccountOrRefusal = async (): Promise<string | Response> => {
+      const resolved = await resolveInvoicePaymentAccount(ctx.supabase, ctx.companyId!, typed, paymentAccount)
+      if (resolved.ok) return resolved.account
+      return v1ErrorResponseFromCode(resolved.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: resolved.details,
+      })
+    }
+
     // A kreditfaktura: the company pays its credit back to the customer. The
     // same door records that refund (Dr 1510 / Cr bank), dry run included.
     if (typed.credited_invoice_id) {
@@ -233,10 +250,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           details: { reason: 'foreign_currency' },
         })
       }
+      const refundAccount = await settlementAccountOrRefusal()
+      if (typeof refundAccount !== 'string') return refundAccount
       const refund = await refundCreditNote(ctx.supabase, ctx.companyId!, ctx.userId, {
         creditNote: typed as unknown as RefundCreditNoteRow,
         refundDate: bodyPaymentDate || todayIsoStockholm(),
-        settlementAccountNumber: await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed),
+        settlementAccountNumber: refundAccount,
         customLines,
         force,
         dryRun: ctx.dryRun,
@@ -521,6 +540,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               { settlementDate: paymentDate },
             )
       if (!salePlan.ok) return v1OutcomeResponse(salePlan, ctx)
+      const previewAccount = await settlementAccountOrRefusal()
+      if (typeof previewAccount !== 'string') return previewAccount
       return dryRunPreview(
         {
           ...typed,
@@ -533,7 +554,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_use_custom_lines: customLines !== undefined,
           // The account the committed entry will debit, already resolved, so a
           // caller can verify the routing before committing.
-          payment_account: await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed),
+          payment_account: previewAccount,
           ...saleFirstPreview(salePlan),
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -547,7 +568,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // cleanup and invoice.paid. The generated debit lands on the bank account
     // the invoice asked to be paid to (the primary bank account when none was
     // chosen).
-    const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
+    const settlementAccountNumber = await settlementAccountOrRefusal()
+    if (typeof settlementAccountNumber !== 'string') return settlementAccountNumber
     const result = await settleInvoicePayment(ctx.supabase, ctx.companyId!, ctx.userId, {
       invoice: typed,
       paymentAmountInInvoiceCurrency,

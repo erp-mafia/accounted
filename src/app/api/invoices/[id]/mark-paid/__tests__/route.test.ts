@@ -363,6 +363,78 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     )
   })
 
+  // crm#1823: a company that receives customer payments on another account
+  // than the primary says where the money landed.
+  describe('payment_account', () => {
+    const CASH_ACCOUNTS = {
+      data: [
+        { ledger_account: '1930', enabled: true },
+        { ledger_account: '1931', enabled: true },
+        { ledger_account: '1935', enabled: true },
+      ],
+      error: null,
+    }
+
+    it('debits the named cash account instead of the primary', async () => {
+      const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer: makeCustomer() })
+      enqueue({ data: invoice, error: null }) // invoice
+      enqueue({ data: [], error: null }) // duplicate guard: counterparty probe
+      enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null }) // settings
+      enqueue(CASH_ACCOUNTS) // the company's cash accounts
+      enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+      mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+        method: 'POST',
+        body: { payment_date: '2026-05-12', payment_account: '1935' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockCreateInvoicePaymentJournalEntry.mock.calls[0][8]).toBe('1935')
+      expect(mockResolvePrimaryBankAccount).not.toHaveBeenCalled()
+    })
+
+    it('refuses an account that is not one of the company\'s cash accounts and books nothing', async () => {
+      const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer: makeCustomer() })
+      enqueue({ data: invoice, error: null }) // invoice
+      enqueue({ data: [], error: null }) // duplicate guard: counterparty probe
+      enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null }) // settings
+      enqueue(CASH_ACCOUNTS) // the company's cash accounts
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+        method: 'POST',
+        body: { payment_date: '2026-05-12', payment_account: '1940' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details?: { available_payment_accounts?: string[] } }
+      }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_PAID_PAYMENT_ACCOUNT_INVALID')
+      expect(body.error.details?.available_payment_accounts).toEqual(['1930', '1931', '1935'])
+      expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+      expect(findCalls('invoices', 'update')).toHaveLength(0)
+    })
+
+    it('returns 400 for an account outside 19xx before anything is read', async () => {
+      const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer: makeCustomer() })
+      enqueue({ data: invoice, error: null }) // invoice
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+        method: 'POST',
+        body: { payment_account: '1686' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      expect(response.status).toBe(400)
+      expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    })
+  })
+
   it('refuses to mark paid (INVOICE_PAID_BOOK_FAILED) when no payment journal entry is produced', async () => {
     const customer = makeCustomer()
     const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer })
