@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { dbError } from '@/lib/errors/db-error'
@@ -223,9 +224,24 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     return listResponse(entries, count)
   }
 
+  // A search that is an account number (four digits) also finds every
+  // verifikat with a line on that account (crm#1847). The lines are joined a
+  // second time under their own alias, filtered to the account and with no
+  // columns selected: `lines` keeps every line of the verifikat, and the
+  // search filter below asks whether the alias found anything. The database
+  // probes idx_journal_entry_lines_entry_account (journal_entry_id,
+  // account_number) once per verifikat of the filtered set, so the count and
+  // the page stay one statement and nothing is fetched to build an id list.
+  const accountSearch = search && isAccountNumber(search) ? search : null
+
   let query = supabase
     .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)', { count: 'exact' })
+    .select(
+      accountSearch
+        ? '*, lines:journal_entry_lines(*), account_match:journal_entry_lines()'
+        : '*, lines:journal_entry_lines(*)',
+      { count: 'exact' },
+    )
     .eq('company_id', companyId)
 
   if (sortKeys.length > 0) {
@@ -317,11 +333,19 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     // voucher_series + voucher_number. The OR is a PostgREST filter list, so
     // the needle is double-quoted to keep commas/parentheses literal.
     const voucher = parseVoucher(search)
+    const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
     if (voucher) {
-      const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
       query = query.or(
         `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
       )
+    } else if (accountSearch) {
+      // The text match stays, so the result only grows: a verifikat that
+      // mentions the digits in its text, or one with a line on the account.
+      // `account_match.not.is.null` is PostgREST's test that the filtered
+      // join found a row; inside or() it sits next to an ordinary column.
+      query = query
+        .eq('account_match.account_number', accountSearch)
+        .or(`description.ilike.${quotedNeedle},account_match.not.is.null`)
     } else {
       query = query.ilike('description', needle)
     }
