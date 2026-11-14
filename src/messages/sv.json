@@ -5386,7 +5386,7 @@
   },
   "inbox_workspace": {
     "upload_queue_stopped_title": "Uppladdningen stannade",
-    "upload_queue_stopped_description": "{count, plural, one {# fil laddades inte upp.} other {# filer laddades inte upp.}} Försök igen om en stund.",
+    "upload_queue_stopped_description": "{count, plural, one {# fil laddades inte upp.} other {# filer laddades inte upp.}}",
     "upload_waiting": "Väntar {seconds} s på uppladdningsgränsen…",
     "pipe_missing": "Saknas",
     "pipe_missing_help": "Köp på kort eller konto utan kvitto eller faktura. Efterlys underlaget eller hämta det från leverantörens portal.",

@@ -96,6 +96,7 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import {
   getErrorMessage as getUserErrorMessage,
   getResponseErrorMessage,
+  type ErrorLocale,
 } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import {
@@ -139,9 +140,9 @@ class ResolvedFailure extends Error {
  * controller know if the reason was an expired session (it redirects to
  * /login; the toast below is what the user sees on the way there).
  */
-async function resolveFailure(response: Response): Promise<ResolvedFailure> {
+async function resolveFailure(response: Response, locale?: ErrorLocale): Promise<ResolvedFailure> {
   notifySessionExpired(response)
-  return new ResolvedFailure(await getResponseErrorMessage(response), response.status)
+  return new ResolvedFailure(await getResponseErrorMessage(response, undefined, locale), response.status)
 }
 
 function failureText(err: unknown): string {
@@ -508,18 +509,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Seconds the upload is waiting for the per-minute upload limit to reset
   // (lib/documents/upload-pacing.ts). Null while nothing waits.
   const [uploadWaitSec, setUploadWaitSec] = useState<number | null>(null)
-  // A file that waits for the limit is not sent once the page is gone.
-  const unmountedRef = useRef(false)
-  useEffect(() => {
-    unmountedRef.current = false
-    return () => {
-      unmountedRef.current = true
-    }
-  }, [])
-  // Set when an upload ends refused by the upload limit even after waiting
-  // (the daily limit, or another source keeping the minute full): the queue
-  // stops there instead of walking every remaining file into the same wait.
-  const uploadLimitHitRef = useRef(false)
   const [selected, setSelected] = useState<InboxItem | null>(null)
   const [docUrl, setDocUrl] = useState<string | null>(null)
   const [docMime, setDocMime] = useState<string | null>(null)
@@ -1062,9 +1051,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // `autoSelect`: jump the detail pane to the new placeholder/row. Useful
   // for a one-off drop (user expects to see what just landed). Harmful in
   // a multi-file queue (selection yanks around as each file processes).
+  // `onLimit`: told the reason when the upload limit still refuses the file
+  // after waiting (the daily limit, or another source keeping the minute
+  // full), so a queue can stop there; only the call that asked hears it.
   const uploadFile = useCallback(async (
     original: File,
-    options: { autoSelect: boolean } = { autoSelect: true },
+    options: { autoSelect: boolean; onLimit?: (reason: string) => void } = { autoSelect: true },
   ) => {
     // A phone photo is routinely larger than the request body the platform
     // will carry, and it rejects the upload itself, before the route can say
@@ -1133,9 +1125,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             body: fd,
           })
         },
-        { onWait: setUploadWaitSec, shouldContinue: () => !unmountedRef.current },
+        { onWait: setUploadWaitSec },
       )
-      if (!res.ok) throw await resolveFailure(res)
+      if (!res.ok) throw await resolveFailure(res, locale === 'en' ? 'en' : 'sv')
       const json = await res.json()
       if (json.data?.extraction_skipped) {
         const pages = json.data?.page_count
@@ -1161,7 +1153,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         setSelected((prev) => (prev?.id === tempId ? null : prev))
       }
       const reason = failureText(err)
-      if (err instanceof ResolvedFailure && err.status === 429) uploadLimitHitRef.current = true
+      if (err instanceof ResolvedFailure && err.status === 429) options.onLimit?.(reason)
       reportUploadFailure({
         status: err instanceof ResolvedFailure ? err.status : 0,
         size: file.size,
@@ -1176,7 +1168,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsUploading(false)
     }
-  }, [fetchItems, handleSelect, toast])
+  }, [fetchItems, handleSelect, toast, locale])
 
   // Sequential queue: running multiple extractions concurrently would
   // hammer pdfjs on slow boxes. Per-file placeholder rows + the queue
@@ -1240,22 +1232,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       return
     }
     setUploadQueue({ total: files.length, done: 0 })
-    uploadLimitHitRef.current = false
     try {
       for (const [index, file] of files.entries()) {
-        await uploadFile(file, { autoSelect: false })
+        const limit: { reason: string | null } = { reason: null }
+        await uploadFile(file, {
+          autoSelect: false,
+          onLimit: (reason) => {
+            limit.reason = reason
+          },
+        })
         setUploadQueue((q) => (q ? { ...q, done: q.done + 1 } : null))
         // Still refused by the upload limit after waiting: the rest would
-        // meet the same refusal, so say once how many are left and stop.
-        if (uploadLimitHitRef.current || unmountedRef.current) {
-          const left = files.length - index - 1
-          if (left > 0 && !unmountedRef.current) {
-            toast({
-              title: t('upload_queue_stopped_title'),
-              description: t('upload_queue_stopped_description', { count: left }),
-              variant: 'destructive',
-            })
-          }
+        // meet the same refusal, so say once how many were not uploaded (this
+        // file and the rest) and why, and stop. One message, with the reason:
+        // the page shows one toast at a time, and this one replaces the
+        // refused file's.
+        if (limit.reason !== null) {
+          toast({
+            title: t('upload_queue_stopped_title'),
+            description: `${t('upload_queue_stopped_description', { count: files.length - index })} ${limit.reason}`,
+            variant: 'destructive',
+          })
           break
         }
       }

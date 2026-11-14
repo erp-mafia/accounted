@@ -1,6 +1,7 @@
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { sendPacedUpload, type PacedUploadOptions } from '@/lib/documents/upload-pacing'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { exceedsHostedUploadLimit, exceedsInboxUploadLimit } from '@/lib/documents/upload-size'
 
@@ -19,7 +20,12 @@ export interface UploadDuplicate {
 export type UploadOutcome =
   | { ok: true; itemId: string; duplicateOf?: UploadDuplicate }
   | { ok: false; reason: 'too_large'; size: number }
-  | { ok: false; reason: 'failed'; message: string }
+  /**
+   * `limited`: still refused by the inbox's upload limit after waiting it out
+   * (the daily limit, or the minute kept full by other uploads): the next
+   * file would meet the same refusal.
+   */
+  | { ok: false; reason: 'failed'; message: string; limited?: boolean }
 
 /**
  * Leave a trace when an upload fails, as the Underlag workspace does: a
@@ -60,26 +66,39 @@ function duplicateOf(data: {
  * goes straight to Storage through a signed URL, everything else is a
  * multipart POST /upload. Only the inbox's own ceiling refuses a file here,
  * where its size can be named. Resolves to the new inbox item.
+ *
+ * A refusal from the per-minute upload limit is waited out and the file sent
+ * again (lib/documents/upload-pacing.ts), as the Underlag workspace does: a
+ * drop of a month's receipts sent every file after the thirtieth straight
+ * into the refusal (118 refused in one minute on 2026-11-14). `pacing` lets
+ * the caller show the wait.
  */
-export async function uploadToInbox(original: File, locale: ErrorLocale): Promise<UploadOutcome> {
+export async function uploadToInbox(
+  original: File,
+  locale: ErrorLocale,
+  pacing: PacedUploadOptions = {},
+): Promise<UploadOutcome> {
   const file = exceedsHostedUploadLimit(original.size) ? await shrinkImageForUpload(original) : original
   if (exceedsInboxUploadLimit(file.size)) {
     reportUploadFailure({ status: 0, size: file.size, type: file.type || 'unknown', reason: 'over inbox ceiling' })
     return { ok: false, reason: 'too_large', size: file.size }
   }
   try {
-    let res: Response
-    if (exceedsHostedUploadLimit(file.size)) {
-      res = await uploadViaSignedUrl(file)
-    } else {
+    const res = await sendPacedUpload(() => {
+      if (exceedsHostedUploadLimit(file.size)) return uploadViaSignedUrl(file)
       const body = new FormData()
       body.append('file', file)
-      res = await fetch(`${INBOX_URL}/upload`, { method: 'POST', body })
-    }
+      return fetch(`${INBOX_URL}/upload`, { method: 'POST', body })
+    }, pacing)
     if (!res.ok) {
       notifySessionExpired(res)
       reportUploadFailure({ status: res.status, size: file.size, type: file.type || 'unknown', reason: 'route refused' })
-      return { ok: false, reason: 'failed', message: await getResponseErrorMessage(res, undefined, locale) }
+      return {
+        ok: false,
+        reason: 'failed',
+        message: await getResponseErrorMessage(res, undefined, locale),
+        ...(res.status === 429 ? { limited: true } : {}),
+      }
     }
     const json = (await res.json()) as {
       data?: {
