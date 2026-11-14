@@ -2840,6 +2840,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Invoice is not in a payable status.',
   },
+  // payment_account on mark-paid (resolveInvoicePaymentAccount, crm#1823).
+  INVOICE_PAID_PAYMENT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Betalkontot kan inte ta emot betalningen: det är inte ett av företagets aktiva kassa- eller bankkonton (19xx).',
+    message_en: 'The payment account cannot receive the payment: it is not one of the company\'s enabled cash or bank accounts (19xx).',
+    remediation: {
+      description: 'Name one of details.available_payment_accounts (the ledger_account of an enabled cash account), or leave payment_account out to book on the account the invoice asked to be paid to.',
+    },
+  },
   // Every door that records a payment by hand (lib/invoices/payment-date.ts).
   PAYMENT_DATE_IN_FUTURE: {
     httpStatus: 400,

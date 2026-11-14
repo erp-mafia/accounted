@@ -178,7 +178,8 @@ import {
   type RefundCreditNoteRow,
 } from '@/lib/invoices/refund-credit-note'
 import { invoicePayableRefusal } from '@/lib/invoices/invoice-payable'
-import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import { resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
+import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { contradictsLearnedDirection, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { bankRowRefusalCode, decideBankRowRebooking } from '@/lib/transactions/is-booked'
@@ -1229,6 +1230,17 @@ const ANNOTATIONS_WRITE_OPEN_WORLD = annotationsForEffect('additive', {
  */
 function registryError(code: string): Error {
   return Object.assign(new Error(getErrorEntry(code)?.message_sv ?? code), { code })
+}
+
+/** A payment_account that is not one of the company's enabled cash accounts, with the ones that are. */
+function paymentAccountRefusal(details: Record<string, unknown>): Error {
+  const available = (details.available_payment_accounts as string[] | undefined) ?? []
+  return codedRefusal(
+    'INVOICE_PAID_PAYMENT_ACCOUNT_INVALID',
+    `gnubok_mark_invoice_as_paid: payment_account ${String(details.payment_account)} is not one of the company's enabled cash accounts (${String(details.reason)}). ` +
+      (available.length > 0 ? `It can be: ${available.join(', ')}.` : 'The company has no enabled 19xx cash account.'),
+    { description: 'Name one of the listed accounts (gnubok_list_cash_accounts shows them), or leave payment_account out.', tool: 'gnubok_list_cash_accounts' },
+  )
 }
 
 /** A refused credit note refund (lib/invoices/refund-credit-note.ts) as the error the agent reads. */
@@ -11737,9 +11749,10 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        invoice_id: { type: 'string', description: 'UUID of the invoice' },
-        payment_date: { type: 'string', description: 'Payment date YYYY-MM-DD (default: today)' },
-        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-payment guard (default false). Set true ONLY after the user confirms; the guard blocks marking paid when an unlinked bank transaction already looks like this invoice\'s payment: match that transaction instead.' },
+        invoice_id: { type: 'string' },
+        payment_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
+        allow_duplicate: { type: 'boolean', description: 'Bypass the duplicate-payment guard, ONLY after the user confirms. It blocks when an unlinked bank transaction looks like this payment: match that instead.' },
+        payment_account: { type: 'string', description: '19xx cash account the money landed on. Default: invoice payee, else primary.' },
       },
       required: ['invoice_id'],
     },
@@ -11749,8 +11762,33 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
+      // The account the money landed on, when the caller says (crm#1823): the
+      // dashboard and v1 mark-paid field, under the same rule.
+      let namedAccount: string | undefined
+      if (args.payment_account !== undefined && args.payment_account !== null) {
+        if (typeof args.payment_account !== 'string' || !isPaidAtIssueAccount(args.payment_account)) {
+          throw badArgument(
+            'payment_account',
+            'payment_account must be a 19xx account (kassa, bank or Swish), such as 1930.',
+            'Betalkontot måste vara ett 19xx-konto (kassa, bank eller Swish).',
+          )
+        }
+        namedAccount = args.payment_account
+      }
+
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       const paymentDate = (args.payment_date as string) || todayIsoStockholm()
+      // Staged only when named, so an unnamed call stages what it always did.
+      const stagedParams = {
+        invoice_id: invoiceId,
+        payment_date: paymentDate,
+        allow_duplicate: args.allow_duplicate === true,
+        ...(namedAccount ? { payment_account: namedAccount } : {}),
+      }
+      if (namedAccount) {
+        const named = await resolveInvoicePaymentAccount(supabase, companyId, invoice as Invoice, namedAccount)
+        if (!named.ok) throw paymentAccountRefusal(named.details)
+      }
 
       // A kreditfaktura: the refund paid back to the customer (Dr 1510 / Cr
       // bank), planned with every check the approval runs.
@@ -11759,10 +11797,11 @@ export const tools: McpTool[] = [
           throw new Error('Invoice can only be marked as paid when status is sent, overdue or partially paid')
         }
         const creditNote = invoice as unknown as RefundCreditNoteRow
+        const refundAccount = namedAccount ?? (await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice))
         const refund = await refundCreditNote(supabase, companyId, userId, {
           creditNote,
           refundDate: paymentDate,
-          settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice),
+          settlementAccountNumber: refundAccount,
           force: args.allow_duplicate === true,
           dryRun: true,
         })
@@ -11773,13 +11812,14 @@ export const tools: McpTool[] = [
           userId,
           type: 'mark_invoice_paid',
           title: `Återbetalning: ${invoice.invoice_number} ${invoice.customer?.name || ''} ${refund.amount} ${invoice.currency}`,
-          params: { invoice_id: invoiceId, payment_date: paymentDate, allow_duplicate: args.allow_duplicate === true },
+          params: stagedParams,
           preview: {
             invoice_number: invoice.invoice_number,
             customer_name: invoice.customer?.name,
             total: invoice.total,
             currency: invoice.currency,
             payment_date: paymentDate,
+            payment_account: refundAccount,
             refund_amount: refund.amount,
             source_type: 'invoice_paid',
             journal_entry_preview: refundEntryPreview(refund.lines),
@@ -11854,6 +11894,7 @@ export const tools: McpTool[] = [
       // otherwise bank / 1510), so the approver sees the lines, not prose.
       const paymentPreview = await buildMarkPaidPreview(supabase, companyId, invoice, {
         saleFirstReceivableSek: salePlan.required ? salePlan.receivableSek : undefined,
+        settlementAccount: namedAccount,
       })
 
       return stage({
@@ -11862,13 +11903,15 @@ export const tools: McpTool[] = [
         userId,
         type: 'mark_invoice_paid',
         title: `Betald: ${invoice.invoice_number} ${invoice.customer?.name || ''} ${invoice.total} ${invoice.currency}`,
-        params: { invoice_id: invoiceId, payment_date: paymentDate, allow_duplicate: args.allow_duplicate === true },
+        params: stagedParams,
         preview: {
           invoice_number: invoice.invoice_number,
           customer_name: invoice.customer?.name,
           total: invoice.total,
           currency: invoice.currency,
           payment_date: paymentDate,
+          // The account the approval debits, resolved: named, the invoice's payee, or the primary.
+          payment_account: paymentPreview.payment_account,
           accounting_method: paymentPreview.accounting_method,
           source_type: paymentPreview.source_type,
           journal_entry_preview: paymentPreview.journal_entry_preview,

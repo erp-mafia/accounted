@@ -85,6 +85,8 @@ export interface MarkPaidPreview {
     total_debit: number
     total_credit: number
   } | null
+  /** The 19xx account the payment books on; null when it could not be resolved for the preview. */
+  payment_account: string | null
   /** The next.description for the staged operation. */
   next_description: string
 }
@@ -127,7 +129,11 @@ export async function buildMarkPaidPreview(
    * Set when the approval books the invoice's sale first (defer_invoice_booking):
    * the 1510 that sale leaves, off its dry run. No voucher holds it yet.
    */
-  options: { saleFirstReceivableSek?: number } = {},
+  options: {
+    saleFirstReceivableSek?: number
+    /** The account the caller named and the tool validated (payment_account); else resolved here. */
+    settlementAccount?: string
+  } = {},
 ): Promise<MarkPaidPreview> {
   // Same read and defaults as loadBookingContext in the commit executor.
   const { data: settings } = await supabase
@@ -144,8 +150,10 @@ export async function buildMarkPaidPreview(
   const accountingMethod: 'cash' | 'accrual' = useCash ? 'cash' : 'accrual'
 
   let journalEntryPreview: MarkPaidPreview['journal_entry_preview'] = null
+  let paymentAccount: string | null = options.settlementAccount ?? null
   try {
-    const settlementAccount = await resolveInvoiceSettlementAccount(supabase, companyId, invoice)
+    const settlementAccount = options.settlementAccount ?? (await resolveInvoiceSettlementAccount(supabase, companyId, invoice))
+    paymentAccount = settlementAccount
     const customerName = invoice.customer?.name ?? undefined
     let lines: CreateJournalEntryLineInput[]
     if (useCash) {
@@ -196,6 +204,7 @@ export async function buildMarkPaidPreview(
     accounting_method: accountingMethod,
     source_type: sourceType,
     journal_entry_preview: journalEntryPreview,
+    payment_account: paymentAccount,
     next_description,
   }
 }

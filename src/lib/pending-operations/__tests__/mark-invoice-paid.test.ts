@@ -446,6 +446,93 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
   })
 
+  // crm#1823: the staging call named the account the money landed on.
+  const SENT_INVOICE = {
+    id: 'inv-1',
+    invoice_number: '2026001',
+    status: 'sent',
+    total: 525,
+    remaining_amount: 525,
+    paid_amount: null,
+    document_type: 'invoice',
+    journal_entry_id: 'je-issue',
+    customer: { name: 'Test AB' },
+  }
+  const CASH_ACCOUNTS = {
+    data: [
+      { ledger_account: '1930', enabled: true },
+      { ledger_account: '1931', enabled: true },
+      { ledger_account: '1935', enabled: true },
+    ],
+    error: null,
+  }
+
+  it('debits the staged payment_account instead of the primary', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: SENT_INVOICE, error: null }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue(CASH_ACCOUNTS) // the company's cash accounts
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: '2026-03-30', payment_account: '1930' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(settleInvoicePayment).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ settlementAccountNumber: '1930' }),
+    )
+    // The primary was never asked.
+    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
+  it('refuses a staged payment_account that is no longer one of the company\'s cash accounts, booking nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: SENT_INVOICE, error: null }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue(CASH_ACCOUNTS) // the company's cash accounts
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: '2026-03-30', payment_account: '1940' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toContain('1930, 1931, 1935')
+    expect(settleInvoicePayment).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('pays a credit note refund out of the staged payment_account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: CREDIT_NOTE, error: null }) // invoice fetch
+    enqueue(CASH_ACCOUNTS) // the company's cash accounts
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+    mockRefundCreditNote.mockResolvedValue({
+      ok: true,
+      dryRun: false,
+      amount: 525,
+      owedAfter: 0,
+      lines: [],
+      journalEntryId: 'je-refund',
+      paidAmount: -525,
+      refundedAt: '2026-03-30T12:00:00Z',
+    })
+
+    const op = makePendingOp({ params: { invoice_id: 'credit-1', payment_date: '2026-03-30', payment_account: '1935' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockRefundCreditNote.mock.calls[0][3]).toMatchObject({ settlementAccountNumber: '1935' })
+  })
+
   it('makulerar the posted voucher when the invoice update loses the race', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
