@@ -210,4 +210,11 @@ describe('buildCompanyGraph', () => {
     // No authority claims a ledger fact.
     expect(g.links.find((l) => l.target === 'fact:f-sal' && l.kind === 'authority')).toBeUndefined()
   })
+
+  it('reads open deadlines only: the stored status outlives a tick-off and a dismissal (crm#1848)', async () => {
+    enqueueAll({})
+    await buildCompanyGraph(supabase, CO, TODAY)
+    expect(mock.findCalls('deadlines', 'eq')).toContainEqual(['is_completed', false])
+    expect(mock.findCalls('deadlines', 'is')).toEqual([['dismissed_at', null]])
+  })
 })

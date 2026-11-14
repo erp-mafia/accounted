@@ -1,6 +1,7 @@
 import { Invoice, Deadline } from '@/types'
 import { isInvoiceOverdue as isCustomerInvoiceOverdue } from '@/lib/invoices/overdue'
 import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
+import { isOpenDeadline } from '@/lib/deadlines/open'
 
 // Parse ISO date string to Date object at start of day
 export function parseDate(dateString: string): Date {
@@ -35,7 +36,7 @@ export function isInvoiceOverdue(invoice: Invoice): boolean {
 
 // Check if deadline is overdue
 export function isDeadlineOverdue(deadline: Deadline): boolean {
-  if (deadline.is_completed) return false
+  if (!isOpenDeadline(deadline)) return false
   return isPastDue(deadline.due_date, todayIsoStockholm())
 }
 

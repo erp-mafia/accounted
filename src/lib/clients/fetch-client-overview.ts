@@ -31,6 +31,7 @@ import { createLogger } from '@/lib/logger'
 import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
 import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import {
   clientBankSwitchFrom,
   countByCompany,
@@ -249,12 +250,12 @@ export async function fetchOverviewRowsForCompanies(
   const deadlineRows: DeadlineRowInput[] = []
   for (const chunk of idChunks) {
     const rows = await fetchAllRows<DeadlineRowInput & { id: string }>(({ from, to }) =>
-      supabase
-        .from('deadlines')
-        .select('id, company_id, title, due_date, tax_deadline_type, status')
-        .in('company_id', chunk)
-        .eq('is_completed', false)
-        .is('dismissed_at', null)
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, company_id, title, due_date, tax_deadline_type, status')
+          .in('company_id', chunk),
+      )
         .in('status', ['upcoming', 'action_needed', 'in_progress', 'overdue'])
         .order('id', { ascending: true })
         .range(from, to),

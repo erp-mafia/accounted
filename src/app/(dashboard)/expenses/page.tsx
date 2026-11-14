@@ -58,7 +58,8 @@ import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { isInboxItemUnbooked } from '@/lib/documents/inbox-item-state'
 import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { formatAmountInput } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -66,7 +67,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate, formatAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import {
+  PLAIN_DOCUMENT_UPLOAD_URL,
+  documentIdFromPlainUpload,
+  plainDocumentUploadForm,
+  underlagUploadRoute,
+} from '@/lib/documents/underlag-upload-route'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
@@ -150,7 +157,8 @@ type UploadState =
   | {
       phase: 'done'
       fileName: string
-      inboxItemId: string
+      /** Null for a receipt stored without the document inbox (no AI capability). */
+      inboxItemId: string | null
       documentId: string | null
       extracted: ExtractedReceipt | null
     }
@@ -158,6 +166,9 @@ type UploadState =
 
 export default function ExpenseClaimsPage() {
   const t = useTranslations('expense_claims')
+  // The document inbox (AI reading) is refused for a company without the AI
+  // capability; the receipt is then stored through the plain documents upload.
+  const receiptRoute = underlagUploadRoute({ hasAiCapability: useCapability(CAPABILITY.ai) })
   const tTpl = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -251,6 +262,11 @@ export default function ExpenseClaimsPage() {
   }, [])
 
   const loadInbox = useCallback(async () => {
+    // No inbox to pick from without the AI capability: the request is refused.
+    if (receiptRoute !== 'inbox') {
+      setInboxLoaded(true)
+      return
+    }
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=100')
       if (!res.ok) return
@@ -280,7 +296,7 @@ export default function ExpenseClaimsPage() {
     } finally {
       setInboxLoaded(true)
     }
-  }, [])
+  }, [receiptRoute])
 
   const loadPayouts = useCallback(() => {
     fetch('/api/expense-claims/payouts')
@@ -741,6 +757,35 @@ export default function ExpenseClaimsPage() {
       pollAbort.current = { cancelled: false }
       setUpload({ phase: 'uploading', fileName: file.name })
       try {
+        if (receiptRoute === 'documents') {
+          // Stored as a plain document: nothing reads it, the person fills
+          // the fields. postDocumentForm handles a file over the body cap.
+          const plainRes = await postDocumentForm(
+            PLAIN_DOCUMENT_UPLOAD_URL,
+            plainDocumentUploadForm(),
+            file,
+          )
+          const plainJson = await plainRes.json().catch(() => null)
+          const plainId = plainRes.ok ? documentIdFromPlainUpload(plainJson) : null
+          if (pollAbort.current.cancelled) return
+          if (!plainId) {
+            setUpload({
+              phase: 'error',
+              message: plainRes.ok
+                ? t('upload_failed')
+                : getErrorMessage(plainJson ?? {}, { statusCode: plainRes.status }),
+            })
+            return
+          }
+          setUpload({
+            phase: 'done',
+            fileName: file.name,
+            inboxItemId: null,
+            documentId: plainId,
+            extracted: null,
+          })
+          return
+        }
         // Over the hosted body cap the receipt goes straight to Storage
         // (same response shape as the multipart route).
         let res: Response
@@ -842,7 +887,7 @@ export default function ExpenseClaimsPage() {
         setUpload({ phase: 'error', message: t('upload_failed') })
       }
     },
-    [applyExtraction, t],
+    [applyExtraction, receiptRoute, t],
   )
 
   function onFileChosen(files: FileList | null) {
@@ -880,7 +925,7 @@ export default function ExpenseClaimsPage() {
       ]
       if (dimensionsEnabled && Object.keys(claimDims).length > 0) body.dimensions = claimDims
       if (uploaded) {
-        body.inbox_item_id = uploaded.inboxItemId
+        if (uploaded.inboxItemId) body.inbox_item_id = uploaded.inboxItemId
         if (uploaded.documentId) body.document_id = uploaded.documentId
       } else if (inbox) {
         body.inbox_item_id = inbox.id
@@ -1318,10 +1363,12 @@ export default function ExpenseClaimsPage() {
                       >
                         <ArrowUpTrayIcon className="h-4 w-4" />
                         {t('dropzone_hint')}
-                        <span className="inline-flex items-center gap-1 text-xs">
-                          <SparklesIcon className="h-3 w-3" />
-                          {t('dropzone_ai_hint')}
-                        </span>
+                        {receiptRoute === 'inbox' && (
+                          <span className="inline-flex items-center gap-1 text-xs">
+                            <SparklesIcon className="h-3 w-3" />
+                            {t('dropzone_ai_hint')}
+                          </span>
+                        )}
                       </button>
                       {inboxOptions.length > 0 && (
                         <button
@@ -1346,7 +1393,9 @@ export default function ExpenseClaimsPage() {
                   </>
                 ) : (
                   <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-                    {upload.phase === 'done' ? (
+                    {upload.phase === 'done' && receiptRoute !== 'inbox' ? (
+                      <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : upload.phase === 'done' ? (
                       <SparklesIcon className="h-4 w-4 shrink-0" />
                     ) : (
                       <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" />
@@ -1356,7 +1405,11 @@ export default function ExpenseClaimsPage() {
                       {upload.phase === 'uploading' && t('upload_uploading')}
                       {upload.phase === 'extracting' && t('upload_extracting')}
                       {upload.phase === 'done' &&
-                        (upload.extracted ? t('upload_extracted') : t('upload_no_extraction'))}
+                        (upload.extracted
+                          ? t('upload_extracted')
+                          : receiptRoute === 'inbox'
+                            ? t('upload_no_extraction')
+                            : t('upload_uploaded'))}
                     </span>
                     <button
                       type="button"

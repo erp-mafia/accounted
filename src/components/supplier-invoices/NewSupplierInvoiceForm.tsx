@@ -70,7 +70,14 @@ import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
 import { accrualFrameworkOf, accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import {
+  PLAIN_DOCUMENT_UPLOAD_URL,
+  documentIdFromPlainUpload,
+  plainDocumentUploadForm,
+  underlagUploadRoute,
+} from '@/lib/documents/underlag-upload-route'
 import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
@@ -266,6 +273,7 @@ export default function NewSupplierInvoiceForm({
     fiscalYearOf(date)?.period_start ?? null
   // The accrual limit follows the framework too (K3: none).
   const accrualFramework = accrualFrameworkOf(useCompanyOptional()?.company)
+  const underlagRoute = underlagUploadRoute({ hasAiCapability: useCapability(CAPABILITY.ai) })
 
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
   // The invoice-level tags start as the supplier's default (accounted#144)
@@ -1548,22 +1556,18 @@ export default function NewSupplierInvoiceForm({
   }
 
   async function uploadPlainDocument(entry: UploadedFile) {
-    const formData = new FormData()
-    formData.append('upload_source', 'file_upload')
     try {
-      const res = await postDocumentForm('/api/documents', formData, entry.file)
-      let result: { data?: { id?: string }; error?: unknown } = {}
-      try {
-        result = await res.json()
-      } catch {
+      const res = await postDocumentForm(
+        PLAIN_DOCUMENT_UPLOAD_URL,
+        plainDocumentUploadForm(),
+        entry.file,
+      )
+      const id = res.ok ? documentIdFromPlainUpload(await res.json().catch(() => null)) : null
+      if (!id) {
         setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
         return
       }
-      if (!res.ok || result.error || !result.data?.id) {
-        setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
-        return
-      }
-      setDocumentFiles([{ ...entry, status: 'uploaded', id: result.data.id }])
+      setDocumentFiles([{ ...entry, status: 'uploaded', id }])
     } catch {
       setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
     }
@@ -1589,6 +1593,14 @@ export default function NewSupplierInvoiceForm({
     setDocumentFiles([entry])
     setExtractionPhase('idle')
     setPendingExtraction(null)
+
+    // Without the AI capability the document inbox refuses the upload, so
+    // the file goes straight to the plain upload (which also carries a file
+    // over the hosted body limit) instead of there after a refused request.
+    if (underlagRoute === 'documents') {
+      await uploadPlainDocument(entry)
+      return
+    }
 
     // Above the hosted request-body limit the platform refuses a multipart
     // body before the route runs (a plain 413, nothing in the logs), so the

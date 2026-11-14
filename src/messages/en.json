@@ -14001,6 +14001,7 @@
     "upload_extracting": "AI is reading the receipt…",
     "upload_extracted": "AI-extracted, fields prefilled",
     "upload_no_extraction": "Uploaded (no extraction)",
+    "upload_uploaded": "Uploaded",
     "upload_remove": "Remove the receipt",
     "upload_failed": "The upload failed",
     "form_back": "Back",

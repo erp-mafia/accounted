@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { roundOre } from '@/lib/money'
-import { grossVat, netVat, splitGrossVat, statedVatFitsRate, treatmentForRate } from '../gross-split'
+import { grossVat, HIGHEST_VAT_RATE, maxVatInGross, netVat, splitGrossVat, statedVatFitsRate, treatmentForRate, vatWithinGrossCeiling } from '../gross-split'
 
 describe('netVat', () => {
   it('is the net times the rate', () => {
@@ -189,5 +189,41 @@ describe('treatmentForRate', () => {
     expect(treatmentForRate(0.06)).toBe('reduced_6')
     expect(treatmentForRate(0)).toBeNull()
     expect(treatmentForRate(0.2)).toBeNull()
+  })
+})
+
+describe('vatWithinGrossCeiling: the ceiling for a document\'s moms', () => {
+  it('the ceiling is the 25 % share of the gross, which is 25 % of the net', () => {
+    expect(HIGHEST_VAT_RATE).toBe(0.25)
+    expect(maxVatInGross(125)).toBe(25)
+    expect(maxVatInGross(-125)).toBe(25)
+    expect(maxVatInGross(1230.97)).toBe(246.19)
+    expect(maxVatInGross(0)).toBe(0)
+  })
+
+  it('accepts moms at the exact boundary and refuses one öre above it', () => {
+    expect(vatWithinGrossCeiling(25, 125)).toBe(true)
+    expect(vatWithinGrossCeiling(25.01, 125)).toBe(false)
+    expect(vatWithinGrossCeiling(246.19, 1230.97)).toBe(true)
+    expect(vatWithinGrossCeiling(246.2, 1230.97)).toBe(false)
+  })
+
+  it('takes the sign of the gross away: an expense row is a negative amount', () => {
+    expect(vatWithinGrossCeiling(25, -125)).toBe(true)
+    expect(vatWithinGrossCeiling(25.01, -125)).toBe(false)
+  })
+
+  it('compares in whole öre, so float noise on the boundary does not refuse it', () => {
+    expect(vatWithinGrossCeiling(0.1 + 0.2, 1.5)).toBe(true) // 0,30000000000000004 on a ceiling of 0,30
+    expect(vatWithinGrossCeiling(roundOre(24.996), 125)).toBe(true)
+    expect(vatWithinGrossCeiling(25.004, 125)).toBe(true)
+    expect(vatWithinGrossCeiling(25.005, 125)).toBe(false)
+  })
+
+  it('accepts a lower or mixed-rate moms and refuses a misread', () => {
+    expect(vatWithinGrossCeiling(12, 112)).toBe(true)
+    expect(vatWithinGrossCeiling(18.5, 125)).toBe(true)
+    expect(vatWithinGrossCeiling(125, 125)).toBe(false)
+    expect(vatWithinGrossCeiling(1, 0)).toBe(false)
   })
 })

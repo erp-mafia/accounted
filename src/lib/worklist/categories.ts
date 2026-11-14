@@ -58,6 +58,7 @@ import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import type {
   AttestedToPayDue,
   BankSwitchDue,
@@ -679,12 +680,12 @@ export async function countDeadlinesNeedingAction(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from('deadlines')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('is_completed', false)
-    .is('dismissed_at', null)
+  const { count, error } = await filterOpenDeadlines(
+    supabase
+      .from('deadlines')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId),
+  )
     .in('status', ['action_needed', 'overdue'])
   if (error) return logAndZero('deadline_action', companyId, error)
   return count ?? 0

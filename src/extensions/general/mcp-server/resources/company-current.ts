@@ -4,6 +4,7 @@ import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 const log = createLogger('mcp-company-current')
@@ -161,11 +162,14 @@ export const companyCurrentResource: McpResource = {
       // indexed. Multi-company users would otherwise see deadlines from all their
       // companies mixed into one company's context (cross-tenant leak flagged by
       // PR #505 review).
-      supabase
-        .from('deadlines')
-        .select('id, title, due_date, deadline_type, priority, status')
-        .eq('company_id', companyId)
-        .eq('is_completed', false)
+      // Open deadlines only (lib/deadlines/open.ts): completed and dismissed
+      // rows are left out, as on /deadlines.
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, title, due_date, deadline_type, priority, status')
+          .eq('company_id', companyId),
+      )
         .gte('due_date', today)
         .order('due_date', { ascending: true })
         .limit(5),

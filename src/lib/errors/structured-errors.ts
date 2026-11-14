@@ -1052,8 +1052,9 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TX_CATEGORIZE_INVALID_VAT_AMOUNT: {
     httpStatus: 400,
     message_sv:
-      'Underlagets moms kunde inte användas för den här bokföringen. Kontrollera beloppet och momssatsen.',
-    message_en: "The document's VAT amount cannot be used for this booking. Check the amount and the VAT treatment.",
+      'Underlagets moms kan inte användas för den här bokföringen: den är högre än 25 % moms på beloppet, eller så har bokföringen ingen momsrad med momssats. Bokför med förslagets moms i stället, eller välj Ändra rader och ange momsen själv.',
+    message_en:
+      "The document's VAT cannot be used for this booking: it is more than 25 % VAT on the amount, or the booking has no rate-based VAT line. Book with the proposal's VAT instead, or choose Edit lines and enter the VAT yourself.",
   },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
