@@ -214,6 +214,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   correct_entry: 'warning_correct_entry',
   reverse_entry: 'warning_reverse_entry',
   credit_invoice: 'warning_credit_invoice',
+  link_credit_note_to_invoice: 'warning_link_credit_note_to_invoice',
   delete_draft_invoice: 'warning_delete_draft_invoice',
   credit_supplier_invoice: 'warning_credit_supplier_invoice',
   approve_supplier_invoice: 'warning_approve_supplier_invoice',

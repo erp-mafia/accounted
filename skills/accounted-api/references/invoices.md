@@ -1272,6 +1272,94 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/invoices/{id}/link-credit-note`
+
+**Link an existing credit note to the existing invoice it credits.**
+`scope:invoices:write · risk:medium · idempotent · dry-run`
+
+For a credit note (kreditfaktura) that exists without a link to its original, typically one imported at a system change whose reference was only free text: sets the credit note's credited_invoice_id, leaves it at status sent (where an issued credit note rests) and moves the invoice to status credited, exactly what POST /invoices/{id}/credit leaves behind in the kundreskontra. The two then net there and the invoice is no longer open or overdue. It never books a verifikat and creates no document. Allowed only where an ordinary credit would not have booked either: kontantmetoden, the invoice issued and unpaid with no verifikat, the credit note with no verifikat, the same customer, the same currency (and rate), and the credit note crediting the whole open amount. Everything else is refused with a code that names the reason. Idempotency: a second call answers 409 INVOICE_CREDIT_LINK_ALREADY_LINKED. Dry-runnable. Emits credit_note.created.
+
+**Use when:** A fully credited invoice still shows as open or overdue in the kundreskontra because its credit note already exists as a separate document with no link to it (credited_invoice_id is null), and neither document has a verifikat.
+**Do not use for:** Crediting an invoice that has no credit note yet (POST /invoices/{id}/credit creates and books it), recording a payment, or settling booked invoices against each other.
+
+**Pitfalls:**
+- Never use POST /invoices/{id}/credit for this: it creates a second credit note next to the existing one.
+- 409 INVOICE_CREDIT_LINK_BOOKING_REQUIRED (details.reason) means an ordinary credit would have booked a verifikat that does not exist: accrual_method (faktureringsmetoden), original_paid_or_booked, credit_note_booked, rot_rut or customer_loss_decision. Nothing is booked for you: the entries have to be made in the bookkeeping first, and the link is then not needed for the ledger.
+- 400 INVOICE_CREDIT_LINK_AMOUNT_MISMATCH: details.reason exceeds_open_amount (the credit is larger than what the invoice still asks for) or partial_credit (it is smaller; a partial credit cannot be linked yet). details carries credit_amount and open_amount.
+- 409 INVOICE_CREDIT_LINK_ORIGINAL_NOT_OPEN: the invoice is a draft, cancelled, already credited (details.status), itself a credit note, or already has a credit note (details.reason).
+- 400 INVOICE_CREDIT_LINK_NOT_A_CREDIT_NOTE: credit_note_id is not an issued document with a total below zero and nothing refunded on it.
+- The invoice and the credit note must belong to the same customer and carry the same currency: 400 INVOICE_CREDIT_LINK_CUSTOMER_MISMATCH and INVOICE_CREDIT_LINK_CURRENCY_MISMATCH.
+- 409 INVOICE_CREDIT_LINK_RACE means one of the two changed between the read and the write: re-read both before retrying.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ credit_note_id: string }
+```
+
+Example request:
+```json
+{
+  "credit_note_id": "7b1d…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice: { id: string, handle?: string, invoice_number: string | null, status: "credited" },
+    credit_note: { id: string, invoice_number: string | null, status: "sent", credited_invoice_id: string },
+    credited_amount: number,
+    currency: string,
+    journal_entry_id: unknown
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice": {
+      "id": "0e9c…",
+      "invoice_number": "207",
+      "status": "credited"
+    },
+    "credit_note": {
+      "id": "7b1d…",
+      "invoice_number": "208",
+      "status": "sent",
+      "credited_invoice_id": "0e9c…"
+    },
+    "credited_amount": 12500,
+    "currency": "SEK",
+    "journal_entry_id": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/{id}/mark-paid`
 
 **Record a payment against an invoice.**

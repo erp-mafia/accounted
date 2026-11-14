@@ -2413,6 +2413,70 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kreditfakturans verifikat skapades, men utfärdandet måste slutföras. Försök igen eller kontakta support.',
     message_en: 'The credit-note voucher was created, but issuance must be completed. Retry or contact support.',
   },
+  // Linking an existing credit note to the invoice it credits (crm#1852,
+  // lib/invoices/link-credit-note.ts). The link never books, so every pair
+  // an ordinary credit would have booked is refused.
+  INVOICE_CREDIT_LINK_NOT_A_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv: 'Dokumentet är inte en utfärdad kreditfaktura som går att koppla. Det ska ha ett negativt belopp, vara utfärdat och inte ha någon återbetalning registrerad.',
+    message_en: 'The document is not an issued credit note that can be linked. It must have a total below zero, be issued and have no refund recorded.',
+    remediation: {
+      description: 'Pass the id of the existing credit note as credit_note_id and the invoice it credits as the invoice. details.reason says what was wrong: not_an_invoice, not_negative, status or refunded.',
+    },
+  },
+  INVOICE_CREDIT_LINK_ALREADY_LINKED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan är redan kopplad till en faktura.',
+    message_en: 'The credit note is already linked to an invoice.',
+    remediation: {
+      description: 'details.credited_invoice_id is the invoice it credits; details.same_invoice is true when that is the invoice you named. A credit note credits one invoice and the link cannot be moved.',
+    },
+  },
+  INVOICE_CREDIT_LINK_ORIGINAL_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Fakturan kan inte krediteras av den här kreditfakturan. Den ska vara en utfärdad kundfaktura som inte redan är krediterad, makulerad eller har en kreditfaktura.',
+    message_en: 'The invoice cannot be credited by this credit note. It must be an issued sales invoice that is not already credited, cancelled or carrying a credit note.',
+    remediation: {
+      description: 'details.reason: same_document, not_an_invoice, is_credit_note, status (details.status is the current one) or has_credit_note. Re-read the invoice and pick the invoice the credit note actually credits.',
+    },
+  },
+  INVOICE_CREDIT_LINK_CUSTOMER_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturan och fakturan har olika kunder. En kreditfaktura kan bara kopplas till en faktura till samma kund.',
+    message_en: 'The credit note and the invoice belong to different customers. A credit note can only be linked to an invoice of the same customer.',
+    remediation: {
+      description: 'Compare customer_id on both documents. If the same customer exists twice in the register, merge the two customers first.',
+    },
+  },
+  INVOICE_CREDIT_LINK_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturan och fakturan har olika valuta eller växelkurs och kan inte kvittas mot varandra.',
+    message_en: 'The credit note and the invoice carry different currencies or exchange rates and cannot be set against each other.',
+    remediation: {
+      description: 'details.reason is currency or exchange_rate. A credit note carries the currency and the rate of the invoice it credits.',
+    },
+  },
+  INVOICE_CREDIT_LINK_BOOKING_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Kopplingen bokför ingenting, och för de här två dokumenten skulle en vanlig kreditering ha bokfört ett verifikat. Bokför krediteringen i bokföringen först.',
+    message_en: 'The link books nothing, and for these two documents an ordinary credit would have booked a verifikat. Make the entries in the bookkeeping first.',
+    remediation: {
+      description: 'details.reason: accrual_method (faktureringsmetoden: a credit always reverses the invoice in the ledger), original_paid_or_booked (the invoice has a verifikat or a payment), credit_note_booked (the credit note has a verifikat), rot_rut (part of the claim is on Skatteverket) or customer_loss_decision (the invoice has a kundförlust decision whose reserve is released by a verifikat). Nothing is booked for you here.',
+    },
+  },
+  INVOICE_CREDIT_LINK_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturans belopp stämmer inte med det som står öppet på fakturan. Kopplingen kräver att kreditfakturan krediterar hela det öppna beloppet.',
+    message_en: 'The credit note amount does not match what is open on the invoice. The link requires the credit note to credit the whole open amount.',
+    remediation: {
+      description: 'details.credit_amount and details.open_amount are the two figures. details.reason: exceeds_open_amount, partial_credit (a partial credit cannot be linked yet) or credit_cap (the database refused the pair).',
+    },
+  },
+  INVOICE_CREDIT_LINK_RACE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan eller kreditfakturan ändrades samtidigt och kopplingen gjordes inte. Ladda om och försök igen.',
+    message_en: 'The invoice or the credit note changed concurrently and the link was not made. Reload and retry.',
+  },
   INVOICE_CREDIT_ALREADY_ISSUED: {
     httpStatus: 409,
     message_sv: 'Kreditfakturan har redan utfärdats.',

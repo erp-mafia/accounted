@@ -104,6 +104,7 @@ export const V1_HANDLE_COVERAGE: Readonly<Record<string, HandleDeclaration>> = O
   'invoices.update': INV,
   'invoices.cancel': INV,
   'invoices.credit': INV,
+  'invoices.link-credit-note': { type: 'invoice', at: 'invoice' },
   'invoices.mark-paid': INV,
   'invoices.mark-sent': INV,
   'invoices.quote-status': INV,

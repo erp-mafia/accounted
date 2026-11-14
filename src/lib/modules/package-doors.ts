@@ -339,6 +339,8 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'op:invoices.book',
     'op:invoices.bulk-book',
     'op:invoices.cancel',
+    // Links two documents that already exist; creates none.
+    'op:invoices.link-credit-note',
     'op:invoices.customer-loss.record',
     // A set-off of two invoices already issued and registered.
     'op:invoices.setoff.book',
