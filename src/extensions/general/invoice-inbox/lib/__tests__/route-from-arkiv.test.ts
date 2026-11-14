@@ -495,6 +495,12 @@ describe('requeueHiddenRoutedItems', () => {
 })
 
 describe('inboxSawABill: where the readers disagree, the item stays in Underlag', () => {
+  it("keeps the company's own invoice in Underlag, whatever Arkiv typed it (crm#1830)", () => {
+    const own = { documentKind: 'other', sellerIsOwnCompany: true, supplier: { name: null }, totals: { total: null } }
+    expect(inboxSawABill(own, 'customer_invoice')).toBe(true)
+    expect(inboxSawABill({ ...own, sellerIsOwnCompany: undefined }, 'customer_invoice')).toBe(false)
+  })
+
   it('keeps what the inbox read as a receipt or supplier invoice, whatever Arkiv typed it', () => {
     expect(inboxSawABill({ documentKind: 'supplier_invoice' }, 'customer_invoice')).toBe(true)
     expect(inboxSawABill({ documentKind: 'receipt' }, 'other')).toBe(true)

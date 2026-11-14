@@ -419,7 +419,9 @@ export function FocusDecision({
               ? t('action_pick_other_row')
               : decision.question === 'invoice_paid'
                 ? t('action_match_paid')
-                : t('action_match_company')}
+                : decision.question === 'own_invoice'
+                  ? t('action_match_payment')
+                  : t('action_match_company')}
           </Button>
         )
       case 'expense':
@@ -789,6 +791,8 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
         return null
       case 'credit_note':
         return t('ev_credit_note')
+      case 'own_invoice':
+        return t('ev_own_invoice')
       case 'reading':
         return t('ev_reading')
       case 'unreadable':

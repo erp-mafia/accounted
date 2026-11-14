@@ -14,6 +14,7 @@ import type { InboxPurchaseCategory } from '@/lib/categories/inbox-purchase-cate
 import type { PurchaseCategoryAlternative } from '@/lib/categories/propose-purchase-category'
 import type { DocumentReading } from '@/lib/documents/reading/types'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { inboxKindLabelKey, isOwnIssuedInvoice } from '@/lib/documents/inbox-kind'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { bookedOnAccount, focusDecision, type DecisionQuestion, type InkorgStartable } from '@/lib/inkorg/decision'
@@ -205,14 +206,16 @@ export function FocusStage({
   // transaction (also when this underlag has not reached it yet, which is why it is here).
   const whyEntryId = item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? item.document_journal_entry_id ?? null
   // Each part stays whole when the line wraps: a date never breaks inside.
+  const kindLabelKey = inboxKindLabelKey(headline.kind, item.extracted_data)
   const metaParts = [
-    headline.kind ? tWork(`doc_kind_${headline.kind}`) : null,
+    kindLabelKey ? tWork(kindLabelKey) : null,
     doorName(doorOf(item)),
     shortDateTime(item.created_at, locale),
   ].filter((part): part is string => Boolean(part))
 
+  // The company's own invoice bought nothing: no category is asked for.
   const category =
-    item.extracted_data && detail?.purchase_category !== undefined ? (
+    item.extracted_data && !isOwnIssuedInvoice(item.extracted_data) && detail?.purchase_category !== undefined ? (
       <PurchaseCategoryChip
         itemId={item.id}
         value={detail.purchase_category}

@@ -11,6 +11,7 @@ import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import { cn, formatCurrency } from '@/lib/utils'
 import { OVERDUE_CHIP } from '@/lib/status-display'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
+import { inboxKindLabelKey } from '@/lib/documents/inbox-kind'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { rowStatus } from '@/lib/inkorg/decision'
 import { doorOf, itemHeadline, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
@@ -101,13 +102,14 @@ function InkorgRow({
   const subject = item.email_subject?.trim() || null
 
   // The document's own line: what the mail said, else its kind and number.
+  const kindLabelKey = inboxKindLabelKey(headline.kind, item.extracted_data)
   const ownLine =
     subject && subject !== headline.name
       ? subject
-      : invoiceNumber && headline.kind
-        ? t('row_doc_number', { kind: tKind(`doc_kind_${headline.kind}`), number: invoiceNumber })
-        : headline.kind
-          ? tKind(`doc_kind_${headline.kind}`)
+      : invoiceNumber && kindLabelKey
+        ? t('row_doc_number', { kind: tKind(kindLabelKey), number: invoiceNumber })
+        : kindLabelKey
+          ? tKind(kindLabelKey)
           : null
   // An invoice whose receipt came with it carries it on this row: the receipt has none of its own.
   // The marker sits beside the line, never inside it, so a long subject truncates without hiding it.

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   INBOX_KIND_FILTERS,
+  inboxKindLabelKey,
+  isOwnIssuedInvoice,
   matchesInboxKindFilter,
   resolveInboxKind,
   type InboxDocumentKind,
@@ -116,5 +118,41 @@ describe('matchesInboxKindFilter', () => {
 
   it('exposes the three filters in menu order', () => {
     expect(INBOX_KIND_FILTERS).toEqual(['all', 'supplier_invoice', 'underlag'])
+  })
+})
+
+describe("the company's own invoice (crm#1830)", () => {
+  const own = { documentKind: 'other', sellerIsOwnCompany: true, supplier: { name: null } }
+
+  it('is the reading the own-company guard stamped: other, seller the company, no seller named', () => {
+    expect(isOwnIssuedInvoice(own)).toBe(true)
+    expect(isOwnIssuedInvoice({ ...own, supplier: null })).toBe(true)
+    expect(isOwnIssuedInvoice({ documentKind: 'other', supplier: { name: null } })).toBe(false)
+    expect(isOwnIssuedInvoice({ documentKind: 'supplier_invoice', supplier: { name: null } })).toBe(false)
+    expect(isOwnIssuedInvoice(null)).toBe(false)
+    expect(isOwnIssuedInvoice(undefined)).toBe(false)
+  })
+
+  it('stops counting once a person names a seller or types the document', () => {
+    expect(isOwnIssuedInvoice({ ...own, supplier: { name: 'Leverantören AB' } })).toBe(false)
+    expect(isOwnIssuedInvoice({ ...own, supplier: { name: '  ' } })).toBe(true)
+    expect(isOwnIssuedInvoice({ ...own, documentKind: 'supplier_invoice' })).toBe(false)
+    expect(resolveInboxKind({ kind_hint: 'supplier_invoice', extracted_data: { ...own, documentKind: 'supplier_invoice' } })).toBe('supplier_invoice')
+  })
+
+  it("is never a supplier's document, whatever address it was mailed to", () => {
+    expect(resolveInboxKind({ extracted_data: own })).toBe('other')
+    expect(resolveInboxKind({ kind_hint: 'supplier_invoice', extracted_data: own })).toBe('other')
+    expect(resolveInboxKind({ kind_hint: 'receipt', extracted_data: own })).toBe('other')
+    // Not even with a credit's amounts: it credits nothing the company owes.
+    expect(resolveInboxKind({ kind_hint: 'supplier_invoice', extracted_data: { ...own, totals: { subtotal: -100, vatAmount: -25, total: -125 } } })).toBe('other')
+    expect(matchesInboxKindFilter(resolveInboxKind({ kind_hint: 'supplier_invoice', extracted_data: own }), 'supplier_invoice')).toBe(false)
+  })
+
+  it('is labelled as the own invoice; everything else by its kind', () => {
+    expect(inboxKindLabelKey('other', own)).toBe('doc_kind_own_invoice')
+    expect(inboxKindLabelKey('other', { documentKind: 'other' })).toBe('doc_kind_other')
+    expect(inboxKindLabelKey('supplier_invoice', { documentKind: 'supplier_invoice' })).toBe('doc_kind_supplier_invoice')
+    expect(inboxKindLabelKey(null, null)).toBeNull()
   })
 })

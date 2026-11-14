@@ -712,3 +712,15 @@ describe('oneClickOutcome', () => {
     expect(oneClickOutcome(noBank, planOneClick(noBank), { category: false, seller: false })).toMatchObject({ oneClick: false, bank: 'none' })
   })
 })
+
+describe("the company's own invoice (crm#1830)", () => {
+  it('is never booked as a cost in one click, with or without a bank row', () => {
+    const own = { ...doc({ documentKind: 'other', totals: { subtotal: 120, vatAmount: 30, total: 150 } }), sellerIsOwnCompany: true }
+    for (const bank of [BANK, { ...BANK, source: 'matched' as const }, null]) {
+      const plan = planOneClick(input({ kind: 'other', reading: own, bank }))
+      expect(plan.form).toBeNull()
+      expect(plan.reason).toBe('own_invoice')
+      expect(plan.lines).toEqual([])
+    }
+  })
+})

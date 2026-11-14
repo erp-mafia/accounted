@@ -159,6 +159,7 @@ export const inboxItemsGet = defineOperation({
     doNotUseFor: 'Scanning the queue (GET /inbox-items) or downloading the file (GET /documents/{id}/download).',
     pitfalls: [
       'extracted_data is what was read, not what was booked: check it against the document before converting.',
+      'extracted_data.sellerIsOwnCompany true (with documentKind other and an empty supplier) means the seller on the document is the company itself: its own sales invoice, not a purchase. Never convert it to a supplier invoice or book a cost from it; link it to the payment it brought in, or leave it. If the reading got it wrong and the document is a purchase, say so through PATCH /inbox-items/{id}: the seller it really names and its documentKind.',
       'email_body_text can carry personal data: do not copy it into notes or descriptions.',
       'An id from another company answers 404 INBOX_ITEM_NOT_FOUND.',
       'reading.fields holds only fields something read; evidence is never the model\'s own confidence, and a value a person cleared is null with source person.',

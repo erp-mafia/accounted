@@ -307,6 +307,15 @@ export function dropMalformedVatNumber(data: InvoiceExtractionResult): InvoiceEx
  * equals the receiving company's own, the whole supplier block is nulled.
  * A false positive costs an empty LEVERANTÖR field the user fills in by
  * hand; wrong data is never written.
+ *
+ * An invoice or a credit note whose seller is the company itself is the
+ * company's own sales document, issued from another invoicing system and sent
+ * in (crm#1830): never a purchase. Emptying the seller alone left it a
+ * "supplier invoice" with no supplier and a cost category proposed off its
+ * lines. The reading says so instead: documentKind 'other' (not a purchase
+ * to any reader) and sellerIsOwnCompany, which the inbox shows as the
+ * company's own invoice (isOwnIssuedInvoice, lib/documents/inbox-kind.ts).
+ * A person who names a seller or types the document takes it back.
  */
 export function stripOwnCompanyAsSupplier(
   data: InvoiceExtractionResult,
@@ -328,8 +337,10 @@ export function stripOwnCompanyAsSupplier(
     ownName !== '' &&
     data.supplier.name?.trim().toLowerCase() === ownName
   if (!orgHit && !vatHit && !nameHit) return data
+  const ownSalesDocument = data.documentKind === 'supplier_invoice' || data.documentKind === 'credit_note'
   return {
     ...data,
+    ...(ownSalesDocument ? { documentKind: 'other' as const, sellerIsOwnCompany: true } : {}),
     supplier: {
       name: null,
       orgNumber: null,
