@@ -83,7 +83,7 @@ describe('stale deploy wiring', () => {
 
   it('DeployReloadPrompt shows its reload card on the announcement', () => {
     const src = readFileSync(path.join(SRC, 'components/system/DeployReloadPrompt.tsx'), 'utf8')
-    expect(src).toMatch(/onStaleDeploy\(window, \(\) => setStale\(true\)\)/)
+    expect(src).toMatch(/onStaleDeploy\(window, \(\) => \{\s+setLiveBuildId\(\(known\) => known \?\? ''\)[\s\S]{0,120}setCardDue\(true\)/)
   })
 
   it('Ladda om shows that it is working and reloads once, however often it is clicked', () => {

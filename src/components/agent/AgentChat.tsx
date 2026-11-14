@@ -28,6 +28,7 @@ import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import { sendFeedback, type FeedbackSentiment } from './feedback-client'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useHoldSoftNavigation } from '@/lib/hooks/use-unsaved-changes'
 
 // New messages arrive one at a time, so they enter on the short bubble curve.
 // The whole loaded history must NOT: `.animate-slide-up` is the 500ms
@@ -260,6 +261,9 @@ export default function AgentChat({
   const errorLocale = useLocale() as ErrorLocale
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // A draft or an answer in flight survives a page change today (the docked
+  // panel lives in the layout); a full load to pick up a new deploy would drop it.
+  useHoldSoftNavigation(streaming || input.trim() !== '')
   // Turn boundaries for the status channel are derived from the streaming flag
   // rather than published at each call site: a turn can end by completing,
   // erroring, aborting or being stopped, and a channel that misses one of
