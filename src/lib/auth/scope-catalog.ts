@@ -448,6 +448,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_counterparty_setoff: 'invoices:write',
   gnubok_delete_supplier_invoice: 'suppliers:write',
   gnubok_uncredit_supplier_invoice: 'suppliers:write',
+  gnubok_update_supplier_invoice: 'suppliers:write',
   gnubok_update_supplier_invoice_item_account: 'suppliers:write',
   gnubok_agi_validate_huvuduppgift: 'compliance:read',
   // Operation registry, wave 3: documents, transactions, rättelse, filing.

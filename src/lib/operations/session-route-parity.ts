@@ -609,7 +609,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PUT /api/suppliers/:id': covered([`PATCH ${V}/suppliers/:id`, 'gnubok_update_supplier']),
   'DELETE /api/suppliers/:id': covered([`DELETE ${V}/suppliers/:id`]),
   'POST /api/supplier-invoices': covered([`POST ${V}/supplier-invoices`, 'gnubok_create_supplier_invoice_from_inbox']),
-  'PUT /api/supplier-invoices/:id': covered([`PATCH ${V}/supplier-invoices/:id`]),
+  'PUT /api/supplier-invoices/:id': covered([`PATCH ${V}/supplier-invoices/:id`, 'gnubok_update_supplier_invoice']),
   'DELETE /api/supplier-invoices/:id': covered([`DELETE ${V}/supplier-invoices/:id`, 'gnubok_delete_supplier_invoice']),
   'POST /api/supplier-invoices/:id/approve': covered([`POST ${V}/supplier-invoices/:id/approve`, 'gnubok_approve_supplier_invoice']),
   'POST /api/supplier-invoices/:id/reject': covered([`POST ${V}/supplier-invoices/:id/reject`]),

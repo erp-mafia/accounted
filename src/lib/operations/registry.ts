@@ -109,6 +109,7 @@ import {
   supplierInvoicesDelete,
   supplierInvoicesMarkBankEntered,
   supplierInvoicesUncredit,
+  supplierInvoicesUpdate,
   supplierInvoicesUpdateItemAccount,
 } from './supplier-invoice-actions'
 import {
@@ -384,6 +385,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // supplier-invoice-actions
   supplierInvoicesDelete,
   supplierInvoicesUncredit,
+  supplierInvoicesUpdate,
   supplierInvoicesUpdateItemAccount,
   supplierInvoicesMarkBankEntered,
   // expense-claims

@@ -25,13 +25,9 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
-import { v1OperationHandler } from '@/lib/operations/v1'
+import { v1OperationHandler, v1OutcomeResponse } from '@/lib/operations/v1'
 import { supplierInvoicesDelete } from '@/lib/operations/supplier-invoice-actions'
-import {
-  findChangedVerifikatFields,
-  findLockedVerifikatFields,
-} from '@/lib/supplier-invoices/lifecycle'
-import { selfBilledLockedFields } from '@/lib/supplier-invoices/self-billing/edit-guard'
+import { updateSupplierInvoiceHeader } from '@/lib/supplier-invoices/update-header'
 
 // V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
 // consumed by the dashboard, where unknown keys are silently stripped, fine
@@ -254,174 +250,68 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    const updateData: Record<string, unknown> = {}
-    for (const key of [
-      'supplier_invoice_number',
-      'invoice_date',
-      'due_date',
-      'delivery_date',
-      'payment_reference',
-      'notes',
-    ] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-    if (Object.keys(updateData).length === 0) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'At least one field must be supplied for update.' },
-      })
-    }
+    // The header fields this endpoint writes; anything else the schema lets
+    // through (auto_debit) is not part of its contract.
+    const { supplier_invoice_number, invoice_date, due_date, delivery_date, payment_reference, notes } = body
+    const updateData = { supplier_invoice_number, invoice_date, due_date, delivery_date, payment_reference, notes }
 
-    // Status guard before doing anything else.
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('supplier_invoices')
-      .select(SI_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', invoiceId)
-      .maybeSingle()
-
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SI_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'registered') {
-      return v1ErrorResponseFromCode('SI_NOT_DRAFT', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
-    }
-
-    // A register-only key (suppliers:register, crm#1548) edits what it could
-    // have registered: no verifikat, not approved or bank-entered, not a
-    // självfaktura. Anything further on needs suppliers:write.
-    if (!scopeSatisfied(ctx.scopes, 'suppliers:write')) {
-      const held = existing as {
-        registration_journal_entry_id: string | null
-        approved_at: string | null
-        bank_entered_at: string | null
-        is_self_billed: boolean | null
-      }
-      if (held.registration_journal_entry_id || held.approved_at || held.bank_entered_at || held.is_self_billed) {
-        return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            required_scope: 'suppliers:write',
-            granted_scopes: ctx.scopes,
-            message:
-              'This supplier invoice has a verifikat, is approved or bank-entered, or is a self-billing invoice: editing it needs suppliers:write.',
-          },
-        })
-      }
-    }
-
-    // An issued self-billing invoice keeps its number and date (crm#1367).
-    const selfBilledFields = selfBilledLockedFields(
-      body,
-      existing as { is_self_billed: boolean | null; supplier_invoice_number: string | null; invoice_date: string | null },
-    )
-    if (selfBilledFields.length > 0) {
-      return v1ErrorResponseFromCode('SI_SELF_BILL_IMMUTABLE', ctx.log, {
-        requestId: ctx.requestId,
-        details: { fields: selfBilledFields },
-      })
-    }
-
-    // For a company without defer_invoice_booking the registration verifikat is
-    // posted at create time, so a 'registered' SI is normally already booked.
-    // invoice_date is that entry's entry_date and supplier_invoice_number is in
-    // its description: patching either here would desync the verifikat outside
-    // both sanctioned rättelse paths (#1230). Dry-run is gated too, so the
-    // preview never promises a write the real call refuses.
-    const lockedFields = findLockedVerifikatFields(
-      body,
-      existing as {
-        registration_journal_entry_id: string | null
-        invoice_date: string | null
-        supplier_invoice_number: string | null
+    // The rules (unsettled only, self-billing identity, the fields a posted
+    // registration verifikat carries, the compare-and-swap write) live in
+    // lib/supplier-invoices/update-header.ts, shared with the dashboard and
+    // the MCP tool. This door is narrower on two points, asked of the stored
+    // row before those rules: it takes only a registered invoice, and it
+    // leaves the status label to the daily check.
+    const outcome = await updateSupplierInvoiceHeader(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      invoiceId,
+      updateData,
+      {
+        dryRun: ctx.dryRun,
+        columns: SI_DETAIL_COLUMNS,
+        keepStatus: true,
+        doorGate: (existing) => {
+          if (existing.status !== 'registered') {
+            return { ok: false, code: 'SI_NOT_DRAFT', details: { current_status: existing.status } }
+          }
+          // A register-only key (suppliers:register, crm#1548) edits what it
+          // could have registered: no verifikat, not approved or bank-entered,
+          // not a självfaktura. Anything further on needs suppliers:write.
+          if (
+            !scopeSatisfied(ctx.scopes, 'suppliers:write') &&
+            (existing.registration_journal_entry_id ||
+              existing.approved_at ||
+              existing.bank_entered_at ||
+              existing.is_self_billed)
+          ) {
+            return {
+              ok: false,
+              code: 'INSUFFICIENT_SCOPE',
+              details: {
+                required_scope: 'suppliers:write',
+                granted_scopes: ctx.scopes,
+                message:
+                  'This supplier invoice has a verifikat, is approved or bank-entered, or is a self-billing invoice: editing it needs suppliers:write.',
+              },
+            }
+          }
+          return null
+        },
       },
     )
-    if (lockedFields.length > 0) {
-      return v1ErrorResponseFromCode('SI_EDIT_VERIFIKAT_LOCKED', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          fields: lockedFields,
-          journal_entry_id: (existing as { registration_journal_entry_id: string | null })
-            .registration_journal_entry_id,
-        },
-      })
+
+    // The public contract of this endpoint, kept: a dry run answers the merged
+    // record alone, and a lost race reads as "no longer registered".
+    if (outcome.ok && outcome.dryRun) {
+      const { changes: _changes, ...merged } = outcome.preview
+      return dryRunPreview(merged, { requestId: ctx.requestId, log: ctx.log })
     }
-
-    if (ctx.dryRun) {
-      return dryRunPreview({ ...existing, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
-    }
-
-    // The lock check read a row that was still unbooked. If this patch moves a
-    // verifikat-critical field, the write stays conditional on that: a
-    // registration entry posted in between must lose the race rather than end
-    // up disagreeing with the invoice it was built from.
-    const movesVerifikatFields =
-      findChangedVerifikatFields(
-        body,
-        existing as { invoice_date: string | null; supplier_invoice_number: string | null },
-      ).length > 0
-
-    let write = ctx.supabase
-      .from('supplier_invoices')
-      .update(updateData)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', invoiceId)
-      // Race guard: another request may have approved / paid between the
-      // pre-flight status check and this update.
-      .eq('status', 'registered')
-    if (movesVerifikatFields) {
-      write = write.is('registration_journal_entry_id', null)
-    }
-
-    const { data, error } = await write.select(SI_DETAIL_COLUMNS).maybeSingle()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      // Either the status moved or a registration entry landed. Re-read so the
-      // caller gets the reason that actually applies instead of a guess.
-      const { data: current } = await ctx.supabase
-        .from('supplier_invoices')
-        .select('status, registration_journal_entry_id, invoice_date, supplier_invoice_number')
-        .eq('company_id', ctx.companyId!)
-        .eq('id', invoiceId)
-        .maybeSingle()
-
-      const nowLocked = current
-        ? findLockedVerifikatFields(
-            body,
-            current as {
-              registration_journal_entry_id: string | null
-              invoice_date: string | null
-              supplier_invoice_number: string | null
-            },
-          )
-        : []
-      if (nowLocked.length > 0) {
-        return v1ErrorResponseFromCode('SI_EDIT_VERIFIKAT_LOCKED', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            fields: nowLocked,
-            journal_entry_id: (current as { registration_journal_entry_id: string | null })
-              .registration_journal_entry_id,
-            reason: 'race',
-          },
-        })
-      }
+    if (!outcome.ok && outcome.code === 'SI_EDIT_CONFLICT') {
       return v1ErrorResponseFromCode('SI_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'race' },
       })
     }
-
-    return ok(data, { requestId: ctx.requestId })
+    return v1OutcomeResponse(outcome, ctx)
   },
   { requireIdempotencyKey: true },
 )
