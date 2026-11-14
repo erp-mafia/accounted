@@ -194,6 +194,17 @@ describe('invoicer role: reads', () => {
     expect(result.members).toEqual([seed.invoicer])
   })
 
+  it('reads an invoice\'s delivery history through the definer reader, by its own membership (for #206)', async () => {
+    // GET /api/invoices/[id]/deliveries runs on the role's own session
+    // (INVOICER_ROUTES, `session`): list_invoice_delivery_summaries asks for
+    // a member of the active company, whatever the role. Nothing is seeded,
+    // so the answer is an empty history, not a refusal.
+    const result = await withUserContext(seed.invoicer, (client) =>
+      client.query(`SELECT id FROM public.list_invoice_delivery_summaries($1, $2)`, [seed.companyId, seed.invoiceId]),
+    )
+    expect(result.rows).toEqual([])
+  })
+
   it('is left out of the shared membership checks', async () => {
     const result = await withUserContext(seed.invoicer, async (client) => {
       const ids = await client.query(`SELECT * FROM public.user_company_ids()`)

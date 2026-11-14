@@ -71,14 +71,18 @@ export function invoiceAttachmentSizeVerdict(
  * crm#1545); mark-sent, a Kivra or Billo mailbox and the PDF download do not.
  * Only while the set can still change: a draft, or a document the editor has
  * not saved yet (`status` null). The sandbox sends neither, and a plan
- * without email cannot email.
+ * without email cannot email. The invoicing-only role does not reach the
+ * attachment routes (lib/auth/invoicer-role.ts), so no step offers it files
+ * that every request would refuse (for #206).
  */
 export function offersInvoiceAttachments(input: {
   channel: EditorChannel | null
   status: string | null
   isSandbox: boolean
   canEmail: boolean
+  invoicer?: boolean
 }): boolean {
+  if (input.invoicer) return false
   const carries = input.channel === 'peppol' || (input.channel === 'email' && input.canEmail)
   return carries && (input.status === null || input.status === 'draft') && !input.isSandbox
 }

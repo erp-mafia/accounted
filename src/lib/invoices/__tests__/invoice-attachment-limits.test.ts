@@ -33,6 +33,15 @@ describe('invoiceAttachmentSizeVerdict (#79)', () => {
 describe('offersInvoiceAttachments (#79, crm#1315)', () => {
   const base = { isSandbox: false, canEmail: true }
 
+  it('offers the invoicing-only role nothing: it does not reach the attachment routes (for #206)', () => {
+    for (const channel of ['email', 'peppol'] as const) {
+      for (const status of [null, 'draft']) {
+        expect(offersInvoiceAttachments({ ...base, channel, status, invoicer: true })).toBe(false)
+        expect(offersInvoiceAttachments({ ...base, channel, status, invoicer: false })).toBe(true)
+      }
+    }
+  })
+
   it('offers them when the editor emails a document it has not saved yet', () => {
     expect(offersInvoiceAttachments({ ...base, channel: 'email', status: null })).toBe(true)
   })

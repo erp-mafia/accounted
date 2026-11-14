@@ -5,6 +5,7 @@ import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
 import { isFullBleedEditorPath } from '@/lib/invoices/editor/new-editor-params'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,9 @@ export function MainContainer({
   children: ReactNode
 }) {
   const pathname = usePathname()
+  // The invoicing-only role never reaches the import: no banner, so no poll
+  // of the SIE holds the server refuses every time (for #206).
+  const holdCompanyId = useIsInvoicer() ? null : companyId
 
   // The panel (<main>) is its own scroll container on desktop, so Next's
   // built-in scroll-to-top on navigation (which targets the window) never
@@ -49,7 +53,7 @@ export function MainContainer({
   if (isFullBleed) {
     return (
       <div key={companyId ?? ''} className="h-full">
-        <SIEImportHoldBanner companyId={companyId} />
+        <SIEImportHoldBanner companyId={holdCompanyId} />
         {children}
       </div>
     )
@@ -64,7 +68,7 @@ export function MainContainer({
   // of a page scrolls clear of the button (crm#1841).
   return (
     <div key={companyId ?? ''} className={cn('px-4 pb-8 pt-4 md:px-6', AGENT_FAB_CLEARANCE_CLASS)}>
-      <SIEImportHoldBanner companyId={companyId} />
+      <SIEImportHoldBanner companyId={holdCompanyId} />
       {children}
     </div>
   )

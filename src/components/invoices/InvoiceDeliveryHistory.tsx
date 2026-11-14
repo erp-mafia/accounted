@@ -9,6 +9,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
 import { mergeDeliveryHistory, type MailboxDispatchView } from '@/lib/invoices/digital-mailbox-view'
+import { invoiceArchivedPdfUrl } from '@/lib/invoices/invoice-pdf-source'
 import { PROVIDER_DISPLAY_NAMES } from '@/lib/providers/unfinished-connect'
 import type { ProviderName } from '@/lib/providers/types'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
@@ -39,6 +40,8 @@ interface InvoiceDeliveryHistoryProps {
   /** Sends to the customer's Kivra or Billo mailbox, merged in by time. */
   mailboxDispatches?: MailboxDispatchView[]
   showLegacyEmptyState: boolean
+  /** Set for the invoicing-only role: a delivery's file is linked through this invoice, not through /api/documents. */
+  pdfThroughInvoiceId?: string
 }
 
 /**
@@ -74,8 +77,13 @@ export function InvoiceDeliveryHistory({
   deliveries,
   mailboxDispatches = [],
   showLegacyEmptyState,
+  pdfThroughInvoiceId,
 }: InvoiceDeliveryHistoryProps) {
   const t = useTranslations('invoice_detail')
+  // The invoicing-only role reads a delivery's file through the invoice; it
+  // never reaches /api/documents (lib/auth/invoicer-role.ts).
+  const pdfHref = (deliveryId: string, documentId: string) =>
+    pdfThroughInvoiceId ? invoiceArchivedPdfUrl(pdfThroughInvoiceId, deliveryId) : `/api/documents/${documentId}/inline`
   const format = useFormatter()
   const { appName } = useBranding()
 
@@ -195,7 +203,7 @@ export function InvoiceDeliveryHistory({
                       </p>
                       {delivery.document_attachment_id && (
                         <a
-                          href={`/api/documents/${delivery.document_attachment_id}/inline`}
+                          href={pdfHref(delivery.id, delivery.document_attachment_id)}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex max-w-full items-center gap-1 hover:underline"
@@ -299,7 +307,7 @@ export function InvoiceDeliveryHistory({
                           <dt className="text-muted-foreground">{t('delivery_pdf_label')}</dt>
                           <dd>
                             <a
-                              href={`/api/documents/${delivery.document_attachment_id}/inline`}
+                              href={pdfHref(delivery.id, delivery.document_attachment_id)}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex max-w-full items-center gap-1 hover:underline"

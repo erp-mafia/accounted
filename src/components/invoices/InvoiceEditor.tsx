@@ -94,6 +94,7 @@ import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { BankDetailsSetupForm } from '@/components/invoices/BankDetailsSetupForm'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { useAccounts, useArticles, useCompanySettings, useCustomers, useFiscalPeriods, usePaymentBankLedger } from '@/lib/reference-data/hooks'
 import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -372,6 +373,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { company, role, isSandbox } = useCompany()
+  // The invoicing-only role reaches the invoice routes and nothing around
+  // them (lib/auth/invoicer-role.ts): the reads below that the server
+  // refuses for it (payee accounts, mailbox and Peppol status, the payment
+  // link status, bilagor) are left out, and the editor behaves as it does
+  // when such a read fails (for #206).
+  const isInvoicer = isInvoicerRole(role)
   const hasEmailSend = useCapability(CAPABILITY.email_send)
   const supabase = createClient()
   const locale = useLocale() as ErrorLocale
@@ -410,7 +417,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // payment link section. Absent extension or no connection → toggle hidden.
   const [stripeConnected, setStripeConnected] = useState(false)
   useEffect(() => {
-    if (!paymentLinksEnabled) return
+    if (!paymentLinksEnabled || isInvoicer) return
     if (!ENABLED_EXTENSION_IDS.has('stripe')) return
     let cancelled = false
     fetch('/api/extensions/ext/stripe/status')
@@ -422,7 +429,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [paymentLinksEnabled])
+  }, [paymentLinksEnabled, isInvoicer])
   // Edit mode: the draft's stored ROT/RUT personnummer, in display form
   // (YYYYMMDD-XXXX). The row only carries ciphertext + last four digits, and
   // the mask must come from the server so the browser never holds both
@@ -1028,6 +1035,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // choice (two or more usable accounts for the invoice currency).
   const [payeeState, setPayeeState] = useState<{ accounts: CashAccount[]; defaults: InvoicePayeeDefault[] } | null>(null)
   useEffect(() => {
+    if (isInvoicer) return
     let cancelled = false
     fetch('/api/cash-accounts/payee-defaults')
       .then((res) => (res.ok ? res.json() : null))
@@ -1040,12 +1048,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isInvoicer])
   // The digital mailboxes this company sends through (Kivra, Billo), read
   // once: the caret menu offers one only where its send can go. A failed
   // read offers none; email stays the channel.
   const [mailboxProviders, setMailboxProviders] = useState<MailboxChannel[]>([])
   useEffect(() => {
+    if (isInvoicer) return
     let cancelled = false
     void fetchActiveSendingProviders().then((providers) => {
       if (!cancelled) setMailboxProviders(providers)
@@ -1053,12 +1062,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isInvoicer])
   // Whether the company sends e-fakturor (Peppol access and a transport),
   // read once: the caret menu lists Peppol only then. A failed read lists
   // none, as before.
   const [peppolSending, setPeppolSending] = useState<PeppolSending | null>(null)
   useEffect(() => {
+    if (isInvoicer) return
     let cancelled = false
     void fetchPeppolSending().then((sending) => {
       if (!cancelled) setPeppolSending(sending)
@@ -1066,7 +1076,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isInvoicer])
   const payeeOptions = useMemo(
     () => (payeeState ? payeeState.accounts.filter((a) => isUsableInvoicePayee(a, watchCurrency as Currency)) : []),
     [payeeState, watchCurrency],
@@ -3676,6 +3686,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       status: isEditMode ? (initial?.status ?? null) : null,
       isSandbox,
       canEmail: hasEmailSend,
+      invoicer: isInvoicer,
     })
       ? isEditMode && initial?.id
         ? { kind: 'invoice', invoiceId: initial.id }

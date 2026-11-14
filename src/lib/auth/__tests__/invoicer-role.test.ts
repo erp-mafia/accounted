@@ -29,6 +29,12 @@ describe('the invoicer allowlist', () => {
       'PATCH /api/invoices/[id]': 'scoped',
       'DELETE /api/invoices/[id]': 'scoped',
       'POST /api/invoices/[id]/send': 'scoped',
+      // for #206: number a draft the role saved, issue it without sending,
+      // read its delivery history and the PDF a delivery archived.
+      'POST /api/invoices/[id]/finalize': 'scoped',
+      'POST /api/invoices/[id]/mark-sent': 'scoped',
+      'GET /api/invoices/[id]/deliveries': 'session',
+      'GET /api/invoices/[id]/archived-pdf': 'scoped',
       'POST /api/invoices/[id]/convert': 'scoped',
       'POST /api/invoices/[id]/convert-to-order': 'scoped',
       'POST /api/invoices/[id]/quote-status': 'scoped',
@@ -134,6 +140,49 @@ describe('invoicerRouteAccess', () => {
     expect(invoicerRouteAccess('GET', '/api/invoices')).toBe('session')
     expect(invoicerRouteAccess('GET', `/api/customers/${ID}`)).toBe('session')
     expect(invoicerRouteAccess('GET', '/api/invoices/next-number')).toBe('scoped')
+  })
+
+  it('reaches its own invoice from draft to sent: number, issue, delivery history, archived PDF (for #206)', () => {
+    expect(invoicerRouteAccess('POST', `/api/invoices/${ID}/finalize`)).toBe('scoped')
+    expect(invoicerRouteAccess('POST', `/api/invoices/${ID}/mark-sent`)).toBe('scoped')
+    expect(invoicerRouteAccess('GET', `/api/invoices/${ID}/deliveries`)).toBe('session')
+    expect(invoicerRouteAccess('GET', `/api/invoices/${ID}/archived-pdf`)).toBe('scoped')
+    // Only as named: no other method, no path under them.
+    expect(invoicerRouteAccess('GET', `/api/invoices/${ID}/finalize`)).toBeNull()
+    expect(invoicerRouteAccess('POST', `/api/invoices/${ID}/deliveries`)).toBeNull()
+    expect(invoicerRouteAccess('POST', `/api/invoices/${ID}/archived-pdf`)).toBeNull()
+    expect(invoicerRouteAccess('GET', `/api/invoices/${ID}/deliveries/${ID}`)).toBeNull()
+  })
+
+  it('still stops at the payment, the books and the document archive around the invoice', () => {
+    for (const [method, path] of [
+      ['POST', `/api/invoices/${ID}/mark-paid`],
+      ['POST', `/api/invoices/${ID}/book`],
+      ['POST', `/api/invoices/${ID}/cancel`],
+      ['POST', `/api/invoices/${ID}/resend`],
+      ['POST', `/api/invoices/${ID}/send-payment-confirmation`],
+      ['POST', `/api/invoices/${ID}/refresh-exchange-rate`],
+      ['GET', `/api/invoices/${ID}/attachments`],
+      ['POST', `/api/invoices/${ID}/attachments`],
+      ['GET', `/api/invoices/${ID}/underlag`],
+      ['POST', `/api/invoices/${ID}/underlag`],
+      ['GET', `/api/invoices/${ID}/rot-rut`],
+      ['GET', `/api/invoices/${ID}/peppol`],
+      ['POST', `/api/invoices/${ID}/peppol/send`],
+      ['GET', `/api/invoices/${ID}/peppol/deliveries`],
+      ['GET', `/api/invoices/${ID}/digital-mailbox`],
+      ['POST', `/api/invoices/${ID}/digital-mailbox/send`],
+      ['GET', `/api/invoices/${ID}/collection`],
+      ['GET', `/api/invoices/${ID}/customer-loss`],
+      ['GET', `/api/documents/${ID}/inline`],
+      ['GET', '/api/documents'],
+      ['GET', '/api/bookkeeping/accounts'],
+      ['GET', '/api/import/sie/holds'],
+      ['GET', '/api/reminders/overview'],
+      ['GET', '/api/cash-accounts/payee-defaults'],
+    ]) {
+      expect(invoicerRouteAccess(method, path), `${method} ${path}`).toBeNull()
+    }
   })
 
   it('refuses everything else', () => {

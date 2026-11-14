@@ -117,6 +117,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod } from '@/types'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
@@ -280,6 +281,10 @@ export default function InvoicesPage() {
           today,
         })
   const { company } = useCompany()
+  // The invoicing-only role reaches the invoice list, not the reminder
+  // overview or the Peppol failures (lib/auth/invoicer-role.ts): those reads
+  // are left out for it instead of being refused on every visit (for #206).
+  const isInvoicer = useIsInvoicer()
   const { canWrite } = useCanWrite()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -345,7 +350,7 @@ export default function InvoicesPage() {
   const { uiState, loaded: uiStateLoaded } = useUiState()
   // Reminders (accounted#104): the offer or the status control, read once
   // after the list has loaded and only while REMINDERS_SENDING_ENABLED is on.
-  const reminders = useInvoiceListReminders(!isQuotesList && !isLoading)
+  const reminders = useInvoiceListReminders(!isQuotesList && !isLoading && !isInvoicer)
 
   // "Ny faktura" (and offert, proforma, självfaktura, copy) is its own page,
   // the one-screen editor at /invoices/new. Old links that opened the list's
@@ -553,7 +558,7 @@ export default function InvoicesPage() {
     const chipReads = Promise.allSettled([
       // The same definition as the Att göra row (peppol_failed_invoice_ids).
       // Quotes are never sent via Peppol.
-      isQuotesList ? Promise.resolve<string[]>([]) : fetchPeppolFailedInvoiceIds(),
+      isQuotesList || isInvoicer ? Promise.resolve<string[]>([]) : fetchPeppolFailedInvoiceIds(),
       // Open collection cases (an obligation read: shown whatever the start
       // gates say). Quotes never have one.
       isQuotesList

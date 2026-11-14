@@ -115,6 +115,16 @@ export function invoiceRerenderUrl(
 }
 
 /**
+ * The archived file of one delivery, read through the invoice
+ * (GET /api/invoices/[id]/archived-pdf). The invoicing-only role reads the
+ * sent invoice this way: it never reaches /api/documents, which opens any
+ * document of the company (lib/auth/invoicer-role.ts).
+ */
+export function invoiceArchivedPdfUrl(invoiceId: string, deliveryId: string): string {
+  return `/api/invoices/${encodeURIComponent(invoiceId)}/archived-pdf?delivery=${encodeURIComponent(deliveryId)}`
+}
+
+/**
  * The betalningsbekräftelse endpoint: the same re-render route in its paid
  * variant. The route refuses anything but a paid faktura and names the file
  * accordingly; the archived original is not involved at any point.
@@ -176,6 +186,8 @@ export function resolveInvoicePdfSource(input: {
   invoiceStatus: string
   deliveriesLoaded: boolean
   deliveries: InvoicePdfDelivery[]
+  /** Serve the archived copy through the invoice (invoiceArchivedPdfUrl): the invoicing-only role. */
+  archivedThroughInvoice?: boolean
 }): InvoicePdfSource {
   const rerenderUrl = invoiceRerenderUrl(input.invoiceId)
   const couldHaveBeenDelivered = (POSSIBLY_DELIVERED_STATUSES as readonly string[]).includes(
@@ -197,7 +209,9 @@ export function resolveInvoicePdfSource(input: {
   if (archived) {
     return {
       kind: 'archived',
-      url: `/api/documents/${encodeURIComponent(archived.document_attachment_id)}/inline`,
+      url: input.archivedThroughInvoice
+        ? invoiceArchivedPdfUrl(input.invoiceId, archived.id)
+        : `/api/documents/${encodeURIComponent(archived.document_attachment_id)}/inline`,
       deliveryId: archived.id,
       sentAt: archived.sent_at,
     }
