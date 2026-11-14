@@ -303,6 +303,25 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     expect(html).not.toMatch(/<script(?![^>]*nonce=)/)
   })
 
+  it("form-action names the origin Cursor's web callback forwards to", async () => {
+    // www.cursor.com answers 308 to cursor.com; a browser that re-checks
+    // form-action on every hop would stop there and Allow would look dead.
+    const response = await GET(
+      new Request(
+        buildAuthorizeUrl({
+          response_type: 'code',
+          redirect_uri: 'https://www.cursor.com/agents/mcp/oauth/callback',
+          code_challenge: 'abc',
+          code_challenge_method: 'S256',
+          scope: 'mcp',
+        }),
+      ),
+    )
+    expect(response.status).toBe(200)
+    const csp = response.headers.get('Content-Security-Policy') ?? ''
+    expect(csp).toMatch(/form-action 'self' https:\/\/www\.cursor\.com https:\/\/cursor\.com(;|$)/)
+  })
+
   it('mints its own nonce when the request did not come through the proxy', async () => {
     const request = new Request(
       buildAuthorizeUrl({

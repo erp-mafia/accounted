@@ -89,6 +89,32 @@ export function isBuiltInRedirectUri(uri: string): boolean {
   return builtInRedirectProvider(uri) !== null
 }
 
+/**
+ * Origins a built-in callback is known to forward the browser to before it
+ * answers. The consent page posts a form, and a browser that enforces CSP
+ * form-action re-checks every hop of the redirect chain, so an onward hop to
+ * an origin the policy does not name stops the navigation and the Allow
+ * button looks dead.
+ *
+ * Cursor's web callback https://www.cursor.com/agents/mcp/oauth/callback
+ * answers 308 to the same path on https://cursor.com (observed 2026-11-14,
+ * crm#1720). The code is still only ever sent to the exact allowlisted URI;
+ * this names where that host forwards it, nothing else.
+ */
+const BUILT_IN_ONWARD_ORIGINS: Readonly<Record<string, readonly string[]>> = {
+  'https://www.cursor.com': ['https://cursor.com'],
+}
+
+/** Onward origins the consent page's form-action must also allow for a built-in callback. */
+export function builtInOnwardOrigins(uri: string): readonly string[] {
+  if (!isBuiltInRedirectUri(uri)) return []
+  try {
+    return BUILT_IN_ONWARD_ORIGINS[new URL(uri).origin] ?? []
+  } catch {
+    return []
+  }
+}
+
 export type RedirectUriResolution =
   | { allowed: true; kind: 'built_in'; provider: BuiltInProvider }
   | {

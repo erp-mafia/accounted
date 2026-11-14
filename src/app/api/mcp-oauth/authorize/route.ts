@@ -13,6 +13,7 @@ import {
 } from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
 import {
+  builtInOnwardOrigins,
   capScopesForRole,
   lookupCompanyRole,
   resolveRedirectUri,
@@ -1084,7 +1085,12 @@ export async function GET(request: Request) {
   // so the post-consent 303 would be blocked in Chromium. A scheme-source
   // (cursor:) is the only form CSP offers for such a URI.
   const redirectUrl = new URL(redirectUri)
-  const formActionSource = redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin
+  // A built-in callback that forwards to another origin (www.cursor.com 308s
+  // to cursor.com) needs that origin named too, or the chain stops there.
+  const formActionSource = [
+    redirectUrl.origin === 'null' ? redirectUrl.protocol : redirectUrl.origin,
+    ...builtInOnwardOrigins(redirectUri),
+  ].join(' ')
   const csp = [
     "default-src 'none'",
     `script-src 'nonce-${cspNonce}'`,
