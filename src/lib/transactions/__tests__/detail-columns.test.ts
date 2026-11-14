@@ -24,7 +24,8 @@ describe('TRANSACTION_DETAIL_COLUMNS', () => {
     for (const column of ['original_description', 'provider_transaction_id', 'end_to_end_id', 'value_date']) {
       expect(parsed.columns).toContain(column)
     }
-  })
+    // Replays every migration file: past the default 5 s on a loaded CI runner.
+  }, 30_000)
 
   /**
    * Read parity: a column Accounted stores on a bank row is on the detail
@@ -60,5 +61,5 @@ describe('TRANSACTION_DETAIL_COLUMNS', () => {
     // The list only shrinks: a name the read now returns, or the table no longer has, goes.
     const stale = Object.keys(LEFT_OUT).filter((column) => onRead.has(column) || !table.columns.has(column))
     expect(stale).toEqual([])
-  })
+  }, 30_000)
 })
