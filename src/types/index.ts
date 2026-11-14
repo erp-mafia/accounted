@@ -4948,6 +4948,11 @@ export interface InvoiceExtractionResult {
     // card), so the amount due is total minus it. Never a card or bank
     // payment of the document itself. Optional: older readings lack it.
     prepaidAmount?: number | null
+    // On a document with a row per party (a capital call, a cost split
+    // between companies): the sum for all parties. total is then this
+    // company's own row, never this figure. Information only: never booked,
+    // never matched. Optional: older readings lack it.
+    documentTotal?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
   // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)

@@ -30,6 +30,7 @@ import {
   settleDatesByEmail,
   type ExtractionEmailContext,
 } from './email-date-context'
+import { OWN_SHARE_RULE, keepOwnShareAsTotal, ownCompanyInstruction } from './own-share'
 
 // Re-exported for callers and tests that import it from here.
 export { extractJsonObject }
@@ -205,6 +206,11 @@ export const ExtractionSchema = z.object({
     // reading derives the amount due from it; total stays what is booked.
     // Optional so cached raw outputs from before the field still validate.
     prepaidAmount: z.number().nullable().catch(null).optional(),
+    // On a document with a row per party (a capital call, a cost split): the
+    // sum for all of them, kept apart from total, which is this company's own
+    // row (crm#1831, own-share.ts). Information only, never booked or matched.
+    // Optional so cached raw outputs from before the field still validate.
+    documentTotal: z.number().nullable().catch(null).optional(),
   }),
   vatBreakdown: z.array(
     z.object({
@@ -449,7 +455,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "vatAmount": number | null,   // total VAT
     "total": number | null,       // amount including VAT: what the buyer actually pays
     "roundingAmount": number | null, // öresavrundning line, may be negative, e.g. -0.37
-    "prepaidAmount": number | null   // already settled amount the document deducts before the amount due, see rules
+    "prepaidAmount": number | null,  // already settled amount the document deducts before the amount due, see rules
+    "documentTotal": number | null   // null, except on a document for several parties, see the several parties rule
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
@@ -473,6 +480,7 @@ Rules:
 - Öresavrundning: Swedish receipts often show an "Avrundning"/"Öresavrundning" line. "total" is ALWAYS the amount actually paid AFTER rounding; put the rounding line in totals.roundingAmount (negative when rounded down). When present: subtotal + vatAmount + roundingAmount = total.
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
+- Several parties: ${OWN_SHARE_RULE}
 - prepaidAmount: when the document deducts an amount settled WITHOUT paying this document ("Applied balance", "Credit applied", "Account credit", "Paid in advance", "Avgår förskott", "Förskott", a gift card or voucher) before its amount due, "total" is the amount BEFORE that deduction and prepaidAmount is the deduction as a positive number (Total 7.75, Applied balance -7.75, Amount due 0.00: total 7.75, prepaidAmount 7.75). A card, Swish or bank payment of this document ("Amount paid", "Betalt", "Paid with Visa") is NOT a prepaidAmount. null when nothing is deducted.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
 - dueDate: ${DUE_DATE_RULE}
@@ -702,8 +710,9 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         total: nullable('number'),
         roundingAmount: nullable('number'),
         prepaidAmount: nullable('number'),
+        documentTotal: nullable('number'),
       },
-      required: ['subtotal', 'vatAmount', 'total', 'roundingAmount', 'prepaidAmount'],
+      required: ['subtotal', 'vatAmount', 'total', 'roundingAmount', 'prepaidAmount', 'documentTotal'],
     },
     vatBreakdown: {
       type: 'array',
@@ -771,7 +780,11 @@ export async function extractInvoiceFields(
     const baseMaxTokens = readAiConfig().extractionMaxTokens
     // The email rides in the instruction, after the document: the system
     // prompt stays one byte-stable, cached text for every reading.
-    const emailLines = emailContextInstruction(input.emailContext)
+    // The receiving company rides there too, so the model can tell its own
+    // row on a document that lists several parties (own-share.ts).
+    const emailLines = [emailContextInstruction(input.emailContext), ownCompanyInstruction(input.ownCompany)]
+      .filter(Boolean)
+      .join(' ')
     const request = {
       document: toDocumentInput(input),
       meter: { feature: 'inbox_extract', companyId: input.ownCompany?.companyId ?? null },
@@ -857,7 +870,7 @@ export async function extractInvoiceFields(
       // .transform, so no post-validation coercion is needed.
       data: dropMalformedVatNumber(
         stripOwnCompanyAsSupplier(
-          promoteSingleProminentAmount({ ...validated, invoice, confidence: 1 }),
+          keepOwnShareAsTotal(promoteSingleProminentAmount({ ...validated, invoice, confidence: 1 })),
           input.ownCompany
         )
       ),
