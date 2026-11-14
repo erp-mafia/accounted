@@ -26,6 +26,15 @@ describe('JournalEntryList compact rows', () => {
     expect(button).toContain("aria-label={t('density_compact')}")
   })
 
+  it('says what it does without being pressed: the name is on the button, and on is a check', () => {
+    const start = SRC.indexOf('onClick={toggleDensity}')
+    const button = SRC.slice(start, SRC.indexOf('</Button>', start))
+    // A bare icon had to be pressed to learn what it did (usage review 2026-11-13).
+    expect(button).toContain("{t('density_compact')}</span>")
+    expect(button).toContain('compact ? <CheckIcon')
+    expect(button).not.toContain('size="icon-sm"')
+  })
+
   it('persists the choice per company', () => {
     expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'")
     expect(SRC).toContain("DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')")

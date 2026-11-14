@@ -35,6 +35,7 @@ describe('GET /api/arkiv/search', () => {
 
   it('titles a page hit like the table does, agreement title first, and points every hit at its record and its page', async () => {
     enqueue({ data: [{ document_id: DOC, page_no: 2, file_name: 'IMG_7485.jpg', headline: '# Hyra\n\n**Hyran** uppgår till <b>12 500</b>', rank: 1 }] })
+    enqueue({ data: [] }) // file names
     enqueue({ data: [{ id: AGR, title: 'Hyresavtal Vasagatan 12', counterparty_name: 'Kvarnen AB', kind: 'rental', ends_on: null }] })
     enqueue({ data: [{ id: 'f1', predicate: 'vat_period', value_text: 'kvartal', subject_kind: 'company', subject_id: 'company-1', source_document_id: null }] })
     enqueue({ data: [{ id: DOC, file_name: 'IMG_7485.jpg', doc_type: 'agreement.rental' }] })
@@ -63,7 +64,7 @@ describe('GET /api/arkiv/search', () => {
         ],
       },
     })
-    expect(findCalls('document_attachments', 'in')).toEqual([['id', [DOC]]])
+    expect(findCalls('document_attachments', 'in')).toEqual([['admission_state', ['admitted', 'held']], ['id', [DOC]]])
     expect(findCalls('agreements', 'in')).toEqual([['source_document_id', [DOC]]])
     expect(captureArkivEvent).toHaveBeenCalledWith('arkiv_searched', { companyId: 'company-1', userId: 'user-1', kinds: 'all', query_length: 4, hits: 3 })
   })
@@ -71,6 +72,7 @@ describe('GET /api/arkiv/search', () => {
   it('outside the brain searches the documents only, whatever kinds were asked for', async () => {
     delete process.env.ARKIV_BRAIN_COMPANY_IDS
     enqueue({ data: [{ document_id: DOC, page_no: 1, file_name: 'Almilånedokument.pdf', headline: 'Kredit från <b>Almi</b>', rank: 1 }] })
+    enqueue({ data: [] }) // file names
     enqueue({ data: [{ id: DOC, file_name: 'Almilånedokument.pdf', doc_type: 'agreement.loan' }] })
     const { status, body } = await parseJsonResponse(await call('?q=almi&kinds=fact,agreement,document'))
     expect(status).toBe(200)
@@ -84,6 +86,24 @@ describe('GET /api/arkiv/search', () => {
     expect(findCalls('agreements', 'in')).toEqual([])
     expect(findCalls('company_facts', 'limit')).toEqual([])
     expect(findCalls('document_extractions', 'in')).toEqual([])
+  })
+
+  it('shows a document found by its file name alone: titled like the table, opened at the record, no page and no passage', async () => {
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
+    enqueue({ data: [] }) // page hits
+    enqueue({ data: [{ id: DOC, file_name: 'Telia_2026-10.pdf' }] }) // file names
+    enqueue({ data: [{ id: DOC, file_name: 'Telia_2026-10.pdf', doc_type: null }] })
+    const { status, body } = await parseJsonResponse(await call('?q=teli'))
+    expect(status).toBe(200)
+    expect(body).toEqual({
+      data: {
+        query: 'teli',
+        count: 1,
+        hits: [{ record_ref: `document:${DOC}`, kind: 'document', title: 'Telia_2026-10', subtitle: null, snippet: null, page: null, href: `/arkiv/dokument/${DOC}`, source_href: `/api/documents/${DOC}/inline` }],
+      },
+    })
+    expect(findCalls('document_attachments', 'ilike')).toEqual([['file_name', '%teli%']])
+    expect(findCalls('document_attachments', 'eq')).toEqual([['company_id', 'company-1'], ['company_id', 'company-1']])
   })
 
   it('passes the kinds and the limit through, and opens a fact where it was read from', async () => {
