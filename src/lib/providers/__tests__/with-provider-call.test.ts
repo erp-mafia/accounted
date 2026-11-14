@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyProviderError,
+  fortnoxLoginLicenceRefusal,
   isApiModuleInactiveError,
   isProviderRefusal,
+  subscriptionRefusal,
   providerRefusalReason,
   ProviderCallError,
   type ProviderCallErrorCode,
@@ -285,5 +287,40 @@ describe('isProviderRefusal', () => {
     ['anything else', new Error('boom')],
   ])('%s is not', (_name, error) => {
     expect(isProviderRefusal(error)).toBe(false)
+  })
+})
+
+// Fortnox's authorize redirect, as its Errors page documents the two licence
+// refusals. The scope one reached two customers as Fortnox's English on
+// 2026-11-12: the callback looked for "missing license" with a space.
+describe('fortnoxLoginLicenceRefusal', () => {
+  it('reads the documented codes exactly', () => {
+    expect(fortnoxLoginLicenceRefusal('error_missing_license')).toBe('scope')
+    expect(fortnoxLoginLicenceRefusal('error_missing_app_license')).toBe('app')
+  })
+
+  it.each(['access_denied', 'invalid_scope', 'missing license', 'ERROR_MISSING_LICENSE', ''])('is null for %j', (error) => {
+    expect(fortnoxLoginLicenceRefusal(error)).toBeNull()
+  })
+})
+
+// A preliminary read (company information) that meets one of these stops the
+// door with its sentence: the preview did, and now the register fetch does.
+describe('subscriptionRefusal', () => {
+  it.each([
+    ['an inactive Visma API module', new VismaApiError('x', 403, 'ForbiddenRequestException - No access to module: api_standard'), 'PROVIDER_API_MODULE_INACTIVE'],
+    ['a missing Fortnox licence', new Error('token refresh failed: error_missing_license'), 'PROVIDER_LICENSE_MISSING'],
+    ['a Bokio plan without API access', new BokioApiError('x', 403, '{"error":"price_plan_feature_required"}'), 'BOKIO_PLAN_NO_API'],
+  ] as const)('names %s', (_label, error, code) => {
+    expect(subscriptionRefusal(error)).toBe(code)
+  })
+
+  it.each([
+    ['an opaque 403', new VismaApiError('x', 403)],
+    ['a dead token', new VismaApiError('x', 401)],
+    ['a network failure', new Error('fetch failed')],
+    ['not an error', 'nope'],
+  ])('is null for %s: the door carries on as before', (_label, error) => {
+    expect(subscriptionRefusal(error)).toBeNull()
   })
 })

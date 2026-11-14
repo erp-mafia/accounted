@@ -16,6 +16,8 @@ import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
 import { companyMismatchMessages } from './company-mismatch-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { subscriptionRefusal } from '@/lib/providers/with-provider-call'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
@@ -42,6 +44,20 @@ function error(code: string, status: number, text = CONTINUE_FAILED) {
 }
 
 /**
+ * A refusal of a register fetch, in the registry's words when the code has an
+ * entry there: why, and what to do. The route's own sentence ("Importen kunde
+ * inte fortsätta...") is for its operational failures; answering every
+ * refusal with it hid the reason. A company without an imported ledger read
+ * it nine times in 50 minutes and never imported anything (2026-11-09), and
+ * six Visma companies whose company identity the provider withheld read it
+ * once each and never got their registers (5 to 11 Nov).
+ */
+function registryRefusal(code: string, status: number) {
+  const entry = getErrorEntry(code)
+  return error(code, status, entry ? { message: entry.message_sv, message_en: entry.message_en } : CONTINUE_FAILED)
+}
+
+/**
  * Fill the consent's durable source identity from the provider before the RPC
  * needs it (see ensureConsentSourceIdentity). Returns a response only when the
  * credentials open a different company than the one being imported into.
@@ -59,6 +75,11 @@ async function sourceIdentityRefusal(ctx: ExtensionContext, consentId: string): 
         details: { expectedOrgNumber: e.expectedOrgNumber, actualOrgNumber: e.actualOrgNumber, actualCompanyName: e.actualCompanyName },
       })
     }
+    // The customer's subscription at the provider refuses (no API module, no
+    // licence, a plan without API access): every register call would answer
+    // the same, and that code's sentence says what to change.
+    const refused = subscriptionRefusal(e)
+    if (refused) return errorResponseFromCode(refused, ctx.log, { details: { consentId } })
     // Anything else is left for the RPC to judge; it names what is missing.
     ctx.log.warn('provider migration source identity lookup failed', { consentId, reason: e instanceof Error ? e.message : 'unknown' })
     return null
@@ -224,11 +245,11 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
       const { data: consent, error: consentError } = await ctx.supabase.from('provider_consents').select('id')
         .eq('id', body.data.consentId).eq('company_id', ctx.companyId).in('status', [0, 1]).maybeSingle()
       if (consentError) return error('MIGRATION_LOOKUP_FAILED', 500)
-      if (!consent) return error('PROVIDER_CONSENT_NOT_FOUND', 404)
+      if (!consent) return registryRefusal('PROVIDER_CONSENT_NOT_FOUND', 404)
       const { data: imports, error: importsError } = await whereSieImportInPlace(ctx.supabase.from('sie_imports')
         .select('fiscal_year_start,fiscal_year_end').eq('company_id', ctx.companyId))
       if (importsError) return error('MIGRATION_LOOKUP_FAILED', 500)
-      if (!imports?.length) return error('PROVIDER_SIE_IMPORT_REQUIRED', 400)
+      if (!imports?.length) return registryRefusal('PROVIDER_SIE_IMPORT_REQUIRED', 400)
       const refusal = await sourceIdentityRefusal(ctx, body.data.consentId)
       if (refusal) return refusal
       // The request for paid supplier invoices rides on the job's own scope,
@@ -242,7 +263,7 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
       })
       if (createError) {
         logRefusal(ctx, createError, body.data.consentId)
-        return error(failureCode(new Error(createError.message)), 409)
+        return registryRefusal(failureCode(new Error(createError.message)), 409)
       }
       after(async () => { await runProviderMigrationWorker({ jobId: job.id }).catch(e => ctx.log.error('provider worker nudge failed', e)) })
       return NextResponse.json({ data: { jobId: job.id } }, { status: 202 })

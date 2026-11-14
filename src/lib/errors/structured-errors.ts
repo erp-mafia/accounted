@@ -6019,6 +6019,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers, invoices and fixed assets from this provider.',
   },
+  // create_provider_migration_job: the consent has no source identity (the
+  // provider company's organisation number), because the provider did not
+  // answer the company information read. A subscription refusal there is
+  // answered with its own code before the RPC runs (migration-job-routes).
+  MIGRATION_SOURCE_IDENTITY_MISSING: {
+    httpStatus: 409,
+    message_sv:
+      'Kunder, leverantörer och fakturor kan inte hämtas: leverantören lämnade inte ut företagets organisationsnummer, så Accounted kan inte kontrollera att registren hör till det här företaget. Bokföringen du redan importerat påverkas inte. Koppla om anslutningen och försök igen; nekar leverantören igen, kontakta supporten.',
+    message_en:
+      'Customers, suppliers and invoices cannot be fetched: the provider did not return the company\'s organisation number, so Accounted cannot check that the registers belong to this company. The bookkeeping already imported is unaffected. Reconnect and try again; if the provider refuses again, contact support.',
+  },
   // /migrate no longer imports customers, suppliers or invoices: the
   // background import job does, reading every record in full (crm#1436).
   // Only a client from before that change sends them.

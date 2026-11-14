@@ -65,6 +65,8 @@ vi.mock('@/lib/supabase/server', () => ({
 import {
   consumeOAuthState,
   peekOAuthState,
+  moveOpenLogins,
+  consentHoldsTokens,
   oauthStateRejectionReason,
   mintHandoff,
   consumeHandoff,
@@ -296,6 +298,66 @@ describe('peekOAuthState', () => {
  * state with one sentence), so that a rejected callback can be sorted into
  * replay or expiry after its row is purged.
  */
+describe('moveOpenLogins', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const predicates = (call: RecordedCall) =>
+    call.ops
+      .filter(([op]) => op === 'in' || op === 'is' || op === 'gt')
+      .map(([op, args]) => (op === 'gt' ? [op, args[0]] : [op, ...args]))
+
+  it('moves only the states a callback could still use, under the same predicates as a peek', async () => {
+    const { calls } = useResults([{ data: [{ code: 'state-1' }] }])
+
+    await expect(moveOpenLogins(['consent-1', 'consent-2'], 'consent-new')).resolves.toBe(1)
+
+    expect(calls[0].table).toBe('provider_otc')
+    // Only the consent the state resolves to changes: initiator and origin stay.
+    expect(findOp(calls[0], 'update')?.[1]).toEqual([{ consent_id: 'consent-new' }])
+    expect(predicates(calls[0])).toEqual([
+      ['in', 'consent_id', ['consent-1', 'consent-2']],
+      ['is', 'used_at', null],
+      ['is', 'provider_code', null],
+      ['is', 'provider_error', null],
+      ['gt', 'expires_at'],
+    ])
+    for (const write of ['delete', 'insert', 'upsert']) expect(findOp(calls[0], write)).toBeUndefined()
+  })
+
+  it('touches nothing for no earlier attempts', async () => {
+    const { calls } = useResults([])
+    await expect(moveOpenLogins([], 'consent-new')).resolves.toBe(0)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('moves nothing when the update fails: /connect then cleans up as before', async () => {
+    useResults([{ data: null, error: { message: 'boom' } }])
+    await expect(moveOpenLogins(['consent-1'], 'consent-new')).resolves.toBe(0)
+  })
+})
+
+describe('consentHoldsTokens', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('reads the token row of the consent alone', async () => {
+    const { calls } = useResults([{ data: [{ consent_id: 'consent-1' }] }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(true)
+    expect(calls[0].table).toBe('provider_consent_tokens')
+    expect(findOp(calls[0], 'eq', 'consent_id')?.[1]).toEqual(['consent_id', 'consent-1'])
+  })
+
+  it('is false without a token row, and when the read fails', async () => {
+    useResults([{ data: [] }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(false)
+    useResults([{ data: null, error: { message: 'boom' } }])
+    await expect(consentHoldsTokens('consent-1')).resolves.toBe(false)
+  })
+})
+
 describe('oauthStateRejectionReason', () => {
   const past = () => new Date(Date.now() - 60_000).toISOString()
   const future = () => new Date(Date.now() + 60_000).toISOString()

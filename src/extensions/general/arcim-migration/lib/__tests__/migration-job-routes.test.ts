@@ -15,6 +15,8 @@ vi.mock('../migration-job-worker', () => ({
 }))
 vi.mock('../provider-client', () => ({ ensureConsentSourceIdentity: ensureIdentity, ProviderCompanyMismatchError: MismatchError }))
 import { migrationJobRoutes } from '../migration-job-routes'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { VismaApiError } from '@/lib/providers/visma/client'
 const id = '5c4da29a-b51a-44ef-9705-fcf437d6c658'
 const route = (method: string, path = '/migration-jobs') => migrationJobRoutes.find(r => r.method === method && r.path === path)!.handler
 const request = (body: unknown) => new Request('http://localhost/api/extensions/ext/arcim-migration/migration-jobs', {
@@ -66,9 +68,17 @@ describe('migration job API', () => {
       { start: '2025-01-01', end: '2025-12-31' },
     ])
   })
-  it('requires a completed SIE import even for a direct API caller', async () => {
+  // 2026-11-09: a new company started the register fetch nine times in 50
+  // minutes without an imported ledger, read "Importen kunde inte fortsätta.
+  // Dina sparade framsteg finns kvar." each time, and never imported anything.
+  it('requires a completed SIE import even for a direct API caller, and says so', async () => {
     const { ctx, mockResult } = context(); mockResult({ data: [] })
-    expect((await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)).status).toBe(400)
+    const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
+    expect(response.status).toBe(400)
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_SIE_IMPORT_REQUIRED')
+    expect(error.message).toBe(getErrorEntry('PROVIDER_SIE_IMPORT_REQUIRED')!.message_sv)
+    expect(error.message).not.toContain('kunde inte fortsätta')
     expect(serviceRpc).not.toHaveBeenCalled()
   })
   it.each(['run', 'retry'])('does not %s an inaccessible job', async action => {
@@ -120,13 +130,30 @@ describe('source identity before the job is created', () => {
     expect((await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)).status).toBe(202)
   })
 
+  // 2026-11-05: Visma's company information answered "No access to module:
+  // api_standard". The fetch left it to the RPC, which refused as "identity
+  // missing", read as "Importen kunde inte fortsätta".
+  it('answers a subscription refusal during the identity lookup with its own sentence', async () => {
+    const { ctx, mockResult } = context(); mockResult(imports)
+    ensureIdentity.mockRejectedValue(new VismaApiError('Visma API error: 403 Forbidden', 403,
+      '{"ErrorCode":4002,"DeveloperErrorMessage":"ForbiddenRequestException - No access to module: api_standard"}'))
+    const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
+    const { error } = await response.json()
+    expect(error.code).toBe('PROVIDER_API_MODULE_INACTIVE')
+    expect(error.message).toBe(getErrorEntry('PROVIDER_API_MODULE_INACTIVE')!.message_sv)
+    expect(serviceRpc).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
+  })
+
   it('logs the RPC failure code on a 409, not just the status', async () => {
     const { ctx, log, mockResult } = context(); mockResult(imports)
     ensureIdentity.mockResolvedValue('unavailable')
     serviceRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'MIGRATION_SOURCE_IDENTITY_MISSING' } })
     const response = await route('POST')(request({ consentId: id, resources: ['customers'] }), ctx)
     expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe('MIGRATION_SOURCE_IDENTITY_MISSING')
+    const { error } = await response.json()
+    expect(error.code).toBe('MIGRATION_SOURCE_IDENTITY_MISSING')
+    expect(error.message).toContain('lämnade inte ut företagets organisationsnummer')
     expect(log.warn).toHaveBeenCalledWith('create_provider_migration_job refused', {
       consentId: id, failure: 'MIGRATION_SOURCE_IDENTITY_MISSING', pgCode: 'P0001',
     })
