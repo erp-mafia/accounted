@@ -43,7 +43,7 @@ import {
   canMarkSupplierInvoiceBankEntered,
   companyAttestsSupplierInvoices,
 } from '@/lib/supplier-invoices/lifecycle'
-import { isAwaitingAttestInList, isToPayInList } from '@/lib/supplier-invoices/list-tabs'
+import { isAttestedInList, isAwaitingAttestInList, isToPayInList } from '@/lib/supplier-invoices/list-tabs'
 import {
   sortSupplierInvoiceList,
   type SupplierInvoiceListSort,
@@ -280,7 +280,8 @@ export default function SupplierInvoicesPage() {
       switch (activeTab) {
         // Not attested yet, overdue ones included (lib/supplier-invoices/list-tabs.ts).
         case 'registered': return isAwaitingAttestInList(inv)
-        case 'approved': return inv.status === 'approved'
+        // Attested, past its due date or not (stored as 'overdue' then).
+        case 'approved': return isAttestedInList(inv)
         case 'to_pay': return isToPayInList(inv)
         case 'in_payment': return openPaymentMarker(inv) !== null
         case 'paid': return inv.status === 'paid'

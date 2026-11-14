@@ -12,6 +12,7 @@
 
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { companyAttestsSupplierInvoices, isOverduePayable } from './lifecycle'
+import { isSupplierInvoiceAttested } from './reported-status'
 
 export const SUPPLIER_INVOICE_STAGES = [
   'incoming',
@@ -55,7 +56,7 @@ export function deriveStage(i: StageInput): SupplierInvoiceStage {
   // An attest on a kontantmetod company's invoice (given before a switch of
   // method, or through the API) has no step on its ladder: the invoice is
   // still registered and waiting for its payment (#93).
-  if ((i.approved_at || i.status === 'approved') && companyAttestsSupplierInvoices(i.accounting_method)) return 'approved'
+  if (isSupplierInvoiceAttested(i) && companyAttestsSupplierInvoices(i.accounting_method)) return 'approved'
   // registered, overdue, partially_paid, disputed: still a debt awaiting attest.
   return 'registered'
 }

@@ -42,6 +42,7 @@ import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 import { scopeSatisfied } from '@/lib/auth/scope-catalog'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 
 const SupplierInvoiceStatus = z.enum([
@@ -115,7 +116,9 @@ const SI_SUMMARY_COLUMNS =
 const SUPPLIER_NAME_ONLY_COLUMNS = 'id, name'
 
 const ListFilters = z.object({
-  status: SupplierInvoiceStatus.optional().describe('Only supplier invoices in this status.'),
+  status: SupplierInvoiceStatus.optional().describe(
+    'Only supplier invoices in this status. approved = attested and nothing paid yet, past due or not (the row\'s status may read overdue). overdue = past due with money left, a part-paid one included (its status reads partially_paid). Every other value matches the stored status.',
+  ),
   supplier_id: z.string().uuid().optional().describe('Only invoices from this supplier (id).'),
   currency: z
     .string()
@@ -150,7 +153,7 @@ registerEndpoint({
   pitfalls: [
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
-    'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
+    'status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there), or filter ?status=approved, which returns every attested invoice nothing is paid on, the overdue ones included. ?status=overdue also returns a part-paid invoice past its due date. bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.',
     'An invoice a bank payment or a payment file already covers keeps its status (approved, overdue) and remaining_amount until the payment lands: read open_payment, null when nothing covers it. payment_order.provider_status RCVD means the payment waits at the bank unsigned.',
     'arrival_number is internal book-keeping, not the seller\'s invoice number: use supplier_invoice_number for matching to received documents.',
     'Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller\'s invoice date.',
@@ -228,7 +231,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    if (filters.status) query = query.eq('status', filters.status)
+    // approved and overdue are read from the attest mark and the due date,
+    // every other status as stored (lib/supplier-invoices/reported-status.ts).
+    if (filters.status) query = filterSupplierInvoicesByReportedStatus(query, filters.status)
     if (filters.supplier_id) query = query.eq('supplier_id', filters.supplier_id)
     if (filters.currency) query = query.eq('currency', filters.currency)
     if (filters.date_from) query = query.gte('invoice_date', filters.date_from)

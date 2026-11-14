@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { deriveStage, type InvoiceLifecycle, type OpenPaymentInstruction } from './stages'
+import { isSupplierInvoiceAttested } from './reported-status'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 
 /**
@@ -185,7 +186,7 @@ export async function computeSupplierInvoiceLifecycle(
   // step, so the method is read when an invoice carries an attest, the one
   // stage it changes.
   let accountingMethod: string | null = null
-  if (invoices.some((inv) => inv.approved_at || inv.status === 'approved')) {
+  if (invoices.some(isSupplierInvoiceAttested)) {
     const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
       .select('accounting_method')

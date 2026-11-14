@@ -200,6 +200,46 @@ describe('GET /api/supplier-invoices', () => {
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['status', 'registered'])
   })
 
+  // For #207: attested is the attest mark, not the stored status, so an
+  // attested invoice the nightly flip stored as overdue is still listed.
+  it('status=approved lists every attested unpaid invoice, the overdue ones included', async () => {
+    setTable('supplier_invoices', { data: [] })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'approved' } }))
+
+    expect(response.status).toBe(200)
+    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'overdue']])
+    expect(findCall('supplier_invoices', 'or')).toEqual(['status.eq.approved,approved_at.not.is.null'])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'approved'])
+  })
+
+  it('status=overdue is computed from the due date and what is left, so a part-paid invoice is listed', async () => {
+    setTable('supplier_invoices', { data: [] })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'overdue' } }))
+
+    expect(response.status).toBe(200)
+    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0.005])
+    expect(findCall('supplier_invoices', 'lt')).toEqual(['due_date', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+  })
+
+  it('every other status filter reads the stored status', async () => {
+    for (const stored of ['paid', 'partially_paid', 'disputed', 'credited', 'reversed']) {
+      reset()
+      setTable('supplier_invoices', { data: [] })
+
+      const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: stored } }))
+
+      expect(response.status).toBe(200)
+      expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['status', stored])
+      expect(findCalls('supplier_invoices', 'in')).toHaveLength(0)
+      expect(findCalls('supplier_invoices', 'or')).toHaveLength(0)
+    }
+  })
+
   it('handles to_pay virtual status', async () => {
     setTable('supplier_invoices', { data: [] })
     setTable('company_settings', { data: { accounting_method: 'accrual' } })

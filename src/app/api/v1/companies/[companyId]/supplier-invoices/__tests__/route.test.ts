@@ -410,6 +410,57 @@ describe('GET supplier invoices: open_payment, read as the app reads it (crm#128
   })
 })
 
+describe('GET supplier invoices: status=approved and status=overdue are read facts (for #207)', () => {
+  const list = async (status: string, rows: unknown[] = []) => {
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: rows, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await listSIs(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?status=${status}`),
+      companyParams(COMPANY_ID),
+    )
+    return { mock, res }
+  }
+
+  it('status=approved asks for the attest mark, and returns an attested invoice whose status reads overdue', async () => {
+    const { mock, res } = await list('approved', [
+      { ...SAMPLE_SI, status: 'overdue', approved_at: '2026-06-01T08:00:00Z', supplier: null },
+    ])
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0]).toMatchObject({ status: 'overdue', approved_at: '2026-06-01T08:00:00Z' })
+    expect(mock.findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'overdue']])
+    expect(mock.findCalls('supplier_invoices', 'or')).toContainEqual(['status.eq.approved,approved_at.not.is.null'])
+    expect(mock.findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'approved'])
+  })
+
+  it('status=overdue asks for money left after the due date, and returns a part-paid invoice', async () => {
+    const { mock, res } = await list('overdue', [
+      { ...SAMPLE_SI, status: 'partially_paid', paid_amount: 400, remaining_amount: 850, supplier: null },
+    ])
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0]).toMatchObject({ status: 'partially_paid', remaining_amount: 850 })
+    expect(mock.findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+    expect(mock.findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    expect(mock.findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0.005])
+    expect(mock.findCall('supplier_invoices', 'lt')).toEqual(['due_date', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)])
+    expect(mock.findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+  })
+
+  it('every other status filter reads the stored status', async () => {
+    for (const stored of ['registered', 'paid', 'partially_paid', 'disputed', 'credited', 'reversed']) {
+      const { mock, res } = await list(stored)
+      expect(res.status).toBe(200)
+      expect(mock.findCalls('supplier_invoices', 'eq')).toContainEqual(['status', stored])
+      expect(mock.findCalls('supplier_invoices', 'in')).toHaveLength(0)
+      expect(mock.findCalls('supplier_invoices', 'or')).toHaveLength(0)
+    }
+  })
+})
+
 describe('GET supplier invoices: approved_at and bank_entered_at (crm#1229)', () => {
   const APPROVED_AT = '2026-06-01T08:00:00Z'
   const BANK_ENTERED_AT = '2026-06-05T09:30:00Z'
