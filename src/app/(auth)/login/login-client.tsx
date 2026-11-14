@@ -48,6 +48,7 @@ import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-metho
 import {
   isSessionAuthMethod,
   SESSION_ENDED_REASON,
+  SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
 import {
@@ -114,6 +115,8 @@ export function LoginClient({
   // The proxy found a session in the browser that had ended (signed out on
   // another device, removed, its refresh token refused).
   const sessionEnded = reasonParam === SESSION_ENDED_REASON
+  // "Logga ut från alla enheter" that the auth server did not confirm.
+  const everywhereUnconfirmed = reasonParam === SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON
   const methodParam = searchParams.get('method')
   const requestedMethod = isSessionAuthMethod(methodParam) ? methodParam : 'password'
   // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
@@ -638,6 +641,11 @@ export function LoginClient({
           {sessionEnded && (
             <div role="alert" className="mb-4">
               <AttnLine>{tAuth('session_ended')}</AttnLine>
+            </div>
+          )}
+          {everywhereUnconfirmed && (
+            <div role="alert" className="mb-4">
+              <AttnLine>{tAuth('sign_out_everywhere_unconfirmed')}</AttnLine>
             </div>
           )}
           {callbackError === 'auth_error' && (

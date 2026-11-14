@@ -287,17 +287,22 @@ export function clearBrowserSessionState(): void {
 
 /**
  * Sign out: the server revokes the session and deletes the HttpOnly cookie,
- * then the browser's own copies go. `scope: 'global'` (the default, like
- * supabase-js signOut()) ends every session of the user; 'local' only this
- * one. Returns an error only when the server could not be asked at all; a
- * 401 means the session was already gone, which is the goal.
+ * then the browser's own copies go. `scope: 'local'` (the default) ends this
+ * browser's session; 'global' ends every session of the user, on every
+ * device (Säkerhet's "Logga ut från alla enheter"). A sign-out on the phone
+ * used to end the laptop's session too: supabase-js signOut() defaults to
+ * global, and every button took that default (founder decision 2026-11-13).
+ * Returns an error only when the server could not be asked at all; a 401
+ * means the session was already gone, which is the goal. `revoked` is the
+ * server's word that the auth server ended the session(s): false when it
+ * refused (the cookies here are gone all the same), null when unknown.
  */
 export async function signOut(
   options: { scope?: 'global' | 'local' } = {},
-): Promise<{ error: AuthClientError | null }> {
-  const { error } = await call('/api/auth/logout', {
+): Promise<{ error: AuthClientError | null; revoked: boolean | null }> {
+  const { data, error } = await call<{ revoked?: boolean }>('/api/auth/logout', {
     method: 'POST',
-    body: { scope: options.scope ?? 'global' },
+    body: { scope: options.scope ?? 'local' },
   })
   clearBrowserSessionState()
   const gone = !error || error.status === 401
@@ -305,7 +310,8 @@ export async function signOut(
   // signed out too: tell them, so they drop their own token and per-tab
   // storage now instead of whenever they next ask the server.
   if (gone) announceSignedOut()
-  return { error: gone ? null : error }
+  const revoked = typeof data?.revoked === 'boolean' ? data.revoked : null
+  return { error: gone ? null : error, revoked }
 }
 
 const SIGNED_OUT_CHANNEL = 'gnubok-signed-out'
@@ -357,7 +363,7 @@ export function reloadTo(destination: string): void {
 export async function signOutAndNavigate(
   destination: string,
   options: { scope?: 'global' | 'local' } = {},
-): Promise<{ error: AuthClientError | null }> {
+): Promise<{ error: AuthClientError | null; revoked: boolean | null }> {
   const result = await signOut(options)
   reloadTo(destination)
   return result

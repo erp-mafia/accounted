@@ -103,7 +103,8 @@ describe('signOut (CASA 6.6.1)', () => {
     expect(result.error).toBeNull()
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(path).toBe('/api/auth/logout')
-    expect(JSON.parse(init.body as string)).toEqual({ scope: 'global' })
+    // This browser only: the user's other devices stay signed in.
+    expect(JSON.parse(init.body as string)).toEqual({ scope: 'local' })
     expect(mocks.clearToken).toHaveBeenCalled()
     expect(mocks.clearStorage).toHaveBeenCalled()
     expect(mocks.resetAnalytics).toHaveBeenCalled()
@@ -112,7 +113,7 @@ describe('signOut (CASA 6.6.1)', () => {
 
   it('treats a 401 (session already gone) as success', async () => {
     fetchMock.mockResolvedValue(json(401, { error: { code: 'SESSION_EXPIRED', message: 'x' } }))
-    await expect(signOut({ scope: 'local' })).resolves.toEqual({ error: null })
+    await expect(signOut({ scope: 'local' })).resolves.toEqual({ error: null, revoked: null })
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ scope: 'local' })
   })
 
@@ -194,5 +195,23 @@ describe('signOut (CASA 6.6.1)', () => {
     fetchMock.mockResolvedValue(json(200, { data: { revoked: true } }))
     await signOutAndNavigate('/login')
     expect(assign).toHaveBeenCalledWith('/login')
+  })
+
+  it("reports whether the auth server confirmed the revocation", async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { data: { revoked: true } }))
+    fetchMock.mockResolvedValueOnce(json(200, { data: { revoked: false } }))
+
+    await expect(signOut({ scope: 'global' })).resolves.toEqual({ error: null, revoked: true })
+    await expect(signOut({ scope: 'global' })).resolves.toEqual({ error: null, revoked: false })
+  })
+
+  it('signOutAndNavigate asks for every device only when told to ("Logga ut från alla enheter")', async () => {
+    fetchMock.mockResolvedValue(json(200, { data: { revoked: true } }))
+
+    await signOutAndNavigate('/login')
+    await signOutAndNavigate('/login', { scope: 'global' })
+
+    const scopes = fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).scope)
+    expect(scopes).toEqual(['local', 'global'])
   })
 })

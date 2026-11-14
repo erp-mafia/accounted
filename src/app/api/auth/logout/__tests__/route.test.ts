@@ -31,19 +31,34 @@ beforeEach(() => {
 })
 
 describe('POST /api/auth/logout', () => {
-  it('revokes every session of the user by default (supabase-js signOut() semantics)', async () => {
+  it("ends only this browser's session by default: a sign-out here leaves the user's other devices signed in", async () => {
     const res = await POST(makeRequest())
     const { body } = await parseJsonResponse<{ data: { revoked: boolean } }>(res)
 
     expect(res.status).toBe(200)
     expect(body.data.revoked).toBe(true)
-    expect(signOutMock).toHaveBeenCalledWith({ scope: 'global' })
+    expect(signOutMock).toHaveBeenCalledWith({ scope: 'local' })
     expect(res.headers.get('cache-control')).toContain('no-store')
   })
 
-  it('ends only this session with scope local (the session-timeout controller)', async () => {
+  it('ends this session with an explicit scope local too (the session-timeout controller)', async () => {
     await POST(makeRequest({ scope: 'local' }))
     expect(signOutMock).toHaveBeenCalledWith({ scope: 'local' })
+  })
+
+  it('ends every session of the user with scope global ("Logga ut från alla enheter")', async () => {
+    const res = await POST(makeRequest({ scope: 'global' }))
+    expect(res.status).toBe(200)
+    expect(signOutMock).toHaveBeenCalledWith({ scope: 'global' })
+  })
+
+  it('says so when the auth server refuses a sign-out everywhere, so the page can tell the user', async () => {
+    signOutMock.mockResolvedValue({ error: { status: 429, code: 'over_request_rate_limit' } })
+    const res = await POST(makeRequest({ scope: 'global' }))
+    const { body } = await parseJsonResponse<{ data: { revoked: boolean } }>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.data.revoked).toBe(false)
   })
 
   it('400s on an unknown scope', async () => {
