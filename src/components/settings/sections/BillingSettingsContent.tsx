@@ -28,6 +28,9 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
 import { BuyPaymentPacksDialog, usePaymentPacks } from '@/components/payments/BankPaymentsAllowance'
 import { UsagePanel } from '@/components/settings/UsagePanel'
+import { useCapability } from '@/contexts/CompanyContext'
+import { isSelfHosted } from '@/lib/env/public-flags'
+import { UPGRADE_REASONS, type UpgradeReason } from '@/lib/entitlements/upgrade-reason'
 
 // What the paid tier unlocks: the external connections. One item per PAID
 // capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
@@ -117,10 +120,10 @@ interface BillingReceipt {
  * (the Stripe invoices). The money terms are stated once each, in the card
  * footer where the decision is made.
  */
-export function BillingSettingsContent() {
+export function BillingSettingsContent({ reason = null }: { reason?: UpgradeReason | null }) {
   return (
     <>
-      <BillingCoreContent />
+      <BillingCoreContent reason={reason} />
       {/* Self-host only (renders null on hosted): connector status + manual
           entitlement sync. Sits below the billing states, which is why the
           core content is split out: it has an early return. */}
@@ -188,7 +191,23 @@ function PlanCard({
   )
 }
 
-function BillingCoreContent() {
+/**
+ * One calm line under the section title for someone a gated section sent
+ * here: it names what they clicked, so the page is not a surprise. Muted
+ * text, not the attn tone: it explains, it does not warn. Shown only while
+ * the company still lacks what the section needs (a link opened after
+ * upgrading says nothing), and never on a self-host, where there is no
+ * subscription to point at.
+ */
+function UpgradeReasonNote({ reason }: { reason: UpgradeReason }) {
+  const t = useTranslations('settings_billing')
+  const entry = UPGRADE_REASONS[reason]
+  const has = useCapability(entry.capability)
+  if (has || isSelfHosted()) return null
+  return <p className="mt-3 text-[13px] text-muted-foreground">{t(entry.messageKey)}</p>
+}
+
+function BillingCoreContent({ reason }: { reason: UpgradeReason | null }) {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_billing')
@@ -332,7 +351,12 @@ function BillingCoreContent() {
     return () => { active = false }
   }, [reloadKey, errorLocale])
 
-  const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+  const header = (
+    <>
+      <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+      {reason && <UpgradeReasonNote reason={reason} />}
+    </>
+  )
 
   if (!view) {
     return (

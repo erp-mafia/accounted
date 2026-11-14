@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { billingHref } from '@/lib/entitlements/upgrade-reason'
 
 const dismissKey = (companyId: string) => `erp_agent_promo_dismissed:${companyId}`
 // storage events only fire in OTHER tabs; this custom event covers the
@@ -63,7 +64,7 @@ export function AgentPromo({ companyId }: AgentPromoProps) {
             the sentence; the negative margin keeps the line box at 20px so
             nothing shifts. */}
         <Link
-          href={hasAi ? '/onboarding/agent' : '/settings/billing'}
+          href={hasAi ? '/onboarding/agent' : billingHref('assistant')}
           className="inline-block -my-3 whitespace-nowrap py-3 text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
         >
           {t(hasAi ? 'agent_promo_cta' : 'agent_promo_cta_upgrade')}

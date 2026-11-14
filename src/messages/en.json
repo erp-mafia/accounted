@@ -3540,6 +3540,7 @@
     "download": "Download archive"
   },
   "settings_billing": {
+    "landed_from_assistant": "You came here from the Assistant. It is part of the subscription below.",
     "compare_plans": "Compare plans",
     "load_failed": "The subscription details could not be loaded, so your status cannot be shown right now.",
     "load_retry": "Try again",
