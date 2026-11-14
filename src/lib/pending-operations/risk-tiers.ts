@@ -364,6 +364,10 @@ const RISK_TIERS = {
   // Same fields on an existing supplier: rerouting a known supplier's
   // payments is the more likely fraud, so the update is no lower.
   update_supplier: 'medium',
+  // Takes a supplier out of the active register (crm#1796). Nothing is
+  // booked and un-archiving undoes it; medium like the v1 DELETE, so a
+  // person decides which supplier card goes.
+  archive_supplier: 'medium',
   // Moves a duplicate customer's invoices, orders and schedules to the card
   // that stays and archives the duplicate (crm#1299). Nothing is booked and
   // the dashboard can undo it, but issued invoices then show the survivor's

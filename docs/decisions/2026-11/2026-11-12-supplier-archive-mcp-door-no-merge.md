@@ -1,0 +1,1 @@
+[2026-11-12] gnubok_archive_supplier is its own search-only staged operation on the v1 DELETE's rule, not archived_at on update_supplier (that field stays null-only); supplier merge is not built: it would re-point supplier invoices that posted verifikat name, a founder call (crm#1796).

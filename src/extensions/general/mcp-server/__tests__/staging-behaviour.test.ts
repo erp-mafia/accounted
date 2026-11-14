@@ -1282,6 +1282,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_delete_asset: { empty: ['depreciation_schedules', 'asset_value_adjustments'] },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
+  // No open supplier invoice names the supplier: an open one refuses the archive (crm#1796).
+  gnubok_archive_supplier: { rows: { suppliers: { name: 'Leverantören AB', archived_at: null } }, counts: { supplier_invoices: 0 } },
   // An empty first year (crm#1450): the STABLE preview answers ok.
   gnubok_delete_fiscal_period: {
     rows: {

@@ -451,6 +451,7 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
     'op:supplier-payment-batches.cancel',
     'op:supplier-payment-batches.create',
     'op:supplier-payment-batches.preview',
+    'op:suppliers.archive',
     'op:suppliers.create',
     'op:suppliers.update',
     'mcp:gnubok_approve_supplier_invoice',

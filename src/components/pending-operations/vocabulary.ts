@@ -109,6 +109,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   create_transaction: 'warning_create_transaction',
   create_customer: 'warning_create_customer',
   update_supplier: 'warning_update_supplier',
+  archive_supplier: 'warning_archive_supplier',
   update_cash_account: 'warning_update_cash_account',
   set_primary_cash_account: 'warning_set_primary_cash_account',
   set_invoice_payee_default: 'warning_set_invoice_payee_default',

@@ -52,6 +52,8 @@
  *   - arsredovisning.record-signature: signed_at, which defaults to the
  *     moment of the call; a signed_at the caller sent is in the input and
  *     stays pinned through it.
+ *   - suppliers.archive: archived_at, the moment of the call, taken at the
+ *     dry run and again at the commit.
  *
  * Kept in on purpose: values that move with the calendar or with other
  * writers (a payment date moved to the next banking day, overdue days, an

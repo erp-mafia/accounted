@@ -5,7 +5,9 @@
  * PATCH : partial update (operation suppliers.update, also served as the MCP
  *          gnubok_update_supplier; rules in lib/suppliers/update-supplier.ts).
  *          Setting archived_at: null un-archives the supplier.
- * DELETE: soft-delete (sets archived_at). Idempotent. Dry-runnable. 204 on
+ * DELETE: soft-delete (sets archived_at; rules in
+ *          lib/suppliers/archive-supplier.ts, also served as the MCP
+ *          gnubok_archive_supplier). Idempotent. Dry-runnable. 204 on
  *          success. REFUSES to archive when the supplier has any open
  *          (registered / approved / partially_paid / overdue / disputed)
  *          supplier invoice: preserves the canonical seller name/address
@@ -23,6 +25,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { suppliersUpdate } from '@/lib/operations/suppliers'
+import { OPEN_SUPPLIER_INVOICE_STATUSES, archiveSupplier } from '@/lib/suppliers/archive-supplier'
 import { SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
 
 // The record read here (and its select) is defined in
@@ -35,17 +38,6 @@ const SupplierDetail = SupplierRecordSchema.extend({
 })
 
 const ALLOWED_EXPAND = ['supplier_invoices', 'party'] as const
-// `disputed` is included so a held supplier invoice still blocks archive:
-// the seller record may still be needed if the dispute resolves into a
-// kreditfaktura or partial payment.
-const OPEN_SUPPLIER_INVOICE_STATUSES = [
-  'registered',
-  'approved',
-  'partially_paid',
-  'overdue',
-  'disputed',
-]
-
 const OPEN_SUPPLIER_INVOICE_COLUMNS =
   'id, supplier_invoice_number, arrival_number, invoice_date, due_date, status, currency, total, remaining_amount'
 
@@ -142,7 +134,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         .select(OPEN_SUPPLIER_INVOICE_COLUMNS)
         .eq('company_id', ctx.companyId!)
         .eq('supplier_id', supplierId)
-        .in('status', OPEN_SUPPLIER_INVOICE_STATUSES)
+        .in('status', [...OPEN_SUPPLIER_INVOICE_STATUSES])
         .order('due_date', { ascending: true })
 
       if (invErr) {
@@ -229,60 +221,35 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     }
     const supplierId = idParse.data
 
-    const { count: openInvoiceCount, error: openErr } = await ctx.supabase
-      .from('supplier_invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', ctx.companyId!)
-      .eq('supplier_id', supplierId)
-      .in('status', OPEN_SUPPLIER_INVOICE_STATUSES)
+    // The rule (open invoices block the archive) is lib/suppliers/archive-supplier.ts,
+    // shared with the MCP gnubok_archive_supplier; this door keeps its own envelope.
+    const outcome = await archiveSupplier(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      supplierId,
+      { dryRun: ctx.dryRun },
+    )
 
-    if (openErr) {
-      return v1ErrorResponse(openErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if ((openInvoiceCount ?? 0) > 0) {
-      return v1ErrorResponseFromCode('SUPPLIER_HAS_INVOICES', ctx.log, {
-        requestId: ctx.requestId,
-        details: { open_invoice_count: openInvoiceCount },
-      })
-    }
-
-    if (ctx.dryRun) {
-      const { data: current, error: fetchErr } = await readSupplierRecord(ctx.supabase, ctx.companyId!, supplierId)
-
-      if (fetchErr) {
-        return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
+    if (!outcome.ok) {
+      if (outcome.code === 'SUPPLIER_HAS_INVOICES') {
+        return v1ErrorResponseFromCode('SUPPLIER_HAS_INVOICES', ctx.log, {
+          requestId: ctx.requestId,
+          details: outcome.details,
+        })
       }
-      if (!current) {
-        ctx.log.warn('suppliers.delete dry-run: not found', { supplierId, companyId: ctx.companyId })
+      if (outcome.code === 'SUPPLIER_NOT_FOUND') {
+        ctx.log.warn('suppliers.delete: not found', { supplierId, companyId: ctx.companyId, dryRun: ctx.dryRun })
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
           requestId: ctx.requestId,
           details: { resource: 'supplier' },
         })
       }
-
-      return dryRunPreview(
-        { ...current, archived_at: new Date().toISOString() },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
+      return v1ErrorResponse(outcome.error ?? new Error(outcome.code), ctx.log, { requestId: ctx.requestId })
     }
 
-    const { data, error } = await ctx.supabase
-      .from('suppliers')
-      .update({ archived_at: new Date().toISOString(), is_active: false })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', supplierId)
-      .select('id')
-      .maybeSingle()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      ctx.log.warn('suppliers.delete: not found', { supplierId, companyId: ctx.companyId })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'supplier' },
-      })
+    if (outcome.dryRun) {
+      // supplier_id is the MCP preview's qualified id; the v1 record names it id.
+      const { supplier_id: _supplierId, ...record } = outcome.preview
+      return dryRunPreview(record, { requestId: ctx.requestId, log: ctx.log })
     }
 
     return noContent({ requestId: ctx.requestId })

@@ -1,9 +1,10 @@
 /**
- * Supplier register (leverantörsregister) operations: create and update. List,
- * get and archive stay the hand-written v1 routes and MCP tools they were. The
- * rules live in lib/suppliers/create-supplier.ts and update-supplier.ts,
- * shared with the dashboard's POST /api/suppliers and PUT /api/suppliers/:id
- * and with the approval of a staged gnubok_create_supplier.
+ * Supplier register (leverantörsregister) operations: create, update and
+ * archive. List and get stay the hand-written v1 routes and MCP tools they
+ * were. The rules live in lib/suppliers/create-supplier.ts and
+ * update-supplier.ts, shared with the dashboard's POST /api/suppliers and
+ * PUT /api/suppliers/:id and with the approval of a staged
+ * gnubok_create_supplier.
  *
  * suppliers.create keeps the v1 POST contract it replaced (path, body,
  * Idempotency-Key, dry run, 201). The MCP gnubok_create_supplier stays the
@@ -14,9 +15,16 @@
  * gnubok_update_supplier, which agents migrating a register lacked: the only
  * way to fill in an imported supplier's address or bank details over MCP was
  * a duplicate gnubok_create_supplier (crm#1060).
+ *
+ * suppliers.archive is the MCP door gnubok_archive_supplier on the rule the
+ * v1 DELETE /suppliers/:id already had (lib/suppliers/archive-supplier.ts):
+ * an agent that found a duplicate supplier after an import could not set it
+ * aside (crm#1796). It has no http binding: the v1 DELETE keeps its
+ * hand-written route and 204 contract and calls the same service.
  */
 import { z } from 'zod'
 import { CreateSupplierSchema, UpdateSupplierSchema } from '@/lib/api/schemas'
+import { archiveSupplier } from '@/lib/suppliers/archive-supplier'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { SupplierRecordSchema, updateSupplier } from '@/lib/suppliers/update-supplier'
 import { defineOperation } from './types'
@@ -169,4 +177,65 @@ export const suppliersUpdate = defineOperation({
     },
   },
   run: (ctx, { supplier_id, ...changes }, { dryRun }) => updateSupplier(ctx, supplier_id, changes, { dryRun }),
+})
+
+export const suppliersArchive = defineOperation({
+  id: 'suppliers.archive',
+  kind: 'write',
+  scope: 'suppliers:write',
+  // Medium like the v1 DELETE it shares its rule with: nothing is booked and
+  // un-archiving undoes it, but a person decides which supplier leaves the
+  // active register.
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Archive a supplier (soft-delete).',
+    description:
+      'Sets archived_at on the supplier; the record is preserved (supplier invoices and audit history remain intact) but excluded from default list responses. Refused while the supplier has an open supplier invoice (registered, approved, partially_paid, overdue or disputed). Un-archive with suppliers.update (archived_at: null). The dry run answers the supplier as it would read archived and writes nothing.',
+    useWhen:
+      'A supplier should leave the active register without losing its history, e.g. a duplicate left by an import once its invoices are closed.',
+    doNotUseFor:
+      'Merging two suppliers or moving a supplier invoice to another supplier: archiving moves nothing. Permanently deleting a supplier.',
+    pitfalls: [
+      'A supplier with any open supplier invoice returns 409 SUPPLIER_HAS_INVOICES (details.open_invoice_count): close the invoices first.',
+      'The archived supplier keeps its supplier invoices; they still name it.',
+      'An archived supplier refuses changes to its identifying fields until it is un-archived.',
+    ],
+    example: {
+      request: { supplier_id: '0e9c…' },
+      response: {
+        data: { ...SUPPLIER_EXAMPLE, archived_at: '2026-05-12T09:00:00Z' },
+        meta: { request_id: 'req_…', api_version: '2026-05-12' },
+      },
+    },
+  },
+  input: z.object({
+    supplier_id: z.string().uuid().describe('The supplier to archive (gnubok_list_suppliers).'),
+  }),
+  output: SupplierRecordSchema,
+  errorCodes: ['SUPPLIER_NOT_FOUND', 'SUPPLIER_HAS_INVOICES'],
+  mcp: {
+    name: 'gnubok_archive_supplier',
+    title: 'Archive Supplier (Leverantör)',
+    description:
+      'Stage archiving a supplier: it leaves the active register and keeps its invoices and history. Refused while it has open supplier invoices. Moves nothing to another supplier. Undo: gnubok_update_supplier archived_at null. supplier_id from gnubok_list_suppliers.',
+    keywords: [
+      'arkivera leverantör',
+      'ta bort leverantör',
+      'dubblett leverantör',
+      'dubbletter leverantörsregister',
+      'inaktivera leverantör',
+      'archive supplier',
+      'delete supplier',
+      'duplicate supplier',
+    ],
+    stage: {
+      pendingType: 'archive_supplier',
+      title: (_input, preview) => `Arkivera leverantör: ${String(preview?.name ?? '')}`.trim(),
+    },
+  },
+  // The timestamp is taken when the call runs, at the dry run and again at
+  // the commit: never part of what the approver pinned.
+  volatilePreviewKeys: ['archived_at'],
+  run: (ctx, { supplier_id }, { dryRun }) => archiveSupplier(ctx, supplier_id, { dryRun }),
 })

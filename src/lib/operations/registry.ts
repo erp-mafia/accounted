@@ -103,7 +103,7 @@ import {
   peppolRegister,
   peppolRequestAccess,
 } from './peppol'
-import { suppliersCreate, suppliersUpdate } from './suppliers'
+import { suppliersArchive, suppliersCreate, suppliersUpdate } from './suppliers'
 import { customersMerge, customersMergeUndo } from './customers'
 import {
   supplierInvoicesDelete,
@@ -374,9 +374,10 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   peppolGetRegistration,
   peppolRegister,
   peppolRequestAccess,
-  // suppliers (create and update: list, get and archive are hand-written doors)
+  // suppliers (create, update and the MCP archive: list, get and the v1 archive are hand-written doors)
   suppliersCreate,
   suppliersUpdate,
+  suppliersArchive,
   // customers (merge; create, update, list, get and archive are hand-written doors)
   customersMerge,
   customersMergeUndo,
