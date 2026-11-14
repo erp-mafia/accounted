@@ -91,17 +91,6 @@ describe('sendPacedUpload', () => {
     expect(sleep).toHaveBeenCalledTimes(3)
   })
 
-  it('does not send again when the caller has gone away during the wait', async () => {
-    const send = vi.fn().mockResolvedValue(refusal('60'))
-    const sleep = vi.fn().mockResolvedValue(undefined)
-
-    const res = await sendPacedUpload(send, { sleep, shouldContinue: () => false })
-
-    expect(res.status).toBe(429)
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(sleep).toHaveBeenCalledTimes(1)
-  })
-
   it('reports the wait as over even when the wait itself fails', async () => {
     const send = vi.fn().mockResolvedValue(refusal('60'))
     const onWait = vi.fn()

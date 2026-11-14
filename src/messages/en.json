@@ -5365,7 +5365,7 @@
   },
   "inbox_workspace": {
     "upload_queue_stopped_title": "The upload stopped",
-    "upload_queue_stopped_description": "{count, plural, one {# file was not uploaded.} other {# files were not uploaded.}} Try again in a moment.",
+    "upload_queue_stopped_description": "{count, plural, one {# file was not uploaded.} other {# files were not uploaded.}}",
     "upload_waiting": "Waiting {seconds} s for the upload limit…",
     "pipe_missing": "Missing",
     "pipe_missing_help": "Card or account purchases without a receipt or invoice. Ask for the document or fetch it from the supplier's portal.",

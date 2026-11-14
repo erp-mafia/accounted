@@ -50,6 +50,56 @@ describe('uploadToInbox', () => {
   const answer = (data: Record<string, unknown>) =>
     vi.fn().mockResolvedValue(new Response(JSON.stringify({ data }), { status: 200 }))
 
+  const refusal = (retryAfter: string) =>
+    new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'För många uppladdningar på kort tid. Försök igen om en stund.' } }), {
+      status: 429,
+      headers: { 'Retry-After': retryAfter, 'content-type': 'application/json' },
+    })
+  const stored = () => new Response(JSON.stringify({ data: { inbox_item_id: 'item-new', skip_reason: null } }), { status: 200 })
+
+  // 2026-11-14: a drop in the Inkorg sent every file after the thirtieth
+  // straight into the per-minute limit, 118 refused in one minute.
+  it('waits out the per-minute upload limit and sends the same file again', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(refusal('60')).mockResolvedValueOnce(stored())
+    vi.stubGlobal('fetch', fetchMock)
+    const sleep = vi.fn().mockResolvedValue(undefined)
+    const onWait = vi.fn()
+
+    expect(await uploadToInbox(pdf(), 'sv', { sleep, onWait })).toEqual({ ok: true, itemId: 'item-new' })
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/extensions/ext/invoice-inbox/upload')).toHaveLength(2)
+    expect(sleep).toHaveBeenCalledWith(60_000)
+    expect(onWait.mock.calls).toEqual([[60], [null]])
+  })
+
+  it('says the upload limit still refuses after waiting, so the caller can stop', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => (url === '/api/log' ? new Response('{}') : refusal('60'))))
+    const outcome = await uploadToInbox(pdf(), 'sv', { sleep: vi.fn().mockResolvedValue(undefined) })
+    expect(outcome).toEqual({ ok: false, reason: 'failed', limited: true, message: 'För många uppladdningar på kort tid. Försök igen om en stund.' })
+  })
+
+  it('does not wait for the daily limit, and says it refuses', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => (url === '/api/log' ? new Response('{}') : refusal('3600')))
+    vi.stubGlobal('fetch', fetchMock)
+    const sleep = vi.fn().mockResolvedValue(undefined)
+    const outcome = await uploadToInbox(pdf(), 'sv', { sleep })
+    expect(outcome).toMatchObject({ ok: false, reason: 'failed', limited: true })
+    expect(sleep).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/extensions/ext/invoice-inbox/upload')).toHaveLength(1)
+  })
+
+  it('reports another refusal as a plain failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string) =>
+        url === '/api/log'
+          ? new Response('{}')
+          : new Response(JSON.stringify({ error: { code: 'UNSUPPORTED_FILE', message: 'Filtypen stöds inte.' } }), { status: 415 }),
+      ),
+    )
+    const outcome = await uploadToInbox(pdf(), 'sv', { sleep: vi.fn().mockResolvedValue(undefined) })
+    expect(outcome).toEqual({ ok: false, reason: 'failed', message: 'Filtypen stöds inte.' })
+  })
+
   it('reports a new item with no duplicate', async () => {
     vi.stubGlobal('fetch', answer({ inbox_item_id: 'item-new', skip_reason: null }))
     expect(await uploadToInbox(pdf(), 'sv')).toEqual({ ok: true, itemId: 'item-new' })

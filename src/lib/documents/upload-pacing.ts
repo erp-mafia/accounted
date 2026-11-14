@@ -30,11 +30,6 @@ const BOUNDARY_MARGIN_SEC = 2
 export interface PacedUploadOptions {
   /** Seconds the queue will now wait before it sends the file again; null when the wait is over. */
   onWait?: (seconds: number | null) => void
-  /**
-   * Asked after each wait: false abandons the file (the page it was dropped
-   * on is gone) and resolves to the refusal without sending again.
-   */
-  shouldContinue?: () => boolean
   /** Injectable for tests; defaults to a timer. */
   sleep?: (ms: number) => Promise<void>
 }
@@ -81,7 +76,6 @@ export async function sendPacedUpload(
     } finally {
       options.onWait?.(null)
     }
-    if (options.shouldContinue && !options.shouldContinue()) return response
     response = await send()
   }
   return response
