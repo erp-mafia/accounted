@@ -1,0 +1,1 @@
+[2026-11-13] The recurring cron's record writes a last_run_at token of its own, an error answer is settled by reading back the run's own invoice id, and a header insert that answers an error holds the schedule for a person: a claim read before the record billed the period twice (accounted#211).

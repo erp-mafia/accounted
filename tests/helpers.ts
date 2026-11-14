@@ -840,8 +840,14 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  * on that one chain (`.select()`, `.eq()`, `.in()`, ...), in order. For a
  * table the code reads in two shapes (one row by id, a list by `.in()`), so a
  * test answers by WHAT was asked instead of by the order of the reads.
+ *
+ * It may answer with a Promise, for a test that lets something else happen
+ * while the statement is on its way (another request interleaved with it). A
+ * plain answer resolves exactly as before, in the same tick.
  */
-export type TableMockResolver = (chainCalls: { method: string; args: unknown[] }[]) => TableMockResult
+export type TableMockResolver = (
+  chainCalls: { method: string; args: unknown[] }[],
+) => TableMockResult | Promise<TableMockResult>
 
 /**
  * A Supabase mock that answers per table instead of from one global FIFO
@@ -854,7 +860,8 @@ export type TableMockResolver = (chainCalls: { method: string; args: unknown[] }
  *     sticks once the others are used up;
  *   - a plain object: returned for every await (a constant);
  *   - a function (TableMockResolver): called on every await with the calls
- *     made on that chain, its return value is the answer.
+ *     made on that chain, its return value (or what its Promise resolves
+ *     to) is the answer.
  * A key with nothing set resolves `{ data: null, error: null }`.
  *
  * Tables are keyed by name ('suppliers'); RPCs by 'rpc:<name>'
@@ -885,22 +892,34 @@ export function createTableMockSupabase(
     queues.set(key, Array.isArray(value) ? [...value] : [value])
   }
 
-  const next = (key: string, chainCalls: { method: string; args: unknown[] }[]) => {
+  type Answer = { data: unknown; error: unknown; count: number | null }
+  const answerOf = (entry: TableMockResult | undefined): Answer => ({
+    data: entry?.data ?? null,
+    error: entry?.error ?? null,
+    count: entry?.count ?? null,
+  })
+
+  const next = (key: string, chainCalls: { method: string; args: unknown[] }[]): Answer | Promise<Answer> => {
     const q = queues.get(key)
     const queued = q && q.length > 1 ? q.shift()! : q?.[0]
     const entry = typeof queued === 'function' ? queued(chainCalls) : queued
-    return { data: entry?.data ?? null, error: entry?.error ?? null, count: entry?.count ?? null }
+    return entry instanceof Promise ? entry.then(answerOf) : answerOf(entry)
   }
 
   // chainCalls: the calls made on this one chain since from()/rpc(), for a
-  // resolver to read.
+  // resolver to read. A plain answer is handed to resolve in the same tick,
+  // as it always was; only a resolver's Promise is waited for.
   const buildChain = (key: string, chainCalls: { method: string; args: unknown[] }[] = []): unknown =>
     new Proxy(
       {},
       {
         get(_target, prop) {
           if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(next(key, chainCalls))
+            return (resolve: (v: unknown) => void, reject?: (e: unknown) => void) => {
+              const answer = next(key, chainCalls)
+              if (answer instanceof Promise) return answer.then(resolve, reject)
+              return resolve(answer)
+            }
           }
           return (...args: unknown[]) => {
             calls.push({ table: key, method: String(prop), args })

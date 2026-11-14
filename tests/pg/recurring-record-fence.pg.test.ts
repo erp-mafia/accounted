@@ -16,16 +16,23 @@ import { seedCompany } from './fixtures'
  *
  * Pinned here with the statements as the route sends them, on two real
  * connections, in both orders: the record (gated on the claim, last_run_at =
- * claimTs) and the hold (the claim moved on to a hold token with the warning
- * a person reads, only while last_run_at = claimTs and the run date and
- * period are the ones read). Whichever commits first wins and the other
- * matches no row, so the draft is removed only when the record can no longer
- * land. The hold, not the claim, is what the run gives back after the
- * removal: until then the schedule stays held, whatever happens to the run.
+ * claimTs, and moving last_run_at on to a token of its own) and the hold (the
+ * claim moved on to a hold token with the warning a person reads, only while
+ * last_run_at = claimTs). Whichever commits first wins and the other matches
+ * no row, so the draft is removed only when the record can no longer land.
+ * The hold, not the claim, is what the run gives back after the removal:
+ * until then the schedule stays held, whatever happens to the run.
+ *
+ * And the record against "Skapa faktura nu" (accounted#211): a claim from the
+ * claim token, read while the cron held the schedule, matches nothing once
+ * the record has landed. When the record kept the claim token, that claim
+ * still matched and billed the period a second time.
  */
 
 const CLAIM_TS = '2026-07-06T06:30:00.000Z'
-const HOLD_TS = '2026-07-06T06:30:00.001Z'
+const RECORD_TS = '2026-07-06T06:30:00.001Z'
+const HOLD_TS = '2026-07-06T06:30:00.002Z'
+const RUN_NOW_TS = '2026-07-06T06:30:05.000Z'
 const PRIOR_RUN = '2026-06-06T06:30:00.000Z'
 const HELD_WARNING =
   'Körningen 2026-07-06 avbröts: connection reset. Kontrollera om en faktura skapades för perioden. ' +
@@ -51,27 +58,37 @@ async function seedClaimedSchedule(): Promise<{ scheduleId: string; companyId: s
   return { scheduleId: rows[0]!.id, companyId }
 }
 
-/** The record as the route writes it: the next run and period, gated on this run's claim. */
+/** The record as the route writes it: the next run and period and a token of its own, gated on this run's claim. */
 function record(runner: { query: PoolClient['query'] }, scheduleId: string, companyId: string) {
   return runner.query(
     `UPDATE public.recurring_invoice_schedules
         SET next_run_date = '2026-08-06', period_start = '2026-08-01', generated_count = 5,
             last_run_at = $3
-      WHERE id = $1 AND company_id = $2 AND last_run_at = $3
+      WHERE id = $1 AND company_id = $2 AND last_run_at = $4
       RETURNING id`,
-    [scheduleId, companyId, CLAIM_TS],
+    [scheduleId, companyId, RECORD_TS, CLAIM_TS],
   )
 }
 
-/** The hold: the claim moved on to the hold token, only while this run holds it and the schedule has not moved on. */
+/** The hold: the claim moved on to the hold token, only while this run holds it. */
 function hold(runner: { query: PoolClient['query'] }, scheduleId: string, companyId: string) {
   return runner.query(
     `UPDATE public.recurring_invoice_schedules
         SET last_run_at = $3, last_run_warning = $5
       WHERE id = $1 AND company_id = $2 AND last_run_at = $4
-        AND next_run_date = '2026-07-06' AND period_start = '2026-07-01'
       RETURNING id`,
     [scheduleId, companyId, HOLD_TS, CLAIM_TS, HELD_WARNING],
+  )
+}
+
+/** "Skapa faktura nu" claiming from the claim token it read while the cron held the schedule. */
+function runNowClaim(runner: { query: PoolClient['query'] }, scheduleId: string, companyId: string) {
+  return runner.query(
+    `UPDATE public.recurring_invoice_schedules
+        SET last_run_at = $3
+      WHERE id = $1 AND company_id = $2 AND last_run_at = $4
+      RETURNING id`,
+    [scheduleId, companyId, RUN_NOW_TS, CLAIM_TS],
   )
 }
 
@@ -139,12 +156,12 @@ describe('the recurring record and its hold on one schedule', () => {
       recorder.release()
       holder.release()
     }
-    // Recorded, and the claim still this run's: no retry today, no period billed twice.
+    // Recorded under the record's own token: no retry today, no period billed twice.
     expect(await scheduleState(scheduleId)).toMatchObject({
       next_run_date: '2026-08-06',
       period_start: '2026-08-01',
       generated_count: 5,
-      last_run_at: new Date(CLAIM_TS),
+      last_run_at: new Date(RECORD_TS),
     })
   })
 
@@ -191,6 +208,62 @@ describe('the recurring record and its hold on one schedule', () => {
       period_start: '2026-07-01',
       generated_count: 4,
       last_run_at: new Date(PRIOR_RUN),
+    })
+  })
+})
+
+describe('the recurring record and "Skapa faktura nu" claiming from the token it read (accounted#211)', () => {
+  it('the record commits first: the claim from the claim token matches nothing, so the period is not billed again', async () => {
+    const { scheduleId, companyId } = await seedClaimedSchedule()
+    const recorder = await getClient()
+    const runNow = await getClient()
+    try {
+      await recorder.query('BEGIN')
+      expect((await record(recorder, scheduleId, companyId)).rowCount).toBe(1)
+
+      const pid = await backendPid(runNow)
+      const pending = runNowClaim(runNow, scheduleId, companyId)
+      await waitUntilBlockedOnLock(pid)
+      await recorder.query('COMMIT')
+
+      expect((await pending).rowCount).toBe(0)
+    } finally {
+      await recorder.query('ROLLBACK').catch(() => {})
+      recorder.release()
+      runNow.release()
+    }
+    expect(await scheduleState(scheduleId)).toMatchObject({
+      next_run_date: '2026-08-06',
+      period_start: '2026-08-01',
+      generated_count: 5,
+      last_run_at: new Date(RECORD_TS),
+    })
+  })
+
+  it('the claim commits first: the record matches nothing (the cron then removes its draft), and the period is billed once', async () => {
+    const { scheduleId, companyId } = await seedClaimedSchedule()
+    const runNow = await getClient()
+    const recorder = await getClient()
+    try {
+      await runNow.query('BEGIN')
+      expect((await runNowClaim(runNow, scheduleId, companyId)).rowCount).toBe(1)
+
+      const pid = await backendPid(recorder)
+      const pending = record(recorder, scheduleId, companyId)
+      await waitUntilBlockedOnLock(pid)
+      await runNow.query('COMMIT')
+
+      expect((await pending).rowCount).toBe(0)
+    } finally {
+      await runNow.query('ROLLBACK').catch(() => {})
+      runNow.release()
+      recorder.release()
+    }
+    expect(await scheduleState(scheduleId)).toMatchObject({
+      next_run_date: '2026-07-06',
+      period_start: '2026-07-01',
+      generated_count: 4,
+      last_run_at: new Date(RUN_NOW_TS),
     })
   })
 })

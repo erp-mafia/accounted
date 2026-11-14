@@ -54,9 +54,14 @@ function filtersHold(row: Row, chain: Chain): boolean {
 const schedules = (chain: Chain) => {
   const update = chain.find((c) => c.method === 'update')
   if (!update) {
+    const lte = chain.find((c) => c.method === 'lte')
+    if (!lte) {
+      // The read-back of a record whose answer was an error: the row, when it matches.
+      if (state.killed) return { data: null, error: { message: 'connection refused' } }
+      return { data: filtersHold(state.row, chain) ? [{ id: state.row.id }] : [] }
+    }
     // The due read (fetchAllRows): active and due on or before today.
-    const today = chain.find((c) => c.method === 'lte')?.args[1] as string
-    const due = state.row.status === 'active' && (state.row.next_run_date as string) <= today
+    const due = state.row.status === 'active' && (state.row.next_run_date as string) <= (lte.args[1] as string)
     return { data: due ? [{ ...state.row, items: [] }] : [] }
   }
   state.writes += 1
@@ -201,14 +206,15 @@ describe('a recurring run cut short never bills its period twice', () => {
     expect(nextDay.results.map((r) => r.skipReason)).toEqual(['held_for_a_person'])
   })
 
-  it('the record\'s answer lost after it landed: the invoice stays recorded, nothing is billed again', async () => {
+  it('the record\'s answer lost after it landed: the read-back finds it and the run goes on, nothing is billed again', async () => {
     state.fates.set(2, 'lost')
 
     await cutRunThenCarryOn()
 
     expect(state.created).toBe(1)
     expect(state.invoices).toEqual(new Set(['inv-1']))
-    expect(state.row).toMatchObject({ next_run_date: '2026-08-06', period_start: '2026-08-01', last_invoice_id: 'inv-1' })
+    // No kept warning: the run finished as if the answer had arrived (accounted#211).
+    expect(state.row).toMatchObject({ next_run_date: '2026-08-06', period_start: '2026-08-01', last_invoice_id: 'inv-1', last_run_warning: null })
   })
 
   it('the hold\'s answer lost after it landed: the draft is kept and the schedule held, nothing is billed again', async () => {

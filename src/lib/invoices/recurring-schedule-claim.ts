@@ -14,9 +14,12 @@ export interface ClaimableSchedule {
  * row and gets it back; the loser matches zero rows and must not spawn an
  * invoice. The hourly cron and "Skapa faktura nu" both claim through this, so
  * two crons, two clicks or a click during the cron never create two invoices
- * for one run (accounted#58). `extra` is written in the same UPDATE (the cron
- * writes the warning a person reads if its run never finishes). Throws when
- * the write itself fails.
+ * for one run (accounted#58). That holds only while the run's own writes move
+ * last_run_at off its claim: the cron's record writes a token of its own, so
+ * a claim from the cron's claim token, read before that record, matches
+ * nothing after it (accounted#211). `extra` is written in the same UPDATE
+ * (the cron writes the warning a person reads if its run never finishes).
+ * Throws when the write itself fails.
  */
 export async function claimRecurringScheduleRun(
   supabase: SupabaseClient,
@@ -62,13 +65,12 @@ export async function releaseRecurringScheduleRun(
 /**
  * Hold a run whose record on the schedule may have landed unseen (a transport
  * error after the UPDATE was sent): move the claim on to `holdTs` and write
- * `warning`, the one a person reads, only while this run holds the claim and
- * the schedule still has the run date and period that were read. The record
- * moves both on and is itself gated on the claim, so of the two UPDATEs
- * whichever commits first wins and the other matches no row. The hold keeps
- * the schedule claimed: until a release from `holdTs` lands, every run passes
- * it by (the same day as already run, from the next day as held for a
- * person).
+ * `warning`, the one a person reads, only while this run holds the claim. The
+ * record is gated on the claim too and moves last_run_at on to a token of its
+ * own, so of the two UPDATEs whichever commits first wins and the other
+ * matches no row. The hold keeps the schedule claimed: until a release from
+ * `holdTs` lands, every run passes it by (the same day as already run, from
+ * the next day as held for a person).
  *
  * Answers 'held' when it matched (the record never landed and now never
  * will), 'moved' when it matched no row (the record landed, or another run
@@ -80,18 +82,37 @@ export async function holdRecurringScheduleRun(
   schedule: ClaimableSchedule,
   claimTs: string,
   holdTs: string,
-  unmoved: { next_run_date: string; period_start: string | null },
   warning: string,
 ): Promise<'held' | 'moved' | 'unknown'> {
-  const hold = supabase
+  const { data, error } = await supabase
     .from('recurring_invoice_schedules')
     .update({ last_run_at: holdTs, last_run_warning: warning })
     .eq('id', schedule.id)
     .eq('company_id', schedule.company_id)
     .eq('last_run_at', claimTs)
-    .eq('next_run_date', unmoved.next_run_date)
-  const gated = unmoved.period_start === null ? hold.is('period_start', null) : hold.eq('period_start', unmoved.period_start)
-  const { data, error } = await gated.select('id')
+    .select('id')
   if (error) return 'unknown'
   return Array.isArray(data) && data.length > 0 ? 'held' : 'moved'
+}
+
+/**
+ * Whether the schedule names `invoiceId` as its last invoice: the read-back
+ * after a record whose answer was an error and whose hold did not take the
+ * run. The id is the run's own draft's, and only the run's record writes it
+ * on the schedule, so finding it proves that record landed. False also when
+ * the read fails: nobody can tell, and the caller keeps the invoice for a
+ * person.
+ */
+export async function scheduleRecordsInvoice(
+  supabase: SupabaseClient,
+  schedule: ClaimableSchedule,
+  invoiceId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('recurring_invoice_schedules')
+    .select('id')
+    .eq('id', schedule.id)
+    .eq('company_id', schedule.company_id)
+    .eq('last_invoice_id', invoiceId)
+  return !error && Array.isArray(data) && data.length > 0
 }

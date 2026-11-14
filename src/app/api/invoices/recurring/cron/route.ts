@@ -15,6 +15,7 @@ import {
   claimRecurringScheduleRun,
   holdRecurringScheduleRun,
   releaseRecurringScheduleRun,
+  scheduleRecordsInvoice,
 } from '@/lib/invoices/recurring-schedule-claim'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
@@ -105,6 +106,26 @@ function isHeldForAPerson(warning: string | null | undefined): boolean {
   return typeof warning === 'string' && warning.endsWith(HELD_FOR_A_PERSON)
 }
 
+/** How many days after its missed date a held schedule is still said as an error. */
+const HELD_REPORT_DAYS = 7
+
+/**
+ * Whether this run says a held schedule as an error: once a day for the week
+ * after its missed date, by the run in the hour (UTC) of the claim or hold its
+ * last run left. Every day has that hour, where the schedule's Stockholm send
+ * hour is missing on the spring DST day; and a run that is missed, or stops
+ * before it reaches the schedule, costs one day's line, not the only one.
+ */
+function heldReportDue(
+  schedule: Pick<RecurringInvoiceSchedule, 'last_run_at' | 'next_run_date'>,
+  now: Date,
+  today: string,
+): boolean {
+  if (today > addDaysIso(schedule.next_run_date, HELD_REPORT_DAYS)) return false
+  const hour = schedule.last_run_at ? new Date(schedule.last_run_at).getUTCHours() : 0
+  return now.getUTCHours() === hour
+}
+
 export const GET = withCronContext('cron.recurring_invoices', async (_request, ctx) => {
   const supabase = createServiceClient()
 
@@ -169,11 +190,12 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       // A run that did not settle (killed after its claim, or stopped with an
       // invoice its schedule may not record) left it for a person
       // (heldWarning): no roll and no new warning, the one on the recurring
-      // invoices page says what to do. Said once as an error, at the
-      // schedule's own hour on the day after the missed date; the runs after
-      // it pass it by quietly.
+      // invoices page says what to do. Said as an error once a day for a week
+      // (heldReportDue); the other runs pass it by quietly. The kill itself
+      // is reported within minutes by the cron watch (lib/cron/watch.ts);
+      // this line names the schedule it left waiting.
       if (isHeldForAPerson(schedule.last_run_warning)) {
-        if (addDaysIso(schedule.next_run_date, 1) === todayStockholm && currentHour === schedule.send_hour) {
+        if (heldReportDue(schedule, now, todayStockholm)) {
           itemCtx.log.error(
             'recurring schedule held for a person: its last run did not settle and may have left an invoice the schedule does not record',
             new Error('recurring schedule held after a run that did not settle'),
@@ -306,17 +328,24 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
 
     // 6. Record the invoice on the schedule the moment it exists, before the
     //    send, and only while this run holds the claim (last_run_at =
-    //    claimTs). An error answer does not prove the record failed: it may
-    //    have landed, or still be on its way. So the run is first held, in
-    //    one UPDATE that moves the claim on to a hold and writes the held
-    //    warning, only while the schedule still has the run date and period
-    //    this run read (holdRecurringScheduleRun). Of the record and the hold
-    //    whichever commits first wins and the other matches nothing:
+    //    claimTs). The record moves last_run_at on to a token of its own:
+    //    kept at the claim token, a claim taken from that token ("Skapa
+    //    faktura nu" reading the schedule while this run held it) still
+    //    matched after the record and billed the period a second time
+    //    (accounted#211). An error answer does not prove the record failed:
+    //    it may have landed, or still be on its way. So the run is first
+    //    held, in one UPDATE that moves the claim on to a hold and writes the
+    //    held warning, only while this run still holds the claim
+    //    (holdRecurringScheduleRun). Of the record and the hold whichever
+    //    commits first wins and the other matches nothing:
     //    - held: the record can no longer land, so RecurringRecordNotLandedError
     //      tells the service to remove the unnumbered draft; only once that is
     //      confirmed is the run given back (step 5's release, from the hold);
-    //    - not held, or not known: the record landed (or nobody can tell), so
-    //      the draft is kept and the run ends as RecurringInvoiceKeptError.
+    //    - not held, or not known: the schedule is read back. Naming this
+    //      run's invoice, it proves the record landed, and the run goes on to
+    //      the send. Otherwise (another run's claim, a read that fails) nobody
+    //      can tell, the draft is kept and the run ends as
+    //      RecurringInvoiceKeptError.
     //    Every step is a single UPDATE that leaves the schedule held if it is
     //    the last one to land: the claim, the hold and the kept warning all
     //    carry the held warning, and only a confirmed removal is followed by a
@@ -328,11 +357,12 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         schedule.day_of_month,
         schedule.interval_months,
       )
+      const recordTs = new Date(Math.max(Date.now(), now.getTime() + 1)).toISOString()
       const { data: recorded, error: updateError } = await supabase
         .from('recurring_invoice_schedules')
         .update({
           next_run_date: nextRunDate,
-          last_run_at: claimTs,
+          last_run_at: recordTs,
           last_invoice_id: invoiceId,
           // Until the send answers (step 7 overwrites it): if the run dies
           // while sending, this is what the user reads.
@@ -356,19 +386,21 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         throw new RecurringRecordNotLandedError(invoiceId, 'the schedule no longer holds this run: another run claimed it')
       }
       const reason = updateError.message.slice(0, 300).replace(/\.$/, '')
-      // A hold distinct from the claim, so the record (gated on the claim)
-      // can no longer land once the hold has.
-      const holdTs = new Date(Math.max(Date.now(), now.getTime() + 1)).toISOString()
-      const hold = await holdRecurringScheduleRun(
-        supabase,
-        schedule,
-        claimTs,
-        holdTs,
-        { next_run_date: schedule.next_run_date, period_start: schedule.period_start ?? null },
-        heldWarning(todayStockholm, reason),
-      )
+      // A hold distinct from the claim and from the record's token, so the
+      // record (gated on the claim) can no longer land once the hold has.
+      const holdTs = new Date(Math.max(Date.now(), Date.parse(recordTs) + 1)).toISOString()
+      const hold = await holdRecurringScheduleRun(supabase, schedule, claimTs, holdTs, heldWarning(todayStockholm, reason))
       if (hold === 'held') {
         throw new RecurringRecordNotLandedError(invoiceId, `schedule update failed for invoice ${invoiceId}: ${updateError.message}`, holdTs)
+      }
+      if (await scheduleRecordsInvoice(supabase, schedule, invoiceId)) {
+        itemCtx.log.warn('recurring record answered an error but landed; the run goes on to the send', {
+          scheduleId: schedule.id,
+          invoiceId,
+          hold,
+          error: updateError.message,
+        })
+        return
       }
       throw new Error(`the record of invoice ${invoiceId} on the schedule is not confirmed (${hold}): ${updateError.message}`)
     }
@@ -384,12 +416,13 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       // full stop of its own; the template adds one.
       const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300).replace(/\.$/, '')
       if (err instanceof RecurringInvoiceKeptError) {
-        // The invoice is in place (recorded on the schedule, or kept because
-        // nobody could tell): there is no retry today, so the claim (or the
-        // hold) stays and the user is told to look at the invoice. Should
-        // this write fail too, the held warning the claim or the hold wrote
-        // already says the same.
-        itemCtx.log.error('recurring run failed with its invoice in place', err, {
+        // The invoice is in place, or may be (recorded on the schedule, kept
+        // because nobody could tell, or a header insert that answered an
+        // error): there is no retry today, so the claim (or the hold) stays
+        // and the user is told to look at the invoice. Should this write fail
+        // too, the held warning the claim or the hold wrote already says the
+        // same.
+        itemCtx.log.error('recurring run failed with its invoice in place, or possibly in place', err, {
           scheduleId: schedule.id,
           invoiceId: err.invoiceId,
         })

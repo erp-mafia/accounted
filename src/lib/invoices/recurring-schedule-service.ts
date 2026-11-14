@@ -266,10 +266,11 @@ export class RecurringRecordNotLandedError extends Error {
 }
 
 /**
- * The run failed with its invoice still in place (only thrown for a caller
- * that records through onInvoiceCreated): the caller keeps its claim, so no
- * second invoice is created for the run, and tells the user to look at the
- * invoice.
+ * The run failed with its invoice still in place, or possibly in place (a
+ * header INSERT that answered an error may have landed); only thrown for a
+ * caller that records through onInvoiceCreated. The caller keeps its claim,
+ * so no second invoice is created for the run, and tells the user to look at
+ * the invoice.
  */
 export class RecurringInvoiceKeptError extends Error {
   constructor(
@@ -282,8 +283,9 @@ export class RecurringInvoiceKeptError extends Error {
 }
 
 /**
- * A failure that leaves a draft the run could not remove: for a caller that
- * records through onInvoiceCreated (the cron, which holds the schedule on
+ * A failure that may leave a draft behind (one the run could not remove, or
+ * a header INSERT whose answer was an error): for a caller that records
+ * through onInvoiceCreated (the cron, which holds the schedule on
  * RecurringInvoiceKeptError instead of retrying beside the draft), kept; for
  * any other caller, the failure as it is.
  */
@@ -488,10 +490,17 @@ export async function executeRecurringSchedule(
     }
   }
 
-  // 5. Insert invoice header.
+  // 5. Insert invoice header, under an id this run generates. An error answer
+  //    to the INSERT does not prove the row is absent: postgrest-js answers a
+  //    502/504 or a reset connection as an error and does not retry a POST,
+  //    so the row may have landed (accounted#211). The id names the draft the
+  //    run may have left, and a caller that records (the cron) keeps the run
+  //    held for a person instead of giving it back beside that draft.
+  const invoiceId = crypto.randomUUID()
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
+      id: invoiceId,
       user_id: schedule.user_id,
       company_id: schedule.company_id,
       customer_id: schedule.customer_id,
@@ -534,7 +543,11 @@ export async function executeRecurringSchedule(
     .single()
 
   if (invoiceError || !invoice) {
-    throw new Error(`failed to insert invoice from schedule: ${invoiceError?.message ?? 'unknown'}`)
+    // Kept for a caller that records: given back, the next run would create a
+    // second draft for the period beside this one, if it landed. Any other
+    // caller (a person who clicked "Skapa faktura nu" and reads the answer)
+    // gets the failure as it is.
+    throw keptOrPlain(options, invoiceId, new Error(`failed to insert invoice from schedule: ${invoiceError?.message ?? 'unknown'}`))
   }
 
   // 6. Insert items. An article's revenue account is used only where

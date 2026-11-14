@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { claimRecurringScheduleRun, holdRecurringScheduleRun, releaseRecurringScheduleRun } from '../recurring-schedule-claim'
+import {
+  claimRecurringScheduleRun,
+  holdRecurringScheduleRun,
+  releaseRecurringScheduleRun,
+  scheduleRecordsInvoice,
+} from '../recurring-schedule-claim'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const CLAIM_TS = '2026-11-10T07:00:00.000Z'
@@ -81,41 +86,53 @@ describe('holdRecurringScheduleRun', () => {
   const schedule = { id: 's-1', company_id: 'c-1', last_run_at: '2026-10-01T06:00:00.000Z' }
   const HOLD_TS = '2026-11-10T07:00:00.001Z'
 
-  it('moves the claim on to the hold with the held warning, only while the claim and the run date and period are the ones read', async () => {
+  it('moves the claim on to the hold with the held warning, only while this run holds the claim', async () => {
     enqueue({ data: [{ id: 's-1' }] })
 
-    await expect(
-      holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, { next_run_date: '2026-11-10', period_start: '2026-11-01' }, 'held'),
-    ).resolves.toBe('held')
+    await expect(holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, 'held')).resolves.toBe('held')
 
     expect(findCalls('recurring_invoice_schedules', 'update')).toEqual([[{ last_run_at: HOLD_TS, last_run_warning: 'held' }]])
+    // The record moves last_run_at off the claim, so the claim alone tells a
+    // landed record from a run still to be held.
     expect(findCalls('recurring_invoice_schedules', 'eq')).toEqual([
       ['id', 's-1'],
       ['company_id', 'c-1'],
       ['last_run_at', CLAIM_TS],
-      ['next_run_date', '2026-11-10'],
-      ['period_start', '2026-11-01'],
     ])
-  })
-
-  it('a schedule without a period is matched on period_start IS NULL', async () => {
-    enqueue({ data: [{ id: 's-1' }] })
-
-    await holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, { next_run_date: '2026-11-10', period_start: null }, 'held')
-
-    expect(findCalls('recurring_invoice_schedules', 'is')).toEqual([['period_start', null]])
   })
 
   it('answers moved when no row matched and unknown when the write failed', async () => {
     enqueue({ data: [] })
-    await expect(
-      holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, { next_run_date: '2026-11-10', period_start: null }, 'held'),
-    ).resolves.toBe('moved')
+    await expect(holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, 'held')).resolves.toBe('moved')
 
     enqueue({ data: null, error: { message: 'connection reset' } })
-    await expect(
-      holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, { next_run_date: '2026-11-10', period_start: null }, 'held'),
-    ).resolves.toBe('unknown')
+    await expect(holdRecurringScheduleRun(supabase as never, schedule, CLAIM_TS, HOLD_TS, 'held')).resolves.toBe('unknown')
+  })
+})
+
+describe('scheduleRecordsInvoice (accounted#211)', () => {
+  beforeEach(() => reset())
+  const schedule = { id: 's-1', company_id: 'c-1', last_run_at: '2026-10-01T06:00:00.000Z' }
+
+  it('reads the schedule back for this run\'s invoice, written there only by this run\'s record', async () => {
+    enqueue({ data: [{ id: 's-1' }] })
+
+    await expect(scheduleRecordsInvoice(supabase as never, schedule, 'inv-1')).resolves.toBe(true)
+
+    expect(findCalls('recurring_invoice_schedules', 'update')).toEqual([])
+    expect(findCalls('recurring_invoice_schedules', 'eq')).toEqual([
+      ['id', 's-1'],
+      ['company_id', 'c-1'],
+      ['last_invoice_id', 'inv-1'],
+    ])
+  })
+
+  it('answers false when the schedule names another invoice, or when the read fails', async () => {
+    enqueue({ data: [] })
+    await expect(scheduleRecordsInvoice(supabase as never, schedule, 'inv-1')).resolves.toBe(false)
+
+    enqueue({ data: null, error: { message: 'connection reset' } })
+    await expect(scheduleRecordsInvoice(supabase as never, schedule, 'inv-1')).resolves.toBe(false)
   })
 })
 

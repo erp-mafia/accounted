@@ -332,9 +332,12 @@ describe('GET /api/invoices/recurring/cron', () => {
 
     // [0] is the claim; [1] is the record, complete before a mail is sent.
     expect(atSend).toHaveLength(2)
+    expect(atSend[0]!.last_run_at).toBe('2026-07-06T08:30:00.000Z')
     expect(atSend[1]).toEqual({
       next_run_date: '2026-08-06',
-      last_run_at: '2026-07-06T08:30:00.000Z',
+      // A token of the record's own, not the claim's: a claim taken from the
+      // claim token before the record matches nothing after it (accounted#211).
+      last_run_at: '2026-07-06T08:30:00.001Z',
       last_invoice_id: 'inv-1',
       generated_count: 5,
       period_start: '2026-08-01',
@@ -452,18 +455,19 @@ describe('GET /api/invoices/recurring/cron', () => {
       expect(body.failed).toBe(1)
       expect(sent).not.toHaveBeenCalled()
       expect(removedDrafts).toEqual(['inv-1'])
-      const [, , hold, release] = scheduleUpdates()
+      const [, record, hold, release] = scheduleUpdates()
       // The hold: one UPDATE that moves the claim on and writes the held
-      // warning, only while the run date and period are the ones read.
+      // warning, only while this run holds the claim. Its token is neither
+      // the claim's nor the record's.
+      const { last_run_at: recordTs } = record![0]!.args[0] as Record<string, string>
       const { last_run_at: holdTs, last_run_warning: heldText } = hold![0]!.args[0] as Record<string, string>
-      expect(holdTs > '2026-07-06T08:30:00.000Z').toBe(true)
+      expect(recordTs > '2026-07-06T08:30:00.000Z').toBe(true)
+      expect(holdTs > recordTs).toBe(true)
       expect(heldText).toMatch(/^Körningen 2026-07-06 avbröts: connection reset\. Kontrollera om en faktura skapades.*gjort något av detta\.$/)
       expect(hold!.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([
         ['id', 's-1'],
         ['company_id', 'c-1'],
         ['last_run_at', '2026-07-06T08:30:00.000Z'],
-        ['next_run_date', '2026-07-06'],
-        ['period_start', '2026-07-01'],
       ])
       // Given back only after the removal, and only from the hold.
       expect(release![0]!.args[0]).toEqual({
@@ -492,40 +496,91 @@ describe('GET /api/invoices/recurring/cron', () => {
       expect(statements[3]![0]!.args[0]).toEqual({ last_run_warning: expect.stringContaining('gjort något av detta') })
     })
 
-    it('landed before the hold: the hold matches nothing, the draft is kept and the user told to check', async () => {
+    it('landed before the hold: the hold matches nothing, the read-back finds this run\'s invoice, and the send goes on (accounted#211)', async () => {
       vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
       enqueue({ data: [makeSchedule({ auto_send: true, period_start: '2026-07-01' })], error: null })
       enqueue({ data: [{ id: 's-1' }], error: null }) // claim
       isSandboxCompany.mockResolvedValue(false)
       const sent = vi.fn()
-      // The record committed (next_run_date and period_start moved on), so the hold matches no row.
-      runCreates({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: true, warning: null }, sent, [recordError, { data: [] }])
+      // The record committed (last_run_at moved off the claim), so the hold
+      // matches no row; the schedule read back names inv-1, and the send's
+      // answer replaces the provisional warning.
+      runCreates({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: true, warning: null }, sent, [
+        recordError,
+        { data: [] },
+        { data: [{ id: 's-1' }] },
+        { data: null },
+      ])
+
+      const { body } = await parseJsonResponse<CronBody & { failed: number }>(await GET(req()))
+
+      expect(body.failed).toBe(0)
+      expect(sent).toHaveBeenCalledTimes(1)
+      expect(removedDrafts).toEqual([])
+      const readBack = calls.filter((c) => c.table === 'recurring_invoice_schedules' && c.method === 'eq').map((c) => c.args)
+      expect(readBack).toContainEqual(['last_invoice_id', 'inv-1'])
+      // No kept warning: the last write is the send's own answer.
+      const writes = updatePayloads.filter((u) => u.table === 'recurring_invoice_schedules').map((u) => u.payload)
+      expect(writes.at(-1)).toEqual({ last_run_warning: null })
+    })
+
+    it('not held, and the read-back does not find this run\'s invoice (another run holds the claim): the draft is kept and the user told to check', async () => {
+      vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+      enqueue({ data: [makeSchedule({ auto_send: true, period_start: '2026-07-01' })], error: null })
+      enqueue({ data: [{ id: 's-1' }], error: null }) // claim
+      isSandboxCompany.mockResolvedValue(false)
+      const sent = vi.fn()
+      runCreates({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: true, warning: null }, sent, [
+        recordError,
+        { data: [] }, // the hold matched nothing
+        { data: [] }, // the read-back: the schedule names another invoice
+        { data: null }, // the kept warning
+      ])
 
       const { body } = await parseJsonResponse<CronBody & { failed: number }>(await GET(req()))
 
       expect(body.failed).toBe(1)
       expect(sent).not.toHaveBeenCalled()
-      // Never removed: removing it would leave a schedule moved on with no invoice for its period.
+      // Never removed: the record may still land, and a removal would leave a
+      // schedule moved on with no invoice for its period.
       expect(removedDrafts).toEqual([])
-      const last = scheduleUpdates().at(-1)!
-      expect(last[0]!.args[0]).toEqual({
+      const writes = updatePayloads.filter((u) => u.table === 'recurring_invoice_schedules').map((u) => u.payload)
+      expect(writes.at(-1)).toEqual({
         last_run_warning: expect.stringContaining('avbröts: the record of invoice inv-1 on the schedule is not confirmed (moved)'),
       })
     })
 
-    it('nobody can tell (the hold errors too): the draft is kept and the claim held', async () => {
+    it('nobody can tell (the hold and the read-back error too): the draft is kept and the claim held', async () => {
       vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
       enqueue({ data: [makeSchedule()], error: null })
       enqueue({ data: [{ id: 's-1' }], error: null }) // claim
       runCreates({ invoiceId: 'inv-1', invoiceNumber: null, autoSent: false, warning: null }, () => {}, [
         recordError,
-        { error: { message: 'connection reset' } },
+        { error: { message: 'connection reset' } }, // the hold
+        { error: { message: 'connection reset' } }, // the read-back
       ])
 
       const { body } = await parseJsonResponse<CronBody & { failed: number }>(await GET(req()))
 
       expect(body.failed).toBe(1)
       expect(removedDrafts).toEqual([])
+    })
+
+    it('the hold\'s answer lost but the read-back finds this run\'s invoice: the record landed first, and the run goes on', async () => {
+      vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+      enqueue({ data: [makeSchedule()], error: null })
+      enqueue({ data: [{ id: 's-1' }], error: null }) // claim
+      runCreates({ invoiceId: 'inv-1', invoiceNumber: null, autoSent: false, warning: null }, () => {}, [
+        recordError,
+        { error: { message: 'connection reset' } }, // the hold: not known
+        { data: [{ id: 's-1' }] }, // the read-back names inv-1: the hold cannot have landed
+      ])
+
+      const { body } = await parseJsonResponse<CronBody & { failed: number }>(await GET(req()))
+
+      expect(body.failed).toBe(0)
+      expect(removedDrafts).toEqual([])
+      expect(body.results[0]).toMatchObject({ invoiceId: 'inv-1' })
     })
   })
 
@@ -584,19 +639,50 @@ describe('GET /api/invoices/recurring/cron', () => {
       expect(executeRecurringSchedule).not.toHaveBeenCalled()
     })
 
-    it('says so as an error once: at its hour on the day after the missed date, not on the hours or days after', async () => {
-      const runAt = async (instant: string) => {
+    /** How many runs so far said a held schedule as an error. */
+    const heldErrors = () => cronLog.error.mock.calls.filter(([message]) => String(message).includes('held for a person')).length
+    const at = (day: string, hourUtc: number) => `${day}T${String(hourUtc).padStart(2, '0')}:00:02Z`
+
+    describe('said as an error once a day for a week, by the run in the hour (UTC) of its last run\'s claim', () => {
+      // Claimed by the 06:00 UTC run (08:00 Stockholm) on 5 July, which never finished.
+      const runAt = async (instant: string, overrides: Record<string, unknown> = {}) => {
         vi.setSystemTime(new Date(instant))
-        enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, send_hour: 8, last_run_warning: HELD })], error: null })
+        enqueue({
+          data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, send_hour: 8, last_run_at: '2026-07-05T06:00:04.000Z', last_run_warning: HELD, ...overrides })],
+          error: null,
+        })
         await GET(req())
       }
-      // 06:30 UTC = 08:30 Stockholm (CEST) on 6 July: the hour of the schedule, the day after.
-      await runAt('2026-07-06T06:30:00Z')
-      await runAt('2026-07-06T07:30:00Z')
-      await runAt('2026-07-07T06:30:00Z')
 
-      const held = cronLog.error.mock.calls.filter(([message]) => String(message).includes('held for a person'))
-      expect(held).toHaveLength(1)
+      it('once on the day after, not on its other hours; once on each later day of the week; not after it', async () => {
+        for (let hour = 0; hour < 24; hour++) await runAt(at('2026-07-06', hour))
+        expect(heldErrors()).toBe(1)
+
+        await runAt(at('2026-07-07', 6))
+        await runAt(at('2026-07-12', 6)) // the 7th day after the missed date
+        expect(heldErrors()).toBe(3)
+
+        await runAt(at('2026-07-13', 6))
+        expect(heldErrors()).toBe(3)
+      })
+
+      it('a missed run costs that day\'s line, not the only one (accounted#211)', async () => {
+        // The 06:00 UTC run on the day after never happens.
+        for (let hour = 0; hour < 24; hour++) if (hour !== 6) await runAt(at('2026-07-06', hour))
+        expect(heldErrors()).toBe(0)
+
+        await runAt(at('2026-07-07', 6))
+        expect(heldErrors()).toBe(1)
+      })
+
+      it('a spring DST day without the schedule\'s Stockholm hour still has the hour it is said in (accounted#211)', async () => {
+        // Stockholm skips 02:00-03:00 on 29 March 2026. Claimed at 02:00 CET
+        // on 28 March (01:00 UTC); the day after has no 02:00 in Stockholm.
+        const overrides = { next_run_date: '2026-03-28', day_of_month: 28, send_hour: 2, last_run_at: '2026-03-28T01:00:04.000Z' }
+        for (let hour = 0; hour < 24; hour++) await runAt(at('2026-03-29', hour), overrides)
+
+        expect(heldErrors()).toBe(1)
+      })
     })
 
     it('a stale schedule with any other warning is rolled forward as before', async () => {
