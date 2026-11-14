@@ -1,0 +1,1 @@
+[2026-11-11] Row approvals in Granskning leave the list on the click and run one at a time in click order, against a shared in-flight flag that disabled every row or parallel commits: the disabled button swallowed clicks on the next row, and serial commits keep voucher numbers in the order the person approved; a refused approval brings its row back with a toast that names it.

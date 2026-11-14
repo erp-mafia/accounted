@@ -95,6 +95,9 @@ import { ReminderBatchDialog } from '@/components/reminders/ReminderBatchDialog'
 import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
 import { reminderRunItems, wantsReminderBatchReview } from '@/lib/reminders/batch-dialog'
 import { dailyBatchTypeOf, pendingDailyBatchTypeOf, type DailyBatchType } from '@/lib/pending-operations/daily-batches'
+import { isHandledElsewhere } from '@/lib/pending-operations/handled-elsewhere'
+import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -387,6 +390,20 @@ export default function PendingOperationsPage() {
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
+  // Approvals given but not yet answered. The row leaves the list on the
+  // click and the approvals run one at a time in click order, so the next
+  // row's Godkänn answers at once instead of waiting on this one (one shared
+  // in-flight flag used to disable every row's button meanwhile, and the
+  // clicks on it went nowhere). A refused approval brings its row back.
+  const [approvingIds, setApprovingIds] = useState<ReadonlySet<string>>(new Set())
+  const approvalChain = useRef<Promise<void>>(Promise.resolve())
+  const approvalsLeft = useRef(0)
+  // Approvals the booking's duplicate guard stopped: the proposal is still
+  // pending, and the person answers the possible duplicate here (match it,
+  // book anyway, or leave it). One dialog at a time, in the order they came.
+  const [duplicatePrompts, setDuplicatePrompts] = useState<
+    Array<{ op: PendingOperation; candidate: BookedDuplicateCandidate }>
+  >([])
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -456,8 +473,12 @@ export default function PendingOperationsPage() {
   // (which would re-subscribe the realtime channel on every data change).
   const loadedTabRef = useRef<ViewTab | null>(null)
   const hasRowsRef = useRef(false)
+  // The rows as they are now, for an approval that answers after the list
+  // has moved on (the queue outlives the render that started it).
+  const operationsRef = useRef<PendingOperation[]>([])
   useEffect(() => {
     hasRowsRef.current = operations.length > 0
+    operationsRef.current = operations
   }, [operations])
   // Background reconcile in flight: drives the quiet toolbar cue.
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -643,37 +664,54 @@ export default function PendingOperationsPage() {
     router.refresh()
     fetchOperations()
   }
+  // The queue's last approval calls the current one: the tab or sort order
+  // may have changed since the click that started it.
+  const afterResolveRef = useRef(afterResolve)
+  useEffect(() => {
+    afterResolveRef.current = afterResolve
+  })
 
   // An approved row leaves the list now, not when the refetch lands (seconds
   // on a long queue). Until then it stayed clickable: approving rows one by
   // one, the next click hit the row just approved again and got a 409 toast
   // for an approval that went through. The refetch reconciles.
   function dropFromList(id: string) {
-    if (!operations.some((o) => o.id === id)) return
+    if (!operationsRef.current.some((o) => o.id === id)) return
     setOperations((prev) => prev.filter((o) => o.id !== id))
     setPendingCount((n) => (n === null ? n : Math.max(0, n - 1)))
   }
 
-  // Shared by the direct-commit pill (low/medium risk) and the high-risk
-  // confirmation dialog. The Granskning row already states source, title and
-  // risk and offers Detaljer, so for low/medium the pill IS the deliberate
-  // approval; only high risk keeps the dialog, whose warning sentence carries
-  // information the row does not.
-  async function commitOp(op: PendingOperation) {
-    setIsCommitting(true)
+  // One approval, as the server answers it. Never throws: it runs inside the
+  // queue, and what went wrong is said in a toast that names the proposal
+  // (its row may be far from where the person is by then).
+  async function sendApproval(op: PendingOperation, expectedDuplicateJournalEntryId?: string) {
     try {
-      const res = await fetch(`/api/pending-operations/${op.id}/commit`, { method: 'POST' })
+      const res = await fetch(`/api/pending-operations/${op.id}/commit`, {
+        method: 'POST',
+        // The approval is given: leaving the page must not drop it.
+        keepalive: true,
+        ...(expectedDuplicateJournalEntryId
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }),
+            }
+          : {}),
+      })
       const json = await res.json().catch(() => ({}))
+      const code = json?.error?.code
       // Already approved (another tab, or a second click), rejected, or being
       // approved right now: nothing ran and nothing failed. Say that, not
       // "Misslyckades", and let the row go.
-      if (res.status === 409 && json?.error?.code === 'PENDING_OPERATION_NOT_PENDING') {
+      if (res.status === 409 && code === 'PENDING_OPERATION_NOT_PENDING') {
         toast({ title: t('already_resolved'), description: getErrorMessage(json, { statusCode: res.status }) })
-        setShowCommitDialog(false)
-        setSelectedOp(null)
-        selection.deselect([op.id])
         dropFromList(op.id)
-        afterResolve()
+        return
+      }
+      // The ledger already seems to hold this affärshändelse. The proposal is
+      // still pending; the person decides in the duplicate dialog.
+      const candidate = json?.error?.details?.candidate as BookedDuplicateCandidate | undefined
+      if (res.status === 409 && code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+        setDuplicatePrompts((prev) => [...prev.filter((prompt) => prompt.op.id !== op.id), { op, candidate }])
         return
       }
       // getErrorMessage handles both `{ error: string }` and the structured
@@ -687,26 +725,55 @@ export default function PendingOperationsPage() {
       // still needs a BankID signature opens its signing step instead.
       const signingUrl = signingUrlOf(json.data)
       if (signingUrl) setSigningPrompt({ title: op.title, url: signingUrl })
-      setShowCommitDialog(false)
-      setSelectedOp(null)
-      selection.deselect([op.id])
       dropFromList(op.id)
-      afterResolve()
     } catch (err) {
       toast({
-        title: 'Misslyckades',
+        title: t('approve_failed', { title: op.title }),
         description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
-    } finally {
-      setIsCommitting(false)
     }
+  }
+
+  // Shared by the row's Godkänn, the slide-over and the high-risk
+  // confirmation dialog. The Granskning row already states source, title and
+  // risk and offers Detaljer, so for low/medium the click IS the deliberate
+  // approval; only high risk keeps the dialog, whose warning sentence carries
+  // information the row does not. The row leaves the list now; the returned
+  // promise settles when the server has answered.
+  function queueApproval(op: PendingOperation, expectedDuplicateJournalEntryId?: string): Promise<void> {
+    approvalsLeft.current += 1
+    setApprovingIds((prev) => new Set(prev).add(op.id))
+    selection.deselect([op.id])
+    const run = approvalChain.current
+      .then(() => sendApproval(op, expectedDuplicateJournalEntryId))
+      .finally(() => {
+        setApprovingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(op.id)
+          return next
+        })
+        approvalsLeft.current -= 1
+        // One reconcile for the whole run of clicks, not one per row.
+        if (approvalsLeft.current === 0) afterResolveRef.current()
+      })
+    approvalChain.current = run
+    return run
   }
 
   async function handleCommit() {
     if (!selectedOp) return
-    await commitOp(selectedOp)
+    setIsCommitting(true)
+    await queueApproval(selectedOp)
+    setIsCommitting(false)
+    setShowCommitDialog(false)
+    setSelectedOp(null)
   }
+
+  const duplicatePrompt = duplicatePrompts[0] ?? null
+  const closeDuplicatePrompt = () => setDuplicatePrompts((prev) => prev.slice(1))
+  const duplicatePromptTransactionId =
+    typeof duplicatePrompt?.op.params?.transaction_id === 'string' ? duplicatePrompt.op.params.transaction_id : null
 
   /**
    * Approve a selection in request-sized chunks. The route takes at most 100
@@ -876,6 +943,8 @@ export default function PendingOperationsPage() {
   }
 
   const filteredOperations = operations.filter((op) => {
+    // Approved on the click: gone until the server says otherwise.
+    if (approvingIds.has(op.id)) return false
     if (conversationFilter && op.agent_metadata?.conversation_id !== conversationFilter) {
       return false
     }
@@ -1059,7 +1128,7 @@ export default function PendingOperationsPage() {
           options={SEG_TABS.map(({ tab, labelKey }) => ({
             value: tab,
             label: t(labelKey),
-            count: tab === 'pending' ? pendingCount ?? 0 : undefined,
+            count: tab === 'pending' ? Math.max(0, (pendingCount ?? 0) - approvingIds.size) : undefined,
           }))}
         />
         {activeTab === 'pending' && (
@@ -1077,10 +1146,10 @@ export default function PendingOperationsPage() {
         )}
         {/* Quiet cue that a background reconcile is running (post-action or
             realtime): the list itself never swaps to a spinner for it. */}
-        {isRefreshing && !isLoading && (
+        {(isRefreshing || approvingIds.size > 0) && !isLoading && (
           <SpinnerIcon
             className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-            aria-label={t('refreshing')}
+            aria-label={approvingIds.size > 0 ? t('approving_count', { count: approvingIds.size }) : t('refreshing')}
           />
         )}
         <div className="ml-auto">
@@ -1230,6 +1299,9 @@ export default function PendingOperationsPage() {
                       <Badge variant="warning" className="mt-0.5 shrink-0 font-normal">{tSigning('sent_badge')}</Badge>
                     ) : op.status === 'committed' && !isAutoExpired(op) ? (
                       <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">{t('badge_approved')}</span>
+                    ) : isHandledElsewhere(op) ? (
+                      // Closed by the system, nobody's verdict: muted text like the normal outcome.
+                      <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">{t('badge_handled_elsewhere')}</span>
                     ) : (
                       <Badge
                         variant={
@@ -1391,7 +1463,7 @@ export default function PendingOperationsPage() {
                       className="text-success hover:text-success"
                       aria-label={approveLabel}
                       title={periodLocked ? t('period_locked_short') : approveLabel}
-                      disabled={periodLocked || isCommitting || isBulkCommitting}
+                      disabled={periodLocked || isBulkCommitting}
                       onClick={(e) => {
                         e.stopPropagation()
                         if (periodLocked) return
@@ -1406,7 +1478,7 @@ export default function PendingOperationsPage() {
                           setShowCommitDialog(true)
                         } else {
                           // Low/medium: the row's button is the approval.
-                          void commitOp(op)
+                          void queueApproval(op)
                         }
                       }}
                     >
@@ -1501,7 +1573,10 @@ export default function PendingOperationsPage() {
                     </p>
                   </div>
                 )}
-                {detailOp.status === 'rejected' && detailOp.rejection_category && detailOp.rejection_category !== 'expired' && (
+                {isHandledElsewhere(detailOp) && (
+                  <p className="text-xs text-muted-foreground">{t('handled_elsewhere_detail')}</p>
+                )}
+                {detailOp.status === 'rejected' && detailOp.rejection_category && detailOp.rejection_category !== 'expired' && !isHandledElsewhere(detailOp) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
                       Avvisad: {rejectionCategoryLabel(detailOp.rejection_category)}
@@ -1569,7 +1644,7 @@ export default function PendingOperationsPage() {
                           setSelectedOp(detailOp)
                           setShowCommitDialog(true)
                         } else {
-                          void commitOp(detailOp)
+                          void queueApproval(detailOp)
                         }
                       }}
                     >
@@ -1611,6 +1686,27 @@ export default function PendingOperationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* A possible duplicate stopped an approval: the proposal waits while
+          the person matches the bank row to the verifikat that is already
+          there, books anyway, or leaves it. Matching books the row, and the
+          next read of the queue then closes the proposal as handled. */}
+      <DuplicateBookingDialog
+        candidate={duplicatePrompt?.candidate ?? null}
+        subject={duplicatePrompt?.op.title}
+        onCancel={closeDuplicatePrompt}
+        onBookAnyway={() => {
+          if (!duplicatePrompt) return
+          closeDuplicatePrompt()
+          void queueApproval(duplicatePrompt.op, duplicatePrompt.candidate.journal_entry_id)
+        }}
+        matchTransaction={duplicatePromptTransactionId ? { id: duplicatePromptTransactionId } : null}
+        onMatched={(_transactionId, _journalEntryId, voucherLabel) => {
+          closeDuplicatePrompt()
+          toast({ title: t('duplicate_matched', { voucher: voucherLabel }) })
+          afterResolve()
+        }}
+      />
 
       {/* Commit confirmation dialog */}
       <ConfirmationDialog

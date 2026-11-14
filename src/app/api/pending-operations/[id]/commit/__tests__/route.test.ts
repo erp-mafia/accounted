@@ -10,7 +10,7 @@ import {
 import { eventBus } from '@/lib/events/bus'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
-const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCalls } = createQueuedMockSupabase()
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
 // Booking review rules (accounted#130): none in these tests; the queued mock
@@ -81,6 +81,7 @@ vi.mock('@/lib/pending-operations/record-app-approval', () => ({
 }))
 
 import { POST } from '../route'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 
 describe('POST /api/pending-operations/:id/commit', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -219,6 +220,52 @@ describe('POST /api/pending-operations/:id/commit', () => {
       expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
       // Numeric sort puts 2614 before 2645 regardless of input order.
       expect(body.error.account_numbers).toEqual(['2614', '2645'])
+    })
+
+    it('answers a possible duplicate with the candidate and keeps the proposal pending', async () => {
+      const candidate = {
+        transaction_id: null,
+        journal_entry_id: '7b1f6f0e-51c4-4a0a-9a1e-0f5e3c1b2a10',
+        voucher_label: 'A2',
+        entry_date: '2026-03-30',
+        description: 'Inbetalning kundfaktura 2026001',
+        amount: -500,
+      }
+      vi.mocked(detectBookingDuplicate).mockResolvedValueOnce(candidate as never)
+      const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+
+      enqueueMany([
+        { data: pendingOp },                         // fetch pending op
+        { data: { id: 'op-1' } },                    // CAS claim
+        { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row
+        { data: null, error: null },                  // dispatcher releases the op back to 'pending'
+      ])
+
+      const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
+      const response = await POST(request, routeParams)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { candidate: { journal_entry_id: string } } }
+      }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+      expect(body.error.details.candidate.journal_entry_id).toBe(candidate.journal_entry_id)
+      // Claimed, then handed back: never rejected.
+      const updates = findCalls('pending_operations', 'update').map(([payload]) => (payload as { status: string }).status)
+      expect(updates).toEqual(['committing', 'pending'])
+      expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 for a book-anyway that names no verifikat id, before reading the operation', async () => {
+      const request = createMockRequest('/api/pending-operations/op-1/commit', {
+        method: 'POST',
+        body: { expected_duplicate_journal_entry_id: 'not-a-uuid' },
+      })
+      const response = await POST(request, routeParams)
+
+      expect(response.status).toBe(400)
+      expect(mockSupabase.from).not.toHaveBeenCalled()
     })
 
     it('returns 409 when transaction already categorized', async () => {

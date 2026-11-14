@@ -1454,6 +1454,13 @@ export interface CategorizeMatchedTransactionOpts {
   notes?: string
   /** Book over a detected possible duplicate (the staged allow_duplicate). */
   allowDuplicate?: boolean
+  /**
+   * The approver looked at the detected candidate in the app and books anyway:
+   * a force bound to that verifikat, re-detected by the guard like the
+   * dashboard's "Bokför ändå" (TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH when
+   * it no longer matches).
+   */
+  expectedDuplicateJournalEntryId?: string
   dimensions?: Record<string, string>
   accountOverride?: string
   loadChart?: ChartVatTreatmentsLoader
@@ -1476,6 +1483,9 @@ export function categorizeInputFromStaged(opts: CategorizeMatchedTransactionOpts
     notes: opts.notes,
     proposal_id: opts.proposalId,
     allow_duplicate: opts.allowDuplicate,
+    ...(opts.expectedDuplicateJournalEntryId
+      ? { force: true, expected_duplicate_journal_entry_id: opts.expectedDuplicateJournalEntryId }
+      : {}),
   }
 }
 
@@ -1542,6 +1552,7 @@ export async function categorizeMatchedTransaction(
     loadChart: opts.loadChart,
     invoiceMatchIntercept: false,
     ...(opts.withoutReview ? { withoutReview: true } : {}),
+    ...(opts.expectedDuplicateJournalEntryId ? { forceVia: 'pending_approval' } : {}),
   })
   if (outcome.ok) {
     const booked = outcome.dryRun ? null : outcome.booked
@@ -1572,7 +1583,14 @@ export function coreResultFromRefusal(refusal: CategorizeRefusal): CategorizeCor
   if (refusal.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE') {
     const candidate = refusal.details?.candidate as BookedDuplicateCandidate | undefined
     if (candidate) {
-      return { error: agentDuplicateMessage(candidate, refusal.transaction?.currency), errorCode: refusal.code, status }
+      // The candidate rides along: the app's approval shows it to the person
+      // instead of the agent wording (commit.ts, duplicateReview).
+      return {
+        error: agentDuplicateMessage(candidate, refusal.transaction?.currency),
+        errorCode: refusal.code,
+        status,
+        data: { candidate },
+      }
     }
   }
   return {

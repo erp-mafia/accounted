@@ -64,6 +64,7 @@ export default function DuplicateBookingDialog({
   matchTransaction,
   onMatched,
   onIgnored,
+  subject,
 }: {
   /** The already-booked sibling, or null to keep the dialog closed. */
   candidate: BookedDuplicateCandidate | null
@@ -83,6 +84,12 @@ export default function DuplicateBookingDialog({
    *  The caller owns the refresh and closes the dialog by clearing
    *  `candidate`. Omit to hide the ignore action. */
   onIgnored?: (transactionId: string) => void
+  /**
+   * What is being booked, in the caller's words, for a caller whose dialog
+   * does not open on the row itself (Granskning names the proposal: its
+   * approvals run in a queue, so the dialog can arrive a few rows later).
+   */
+  subject?: string
 }) {
   const t = useTranslations('transactions')
   const locale = useLocale() as ErrorLocale
@@ -237,6 +244,12 @@ export default function DuplicateBookingDialog({
           </div>
         </DialogHeader>
         <div className="space-y-4">
+          {/* data-ph-mask: a proposal's title carries counterparty and amount. */}
+          {subject && (
+            <p className="break-words text-sm" data-ph-mask="">
+              {subject}
+            </p>
+          )}
           <p className="text-sm text-muted-foreground">
             {covering
               ? t('dialog_duplicate_body_covering', { unlinked: formatCurrency(covering.unlinked, 'SEK') })

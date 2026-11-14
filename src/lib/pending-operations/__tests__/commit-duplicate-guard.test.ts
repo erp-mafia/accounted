@@ -129,6 +129,90 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     expect(result.http_status).toBe(409)
   })
 
+  it("keeps the proposal pending with the candidate when the app's single approval answers duplicates itself", async () => {
+    mockDetectBookingDuplicate.mockResolvedValue(voucherCandidate)
+    // claim → transaction fetch → gate → release back to pending
+    const supabase = queuedSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] },
+      { data: null },
+    ])
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'income' },
+    })
+
+    const result = await commitPendingOperation(supabase, 'user-1', 'company-1', op, { duplicateReview: {} })
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    // Not consumed: the person answers the duplicate and approves again.
+    expect(result.operation_status).toBe('pending')
+    expect(result.data).toEqual({ candidate: voucherCandidate })
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+
+  it('refuses a book-anyway that names another verifikat than the one detected, and keeps the proposal pending', async () => {
+    mockDetectBookingDuplicate.mockResolvedValue(voucherCandidate)
+    const supabase = queuedSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] },
+      { data: null },
+    ])
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'income' },
+    })
+
+    const result = await commitPendingOperation(supabase, 'user-1', 'company-1', op, {
+      duplicateReview: { expectedJournalEntryId: 'je-another' },
+    })
+
+    expect(result.code).toBe('TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH')
+    expect(result.operation_status).toBe('pending')
+    // Nothing was dismissed: the guard held.
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+
+  it('books over the candidate the person looked at, and records that dismissal to behandlingshistorik', async () => {
+    mockDetectBookingDuplicate.mockResolvedValue(voucherCandidate)
+    const supabase = queuedSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: [] }, // the gate: no posted verifikat booked from the row (#203)
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] },
+      { data: [] },
+      { data: null },
+      { data: null },
+      { data: [] },
+      { data: [] },
+      { data: [{ id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null, is_ignored: false }] },
+    ])
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'income' },
+    })
+
+    const result = await commitPendingOperation(supabase, 'user-1', 'company-1', op, {
+      duplicateReview: { expectedJournalEntryId: 'je-existing' },
+    })
+
+    // Past the guard: neither refusal came back.
+    expect(result.code).not.toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect(result.code).not.toBe('TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH')
+    expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
+    const event = mockAppendProcessingHistory.mock.calls[0][0]
+    expect(event).toMatchObject({
+      eventType: 'BankTransactionDuplicateDismissed',
+      aggregateId: 'tx-1',
+      actor: { type: 'user', id: 'user-1' },
+    })
+    expect(event.payload).toMatchObject({ transaction_id: 'tx-1', dismissed_journal_entry_id: 'je-existing' })
+  })
+
   it('does not enforce the guard when allow_duplicate=true, but records the dismissal to behandlingshistorik', async () => {
     mockDetectBookingDuplicate.mockResolvedValue(voucherCandidate)
     // The booking proceeds past the guard (not auto-rejected); the downstream
