@@ -16690,7 +16690,6 @@
     "redirect_intro": "You will be sent to {bank}. Sign there and come back here.",
     "redirect_continue": "Continue to {bank}",
     "redirect_waiting": "Waiting for {bank}'s answer.",
-    "method_redirect": "Sign at {bank}",
     "help_redirect": "{bank} signs on its own page: you are sent there, sign with BankID and come back here, where the connection continues.",
     "affiliate_label": "Which savings bank?",
     "affiliate_search": "Search savings bank",

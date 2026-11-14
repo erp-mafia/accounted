@@ -16690,7 +16690,6 @@
     "redirect_intro": "Du skickas till {bank}. Signera där och kom tillbaka hit.",
     "redirect_continue": "Fortsätt till {bank}",
     "redirect_waiting": "Vi väntar på svar från {bank}.",
-    "method_redirect": "Signera hos {bank}",
     "help_redirect": "{bank} signerar på sin egen sida: du skickas dit, signerar med BankID och kommer tillbaka hit, där kopplingen fortsätter.",
     "affiliate_label": "Vilken sparbank?",
     "affiliate_search": "Sök sparbank",

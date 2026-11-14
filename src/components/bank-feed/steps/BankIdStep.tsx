@@ -26,9 +26,16 @@ interface BankIdStepProps {
   /** The typed logon id was refused when the person tried to start. */
   psuAuthoriserIdInvalid: boolean
   secondsLeft: number | null
-  /** How the chosen bank signs: decides whether the start is our screen, the bank's page, or the person's choice. */
+  /**
+   * How the chosen bank signs: its own page only when it signs nowhere else.
+   * A bank that also signs in our screen is never offered its page: the
+   * consent would be made for that page, and every later call on it (the
+   * reads, the revoke) would have to say so, which nothing stores (Swedbank
+   * refused such a revoke, 2026-11-12). The server still sends such a bank to
+   * its page when the bank itself imposes it on a restart.
+   */
   approach: SigningApproach
-  /** A phone-sized viewport: the only place the bank's page is offered next to BankID on this device. */
+  /** A phone-sized viewport: a second signatory's BankID opens on this device instead of a QR. */
   mobile: boolean
   /** The bank as the person knows it (the sparbank when one is chosen). */
   bankName: string
@@ -134,17 +141,12 @@ export function BankIdStep({
         {personalNumberField}
         {psuAuthoriserField}
         {state.startError && <AttnLine>{state.startError}</AttnLine>}
-        {/* Three ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
+        {/* The ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
         <DialogFooter className="sm:flex-wrap">
           {closeButton}
           <Button variant="secondary" onClick={() => onStart('same_device')} loading={state.starting && state.method === 'same_device'} disabled={disabled}>
             {t('method_same_device')}
           </Button>
-          {approach === 'both' && mobile && (
-            <Button variant="secondary" onClick={() => onStart('redirect')} loading={state.starting && state.method === 'redirect'} disabled={disabled}>
-              {t('method_redirect', { bank: bankName })}
-            </Button>
-          )}
           <Button onClick={() => onStart('qr')} loading={state.starting && state.method === 'qr'} disabled={disabled}>
             {t('method_qr')}
           </Button>
