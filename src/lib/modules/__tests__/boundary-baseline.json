@@ -27,7 +27,7 @@
     "supplier-invoices -> invoicing": 4,
     "transactions -> collections": 1,
     "transactions -> invoicing": 21,
-    "transactions -> skatteverket": 8,
+    "transactions -> skatteverket": 9,
     "transactions -> supplier-invoices": 1
   },
   "undeclaredKernelToKernel": {

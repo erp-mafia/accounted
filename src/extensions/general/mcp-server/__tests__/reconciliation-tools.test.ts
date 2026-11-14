@@ -683,6 +683,45 @@ describe('reconciliation MCP tools', () => {
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.message_en).toMatch(/ENTRY_NOT_FOUND: saknas \| ALREADY_LINKED: redan kopplad/)
 
+    // crm#1846: a wrong-way pair names the list to pick the right verifikat
+    // from, and a held verifikat names the unlink of the row that holds it.
+    matchMock.mockResolvedValueOnce({
+      dry_run: true,
+      considered: 1,
+      applied: [],
+      skipped: [
+        { pair: { external_ids: [ROW], journal_entry_ids: [ENTRY] }, code: 'WRONG_DIRECTION', message: 'Riktningen stämmer inte' },
+      ],
+    })
+    error = await refusal({ account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }] })
+    expect(error.code).toBe('WRONG_DIRECTION')
+    expect(error.retryable).toBe(false)
+    expect(error.remediation).toMatchObject({
+      tool: 'gnubok_list_reconciliation_items',
+      args: { account_key: 'skattekonto', bucket: 'unmatched_ledger' },
+    })
+    expect(error.remediation?.description).toContain('with or without allow_remainder')
+
+    matchMock.mockResolvedValueOnce({
+      dry_run: true,
+      considered: 1,
+      applied: [],
+      skipped: [
+        {
+          pair: { external_ids: [ROW], journal_entry_ids: [ENTRY] },
+          code: 'ALREADY_LINKED',
+          message: 'Verifikatet är redan kopplat',
+          linked_external_ids: ['holder-1', 'holder-2'],
+        },
+      ],
+    })
+    error = await refusal({ account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }] })
+    expect(error.code).toBe('ALREADY_LINKED')
+    expect(error.remediation).toMatchObject({
+      tool: 'gnubok_reconcile_unmatch',
+      args: { account_key: 'skattekonto', external_id: 'holder-1' },
+    })
+
     // use_proposals found nothing: say so instead of a bare "nothing to stage".
     matchMock.mockResolvedValueOnce({ dry_run: true, considered: 0, applied: [], skipped: [] })
     error = await refusal({ account_key: 'skattekonto', use_proposals: true })

@@ -3,6 +3,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { roundOre } from '@/lib/money'
 import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
+import { fetchRowsLinkedToEntries } from '@/lib/skatteverket/skattekonto-link'
 import { chunk } from '@/lib/utils'
 import type { ReconciliationPair } from './actions'
 import { parseAccountKey } from './schemas'
@@ -210,23 +211,10 @@ export async function describeMatchPairs(
     for (const e of (data ?? []) as EntryRow[]) entries.set(e.id, e)
 
     if (parsed.kind !== 'skattekonto') continue
-    const { data: linked, error: linkedError } = await supabase
-      .from('skattekonto_transactions')
-      .select('id, journal_entry_id, belopp_skatteverket')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', part)
-    if (linkedError) throw dbError(linkedError, 'Kunde inte läsa kopplade rader')
-    for (const r of (linked ?? []) as Array<{
-      id: string
-      journal_entry_id: string | null
-      belopp_skatteverket: number | string | null
-    }>) {
+    for (const r of await fetchRowsLinkedToEntries(supabase, companyId, part)) {
       // A row of the staged pairs is not "already" linked, whatever it says.
-      if (!r.journal_entry_id || rows.has(r.id)) continue
-      alreadyLinked.set(r.journal_entry_id, [
-        ...(alreadyLinked.get(r.journal_entry_id) ?? []),
-        Number(r.belopp_skatteverket),
-      ])
+      if (rows.has(r.id)) continue
+      alreadyLinked.set(r.journal_entry_id, [...(alreadyLinked.get(r.journal_entry_id) ?? []), r.amount])
     }
   }
 

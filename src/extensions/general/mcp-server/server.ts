@@ -532,7 +532,7 @@ import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 // the dashboard routes and the v1 API call.
 import { getAccountStatus } from '@/lib/reconciliation/service'
 import { listAccountItems } from '@/lib/reconciliation/items'
-import { matchPairs } from '@/lib/reconciliation/actions'
+import { matchPairs, type SkippedPair } from '@/lib/reconciliation/actions'
 import { describeMatchPairs, type MatchPairsPreview } from '@/lib/reconciliation/pair-preview'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
@@ -2879,6 +2879,38 @@ function skattekontoEntryPreview(
  * reconciliation reads say so with the same block, so an agent that sees 0
  * open rows on the bridge learns where the rest are and what to do.
  */
+/**
+ * The next call when every pair of a skattekonto reconcile_match was refused
+ * for one reason an agent cannot act on from the code alone (crm#1846: a
+ * wrong-way pair was retried with allow_remainder, and a verifikat held by a
+ * row the open lists do not show read as a contradiction).
+ */
+function skattekontoSkipRemediation(
+  accountKey: string,
+  code: string | null,
+  first: SkippedPair | undefined,
+): { description: string; tool: string; args: Record<string, unknown> } | undefined {
+  if (accountKey !== 'skattekonto' || !first) return undefined
+  if (code === 'WRONG_DIRECTION') {
+    return {
+      description:
+        'Do not retry this pair, with or without allow_remainder: the row and the verifikat move the skattekonto account in opposite directions, so they are not the same event. A negative row (money out of the skattekonto) needs a verifikat that credits the account, a positive row one that debits it. Pick the verifikat from bucket unmatched_ledger whose amount has the sign of the row, or book the row with gnubok_book_skattekonto_rows when the event is not in the ledger.',
+      tool: 'gnubok_list_reconciliation_items',
+      args: { account_key: accountKey, bucket: 'unmatched_ledger' },
+    }
+  }
+  const holders = first.linked_external_ids ?? []
+  if (code === 'ALREADY_LINKED' && holders.length > 0) {
+    return {
+      description:
+        'The verifikat is held by the rows in linked_external_ids (named in the message). A holder can be missing from unmatched_external and matched: an upcoming row, or one dated after the fetched saldo; gnubok_list_reconciliation_items then shows held_by_uncounted_rows on the verifikat in unmatched_ledger. When the holder is the wrong row (for example an upcoming copy of the event you are linking), undo its link with gnubok_reconcile_unmatch, one call per row, then send the pair again. When the holder is right, the rows you sent belong to another verifikat.',
+      tool: 'gnubok_reconcile_unmatch',
+      args: { account_key: accountKey, external_id: holders[0] },
+    }
+  }
+  return undefined
+}
+
 function skattekontoBeforeHistoryBlock(summary: {
   count: number
   total: number
@@ -16501,7 +16533,11 @@ export const tools: McpTool[] = [
         // still tells a timeout from a bug.
         throw sharedCode === 'UNKNOWN'
           ? new Error(message)
-          : codedRefusal(sharedCode ?? 'VALIDATION_ERROR', message)
+          : codedRefusal(
+              sharedCode ?? 'VALIDATION_ERROR',
+              message,
+              skattekontoSkipRemediation(accountKey, sharedCode, preview.skipped[0]),
+            )
       }
 
       // What the reviewer reads before approving: every pair's outside rows

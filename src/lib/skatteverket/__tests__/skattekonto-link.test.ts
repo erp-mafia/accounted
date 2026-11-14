@@ -269,7 +269,8 @@ describe('linkSkattekontoRows (N:1)', () => {
     reset()
     enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: -3000 })] })
     enqueue({ data: entry([{ account_number: '1630', debit_amount: 3000, credit_amount: 0 }]) })
-    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'INVALID_CANDIDATE' })
+    // The -3 000 row has no credit on 1630 to sit on: the direction, not the sum, is what is wrong.
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'WRONG_DIRECTION' })
   })
 
   it('links a net-zero pair when each row matches its own 1630 line in the voucher (crm#104)', async () => {
@@ -384,10 +385,94 @@ describe('linking with a remainder (a summarised verifikat, crm#1043)', () => {
   it('the remainder is the 1630 net minus EVERY linked row: either sign, and larger than the net when the unfetched part had the other sign', () => {
     // Net +1 000. Rows we hold sum to +5 000: the unfetched part was -4 000.
     expect(evaluateSkattekontoLink([l(1000, 0)], [], [3000, 2000], { allowRemainder: true })).toMatchObject({ via: 'partial', remainder: -4000 })
-    // Net -2 000, rows +3 000: remainder -5 000, larger than the net.
-    expect(evaluateSkattekontoLink([l(0, 2000)], [], [3000], { allowRemainder: true })).toMatchObject({ via: 'partial', remainder: -5000 })
+    // Net -2 000 over both sides, rows +3 000: remainder -5 000, larger than the net.
+    expect(evaluateSkattekontoLink([l(1000, 0), l(0, 3000)], [], [3000], { allowRemainder: true })).toMatchObject({ via: 'partial', remainder: -5000 })
     // Rows already on the verifikat count too.
     expect(evaluateSkattekontoLink(summarised, [100000], [-60000.5], { allowRemainder: true })).toMatchObject({ remainder: -2500.25 })
+  })
+
+  // crm#1846: an event of -N against a verifikat that only debits 1630 with N
+  // was refused as "no matching line", and linked on allowRemainder with a
+  // "remainder" of 2N (3N for two such events): more than the verifikat holds.
+  it('a row against a verifikat that books nothing on its side of 1630 is the wrong direction, with or without allowRemainder', () => {
+    const debitOnly = [l(10000, 0), l(0, 10000, '1930')]
+    for (const allowRemainder of [false, true]) {
+      expect(evaluateSkattekontoLink(debitOnly, [], [-10000], { allowRemainder })).toEqual({
+        ok: false,
+        via: null,
+        remainder: 20000,
+        reason: 'wrong_direction',
+        missingSide: 'credit',
+      })
+      expect(evaluateSkattekontoLink(debitOnly, [], [-10000, -10000], { allowRemainder })).toMatchObject({
+        ok: false,
+        reason: 'wrong_direction',
+      })
+      // The mirror: money into the skattekonto against a credit-only verifikat.
+      expect(evaluateSkattekontoLink([l(0, 2000)], [], [3000], { allowRemainder })).toMatchObject({
+        ok: false,
+        reason: 'wrong_direction',
+        missingSide: 'debit',
+      })
+      // One wrong-way row refuses the group: the link is all or nothing.
+      expect(evaluateSkattekontoLink([l(0, 2000)], [], [-500, 300], { allowRemainder })).toMatchObject({
+        ok: false,
+        reason: 'wrong_direction',
+        missingSide: 'debit',
+      })
+    }
+    // The right way round is untouched: exact, and partial on the flag.
+    expect(evaluateSkattekontoLink(debitOnly, [], [10000])).toMatchObject({ ok: true, via: 'line', remainder: 0 })
+    expect(evaluateSkattekontoLink(debitOnly, [], [4000], { allowRemainder: true })).toMatchObject({ ok: true, via: 'partial', remainder: 6000 })
+    // A verifikat with lines on both sides takes rows of both signs.
+    expect(evaluateSkattekontoLink(summarised, [], [-20000, 5000], { allowRemainder: true })).toMatchObject({ ok: true, via: 'partial' })
+  })
+
+  it('the wrong-direction refusal says so, names both amounts and does not offer allow_remainder as a way through', async () => {
+    const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+    for (const allowRemainder of [false, true]) {
+      reset()
+      enqueue({ data: row({ belopp_skatteverket: -10000 }) })
+      enqueue({ data: entry([l(10000, 0), l(0, 10000, '1930')]) })
+      enqueue({ data: [] })
+      const err = await linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY, { allowRemainder }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(SkattekontoLinkError)
+      expect((err as SkattekontoLinkError).code).toBe('WRONG_DIRECTION')
+      const message = (err as SkattekontoLinkError).message
+      expect(message).toContain('Riktningen stämmer inte')
+      expect(message).toContain('verifikatet bokför bara debet på 1630')
+      expect(message).toContain('allow_remainder ändrar inte det')
+      expect(message).not.toContain('står då kvar')
+      expect(message).not.toContain('saknar en matchande rad')
+      expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+    }
+  })
+
+  it('a verifikat held by other rows names them and what to do, and offers allow_remainder only while something is left on it', async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    // Fully explained by two rows already on it: nothing left to link against.
+    enqueue({ data: [row({ belopp_skatteverket: -4521 }), row({ id: ROW2, belopp_skatteverket: -7704 })] })
+    enqueue({ data: entry([l(0, 12225)]) })
+    enqueue({ data: [{ id: 'held-1', belopp_skatteverket: -4521 }, { id: 'held-2', belopp_skatteverket: -7704 }] })
+    const full = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY).catch((e: unknown) => e)
+    expect(full).toBeInstanceOf(SkattekontoLinkError)
+    expect((full as SkattekontoLinkError).code).toBe('ENTRY_ALREADY_LINKED')
+    expect((full as SkattekontoLinkError).linkedRowIds).toEqual(['held-1', 'held-2'])
+    expect((full as SkattekontoLinkError).message).toContain('held-1, held-2')
+    expect((full as SkattekontoLinkError).message).toContain('2 händelser är kopplade')
+    expect((full as SkattekontoLinkError).message).toContain('Inget står kvar på verifikatet')
+    expect((full as SkattekontoLinkError).message).toContain('reconcile_unmatch')
+    expect((full as SkattekontoLinkError).message).not.toContain('allow_remainder')
+
+    // A summarised verifikat with one row on it: the remainder link is still offered.
+    reset()
+    enqueue({ data: [row({ id: ROW3, belopp_skatteverket: -20000 })] })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: [{ id: 'held-1', belopp_skatteverket: 100000 }] })
+    const partly = await linkSkattekontoRows(supabase as never, COMPANY, [ROW3], ENTRY).catch((e: unknown) => e)
+    expect((partly as SkattekontoLinkError).code).toBe('ENTRY_ALREADY_LINKED')
+    expect((partly as SkattekontoLinkError).message).toContain('1 händelse är kopplad')
+    expect((partly as SkattekontoLinkError).message).toContain('allow_remainder')
   })
 
   it('a single matched line of a verifikat with more lines on 1630 still links without the flag, and reports the rest as its remainder', () => {

@@ -1350,6 +1350,50 @@ describe('one rule for every link: it explains exactly the linked rows, the rest
     expect(s.skattekonto?.covered).toBeNull()
   })
 
+  // crm#1846: the list said "unmatched" and a link answered ALREADY_LINKED,
+  // with no row to be seen. An upcoming row booked ahead holds its verifikat
+  // without counting in the comparison; the verifikat now says so.
+  it('a verifikat held by a row the comparison does not count yet stays open with its whole amount and names the holder', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A8 = head('A8', '2026-08-12')
+    // No heads read: only counted rows reference verifikat, and none does here.
+    enqueue({ data: { value: { saldo: { saldoSkatteverket: -5000 }, fetchedAt: FETCHED_AT } } })
+    enqueue({
+      data: [
+        row('r-open', '2026-08-12', -5000),
+        row('r-up', '2026-09-12', -5000, { status: 'upcoming', forfallodatum: '2026-09-12', journal_entry_id: 'A8' }),
+      ],
+    })
+    wholeLedger([ledgerLine(A8, -5000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    // The bridge is as before: one open event, one open verifikat, nothing unexplained.
+    expect(s.counts).toMatchObject({ unmatched_external: 1, unmatched_ledger: 1, matched: 0 })
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.items.unmatched_ledger[0]).toMatchObject({
+      item_id: 'A8',
+      amount: -5000,
+      held_by_uncounted_rows: { count: 1, amount: -5000, external_ids: ['r-up'] },
+    })
+    expect(s.items.unmatched_ledger[0].partially_linked).toBeUndefined()
+    expect(s.items.upcoming[0]).toMatchObject({ item_id: 'r-up', linked_journal_entry_id: 'A8' })
+  })
+
+  it('a counted link is never repeated as a holder', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const M1 = head('M1', '2026-08-12')
+    enqueueBase(enqueue, {
+      saldo: -8000,
+      rows: [row('r1', '2026-08-12', -8000, { journal_entry_id: 'M1' })],
+      heads: [M1],
+    })
+    wholeLedger([ledgerLine(M1, -8000), ledgerLine(M1, -9000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.items.unmatched_ledger[0]).toMatchObject({ item_id: 'M1', amount: -9000 })
+    expect(s.items.unmatched_ledger[0].held_by_uncounted_rows).toBeUndefined()
+  })
+
   it('a row matched on one of several 1630 lines: the other lines are listed as the remainder instead of vanishing into unexplained', async () => {
     // Imported monthly verifikat with three lines on 1630; only the F-skatt
     // line has a linked row. Before crm#1043 the whole verifikat left the
