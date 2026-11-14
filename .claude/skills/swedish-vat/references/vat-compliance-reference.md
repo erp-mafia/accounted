@@ -95,6 +95,17 @@ Buyer self-assesses both output and input VAT. Applies in two contexts:
 
 Standard journal entry (EU consulting at 25%): Debit cost account + 2645, credit 2614 + leverantörsskulder (2440). Net VAT effect is zero with full deduction right. BOTH sides must be reported; silent netting is prohibited.
 
+**Foreign seller wrongly charged its own VAT on a purchase where the buyer is liable:** the buyer still accounts for reverse charge, the taxable amount includes the wrongly charged VAT, and the foreign VAT is not deductible in Sweden.
+
+- Liability follows the law, not the invoice: ML 6 kap. 33 § (place of supply) and 16 kap. 9 § ("är den som förvärvar tjänsten skyldig att betala mervärdesskatt för tillhandahållandet").
+- Taxable amount: ML 8 kap. 2 § ("utgörs beskattningsunderlaget av ersättningen"), 8 kap. 3 § and 8 kap. 13 § ("I beskattningsunderlaget ska det ingå skatter och avgifter utom skatt enligt denna lag."). Skatteverket, "Momslagens regler om fakturering" (goods or services): "Vid försäljning av varor eller tjänster där omvänd betalningsskyldighet ska tillämpas och moms felaktigt har debiterats i fakturan ska momsen ingå i beskattningsunderlaget (det värde som momsen beräknas på). I en sådan situation ska köparen beräkna och redovisa moms på hela ersättningen, det vill säga inklusive den felaktigt debiterade momsen."
+- Foreign VAT, stated by Skatteverket for goods ("Köpa varor från andra EU-länder"): "Om förutsättningarna för att köpa varor utan moms från ett annat EU-land är uppfyllda men säljaren felaktigt har tagit ut moms i ett annat EU-land, måste du ändå räkna fram och redovisa svensk moms på inköpet i din momsdeklaration." and "Du beräknar momsen på varans pris inklusive den utländska momsen."
+- No deduction: ML 13 kap. 4 § (ingående skatt is "mervärdesskatt enligt denna lag") and 2 kap. 12 § (felaktigt debiterad mervärdesskatt). Skatteverket: "Däremot får du inte göra avdrag för den utländska momsen som säljaren har tagit ut av dig." The buyer asks the seller for an ändringsfaktura (for example a kreditfaktura) on the wrongly charged VAT.
+- **Services: inference, not a Skatteverket quote.** Skatteverket names the foreign VAT case only for goods. For a service bought under 16 kap. 9 § the same result follows from the general sentence above and ML 8 kap. 3 and 13 §§; no Skatteverket sentence, ställningstagande or ruling naming the service case was found.
+- Not settled: a 25 percent VAT line from a foreign seller of electronic services may be Swedish VAT charged through OSS, not foreign VAT. Flag it to the user; do not decide automatically.
+
+Example: price 100, foreign VAT 21, paid 121. Reverse charge base 121, output VAT 30.25 (2614), calculated input VAT 30.25 (2645) with full deduction right; the 21 is never booked as input VAT.
+
 ### 2.2 Trade in services within EU
 
 **Huvudregeln** (ML 6 kap. 33 §, Article 44 VAT Directive): B2B services taxed where buyer established.
