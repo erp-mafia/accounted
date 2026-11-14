@@ -461,6 +461,35 @@ export async function deleteInboxItem(
   return { ok: true, data: { id: inboxItemId, deleted: true } }
 }
 
+/** What became of one item of a batch: gone, or refused with the code the single delete answers. */
+export type InboxItemRemoval = { id: string; removed: true } | { id: string; removed: false; code: string }
+
+/**
+ * Discard several inbox items, one at a time through deleteInboxItem, so each
+ * item meets the same rules as a single delete (converted or booked: refused)
+ * and leaves the same decision row. One refusal or failure never stops the
+ * rest: every id gets its own outcome, in the order asked (an id named twice
+ * is taken once).
+ */
+export async function deleteInboxItems(ctx: OperationContext, inboxItemIds: readonly string[]): Promise<InboxItemRemoval[]> {
+  const results: InboxItemRemoval[] = []
+  for (const id of new Set(inboxItemIds)) {
+    try {
+      const outcome = await deleteInboxItem(ctx, id)
+      if (outcome.ok) {
+        results.push({ id, removed: true })
+        continue
+      }
+      if (outcome.error) ctx.log.error('inbox item removal failed', outcome.error, { inbox_item_id: id, code: outcome.code })
+      results.push({ id, removed: false, code: outcome.code })
+    } catch (error) {
+      ctx.log.error('inbox item removal threw', error, { inbox_item_id: id })
+      results.push({ id, removed: false, code: 'UNKNOWN_ERROR' })
+    }
+  }
+  return results
+}
+
 // ---------------------------------------------------------------------------
 // Release a transaction match
 // ---------------------------------------------------------------------------

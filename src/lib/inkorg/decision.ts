@@ -449,6 +449,18 @@ export function focusDecision(
 }
 
 /**
+ * The item can be taken out of the Inkorg: its decision offers "Ta bort ur
+ * Inkorgen", as an answer or as the quiet link. What the list lets a person
+ * pick for removing several at once, so the list and the focus view never
+ * disagree about what can go. No context is needed: nothing a decision reads
+ * from it adds or takes away this answer.
+ */
+export function offersRemoval(item: InkorgItem): boolean {
+  const decision = focusDecision(item)
+  return decision.actions.includes('not_underlag') || decision.quietActions.includes('not_underlag')
+}
+
+/**
  * The actions an existing endpoint can truly undo, and how: a match is
  * released by unmatch-transaction, and a released match is made again by
  * match-transaction with the transaction it had (both sides restore the

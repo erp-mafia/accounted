@@ -22,6 +22,7 @@ import { VAT_DECLARATION_CHECK_CODES } from '@/lib/reports/vat-declaration-check
 import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistorik-types'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import { BULK_IDS_MAX, SHARED_ACKNOWLEDGMENT_GROUPS } from '@/lib/pending-operations/shared-acknowledgment'
+import { MAX_INBOX_ITEMS_PER_REMOVAL } from '@/lib/inkorg/remove-items'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -3502,6 +3503,11 @@ export const BookInboxItemOneClickSchema = z.object({
 /** POST /api/inkorg/items/:id/companion: the receipt that came with the invoice :id as one purchase. */
 export const FollowInboxCompanionSchema = z.object({
   receipt_item_id: uuid,
+})
+
+/** POST /api/inkorg/items/remove: the inbox items to take out of the Inkorg in one go. */
+export const RemoveInboxItemsSchema = z.object({
+  inbox_item_ids: z.array(uuid).min(1).max(MAX_INBOX_ITEMS_PER_REMOVAL),
 })
 
 /**

@@ -1027,6 +1027,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/invoice-inbox/items/:id/suggest-booking': covered(['gnubok_suggest_categories']),
   'POST /api/extensions/ext/invoice-inbox/items/bulk-book': covered(['gnubok_bulk_book_inbox_items']),
   'DELETE /api/extensions/ext/invoice-inbox/items/:id': covered([`DELETE ${V}/inbox-items/:id`, 'gnubok_delete_inbox_item']),
+  'POST /api/inkorg/items/remove': covered([`DELETE ${V}/inbox-items/:id`, 'gnubok_delete_inbox_item'], 'one call per item; the batch is the same removal in a loop'),
   'POST /api/extensions/ext/invoice-inbox/inbox/previous/stop': gap('P3', 'stop an earlier inbox address a rename kept (crm#1209), like rotate'),
   'POST /api/extensions/ext/invoice-inbox/inbox/rotate': gap('P3', 'rotate the inbound e-mail address'),
   'POST /api/extensions/ext/invoice-inbox/inbound': machine(WEBHOOK),

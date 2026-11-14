@@ -495,6 +495,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     // supplier invoice only while Leverantörsfakturor is on (its plan reads
     // the switch): it starts nothing a switched-off package would refuse.
     'POST /api/inkorg/items/:id/book',
+    // The single removal, once per item: it starts nothing.
+    'POST /api/inkorg/items/remove',
     'DELETE /api/extensions/ext/mail/connections',
     'POST /api/extensions/ext/whatsapp-inbox/link/default-company',
     'POST /api/extensions/ext/whatsapp-inbox/link/revoke',

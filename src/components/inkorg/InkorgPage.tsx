@@ -13,7 +13,7 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { cn } from '@/lib/utils'
 import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
-import { ALL_STARTABLE, type InkorgStartable } from '@/lib/inkorg/decision'
+import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
 import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
 import {
@@ -31,6 +31,7 @@ import { AddMailboxDialog } from './AddMailboxDialog'
 import { useDoorName } from './door-icon'
 import { InkorgFocus, type FocusMotion } from './InkorgFocus'
 import { InkorgList } from './InkorgList'
+import { RemoveSeveralBar } from './RemoveSeveralBar'
 import { InkorgRail } from './InkorgRail'
 import { MissingFocusStage } from './MissingFocusStage'
 import { MissingUnderlagList } from './MissingUnderlagList'
@@ -44,6 +45,7 @@ import { UploadButton } from './UploadButton'
 import { useAttachUnderlag } from './use-attach-underlag'
 import { PayInBankDialog, type PayInBankTarget } from './PayInBankDialog'
 import { useInkorgData } from './use-inkorg-data'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { useMissingContext } from './use-missing-context'
 import { useExpectations } from './use-expectations'
 import { ViewHeading } from './row-parts'
@@ -163,6 +165,14 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     () => queueFor(items, view).filter((item) => !following.has(item.id) && !booking.has(item.id)),
     [items, view, following, booking],
   )
+  // Removing several at once: the rows the focus view would let a person remove, in the list
+  // views only. A row that leaves the view leaves the selection (useBulkSelection prunes).
+  const removableIds = useMemo(
+    () => (canWrite && view.kind !== 'missing' && itemsState === 'ready' ? queue.filter(offersRemoval).map((item) => item.id) : []),
+    [canWrite, view.kind, itemsState, queue],
+  )
+  const removableSet = useMemo(() => new Set(removableIds), [removableIds])
+  const selection = useBulkSelection(removableIds)
   // What came in here and left for Dokument lately: named under the list, so it never just vanishes (PH 225).
   const routedAway = useMemo(() => recentlyRoutedAway(items, view).length, [items, view])
   // Saknar underlag works through bank purchases, not items: its own queue, newest first,
@@ -727,7 +737,10 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                     onRetry={() => void refresh()}
                     lastOpenedId={lastOpenedId}
                     bankMatches={bankMatches}
+                    selection={canWrite ? selection : undefined}
+                    selectableIds={removableSet}
                   />
+                  <RemoveSeveralBar selection={selection} selectableCount={removableIds.length} onRemoved={refresh} />
                   {itemsState === 'ready' && routedAway > 0 && (
                     <p className="mt-4 text-[12.5px] leading-5 text-muted-foreground">
                       {t('routed_away', { count: routedAway })}{' '}
