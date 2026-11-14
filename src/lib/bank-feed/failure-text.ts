@@ -205,3 +205,25 @@ export function consentFailureText(code: string | null | undefined): FailureText
   if (!code) return OPEN_BANKING_GENERIC_FAILURE
   return OPEN_BANKING_FAILURE_TEXTS[code.trim().toUpperCase()] ?? OPEN_BANKING_GENERIC_FAILURE
 }
+
+/**
+ * The error codes a bank's refusal is answered with, the bank's own code in
+ * details.provider_code (service.ts providerFailure, whose Swedish message is
+ * that code's sentence here when it has one).
+ */
+const BANK_REFUSAL_CODES: ReadonlySet<string> = new Set(['BANK_PROVIDER_REFUSED', 'BANK_PROVIDER_UNAVAILABLE'])
+
+/**
+ * The person's sentence for a bank's refusal as its error envelope carries it
+ * (code, details.provider_code), in the reader's language. The route words
+ * only the Swedish, and the registry's English for these codes is the line
+ * for a refusal we have no sentence for, so an English reader got that line
+ * for every refusal. Null for a provider code without a sentence of its own,
+ * and for every other error code.
+ */
+export function bankRefusalMessage(code: unknown, details: unknown, locale: 'sv' | 'en'): string | null {
+  if (typeof code !== 'string' || !BANK_REFUSAL_CODES.has(code)) return null
+  const providerCode = (details as { provider_code?: unknown } | null | undefined)?.provider_code
+  if (typeof providerCode !== 'string' || !providerCode.trim()) return null
+  return OPEN_BANKING_FAILURE_TEXTS[providerCode.trim().toUpperCase()]?.[locale] ?? null
+}

@@ -30,6 +30,7 @@ import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 import { syncHoldMessage } from '@/lib/bank-sync/sync-hold-message'
+import { bankRefusalMessage } from '@/lib/bank-feed/failure-text'
 
 export type ErrorContext =
   | 'invoice'
@@ -663,6 +664,13 @@ export function getErrorMessage(
       // the field the time is in (next_allowed_at); a person reads the time.
       const syncHold = syncHoldMessage(structured.code, structured.details, locale)
       if (syncHold) return syncHold
+
+      // A bank's refusal the bank feed has a sentence for (another BankID
+      // session still open, a missing right, KYC): the route words only the
+      // Swedish, and the registry's English for the code is the line for a
+      // refusal without one.
+      const bankRefusal = bankRefusalMessage(structured.code, structured.details, locale)
+      if (bankRefusal) return bankRefusal
 
       // A refused delete as errorResponse sends it: the envelope already
       // carries the register's own sentence in both languages (#2831).
