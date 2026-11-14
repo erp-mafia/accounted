@@ -71,7 +71,7 @@ describe('/pending approve', () => {
     const chainAt = queueApproval.indexOf('approvalChain.current')
     expect(hideAt).toBeGreaterThan(-1)
     expect(chainAt).toBeGreaterThan(hideAt)
-    expect(queueApproval).toMatch(/approvalChain\.current\s*\.then\(\(\) => sendApproval\(op, expectedDuplicateJournalEntryId\)\)/)
+    expect(queueApproval).toMatch(/approvalChain\.current\s*\.then\(\(\) => sendApproval\(op, expectedDuplicateJournalEntryId, acknowledgedWarnings\)\)/)
     expect(page).toContain('if (approvingIds.has(op.id)) return false')
   })
 

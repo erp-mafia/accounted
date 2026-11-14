@@ -1027,6 +1027,111 @@ describe('commitPendingOperation: create_voucher', () => {
   })
 })
 
+// ─── create_voucher: booking-time warnings at approval (#206) ───────
+
+describe('commitPendingOperation: create_voucher refused for its booking-time warnings', () => {
+  const WARNING = {
+    code: 'VOUCHER_DUPLICATE_IN_BOOKS',
+    message_sv: 'En verifikation med samma datum och belopp finns redan.',
+    message_en: 'A voucher with the same date and amount already exists.',
+    details: { journal_entry_id: 'je-older' },
+  }
+  const params = {
+    entry_date: '2026-05-12',
+    description: 'Hyra maj',
+    fiscal_period_id: 'fp-1',
+    lines: [
+      { account_number: '5010', debit_amount: 250, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+    ],
+  }
+  const refused = { ok: false, code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings: [WARNING] } }
+
+  it('the app approval keeps the proposal pending and returns the code and the warnings, posting nothing', async () => {
+    mockVoucherGuard.mockResolvedValueOnce(refused)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // claim released back to pending
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({ params }), {
+      commitMethod: 'user_accept',
+      keepFixableRefusals: true,
+    })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      http_status: 409,
+      code: 'VOUCHER_NEEDS_CONFIRMATION',
+      data: { warnings: [WARNING] },
+      operation_status: 'pending',
+    })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    const updates = findCalls('pending_operations', 'update')
+    expect(updates).toContainEqual([{ status: 'pending' }])
+    expect(updates.some((args) => (args[0] as { status?: string }).status === 'rejected')).toBe(false)
+  })
+
+  it('every other door still rejects the proposal on the same refusal', async () => {
+    mockVoucherGuard.mockResolvedValueOnce(refused)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // auto-reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp({ params }), {
+      commitMethod: 'bulk_accept',
+    })
+
+    expect(result).toMatchObject({ status: 'rejected', code: 'VOUCHER_NEEDS_CONFIRMATION', operation_status: 'rejected' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    const updates = findCalls('pending_operations', 'update')
+    expect(updates.some((args) => (args[0] as { status?: string }).status === 'rejected')).toBe(true)
+    expect(updates).not.toContainEqual([{ status: 'pending' }])
+  })
+
+  it('a refusal that is not on the list still rejects under the app approval', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      // No lines: the executor's own validation refuses (400), before the guard.
+      makePendingOp({ params: { entry_date: '2026-05-12', description: 'Hyra maj', lines: [] } }),
+      { commitMethod: 'user_accept', keepFixableRefusals: true },
+    )
+
+    expect(result).toMatchObject({ status: 'failed', http_status: 400, operation_status: 'rejected' })
+    const updates = findCalls('pending_operations', 'update')
+    expect(updates.some((args) => (args[0] as { status?: string }).status === 'rejected')).toBe(true)
+  })
+
+  it('the confirmed codes reach the guard beside the staged ones, and the booking goes through', async () => {
+    mockVoucherGuard.mockResolvedValueOnce({ ok: true, acknowledged: [WARNING] })
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-200', voucher_number: 7, voucher_series: 'A' })
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...params, acknowledged_warnings: ['VOUCHER_STAGED_ONE'] } }),
+      { commitMethod: 'user_accept', keepFixableRefusals: true, acknowledgedWarnings: ['VOUCHER_DUPLICATE_IN_BOOKS'] },
+    )
+
+    expect(result.status).toBe('committed')
+    expect(mockVoucherGuard.mock.calls[0][4]).toEqual({
+      acknowledged: ['VOUCHER_STAGED_ONE', 'VOUCHER_DUPLICATE_IN_BOOKS'],
+    })
+    expect(createJournalEntry).toHaveBeenCalledTimes(1)
+  })
+})
+
 // ─── correct_entry ──────────────────────────────────────────────────
 
 describe('commitPendingOperation: set_opening_balances (one IB per year)', () => {

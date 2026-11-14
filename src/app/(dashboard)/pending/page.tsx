@@ -87,6 +87,10 @@ import {
   type SharedAcknowledgmentGroup,
 } from '@/lib/pending-operations/shared-acknowledgment'
 import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
+import { closedByRefusalReason, readApprovalRefusal, type ApprovalRefusal } from '@/lib/pending-operations/approval-refusal'
+import { fixableRefusalFor } from '@/lib/pending-operations/fixable-refusals'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
@@ -132,6 +136,18 @@ const REGISTER_BOOKED_BULK_KEYS = {
   customer: 'register_booked_invoice',
   supplier: 'register_booked_supplier_invoice',
 } as const
+
+// What the person fixes, per refusal code of lib/pending-operations/
+// fixable-refusals.ts (the list of codes lives there; the words live here).
+// The toast says the refusal's own sentence (it names the numbers) unless
+// noteInToast: Skatteverket's "Sessionen har gått ut. Logga in med BankID
+// igen." names neither Skatteverket nor where to log in.
+const FIXABLE_REFUSAL_COPY: Record<string, { note: string; link: string; noteInToast?: boolean }> = {
+  SKATTEVERKET_NOT_CONNECTED: { note: 'refusal_fix_skatteverket', link: 'refusal_fix_skatteverket_link', noteInToast: true },
+  INVOICE_NUMBER_SERIES_BEHIND: { note: 'refusal_fix_invoice_series', link: 'refusal_fix_invoicing_link' },
+  INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: { note: 'refusal_fix_payment_details', link: 'refusal_fix_invoicing_link' },
+  INVOICE_SEND_VAT_NUMBER_MISSING: { note: 'refusal_fix_vat_number', link: 'refusal_fix_tax_link' },
+}
 
 function bulkActionKey(op: PendingOperation): string {
   const ledger = registerBookedLedgerOf(op.operation_type, op.params)
@@ -436,6 +452,14 @@ export default function PendingOperationsPage() {
   // An approved Skatteverket filing is locked there, not filed: its BankID
   // signing link opens in a dialog right after the approval (crm#1478).
   const [signingPrompt, setSigningPrompt] = useState<{ title: string; url: string } | null>(null)
+  // An approval refused for something the person fixes around the proposal:
+  // the proposal is still pending. The row says what to fix (by refusal
+  // code) until the approval goes through; a create_voucher refused for its
+  // booking-time warnings shows them for the person to confirm.
+  const [fixNotes, setFixNotes] = useState<Record<string, string>>({})
+  // One dialog at a time, in the order the approvals answered: the queue can
+  // bring a second one while the first is being read.
+  const [voucherConfirms, setVoucherConfirms] = useState<Array<{ op: PendingOperation; warnings: VoucherWarning[] }>>([])
   const { toast } = useToast()
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
   // /invoices only selects drafts when the company books at issue. Under
@@ -684,17 +708,28 @@ export default function PendingOperationsPage() {
 
   // One approval, as the server answers it. Never throws: it runs inside the
   // queue, and what went wrong is said in a toast that names the proposal
-  // (its row may be far from where the person is by then).
-  async function sendApproval(op: PendingOperation, expectedDuplicateJournalEntryId?: string) {
+  // (its row may be far from where the person is by then). What the person
+  // answered after a first refusal rides along: the possible duplicate they
+  // book over, or the booking-time warnings they confirmed.
+  async function sendApproval(
+    op: PendingOperation,
+    expectedDuplicateJournalEntryId?: string,
+    acknowledgedWarnings?: string[],
+  ) {
     try {
       const res = await fetch(`/api/pending-operations/${op.id}/commit`, {
         method: 'POST',
         // The approval is given: leaving the page must not drop it.
         keepalive: true,
-        ...(expectedDuplicateJournalEntryId
+        ...(expectedDuplicateJournalEntryId || acknowledgedWarnings
           ? {
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }),
+              body: JSON.stringify({
+                ...(expectedDuplicateJournalEntryId
+                  ? { expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
+                  : {}),
+                ...(acknowledgedWarnings ? { acknowledged_warnings: acknowledgedWarnings } : {}),
+              }),
             }
           : {}),
       })
@@ -715,6 +750,12 @@ export default function PendingOperationsPage() {
         setDuplicatePrompts((prev) => [...prev.filter((prompt) => prompt.op.id !== op.id), { op, candidate }])
         return
       }
+      // A refusal that closed the proposal: said on its way out of the list.
+      const refusal = res.ok ? null : readApprovalRefusal(json, res.status)
+      if (refusal?.closed) return closeRefusedRow(op, refusal)
+      // Still pending, and the person can fix it: the warnings to confirm,
+      // or what to fix on the row.
+      if (refusal && askToFixRefusal(op, refusal)) return
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
@@ -742,12 +783,16 @@ export default function PendingOperationsPage() {
   // approval; only high risk keeps the dialog, whose warning sentence carries
   // information the row does not. The row leaves the list now; the returned
   // promise settles when the server has answered.
-  function queueApproval(op: PendingOperation, expectedDuplicateJournalEntryId?: string): Promise<void> {
+  function queueApproval(
+    op: PendingOperation,
+    expectedDuplicateJournalEntryId?: string,
+    acknowledgedWarnings?: string[],
+  ): Promise<void> {
     approvalsLeft.current += 1
     setApprovingIds((prev) => new Set(prev).add(op.id))
     selection.deselect([op.id])
     const run = approvalChain.current
-      .then(() => sendApproval(op, expectedDuplicateJournalEntryId))
+      .then(() => sendApproval(op, expectedDuplicateJournalEntryId, acknowledgedWarnings))
       .finally(() => {
         setApprovingIds((prev) => {
           const next = new Set(prev)
@@ -771,6 +816,8 @@ export default function PendingOperationsPage() {
     setSelectedOp(null)
   }
 
+  const voucherConfirm = voucherConfirms[0] ?? null
+  const closeVoucherConfirm = () => setVoucherConfirms((prev) => prev.slice(1))
   const duplicatePrompt = duplicatePrompts[0] ?? null
   const closeDuplicatePrompt = () => setDuplicatePrompts((prev) => prev.slice(1))
   const duplicatePromptTransactionId =
@@ -866,6 +913,49 @@ export default function PendingOperationsPage() {
     selection.clear()
     afterResolve()
     setIsBulkCommitting(false)
+  }
+
+  // An approval the executor refused in a way that closed the proposal
+  // (tracker #206): say so and let the row go, so a second Godkänn is not
+  // offered on it (it answered "Redan hanterad"). Historik keeps the
+  // proposal with the reason. Runs inside the approval queue, which
+  // deselects the row, closes the confirm dialog and refetches once drained.
+  function closeRefusedRow(op: PendingOperation, refusal: ApprovalRefusal) {
+    toast({ title: t('refusal_closed_title'), description: refusal.message, variant: 'destructive' })
+    dropFromList(op.id)
+  }
+
+  // An approval refused for something the person fixes around the proposal
+  // (fixable-refusals.ts): the proposal is still pending. A voucher's
+  // booking-time warnings open for the person to confirm; anything else is
+  // said on the row with the link to the fix. False when the refusal is not
+  // one of those: the caller then reports it as a plain failure.
+  function askToFixRefusal(op: PendingOperation, refusal: ApprovalRefusal): boolean {
+    const fix = fixableRefusalFor(op.operation_type, refusal.code)
+    if (!fix || !refusal.code) return false
+    const warnings = refusal.details.warnings
+    if (refusal.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings) && warnings.length > 0) {
+      const prompt = { op, warnings: warnings as VoucherWarning[] }
+      setVoucherConfirms((prev) => [...prev.filter((waiting) => waiting.op.id !== op.id), prompt])
+      return true
+    }
+    const copy = FIXABLE_REFUSAL_COPY[refusal.code]
+    if (!copy) return false
+    setFixNotes((prev) => ({ ...prev, [op.id]: refusal.code as string }))
+    toast({
+      title: t('refusal_fix_title'),
+      description: copy.noteInToast ? t(copy.note) : refusal.message,
+      ...(fix.fixHref
+        ? {
+            action: (
+              <ToastAction altText={t(copy.link)} onClick={() => router.push(fix.fixHref as string)}>
+                {t(copy.link)}
+              </ToastAction>
+            ),
+          }
+        : {}),
+    })
+    return true
   }
 
   function openRejectDialog(target: PendingOperation | 'bulk') {
@@ -1320,7 +1410,9 @@ export default function PendingOperationsPage() {
                             ? t('badge_failed_partial')
                             : op.status === 'unknown'
                               ? t('badge_unknown')
-                              : t('badge_rejected')}
+                              : op.rejection_category === 'failed'
+                                ? t('badge_closed_by_refusal')
+                                : t('badge_rejected')}
                       </Badge>
                     )}
                     <div className="min-w-0 flex-1">
@@ -1343,6 +1435,14 @@ export default function PendingOperationsPage() {
                       )}
                       {op.status === 'unknown' && (
                         <p className="mt-1 text-xs text-muted-foreground">{t('unknown_detail')}</p>
+                      )}
+                      {/* Closed by a refused approval, nobody's verdict: why,
+                          in words for a person. data-ph-mask: may name a
+                          counterparty or an invoice. */}
+                      {closedByRefusalReason(op) && (
+                        <p className="mt-1 break-words text-xs text-muted-foreground" data-ph-mask="">
+                          {t('closed_by_refusal_detail', { reason: closedByRefusalReason(op) ?? '' })}
+                        </p>
                       )}
                     </div>
                     <ChevronRightIcon
@@ -1441,6 +1541,26 @@ export default function PendingOperationsPage() {
                     {op.agent_reason && !isRun && (
                       <span className="min-w-0 truncate text-xs text-muted-foreground" title={op.agent_reason} data-ph-mask="">
                         {op.agent_reason}
+                      </span>
+                    )}
+                    {/* The last approval was refused for something fixed
+                        around the proposal: what, and where. The proposal is
+                        still pending; Godkänn works once it is fixed. */}
+                    {FIXABLE_REFUSAL_COPY[fixNotes[op.id]] && (
+                      <span className="flex min-w-0 items-center gap-1 text-[12.5px] text-attn">
+                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
+                        <span className="min-w-0 truncate" title={t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}>
+                          {t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}
+                        </span>
+                        {fixableRefusalFor(op.operation_type, fixNotes[op.id])?.fixHref && (
+                          <a
+                            href={fixableRefusalFor(op.operation_type, fixNotes[op.id])?.fixHref}
+                            className="shrink-0 underline underline-offset-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].link)}
+                          </a>
+                        )}
                       </span>
                     )}
                   </span>
@@ -1721,6 +1841,22 @@ export default function PendingOperationsPage() {
       >
         {selectedOp && <OperationPreview op={selectedOp} />}
       </ConfirmationDialog>
+
+      {/* An approved verifikat the booking-time guard stopped: the proposal
+          waits while the person reads the warnings. "Bokför ändå" sends the
+          same approval again with these codes confirmed; the guard runs
+          again, and a warning that appeared meanwhile is asked the same way. */}
+      <VoucherWarningsDialog
+        warnings={voucherConfirm?.warnings ?? null}
+        processing={false}
+        onCancel={closeVoucherConfirm}
+        onConfirm={() => {
+          if (!voucherConfirm) return
+          const { op, warnings } = voucherConfirm
+          closeVoucherConfirm()
+          void queueApproval(op, undefined, warnings.map((warning) => warning.code))
+        }}
+      />
 
       {/* Bulk commit confirmation dialog */}
       <ConfirmationDialog

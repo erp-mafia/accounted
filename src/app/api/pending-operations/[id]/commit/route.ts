@@ -5,16 +5,21 @@ import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { personRefusalText, stripAgentWording } from '@/lib/pending-operations/approval-refusal'
 import type { PendingOperation } from '@/types'
 import { z } from 'zod'
 
 /**
- * The one thing an approval may add: the possible duplicate the person looked
- * at and books over ("Bokför ändå" in the duplicate dialog). No body is the
- * plain approval.
+ * What an approval may add, each the person's answer to a first approval that
+ * was refused with the proposal kept: the possible duplicate they looked at
+ * and book over ("Bokför ändå" in the duplicate dialog), or the booking-time
+ * warnings they read and confirmed after VOUCHER_NEEDS_CONFIRMATION ("Bokför
+ * ändå" in the warnings dialog). No body is the plain approval.
  */
 const CommitBodySchema = z.object({
   expected_duplicate_journal_entry_id: z.string().uuid().optional(),
+  acknowledged_warnings: z.array(z.string().min(1).max(100)).max(20).optional(),
 })
 
 /** The duplicate refusals a single approval answers in the app instead of losing the proposal. */
@@ -43,6 +48,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const body = CommitBodySchema.safeParse(parsedBody)
     if (!body.success) return errorResponseFromCode('VALIDATION_ERROR', log)
     const expectedDuplicate = body.data.expected_duplicate_journal_entry_id
+    const acknowledgedWarnings = body.data.acknowledged_warnings
 
     const { data: op, error: fetchError } = await supabase
       .from('pending_operations')
@@ -62,6 +68,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         companyId,
         op as PendingOperation,
         {
+          // A refusal the person can fix around the proposal (the one list
+          // in fixable-refusals.ts) is theirs to fix, here: the proposal
+          // waits for it instead of being consumed.
+          keepFixableRefusals: true,
+          ...(acknowledgedWarnings?.length ? { acknowledgedWarnings } : {}),
           userEmail: user.email,
           commitMethod: 'user_accept',
           actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
@@ -105,18 +116,37 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         )
         if (structured) return structured
       }
-      // The executor's error strings mix Swedish user messages with raw
-      // Supabase/Zod English; the pending page toasts this field verbatim, so
-      // map it here. Swedish passes through untouched, English falls to the
-      // status-appropriate Swedish fallback (issue #337). Raw stays in logs.
+      // The refusal as a person reads it, with what a client needs to act on
+      // it (tracker #206 point 2): the structured code and the executor's
+      // details, and details.operation_status, so the page knows whether the
+      // proposal still waits or was closed by this refusal. The executor's
+      // sentences mix Swedish for a person with wording for an agent (tool
+      // names, arguments, raw codes) and raw Supabase/Zod English: the agent
+      // wording is stripped, Swedish passes through, and anything else falls
+      // to the registry's sentence for the code or the sentence for the
+      // status (issue #337). Raw stays in logs.
       const status = result.http_status ?? 500
       log.warn('pending operation commit failed', {
         operationId: id,
         rawError: result.error,
         status,
       })
+      const cleaned = stripAgentWording(result.error)
+      const authored = personRefusalText(result.error)
+      const operationStatus = result.operation_status
+      if (result.code && hasErrorEntry(result.code)) {
+        return errorResponseFromCode(result.code, log, {
+          status,
+          reason: result.error,
+          ...(authored ? { messageSv: authored } : {}),
+          details: { ...(result.data ?? {}), ...(operationStatus ? { operation_status: operationStatus } : {}) },
+        })
+      }
       return NextResponse.json(
-        { error: getErrorMessage(result.error ?? null, { statusCode: status }) },
+        {
+          error: authored ?? getErrorMessage(cleaned || null, { statusCode: status }),
+          ...(operationStatus ? { operation_status: operationStatus } : {}),
+        },
         { status }
       )
     } catch (err) {

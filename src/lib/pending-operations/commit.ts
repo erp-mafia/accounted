@@ -173,6 +173,7 @@ import {
 } from '@/lib/pending-operations/skatteverket-commit'
 import { maskPersonnummerInText } from '@/lib/salary/personnummer-format'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
+import { fixableRefusalFor } from './fixable-refusals'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
@@ -378,6 +379,22 @@ export interface CommitOptions {
    * every check below apply the same either way.
    */
   approvalDoor?: ApprovalDoor
+  /**
+   * A person approves one operation in the app, where a refusal they can fix
+   * around the proposal can be said and fixed (lib/pending-operations/
+   * fixable-refusals.ts, the one list): such a refusal hands the operation
+   * back to 'pending' instead of consuming it as rejected. Nothing was
+   * written, and the same approval is right once the fix is made. Every
+   * other door (bulk, keys, agents) leaves it unset and keeps the rejection.
+   */
+  keepFixableRefusals?: boolean
+  /**
+   * The booking-time warning codes the approver read and confirmed in the
+   * app (VOUCHER_NEEDS_CONFIRMATION answered in the warnings dialog), added
+   * to the ones acknowledged at staging. The guard still runs again: a
+   * warning not named here refuses the approval once more.
+   */
+  acknowledgedWarnings?: readonly string[]
   /**
    * The attest answers of a bulk approval, told once: each staged attest
    * passes it to the attest service (AttestDecisionInput in
@@ -2854,7 +2871,7 @@ async function commitCreditNoteRefund(
 /** A refused issue as the executors answer it. */
 function issueRefusalResult(refusal: IssueRefusal, currency: Invoice['currency']): ExecutorResult {
   if (refusal.code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING') {
-    return { error: describeMissingInvoicePaymentAccount(currency).sv, status: 400 }
+    return { error: describeMissingInvoicePaymentAccount(currency).sv, errorCode: refusal.code, status: 400 }
   }
   const entry = getErrorEntry(refusal.code)
   return { error: entry?.message_sv ?? refusal.code, errorCode: refusal.code, status: entry?.httpStatus ?? 400 }
@@ -4976,7 +4993,12 @@ async function commitCreateVoucher(
   const voucherGuard =
     sourceType === 'manual'
       ? await runVoucherWarningsGuard(supabase, companyId, { entry_date: entryDate, description, lines }, log, {
-          acknowledged: Array.isArray(params.acknowledged_warnings) ? (params.acknowledged_warnings as string[]) : undefined,
+          // What the agent's user confirmed at staging, and what the approver
+          // confirmed in the app after this approval was refused once.
+          acknowledged: [
+            ...(Array.isArray(params.acknowledged_warnings) ? (params.acknowledged_warnings as string[]) : []),
+            ...(opts.acknowledgedWarnings ?? []),
+          ],
         })
       : null
   if (voucherGuard && !voucherGuard.ok) {
@@ -5026,7 +5048,7 @@ async function commitCreateVoucher(
         userId,
         journalEntryId: entry.id,
         warnings: voucherGuard.acknowledged,
-        door: 'mcp_create_voucher',
+        door: opts.acknowledgedWarnings?.length ? 'pending_approval' : 'mcp_create_voucher',
         log,
       })
     }
@@ -7141,6 +7163,28 @@ async function commitPendingOperationInner(
         code: 'partial_commit',
         data: { posted_ids: partialPostedIds },
         operation_status: 'failed_partial',
+      }
+    }
+    // The app's single approval (keepFixableRefusals) and a refusal the
+    // person can fix around the proposal (fixable-refusals.ts: refused before
+    // any write, and what is wrong lies outside the proposal): the operation
+    // goes back to 'pending' with the code and the executor's details, so the
+    // page says what to fix and the same approval can be given again.
+    if (
+      opts.keepFixableRefusals &&
+      fixableRefusalFor(pendingOp.operation_type, result.errorCode)
+    ) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: result.error,
+        http_status: result.status,
+        ...(result.errorCode ? { code: result.errorCode } : {}),
+        ...(result.data && Object.keys(result.data).length > 0 ? { data: result.data } : {}),
+        operation_status: 'pending',
       }
     }
     // Authorization refusals (401/403) happen BEFORE any side-effect and say
