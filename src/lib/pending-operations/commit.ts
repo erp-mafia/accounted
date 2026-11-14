@@ -386,6 +386,18 @@ export interface CommitOptions {
    * it in a finally. Without it each attest mails as it completes.
    */
   attestDecisions?: AttestDecisionBatch
+  /**
+   * A person approves one categorize_transaction in the app, where a possible
+   * duplicate can be shown and answered. Set (even empty), the duplicate
+   * refusal hands the operation back to 'pending' with the candidate instead
+   * of consuming it as rejected: nothing was written, and the person's yes
+   * was to the booking, not to losing the proposal. With
+   * expectedJournalEntryId the person saw that candidate and books anyway:
+   * the guard re-detects it and records the dismissal in behandlingshistorik.
+   * Every other door (bulk, keys, agents) keeps the auto-reject and restages
+   * with allow_duplicate.
+   */
+  duplicateReview?: { expectedJournalEntryId?: string }
 }
 
 // ensureFiscalPeriod moved to lib/transactions/categorize-core.ts (imported
@@ -693,7 +705,8 @@ async function commitCategorizeTransaction(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  duplicateReview?: CommitOptions['duplicateReview'],
 ): Promise<ExecutorResult> {
   const txId = params.transaction_id as string
   const category = params.category as TransactionCategory
@@ -755,6 +768,9 @@ async function commitCategorizeTransaction(
     vatAmount,
     notes,
     allowDuplicate: params.allow_duplicate === true,
+    ...(duplicateReview?.expectedJournalEntryId
+      ? { expectedDuplicateJournalEntryId: duplicateReview.expectedJournalEntryId }
+      : {}),
     // Dimensions PR7: resolved at staging; coerce is the drift/tamper gate.
     dimensions: coerceDimensionsBag(params.dimensions),
     // Validated against the chart both at staging and inside the core at commit.
@@ -6686,7 +6702,7 @@ async function commitPendingOperationInner(
   try {
     switch (pendingOp.operation_type) {
       case 'categorize_transaction':
-        result = await commitCategorizeTransaction(supabase, userId, companyId, pendingOp.params)
+        result = await commitCategorizeTransaction(supabase, userId, companyId, pendingOp.params, opts.duplicateReview)
         break
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
@@ -7123,7 +7139,14 @@ async function commitPendingOperationInner(
       result.errorCode === 'TX_CATEGORIZE_REVIEW_REQUIRED' ||
       // A read behind the bank row gate failed, before any write: the same
       // approval can be given again.
-      result.errorCode === 'BANK_ROW_READ_FAILED'
+      result.errorCode === 'BANK_ROW_READ_FAILED' ||
+      // The app's single approval answers a possible duplicate itself
+      // (duplicateReview): the proposal waits for that answer. A candidate
+      // that changed since the person looked is asked again the same way.
+      (opts.duplicateReview !== undefined &&
+        pendingOp.operation_type === 'categorize_transaction' &&
+        (result.errorCode === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' ||
+          result.errorCode === 'TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH'))
     ) {
       await supabase
         .from('pending_operations')
@@ -7134,6 +7157,7 @@ async function commitPendingOperationInner(
         error: result.error,
         http_status: result.status,
         ...(result.errorCode ? { code: result.errorCode } : {}),
+        ...(result.data && Object.keys(result.data).length > 0 ? { data: result.data } : {}),
         operation_status: 'pending',
       }
     }

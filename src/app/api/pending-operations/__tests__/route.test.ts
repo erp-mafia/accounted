@@ -23,6 +23,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+const mockAppendProcessingHistory = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => mockAppendProcessingHistory(...args),
+}))
+
 import { GET } from '../route'
 
 describe('GET /api/pending-operations', () => {
@@ -55,6 +60,54 @@ describe('GET /api/pending-operations', () => {
 
     expect(response.status).toBe(400)
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('closes a proposal whose bank row is already booked and lists the queue without it', async () => {
+    const stale = {
+      id: 'operation-1',
+      status: 'pending',
+      operation_type: 'categorize_transaction',
+      risk_level: 'medium',
+      params: { transaction_id: 'tx-1', category: 'expense_office' },
+    }
+    enqueue({ data: [stale], count: 1 }) // first read of the page
+    enqueue({ data: [{ id: 'tx-1', is_booked: true }] }) // the row is booked
+    enqueue({ data: [{ id: 'operation-1' }] }) // closed as superseded
+    enqueue({ data: [], count: 0 }) // the page, read again
+    enqueue({ count: 3 })
+    enqueue({ count: 5 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations'),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: Array<{ id: string }>
+      counts: { pending: number; committed: number; rejected: number }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual([])
+    expect(body.counts).toEqual({ pending: 0, committed: 3, rejected: 5 })
+    expect(findCalls('pending_operations', 'update')[0][0]).toMatchObject({
+      status: 'rejected',
+      rejection_category: 'superseded',
+    })
+  })
+
+  it('leaves the history tabs alone: nothing is closed from a committed or rejected list', async () => {
+    enqueue({ data: [{ id: 'operation-1', status: 'committed', operation_type: 'categorize_transaction', params: { transaction_id: 'tx-1' } }], count: 1 })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations', { searchParams: { status: 'committed' } }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(supabase.from).toHaveBeenCalledTimes(3)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
   })
 
   it('returns the active list and all tab counts in one response', async () => {

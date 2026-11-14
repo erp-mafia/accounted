@@ -3,6 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { PendingOperationsQuerySchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { resolveHandledProposals } from '@/lib/pending-operations/resolve-handled'
+import type { PendingOperation } from '@/types'
 
 /**
  * GET /api/pending-operations
@@ -31,17 +33,31 @@ export const GET = withRouteContext(
     const statusesFor = (candidate: string): string[] =>
       candidate === 'rejected' ? ['rejected', 'failed_partial', 'unknown'] : [candidate]
 
-    const listPromise = supabase
-      .from('pending_operations')
-      .select('*', { count: 'exact' })
-      .eq('company_id', companyId)
-      .in('status', statusesFor(status))
-      .order(orderColumn, { ascending: order === 'asc', nullsFirst: false })
-      // Offset paging needs a total order: a bulk reject or a stuck-commit
-      // sweep stamps one resolved_at on the whole batch, and rows tied on it
-      // could repeat or vanish between the list's "Ladda fler" pages.
-      .order('id', { ascending: order === 'asc' })
-      .range(offset, offset + limit - 1)
+    const readList = () =>
+      supabase
+        .from('pending_operations')
+        .select('*', { count: 'exact' })
+        .eq('company_id', companyId)
+        .in('status', statusesFor(status))
+        .order(orderColumn, { ascending: order === 'asc', nullsFirst: false })
+        // Offset paging needs a total order: a bulk reject or a stuck-commit
+        // sweep stamps one resolved_at on the whole batch, and rows tied on it
+        // could repeat or vanish between the list's "Ladda fler" pages.
+        .order('id', { ascending: order === 'asc' })
+        .range(offset, offset + limit - 1)
+
+    // The queue never shows a proposal whose bank row is already booked
+    // another way: those on this page are closed first, and the page is read
+    // again without them (lib/pending-operations/resolve-handled.ts).
+    let firstRead: Awaited<ReturnType<typeof readList>> | null = null
+    if (status === 'pending') {
+      firstRead = await readList()
+      const closed = firstRead.error
+        ? []
+        : await resolveHandledProposals(supabase, companyId, (firstRead.data ?? []) as PendingOperation[])
+      if (closed.length > 0) firstRead = null
+    }
+    const listPromise = firstRead ? Promise.resolve(firstRead) : readList()
 
     // Return every tab count with the active list. The browser previously
     // called this authenticated route four times, repeating auth and company
