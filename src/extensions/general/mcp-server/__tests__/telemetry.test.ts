@@ -5,12 +5,22 @@
  * scope denied, unknown tool) emit a correctly-shaped event to the bus,
  * and that the event-log handler registers the new type for persistence.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
 import { OAUTH_MCP_KEY_NAME, validateApiKey } from '@/lib/auth/api-keys'
 
 // ── Mocks (mirrors receipt-matcher.test.ts setup) ────────────
+
+// The PostHog mirror of each tool call (posthog-tool-call.ts). Off in every
+// test without a project token; the last describe switches it on.
+const posthogCapture = vi.hoisted(() => vi.fn((..._a: unknown[]) => undefined))
+vi.mock('posthog-node', () => ({
+  PostHog: class {
+    capture = posthogCapture
+    flush = async () => undefined
+  },
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -104,6 +114,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 
 import { handleMcpRequest, tools } from '../server'
 import { readCompletionLog } from '@/lib/extensions/completion-log'
+import { TOOL_CALL_EVENT_PROPERTIES } from '../posthog-tool-call'
 
 function mcpRequest(
   method: string,
@@ -1100,5 +1111,65 @@ describe('the dispatcher completion line (one per tools/call, none for chatter)'
     const initialized = mcpRequest('notifications/initialized')
     await handleMcpRequest(initialized)
     expect(readCompletionLog(initialized)?.quiet).toBe(true)
+  })
+})
+
+describe('PostHog mirror of a tool call', () => {
+  const call = () => handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  afterEach(() => {
+    posthogCapture.mockReset()
+    vi.unstubAllEnvs()
+  })
+
+  it('sends nothing while analytics is off, as on a self-hosted install', async () => {
+    vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const eventPromise = captureNextToolCalledEvent()
+    await call()
+    await eventPromise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posthogCapture).not.toHaveBeenCalled()
+  })
+
+  it('mirrors the call with fixed fields only, and a throwing capture changes nothing for the caller', async () => {
+    const offResult = await (await call()).json()
+
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
+    posthogCapture.mockImplementation(() => {
+      throw new Error('posthog down')
+    })
+    const eventPromise = captureNextToolCalledEvent()
+    const response = await call()
+    expect(response.status).toBe(200)
+    const onResult = await response.json()
+    expect(onResult.error).toBeUndefined()
+    expect(onResult.result.isError).toBeFalsy()
+    expect(onResult.result.content).toEqual(offResult.result.content)
+
+    // The event log still gets its row.
+    expect((await eventPromise).tool).toBe('gnubok_list_skills')
+
+    await vi.waitFor(() => expect(posthogCapture).toHaveBeenCalledTimes(1))
+    const sent = posthogCapture.mock.calls[0][0] as {
+      distinctId: string
+      event: string
+      properties: Record<string, unknown>
+      groups: Record<string, string>
+    }
+    expect(Object.keys(sent).sort()).toEqual(['distinctId', 'event', 'groups', 'properties'])
+    expect(sent.distinctId).toBe('user-1')
+    expect(sent.event).toBe('$mcp_tool_call')
+    expect(sent.groups).toEqual({ company: '11111111-1111-4111-8111-111111111111' })
+    const allowed = new Set<string>(TOOL_CALL_EVENT_PROPERTIES)
+    expect(Object.keys(sent.properties).filter((key) => !allowed.has(key))).toEqual([])
+    expect(sent.properties.$mcp_tool_name).toBe('gnubok_list_skills')
+    expect(sent.properties.$mcp_is_error).toBe(false)
   })
 })

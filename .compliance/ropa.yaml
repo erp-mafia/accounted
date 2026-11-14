@@ -734,6 +734,16 @@ processing_activities:
       # inmatning och all text maskeras, utom appens eget statiska gränssnitt
       # (rubriker, navigering, knappar, etiketter), se security_measures.
       - user.behavior         # sidvisningar, klick, händelser, sessionsinspelning
+      # Agentanrop (MCP): servern speglar varje verktygsanrop som en händelse
+      # `$mcp_tool_call` med en FAST fältlista (verktygets registernamn,
+      # lyckat/fel, felkod och felklass, svarstid i ms, klientetikett ur en
+      # sluten lista, sessions-id om det är ett UUID, serverns namn och
+      # version), användar-ID som distinct id och företags-ID som grupp. Har
+      # personen stängt av analys skickas händelsen utan användar-ID,
+      # företags-ID och sessions-id, under ett gemensamt id utan personprofil.
+      # Aldrig argument, resultat, felmeddelanden, belopp, namn eller annan
+      # fritext. Källa: extensions/general/mcp-server/posthog-tool-call.ts;
+      # fältlistan är låst av test (TOOL_CALL_EVENT_PROPERTIES).
       - user.device           # user agent, skärmstorlek, IP (trunkeras av PostHog)
       # Supportärenden: fritext som användaren SJÄLV skriver till supporten via
       # in-app-dialogen (components/ui/support-link.tsx). Till skillnad från
@@ -797,6 +807,9 @@ processing_activities:
       - sandbox_companies_never_identified
       - disabled_entirely_when_self_hosted
       - server_side_payloads_redacted_before_send   # lib/observability/redact.ts
+      - mcp_tool_call_event_fixed_field_allowlist   # inga argument, resultat eller fritext; låst av test
+      - mcp_tool_call_event_anonymous_on_analytics_opt_out   # user_preferences.analytics_consent = false -> händelsen räknas utan användar-ID, företags-ID, sessions-id och personprofil
+      - mcp_tool_call_event_never_sent_for_sandbox_companies
       - support_widget_disabled                    # endast egen UI via conversations-API
       - support_ticket_identity_hmac_signed        # POSTHOG_SECRET_API_KEY, serverside
       - support_message_body_never_in_event_properties  # breadcrumb bär endast subject

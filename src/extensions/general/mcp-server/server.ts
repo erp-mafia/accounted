@@ -85,6 +85,7 @@ import {
   isPublicTool,
 } from './public-tools'
 import { isEagerAuthRequested } from './auth-mode'
+import { mirrorToolCallToPostHog } from './posthog-tool-call'
 import { createLogger } from '@/lib/logger'
 import { briefBolaget } from '@/lib/bolaget/briefing'
 import {
@@ -29759,6 +29760,20 @@ function emitToolCallTelemetry(payload: {
   // Read now, in the message's trace scope: the emit itself runs after the
   // response (emitAfterResponse).
   const traceId = getTraceId() ?? null
+  // Its own after-response task, so neither emit can hold up or fail the
+  // other. Fixed fields only (posthog-tool-call.ts): no message, no argument.
+  emitAfterResponse(() => mirrorToolCallToPostHog({
+    tool: payload.tool,
+    isError: payload.isError,
+    errorCode: payload.errorCode,
+    errorKind: payload.errorKind,
+    latencyMs: payload.latencyMs,
+    client: payload.actor.client,
+    sessionId: payload.actor.sessionId,
+    serverVersion: SERVER_VERSION,
+    userId: payload.userId,
+    companyId,
+  }))
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tool_called',
