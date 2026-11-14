@@ -122,7 +122,7 @@ export interface GetWorklistCountsOptions {
    */
   documentsToSign?: DocumentToSignDue[] | Promise<DocumentToSignDue[]>
   /**
-   * The attested supplier invoices to pay the caller is already fetching
+   * The supplier invoices to pay the caller is already fetching
    * (Hem renders them as one Betala row): the count is taken from it instead
    * of a second read. Pass null for "nothing ready".
    */

@@ -386,11 +386,9 @@ export async function listSupplierInvoiceAttestsDue(
 
 /**
  * The supplier invoices still to pay (attested_to_pay): loadToPayQueue of
- * lib/supplier-invoices/attest-queues.ts. Where the attest policy governs the
- * company, the ready queue the byrå client list counts ("Betala N attesterade
- * fakturor"); elsewhere, kontantmetoden included, every unpaid invoice whose
- * approval is done or not part of the method ("Betala N
- * leverantörsfakturor", crm#1631). Less the invoices the payment_failed row
+ * lib/supplier-invoices/attest-queues.ts, every invoice that waits to be paid
+ * ("Betala N leverantörsfakturor"), the invoices the Att betala tab it opens
+ * lists (lib/supplier-invoices/to-pay.ts). Less the invoices the payment_failed row
  * shows (listPaymentsFailedDue, the very list it renders): one payment is
  * one row. An invoice that row does not show stays here, so none falls
  * between the two. Hem passes the failed list it already reads; otherwise it
@@ -405,9 +403,9 @@ export async function listAttestedToPayDue(
   try {
     const leaveOut = async () =>
       new Set((await (options.paymentsFailed ?? listPaymentsFailedDue(supabase, companyId))).map((p) => p.supplier_invoice_id))
-    const { attested, queue } = await loadToPayQueue(supabase, companyId, options.today ?? todayIsoStockholm(), { leaveOut })
+    const { queue } = await loadToPayQueue(supabase, companyId, options.today ?? todayIsoStockholm(), { leaveOut })
     if (queue.count === 0 || !queue.next_due) return null
-    return { count: queue.count, next_due: queue.next_due, overdue: queue.overdue, attested }
+    return { count: queue.count, next_due: queue.next_due, overdue: queue.overdue }
   } catch (error) {
     logAndZero('attested_to_pay', companyId, error)
     return null

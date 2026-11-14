@@ -58,8 +58,10 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  *
  * Where any client attests its supplier invoices (the attest policy), two
  * columns say what waits on whom: Väntar på kund (invoices the client has not
- * attested) and Redo att betala (attested, still to pay), each with the
- * nearest due date and the fallen-due ones marked. A count enters the client
+ * attested) and Redo att betala (still owed and not held by the policy: what
+ * the client's Att göra counts as to pay, less what Att göra shows as a failed
+ * payment), each with the nearest due
+ * date and the fallen-due ones marked. A count enters the client
  * on the supplier invoice list's matching tab. Same queues as the client's
  * own Att göra row (lib/supplier-invoices/attest-queues.ts).
  */

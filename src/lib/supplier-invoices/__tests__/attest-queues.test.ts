@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import { NO_ATTEST_POLICY, type AttestPolicy } from '../attest-policy'
-import { attestQueueOf, isToPayWithoutAttest, loadAttestQueues, loadToPayQueue, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
+import { attestQueueOf, loadAttestQueues, loadToPayQueue, paymentOrderReadChunks, type AttestQueueInvoice } from '../attest-queues'
 
 const POLICY: AttestPolicy = { ...NO_ATTEST_POLICY, enabled: true, attesters: ['kim'] }
 
@@ -31,12 +31,15 @@ describe('attestQueueOf', () => {
     expect(attestQueueOf(POLICY, 'accrual', invoice({ status: 'overdue', approved_at: '2026-10-31T10:00:00Z', due_date: '2026-09-15' }), false)).toBe('ready')
   })
 
-  it('leaves out what the policy does not govern: no policy, kontantmetoden, a credit note, under the threshold', () => {
+  it('has no queues where no policy governs (no policy, kontantmetoden), and none for a credit note', () => {
     expect(attestQueueOf(NO_ATTEST_POLICY, 'accrual', invoice(), false)).toBeNull()
     expect(attestQueueOf(POLICY, 'cash', invoice(), false)).toBeNull()
     expect(attestQueueOf(POLICY, 'accrual', invoice({ is_credit_note: true }), false)).toBeNull()
-    expect(attestQueueOf({ ...POLICY, threshold_amount: 20000 }, 'accrual', invoice(), false)).toBeNull()
-    expect(attestQueueOf({ ...POLICY, threshold_amount: 20000 }, 'accrual', invoice({ approved_at: '2026-10-31T10:00:00Z', status: 'approved' }), false)).toBeNull()
+  })
+
+  it('counts an invoice under the threshold as ready, attested or not: the policy does not hold it, and Att göra counts it', () => {
+    expect(attestQueueOf({ ...POLICY, threshold_amount: 20000 }, 'accrual', invoice(), false)).toBe('ready')
+    expect(attestQueueOf({ ...POLICY, threshold_amount: 20000 }, 'accrual', invoice({ approved_at: '2026-10-31T10:00:00Z', status: 'approved' }), false)).toBe('ready')
   })
 
   it('is no longer the payer\'s to pay once settled, at the bank, or debited by the supplier itself', () => {
@@ -53,24 +56,6 @@ describe('attestQueueOf', () => {
     expect(attestQueueOf(POLICY, 'accrual', partPaid, false)).toBe('ready')
     // Unattested and part paid cannot be attested any more (canApproveSupplierInvoice): it waits on nobody.
     expect(attestQueueOf(POLICY, 'accrual', { ...partPaid, approved_at: null }, false)).toBeNull()
-  })
-})
-
-describe('isToPayWithoutAttest (crm#1631)', () => {
-  it('takes a registered invoice as it stands on kontantmetoden, and only an approved one on faktureringsmetoden', () => {
-    expect(isToPayWithoutAttest('cash', invoice(), false)).toBe(true)
-    expect(isToPayWithoutAttest('cash', invoice({ status: 'overdue' }), false)).toBe(true)
-    expect(isToPayWithoutAttest('accrual', invoice(), false)).toBe(false)
-    expect(isToPayWithoutAttest(null, invoice({ status: 'overdue' }), false)).toBe(false)
-    expect(isToPayWithoutAttest('accrual', invoice({ status: 'approved', approved_at: '2026-10-31T10:00:00Z' }), false)).toBe(true)
-  })
-
-  it('shares the ready rule with the attest queue: nothing left, not payable, debited by the supplier, at the bank, a credit note', () => {
-    expect(isToPayWithoutAttest('cash', invoice({ remaining_amount: 0.004 }), false)).toBe(false)
-    expect(isToPayWithoutAttest('cash', invoice({ status: 'paid' }), false)).toBe(false)
-    expect(isToPayWithoutAttest('cash', invoice({ auto_debit: true }), false)).toBe(false)
-    expect(isToPayWithoutAttest('cash', invoice(), true)).toBe(false)
-    expect(isToPayWithoutAttest('cash', invoice({ is_credit_note: true }), false)).toBe(false)
   })
 })
 
@@ -259,8 +244,121 @@ describe('a ticked "Inlagd i banken" in the to-pay counts (crm#1824)', () => {
     expect(queues.get('c1')?.ready).toEqual({ count: 3, next_due: '2026-11-05', overdue: 1 })
   })
 
+  it('counts the same way where the policy governs: the Att göra row and the Att betala tab are one population', async () => {
+    // loadToPayQueue reads one company's policy and method as one row each.
+    const mock = createTableMockSupabase()
+    mock.setTable('company_attest_policies', { data: policyRow })
+    mock.setTable('company_settings', { data: { accounting_method: 'accrual' } })
+    const governed = seed([policyRow], 'accrual') as unknown as { from: (table: string) => unknown }
+    const supabase = {
+      ...(governed as object),
+      from: (table: string) => (table === 'company_attest_policies' || table === 'company_settings' ? mock.supabase.from(table) : governed.from(table)),
+    } as unknown as SupabaseClient
+    const toPay = await loadToPayQueue(supabase, 'c1', '2026-11-12')
+    expect(toPay).toEqual({ queue: { count: 3, next_due: '2026-11-05', overdue: 1 } })
+  })
+
   it('counts the same way for a company without an attest queue', async () => {
-    const toPay = await loadToPayQueue(seed([], 'cash'), 'c1', '2026-11-12')
-    expect(toPay).toEqual({ attested: false, queue: { count: 3, next_due: '2026-11-05', overdue: 1 } })
+    const mock = createTableMockSupabase()
+    mock.setTable('company_attest_policies', { data: null })
+    mock.setTable('company_settings', { data: { accounting_method: 'cash' } })
+    const plain = seed([], 'cash') as unknown as { from: (table: string) => unknown }
+    const supabase = {
+      ...(plain as object),
+      from: (table: string) => (table === 'company_attest_policies' || table === 'company_settings' ? mock.supabase.from(table) : plain.from(table)),
+    } as unknown as SupabaseClient
+    const toPay = await loadToPayQueue(supabase, 'c1', '2026-11-12')
+    expect(toPay).toEqual({ queue: { count: 3, next_due: '2026-11-05', overdue: 1 } })
+  })
+})
+
+// The byrå's Redo att betala once counted only attested invoices while Att
+// göra counted every one the policy lets through: the byrå said 0 and the
+// client's Att göra said 1 for the same invoice.
+describe('the byrå\'s Redo att betala and the Att göra Betala row: one population', () => {
+  const policyRow = { company_id: 'c1', enabled: true, threshold_amount: 10_000, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null }
+
+  /** c1 on 12 Nov: one invoice the policy holds, one under its threshold, one under it already at the bank. */
+  function invoicesAndOrders() {
+    const mock = createTableMockSupabase()
+    mock.setTable('supplier_invoices', {
+      data: [
+        invoice({ id: 'held', status: 'registered', approved_at: null, total: 50_000, remaining_amount: 50_000, due_date: '2026-11-20' }),
+        invoice({ id: 'below', status: 'registered', approved_at: null, total: 2_000, remaining_amount: 2_000, due_date: '2026-11-25' }),
+        invoice({ id: 'below-at-bank', status: 'registered', approved_at: null, total: 3_000, remaining_amount: 3_000, due_date: '2026-11-18' }),
+      ],
+    })
+    mock.setTable('supplier_payment_batch_items', { data: [] })
+    mock.setTable('payment_orders', {
+      data: [{ supplier_invoice_id: 'below-at-bank', status: 'awaiting_signature', created_at: '2026-11-11T10:00:00Z', supplier_invoice_payment_id: null }],
+    })
+    return mock
+  }
+
+  it('counts the unattested invoice under the threshold in both, and neither the held one nor the one at the bank', async () => {
+    // The byrå reads every client's policy and method as lists.
+    const byraData = invoicesAndOrders()
+    byraData.setTable('company_attest_policies', { data: [policyRow] })
+    byraData.setTable('company_settings', { data: [{ company_id: 'c1', accounting_method: 'accrual' }] })
+    const byra = await loadAttestQueues(byraData.supabase as unknown as SupabaseClient, ['c1'], '2026-11-12')
+
+    // Att göra reads one company's policy and method as one row each, over the same invoices and orders.
+    const oneRow = createTableMockSupabase()
+    oneRow.setTable('company_attest_policies', { data: policyRow })
+    oneRow.setTable('company_settings', { data: { accounting_method: 'accrual' } })
+    const shared = invoicesAndOrders()
+    const attGora = await loadToPayQueue(
+      {
+        ...(shared.supabase as object),
+        from: (table: string) =>
+          table === 'company_attest_policies' || table === 'company_settings' ? oneRow.supabase.from(table) : shared.supabase.from(table),
+      } as unknown as SupabaseClient,
+      'c1',
+      '2026-11-12',
+    )
+
+    expect(byra.get('c1')?.ready).toEqual({ count: 1, next_due: '2026-11-25', overdue: 0 })
+    expect(attGora.queue).toEqual(byra.get('c1')?.ready)
+    // The held one waits for attest on the byrå's board; the one at the bank is nobody's to pay.
+    expect(byra.get('c1')?.waiting).toEqual({ count: 1, next_due: '2026-11-20', overdue: 0 })
+    // The bank is asked about every invoice the policy does not hold, attested or not.
+    expect(byraData.findCalls('payment_orders', 'in')).toContainEqual(['supplier_invoice_id', expect.arrayContaining(['below', 'below-at-bank'])])
+  })
+})
+
+describe('loadToPayQueue: what waits to be paid (lib/supplier-invoices/to-pay.ts)', () => {
+  const policy = (threshold: number | null) => ({
+    company_id: 'c1', enabled: true, threshold_amount: threshold, mode: 'any', attesters: ['kim'], preparer_may_attest: false, updated_by: null, updated_at: null,
+  })
+  function seed(policy: unknown, accountingMethod: string, invoices: unknown[]) {
+    const mock = createTableMockSupabase()
+    // One company's policy, read as one row (loadAttestPolicy).
+    mock.setTable('company_attest_policies', { data: policy })
+    mock.setTable('company_settings', { data: { accounting_method: accountingMethod } })
+    mock.setTable('supplier_invoices', { data: invoices })
+    mock.setTable('payment_orders', { data: [] })
+    return mock.supabase as unknown as SupabaseClient
+  }
+
+  it('counts an unattested invoice of a company without a policy: the payment file pays it', async () => {
+    const toPay = await loadToPayQueue(
+      seed(null, 'accrual', [invoice({ id: 'unattested', status: 'registered', approved_at: null, due_date: '2026-11-25' })]),
+      'c1',
+      '2026-11-12',
+    )
+    expect(toPay.queue.count).toBe(1)
+  })
+
+  it('leaves out what the policy holds back, and counts what it lets through below its threshold', async () => {
+    const toPay = await loadToPayQueue(
+      seed(policy(10_000), 'accrual', [
+        invoice({ id: 'big-unattested', status: 'registered', approved_at: null, total: 50_000, remaining_amount: 50_000, due_date: '2026-11-20' }),
+        invoice({ id: 'small-unattested', status: 'registered', approved_at: null, total: 2_000, remaining_amount: 2_000, due_date: '2026-11-25' }),
+        invoice({ id: 'big-attested', status: 'approved', approved_at: '2026-11-01T10:00:00Z', total: 50_000, remaining_amount: 50_000, due_date: '2026-11-30' }),
+      ]),
+      'c1',
+      '2026-11-12',
+    )
+    expect(toPay.queue).toEqual({ count: 2, next_due: '2026-11-25', overdue: 0 })
   })
 })

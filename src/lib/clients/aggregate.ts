@@ -82,7 +82,7 @@ export interface ClientOverviewRow {
   bankSwitch?: ClientBankSwitch | null
   /**
    * The client's attest queues (lib/supplier-invoices/attest-queues.ts):
-   * invoices waiting for the client's attest and attested ones ready to pay.
+   * invoices waiting for the client's attest and the ones ready to pay.
    * Only present when the fetch layer was asked for them (the byrå client
    * list); null for a client without an attest step (no policy, policy off,
    * kontantmetoden), which the columns show as a dash.

@@ -114,7 +114,7 @@ describe('getWorklistCounts', () => {
     expect(countPaymentsFailedDue).not.toHaveBeenCalled()
   })
 
-  it('counts the attested invoices to pay as one row in the total, from a caller-supplied value when given', async () => {
+  it('counts the invoices to pay as one row in the total, from a caller-supplied value when given', async () => {
     const { countAttestedToPayDue } = await import('../categories')
     vi.mocked(countAttestedToPayDue).mockResolvedValueOnce(3)
     const base = (await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: null })).total
@@ -124,7 +124,7 @@ describe('getWorklistCounts', () => {
     // One payment run, however many invoices: the total moves by one.
     expect(counted.total).toBe(base + 1)
     vi.mocked(countAttestedToPayDue).mockClear()
-    const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0, attested: true }) })
+    const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0 }) })
     expect(given.counts.attested_to_pay).toBe(2)
     expect(countAttestedToPayDue).not.toHaveBeenCalled()
   })

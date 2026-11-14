@@ -11107,7 +11107,6 @@
     "row_expense_payout": "Betala ut utlägg till {name}",
     "row_expense_payout_detail_one": "1 kvitto · {date}",
     "row_expense_payout_detail_other": "{count} kvitton · äldsta {date}",
-    "row_attested_to_pay": "{count, plural, one {Betala # attesterad faktura} other {Betala # attesterade fakturor}}",
     "row_supplier_invoices_to_pay": "{count, plural, one {Betala # leverantörsfaktura} other {Betala # leverantörsfakturor}}",
     "row_attested_to_pay_detail": "Närmast förfaller {date}",
     "row_attested_to_pay_detail_overdue": "{overdue, plural, one {En förfallen} other {# förfallna}} sedan {date}",

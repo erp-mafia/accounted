@@ -197,11 +197,13 @@ import { rejectPendingOperations } from '@/lib/pending-operations/reject'
 import {
   canApproveSupplierInvoice,
   companyAttestsSupplierInvoices,
-  payableSupplierInvoiceStatuses,
 } from '@/lib/supplier-invoices/lifecycle'
-import { invoiceTotalSek } from '@/lib/supplier-invoices/attest-policy'
+import { invoiceTotalSek, type AttestInvoiceFacts } from '@/lib/supplier-invoices/attest-policy'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
+import { readAttestHold, type AttestHold } from '@/lib/supplier-invoices/attest-hold'
+import { PAYABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/payments/batch-eligibility'
+import { isToPayInList, type ListTabInvoice } from '@/lib/supplier-invoices/list-tabs'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
 import { filterSupplierInvoicesByReportedStatus } from '@/lib/supplier-invoices/reported-status'
 import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
@@ -12737,7 +12739,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_supplier_invoices',
     keywords: ['leverantörsfaktura', 'leverantörsfakturor', 'inköpsfaktura'],
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = payable now; kontantmetod incl. registered), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Filters: status (to_pay = the Att betala tab: waits to be paid), supplier_id, supplier_name (substring), date_from/date_to on invoice_date (YYYY-MM-DD).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12848,62 +12850,90 @@ export const tools: McpTool[] = [
         nameMatchedSupplierIds = matchedIds
       }
 
-      // What to_pay means hangs on whether the company attests.
-      let accountingMethod: string | null = null
-      if (status === 'to_pay') {
-        const { data: settings, error: settingsError } = await supabase
-          .from('company_settings')
-          .select('accounting_method')
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (settingsError) throw dbError(settingsError)
-        accountingMethod = (settings?.accounting_method as string | null | undefined) ?? null
-      }
-
       // count: 'exact' so truncation is SIGNALLED (total_count/has_more): the
       // date filters invite period reconciliation, and a silently capped
       // listing reads as complete (same contract as gnubok_list_invoices).
-      let query = supabase
-        .from('supplier_invoices')
-        .select(
-          // is_self_billed: a självfaktura the company issued in the
-          // supplier's name, numbered from its own series (crm#1367).
-          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, auto_debit, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, is_self_billed, self_billing_number, default_dimensions, ' +
-            `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`,
-          { count: 'exact' },
-        )
-        .eq('company_id', companyId)
-
-      if (status !== 'all') {
-        if (status === 'to_pay') {
-          // The rows the app offers Markera som betald for: kontantmetoden
-          // has no attest step, so its registered invoices are payable too
-          // (crm#1141). One the supplier debits itself has nothing to pay
-          // (auto_debit, crm#1463).
-          query = query.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('auto_debit', false)
-        } else {
-          // approved and overdue are read from the attest mark and the due
-          // date, so an attested invoice past due is in both and its status
-          // field still reads overdue (reported-status.ts, for #207).
-          query = filterSupplierInvoicesByReportedStatus(query, status)
-        }
-      }
-
+      // to_pay counts what it keeps itself, and reads the rate the attest
+      // policy weighs (paymentWaitsForAttest), which stays out of the answer.
       // Same filter shapes as the v1 supplier-invoices list: eq on
       // supplier_id, gte/lte on invoice_date.
-      if (supplierId) query = query.eq('supplier_id', supplierId)
-      if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
-      if (dateFrom) query = query.gte('invoice_date', dateFrom)
-      if (dateTo) query = query.lte('invoice_date', dateTo)
+      const listColumns =
+        // is_self_billed: a självfaktura the company issued in the
+        // supplier's name, numbered from its own series (crm#1367).
+        'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, auto_debit, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, is_self_billed, self_billing_number, default_dimensions, ' +
+        `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`
+      const listQuery = () => {
+        let query = supabase
+          .from('supplier_invoices')
+          .select(
+            status === 'to_pay' ? `${listColumns}, exchange_rate` : listColumns,
+            status === 'to_pay' ? undefined : { count: 'exact' },
+          )
+          .eq('company_id', companyId)
+        if (status !== 'all') {
+          // to_pay: the statuses a payment may be made in, one the supplier
+          // debits itself left out (crm#1463); waitsToBePaid below decides.
+          query = status === 'to_pay'
+            ? query.in('status', [...PAYABLE_SUPPLIER_INVOICE_STATUSES]).eq('auto_debit', false)
+            : // approved and overdue are read from the attest mark and the due
+              // date, so an attested invoice past due is in both and its status
+              // field still reads overdue (reported-status.ts, for #207).
+              filterSupplierInvoicesByReportedStatus(query, status)
+        }
+        if (supplierId) query = query.eq('supplier_id', supplierId)
+        if (nameMatchedSupplierIds) query = query.in('supplier_id', nameMatchedSupplierIds)
+        if (dateFrom) query = query.gte('invoice_date', dateFrom)
+        if (dateTo) query = query.lte('invoice_date', dateTo)
+        // Tiebreak on the unique id: due_date alone leaves which rows fall past
+        // the cap nondeterministic between identical calls.
+        return query.order('due_date', { ascending: true }).order('id', { ascending: true })
+      }
 
-      // Tiebreak on the unique id: due_date alone leaves which rows fall past
-      // the cap nondeterministic between identical calls.
-      const { data, error, count } = await query
-        .order('due_date', { ascending: true })
-        .order('id', { ascending: true })
-        .limit(limit)
-
-      if (error) throw dbError(error)
+      // to_pay is the Att betala tab, row for row (lib/supplier-invoices/to-pay.ts):
+      // read every candidate, keep what waits to be paid, then cut the page, so
+      // total_count counts what to_pay means.
+      let data: unknown[] | null
+      let count: number | null
+      // to_pay reads the open payments of every candidate: the page reuses them.
+      let openPaymentsRead: Awaited<ReturnType<typeof loadOpenPaymentInstructions>> | null = null
+      if (status === 'to_pay') {
+        const candidates = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+          listQuery().range(from, to) as unknown as PromiseLike<{
+            data: Record<string, unknown>[] | null
+            error: { message: string } | null
+          }>,
+        )
+        let openForToPay: Awaited<ReturnType<typeof loadOpenPaymentInstructions>>
+        try {
+          openForToPay = await loadOpenPaymentInstructions(supabase, companyId, candidates.map((row) => row.id as string))
+        } catch (openError) {
+          throw dbError(openError)
+        }
+        openPaymentsRead = openForToPay
+        // Strict: a policy that cannot be read fails the call, as a failed
+        // read of the open payments does; "not held" would tell the agent a
+        // held invoice waits to be paid.
+        let waitsForAttest: AttestHold
+        try {
+          waitsForAttest = await readAttestHold(supabase, companyId, { strict: true })
+        } catch (holdError) {
+          throw dbError(holdError)
+        }
+        const toPayFilter = (row: Record<string, unknown>) =>
+          isToPayInList({
+            ...(row as unknown as ListTabInvoice),
+            open_payment: openForToPay.get(row.id as string) ?? null,
+            waits_for_attest: waitsForAttest(row as unknown as AttestInvoiceFacts & { approved_at: string | null }),
+          })
+        const waiting = candidates.filter(toPayFilter)
+        data = waiting.slice(0, limit)
+        count = waiting.length
+      } else {
+        const { data: page, error, count: total } = await listQuery().limit(limit)
+        if (error) throw dbError(error)
+        data = page
+        count = total
+      }
 
       // payee_alert: the invoice states bank details the supplier card lacks
       // and payment is held until a person decides (changed), or a person
@@ -12936,7 +12966,7 @@ export const tools: McpTool[] = [
       // would say nothing pays the invoice.
       let openPayments: Awaited<ReturnType<typeof loadOpenPaymentInstructions>>
       try {
-        openPayments = await loadOpenPaymentInstructions(
+        openPayments = openPaymentsRead ?? await loadOpenPaymentInstructions(
           supabase,
           companyId,
           rows.filter((row) => !SETTLED_SUPPLIER_INVOICE_STATUSES.has(row.status)).map((row) => row.id as string),
@@ -12953,6 +12983,10 @@ export const tools: McpTool[] = [
           payee_iban: _iban,
           supplier_id: _supplierId,
           is_credit_note: _creditNote,
+          // Never part of the answer: to_pay reads the rate for the attest
+          // policy alone, and no status returns the registrant's auth id.
+          user_id: _registrant,
+          exchange_rate: _rate,
           supplier,
           ...rest
         } = row

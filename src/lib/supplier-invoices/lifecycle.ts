@@ -22,7 +22,7 @@ import { isPastDue } from '@/lib/dates/iso'
  * "Nothing left to pay" threshold, mirroring the cron and the payment/match
  * paths: öre-level rounding must not leave a payable looking unsettled.
  */
-const FULLY_PAID_EPSILON = 0.005
+export const FULLY_PAID_EPSILON = 0.005
 
 /**
  * Statuses the overdue flip/un-flip owns. They are also exactly the statuses
@@ -157,7 +157,8 @@ export function payableSupplierInvoiceStatuses(
 
 /**
  * True when "Markera som betald" is offered for the invoice. One rule for the
- * detail page, the "Inlagd i banken" mark and the to_pay filters.
+ * detail page and the "Inlagd i banken" mark. What waits to be paid (the
+ * Att betala tab, to_pay) is lib/supplier-invoices/to-pay.ts.
  */
 export function canMarkSupplierInvoicePaid(
   invoice: { status: string },
