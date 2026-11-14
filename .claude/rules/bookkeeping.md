@@ -20,4 +20,4 @@ Invoice items support individual `vat_rate` values (mixed-rate invoices). Both h
 
 ## VAT Declaration Rutor (SKV 4700)
 
-Ruta assignment is driven by **BAS account number**, never by a per-line tax code: `ACCOUNT_RUTA` in `lib/reports/vat-declaration.ts` is the source of truth, mirrored by `ACCOUNT_TO_BOX` in `lib/vat/moms-box-mapping.ts` (a regression test asserts the two agree). `journal_entry_lines.tax_code` is a free-text tag that nothing reads; there is no `tax_codes` table (migration 012 is a placeholder for a design that was never deployed).
+Ruta assignment is driven by **BAS account number**, never by a per-line tax code: `VAT_ACCOUNT_TABLE` in `lib/vat/moms-box-mapping.ts` is the one table: `ACCOUNT_TO_BOX` beside it and `ACCOUNT_RUTA` / `VAT_ACCOUNTS` in `lib/reports/vat-declaration.ts` are derived from it, and a company's own class 3 accounts with a moms-sats join ruta 05 on top (`fetchDynamicRuta05Accounts`). `journal_entry_lines.tax_code` is a free-text tag that nothing reads; there is no `tax_codes` table (migration 012 is a placeholder for a design that was never deployed).

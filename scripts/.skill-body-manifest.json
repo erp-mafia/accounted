@@ -1,7 +1,7 @@
 {
   "horizontal/swedish-accounting-compliance": {
-    "hash": "f1775ccfedded262b10c8ef7efc45fd630e2507458a054360ce0365d67bd8129",
-    "version": 7
+    "hash": "0d7541c13124a06698aa8ab54c52991cc5d9252ae081469e0eadafd85a309718",
+    "version": 8
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
     "hash": "fcd967767cbc52b62dcf31afe78a1ced76499e2e82516c60ecc0934f70b374ac",
@@ -20,8 +20,8 @@
     "version": 4
   },
   "horizontal/swedish-asset-accounting": {
-    "hash": "b78949eda847e5f665ef9dea2f64ff6acdaa53ac9c0b9befda5b15662343c526",
-    "version": 5
+    "hash": "9f98714b87d08a5b1405adb4ae13f79ccd1cc5f6767a8914bb1c0ceea41986a8",
+    "version": 6
   },
   "horizontal/swedish-asset-accounting/accounts-and-registry": {
     "hash": "b5567f495a34f593ff6066c97078c878cccedab16215f294dbe35d9b1d5f366b",
@@ -48,8 +48,8 @@
     "version": 1
   },
   "horizontal/swedish-daily-bookkeeping": {
-    "hash": "632565bc3dbb08d1d47a973380455a0cbc97036936cba6ca900a4e675c502efa",
-    "version": 1
+    "hash": "7f089324cf2a9f233cb0c7da339b8a5d021404a8da79f2f17211ca2ab474a654",
+    "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/cost-types-and-underlag": {
     "hash": "2fd3309b222c0ca31a8948268bbc48f40d6f940ea0cfdf09bbaeceed6900e0e4",
@@ -204,8 +204,8 @@
     "version": 1
   },
   "horizontal/swedish-payroll": {
-    "hash": "a4e284d7b71b449391433856a7894533f16bb47dce716d30807e4bf1d6193455",
-    "version": 7
+    "hash": "a1bd2d213ff14d7ffe642bcbbe682c5a44e34737d63f187eb1c0d952e7bcfb0d",
+    "version": 8
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "5a491218da623d2fd1a1fd865be40a3be168cce27465bb3c90bf507c9c11ff45",
@@ -252,8 +252,8 @@
     "version": 3
   },
   "horizontal/swedish-project-accounting": {
-    "hash": "55f17d8dcc80121d05e670615bffdee83e5f77537ba6c257f382fdbc38e61a87",
-    "version": 5
+    "hash": "d180b9e0507b4657888f74eb77b5b8e66110e307284a6bba6b0f3a15268c02fd",
+    "version": 6
   },
   "horizontal/swedish-project-accounting/accounts-and-entries": {
     "hash": "70008104fbb2c3208e9e726213acdbdd7a74ac941a59d7bc61167e54ddbb68ad",
@@ -268,8 +268,8 @@
     "version": 2
   },
   "horizontal/swedish-sie-import-export": {
-    "hash": "704e2eb2fbffcd799b2ba0788110f0cfd54517ef732d303946a5cba292c4b306",
-    "version": 6
+    "hash": "e402e100e9b0918d5b7d0d2bbdb1aa027e3eb56c3a8cfeadb2f683f190d2c101",
+    "version": 7
   },
   "horizontal/swedish-sie-import-export/bas-sru": {
     "hash": "dabc794ce99933a6e5825a9b7b945ee256bd313f3954a726ce7affda649eb7b8",

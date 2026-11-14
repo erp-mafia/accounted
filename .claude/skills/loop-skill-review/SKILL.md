@@ -14,7 +14,8 @@ publication, a review date, or a withdrawal there. No credentials in the app.
 Use `npm run skills:admin -- --help`. The reviewer supplies a matching explicit
 `SKILLS_SUPABASE_URL`, `SKILLS_SERVICE_ROLE_KEY`, and `--project` reference. Never
 load `.env.local`, print credentials, or paste submitted content into a public issue.
-`list` reads up to 100 pending/withdrawn rows. Prioritize withdrawals; review at most
+`list` reads up to 100 submitted rows; withdrawals are not in it (see below). Handle
+withdrawals first; review at most
 five new submissions per run and report overflow. A local weekly invocation is
 enough; do not create a cloud routine.
 
@@ -57,12 +58,12 @@ Do not invent a review date. Community reviews are at publication only.
 
 ## Withdrawal and emergency stop
 
-For a withdrawn row, identify its exact slug from `published_atom_id` or the linked
-PR. With specific DB write authorization, `withdraw --id <uuid> --slug <slug>
---project <ref>` disables the published registry atom immediately and removes only
-the matching local public entry/body. Run the generator and propose a withdrawal
-PR. Do not delete shared author profiles. Keep the withdrawn DB row as evidence.
-An unmerged publication PR must be closed or amended so it cannot publish later.
+An author's withdrawal returns the item to private and hides its published atom
+from every AI at once, in the database; no reviewer command does this. The review
+page `/skills/granskning` lists each withdrawn item whose folder is still in the
+public repository: propose removing only that folder. Do not delete shared author
+profiles. An unmerged publication PR must be closed or amended so it cannot
+publish later.
 
 `disable --slug <tier/slug> --project <ref>` is the emergency kill switch. Active
 state is checked on every MCP load, including reference parents. It cannot erase

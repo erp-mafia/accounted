@@ -50,28 +50,8 @@ A write door of a switchable package (a route, v1 endpoint or operation under L�
 
 ## Endpoint map (`app/api/`)
 
-Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
+Each directory under `app/api/` is a route family; list them with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`. What the tree does not tell you:
 
-- `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
-- `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required
-- `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, behandlingshistorik, bokslutsbilagor, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability
-- `/api/salary/*` (36): employees, tax-tables, runs
-- `/api/invoices/*` (28), `/api/supplier-invoices/*` (16): CRUD + state transitions, bulk-book, recurring, reminders, self-billed, preview-pdf, next-number; supplier side adds exists + payment-batches (betalfil)
-- `/api/import/*` (26): bank-file, SIE (parse/execute), skattekonto-file, opening-balance, articles, customers, suppliers, documents
-- `/api/extensions/*` (21): `ext/[...path]` dynamic extension routes (catch-all → `/api/extensions/ext/{extensionId}/{routePath}`, path params as `_paramName` query), `[sector]` listing, plus first-party callbacks (enable-banking, cloud-backup, invoice-inbox, whatsapp-inbox, shopify, woocommerce, stripe, skatteverket)
-- `/api/transactions/*` (20): list/detail, categorize/uncategorize, book, ignore, match-{invoice,supplier-invoice} (+ preview), match-batch, bulk-book, suggest-categories, attach-document, link-journal-entry, cash-account, duplicate-payment-check, refresh-exchange-rate
-- `/api/settings/*` (19): company settings, api-keys, oauth-clients, booking-templates, counterparty-templates, logo, invoice-font, peppol, signals (eu-trade, ku, rot-rut)
-- `/api/reconciliation/*` (18): `accounts` + `accounts/[accountKey]/*` (account-keyed engine, #1833: bridge, items + ignore, links, attachments, residual, signoff + reopen) and the legacy `bank/*` verbs (run, link, unmatched-entries, confirm-suggestions, mark-opening-balance)
-- `/api/agent/*` (16): ask, invoke, conversations (+ reject-pending), categorize (+ outcome), memory, knowledge, skills, profile (+ verify), feedback, onboarding/stream
-- `/api/documents/*` (12): CRUD, versions, inline, link/detach, integrity, extraction-status, verify cron, counts, inbox-available
-- `/api/company/*` (10), `/api/team/*` (5), `/api/user/*` (4), `/api/account/*` (2): company CRUD, current, members + invites, check-org-number, migration-reset; team invite/accept/members; preferences, profile, locale, ui-state; delete, password
-- `/api/dimensions/*` (9): CRUD, rules, tagging, import-existing
-- `/api/pending-operations/*` (7): list/detail, bulk-commit, bulk-reject, expire
-- `/api/mileage/*` (6), `/api/rot-rut/*` (6), `/api/webshop-orders/*` (6): trips, distance, book, export, salary-push; eligible, beslut, payout-requests, payout-file; orders + bulk-book + settings
-- `/api/deadlines/*` (5), `/api/tax-deadlines/*` (2), `/api/tax-assessment-notices/*` (2), `/api/skatteverket/*` (3): deadline CRUD + status, tax-deadline generate + cron, assessment notices, skattekonto tax-payments
-- `/api/customers/*` (3, incl. `[id]/personal-number`), `/api/suppliers/*` (2), `/api/articles/*` (2), `/api/assets/*` (3), `/api/cash-accounts`, `/api/export/*` (3: articles, customers, suppliers)
-- `/api/billing/*` (3: checkout, portal, status), `/api/stripe/webhook`
-- `/api/peppol/*` (2: inbound, outbound), `/api/webhooks/*` (2: dispatch cron, peppol/qvalia callback)
-- `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/dismiss`, `/api/idempotency/cleanup/cron`, `/api/vendor-logos/cron`
-- `/api/mcp-oauth/*` (3: authorize, token, register), `/api/calendar/feed/[token]`, `/api/payslip/[token]/pdf`, `/api/storage/[...path]`
-- Singletons: `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`
+- `/api/v1/*` is the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Its `transactions/{id}/ignore` (POST/DELETE) books no verifikat: it is the locked-period escape hatch for non-business rows.
+- `/api/extensions/ext/[...path]` is the catch-all for extension routes (`/api/extensions/ext/{extensionId}/{routePath}`, path params as `_paramName` query); the family also holds first-party callbacks (enable-banking, cloud-backup, invoice-inbox, whatsapp-inbox, shopify, woocommerce, stripe, skatteverket).
+- `/api/reconciliation/accounts/[accountKey]/*` is the account-keyed engine (#1833); `/api/reconciliation/bank/*` holds the legacy verbs.

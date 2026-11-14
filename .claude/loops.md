@@ -7,7 +7,7 @@ run marker in their tracking issue first, so running them early is a cheap no-op
 
 | Skill | Watches | Cadence | Output |
 |---|---|---|---|
-| `loop-feedback-triage` | MCP agent feedback in prod `event_log` (30-day TTL, so run it at least monthly) | weekly | digest in `dev_docs/`, small fix MRs |
+| `loop-feedback-triage` | MCP agent feedback in prod `event_log` (`mcp.*` and `agent.*` rows kept 180 days) | weekly | digest in `dev_docs/`, small fix MRs |
 | `loop-docs-freshness` | docs.accounted.se against what the repo generates | weekly | one drift issue, website MR |
 | `loop-regeluppdat` | Swedish laws and rules that affect the product | monthly | issues only, never code |
 | `loop-skill-review` | community skill submissions | on demand | registry MR |

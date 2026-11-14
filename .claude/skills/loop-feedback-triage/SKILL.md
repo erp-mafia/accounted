@@ -1,6 +1,6 @@
 ---
 name: loop-feedback-triage
-description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) and what agents asked for without reporting it (MCP calls to tools or parameters that do not exist, and failures that reached them as UNKNOWN_ERROR) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix PRs for clearly-scoped bugs. Never merges, never files GitLab issues on its own. Run LOCALLY (needs the Supabase MCP). Follows .claude/loops.md.
+description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) and what agents asked for without reporting it (MCP calls to tools or parameters that do not exist, and failures that reached them as UNKNOWN_ERROR) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix MRs for clearly-scoped bugs. Never merges, never files GitLab issues on its own. Run LOCALLY (needs the Supabase MCP). Follows .claude/loops.md.
 ---
 
 # loop-feedback-triage
@@ -13,8 +13,8 @@ Background: the first full triage (2026-08-17, `dev_docs/mcp_feedback_triage_202
 reports across 15 companies with **zero read surface**; the reports are high quality (exact ids, double
 reproduction) and convert to fixes in days once read. The waste is entirely on the reading side.
 
-> **Run LOCALLY.** The source is prod `event_log`, reached through the Supabase MCP
-> (`mcp__plugin_supabase_supabase__execute_sql`, project `pwxtzglxptnnvjrpixpg`). Read-only SQL only.
+> **Run LOCALLY.** The source is prod `event_log`, reached through the Supabase MCP's
+> `execute_sql` (project `pwxtzglxptnnvjrpixpg`). Read-only SQL only.
 > Never write to `event_log`, never touch `.env.local` scripts (they hit prod).
 >
 > `dev_docs/` is gitignored (local-only working docs), so the digest and the 2026-08 triage doc live
@@ -45,8 +45,9 @@ Few agents file `gnubok_feedback`; most just call what they expect to exist and 
 logged as an `mcp.tool_called` row, so the same watermark also reads the silent asks. The product rule
 this serves: every capability should pass "can an agent do this through Claude?", and these rows are
 where agents answer "no" (2026-09-28: 7 companies called a `gnubok_list_salary_runs` that did not
-exist; 175 companies got an opaque UNKNOWN_ERROR in 30 days). `event_log` keeps 30 days, so a skipped
-week loses nothing but a skipped month does.
+exist; 175 companies got an opaque UNKNOWN_ERROR in 30 days). `event_log` keeps `mcp.*` and `agent.*`
+rows for 180 days (other event types 30), so a skipped run loses no rows; the weekly cadence is what
+keeps reports read within a week.
 
 ```sql
 -- Tools agents called that do not exist.
@@ -118,15 +119,15 @@ Then, in the same dated section, the asks from step 1b:
 ```
 Set the watermark to the highest sequence read by either step 1 or step 1b.
 
-## 4. Fix only what is clearly small (propose-don't-merge), cap 3 PRs/run
-Open a `loop/feedback-<seq>` PR **only** for `open-bug` + `small` where the cause is unambiguous:
+## 4. Fix only what is clearly small (propose-don't-merge), cap 3 MRs/run
+Open a `loop/feedback-<seq>` merge request **only** for `open-bug` + `small` where the cause is unambiguous:
 a wrong filter, a missing status check, a stale label, a copy error, a missing test fixture. From
 step 1b, an `untyped-error` whose throw site is plain (a validation message, a not-found) and an
 `alias` fixed by keywords or a description are small too; a `capability-gap` or `param-gap` is a
-digest line for the founder, never a loop PR (it adds surface). Every PR
-passes the Definition of Done checks in `CLAUDE.md` first. PR body links the digest line and
+digest line for the founder, never a loop MR (it adds surface). Every MR
+passes the Definition of Done checks in `CLAUDE.md` first. The MR body links the digest line and
 quotes the report's ids so the fix is verifiable. Anything touching posted journal entries, money math,
-a migration, or Swedish tax law is `medium`+ and gets a digest line + `needs-human`, never a loop PR.
+a migration, or Swedish tax law is `medium`+ and gets a digest line + `needs-human`, never a loop MR.
 
 Never file GitLab issues from this loop: issue creation is founder-authorised only. Surface gaps in the
 digest and, when a report is urgent (data loss, wrong filing, a tool 100% broken), say so at the top of
@@ -134,6 +135,6 @@ the run report.
 
 ## 5. Report
 List: reports read (count + seq range), verdict tally, the asks from step 1b (unknown tools,
-unknown parameters, UNKNOWN_ERROR causes, each with its company count), digest lines appended, PRs
+unknown parameters, UNKNOWN_ERROR causes, each with its company count), digest lines appended, MRs
 opened, anything escalated as needs-human, and the new watermark. If nothing new arrived, say "0 new reports since
 <date>" and still update the run timestamp in the digest so silence is visibly checked, not assumed.
