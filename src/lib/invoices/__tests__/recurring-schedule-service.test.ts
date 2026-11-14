@@ -1392,6 +1392,65 @@ describe('executeRecurringSchedule dimension propagation', () => {
     })
   })
 
+  describe('the header is inserted under an id the run generates (accounted#211)', () => {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    const insertedHeader = () => inserted['invoices']![0] as Record<string, unknown>
+
+    function enqueueUntilInsertFails() {
+      enqueue({ data: customer, error: null }) // customers select
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      // postgrest-js answers a gateway timeout or a reset connection as an
+      // error and does not retry the POST: the row may be in place.
+      enqueue({ data: null, error: { message: 'upstream connect error or disconnect/reset before headers' } })
+    }
+
+    it('the insert carries an id generated for this run, a fresh one each run', async () => {
+      enqueueCreatePath()
+      await executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true })
+      reset()
+      enqueueCreatePath()
+      await executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true })
+
+      const [first, second] = inserted['invoices'] as Array<Record<string, unknown>>
+      expect(first!.id).toMatch(UUID)
+      expect(second!.id).toMatch(UUID)
+      expect(second!.id).not.toBe(first!.id)
+    })
+
+    it('an insert that answers an error is kept for a caller that records, naming the id the row would have: the cron holds the schedule instead of retrying beside it', async () => {
+      enqueueUntilInsertFails()
+      const onInvoiceCreated = vi.fn()
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated,
+      }).catch((err: unknown) => err)
+
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe(insertedHeader().id)
+      expect((failure as RecurringInvoiceKeptError).message).toBe(
+        'failed to insert invoice from schedule: upstream connect error or disconnect/reset before headers',
+      )
+      // Nothing after the insert: no lines, no removal, no record.
+      expect(onInvoiceCreated).not.toHaveBeenCalled()
+      expect(inserted['invoice_items']).toBeUndefined()
+      expect(findCalls('invoices', 'delete')).toHaveLength(0)
+    })
+
+    it('without a caller that records ("Skapa faktura nu"), the failure as it is', async () => {
+      enqueueUntilInsertFails()
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true }).catch(
+        (err: unknown) => err,
+      )
+
+      expect(failure).not.toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as Error).message).toBe(
+        'failed to insert invoice from schedule: upstream connect error or disconnect/reset before headers',
+      )
+    })
+  })
+
   describe('a draft the run cannot use is removed, never left beside the next one', () => {
     function enqueueUntilReload(reloaded: unknown) {
       enqueue({ data: customer, error: null }) // customers select
