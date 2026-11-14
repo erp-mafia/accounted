@@ -179,6 +179,30 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     expect(Number(collapsed[0]!.total_count)).toBe(3)
   })
 
+  // Migration 20261114132547 moved the collapse flag into a set the list
+  // anti-joins against (`p_collapse_corrections IS NOT FALSE`). A NULL flag
+  // folded a corrected group before (`NULL OR false` filters the row out) and
+  // must still do so; false must still fold nothing.
+  it('folds a corrected group for a NULL collapse flag too, and nothing for false', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const posted = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'manual', voucherNumber: 20, withLines: true, description: 'Plain posted' })
+    const original = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'reversed', sourceType: 'manual', voucherNumber: 21, withLines: true, description: 'Original' })
+    const storno = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'storno', voucherNumber: 22, reversesId: original, withLines: true, description: 'Storno' })
+    const correction = await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'correction', voucherNumber: 23, correctionOfId: original, withLines: true, description: 'Correction' })
+
+    const { rows: nullFlag } = await getPool().query<{ entry: { id: string }; total_count: string }>(
+      `SELECT entry, total_count
+         FROM list_fiscal_period_entries_with_related($1, $2, true, NULL, NULL, NULL, 'asc', 100, 0, true, NULL, NULL)`,
+      [companyId, fiscalPeriodId],
+    )
+    expect(nullFlag.map((r) => r.entry.id)).toEqual([posted, correction])
+    expect(Number(nullFlag[0]!.total_count)).toBe(2)
+
+    const notCollapsed = await callRpc(companyId, fiscalPeriodId, { excludeDraft: true, collapse: false, sortDate: 'asc' })
+    expect(notCollapsed.map((r) => r.entry.id)).toEqual([posted, original, storno, correction])
+    expect(Number(notCollapsed[0]!.total_count)).toBe(4)
+  })
+
   it('still returns drafts when status=draft is requested explicitly', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'manual', voucherNumber: 10, withLines: true, description: 'Posted' })
