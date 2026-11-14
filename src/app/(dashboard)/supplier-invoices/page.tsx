@@ -14,7 +14,16 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { IntentLink } from '@/components/ui/intent-link'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS, SortableTh } from '@/components/ui/dry-table'
+import {
+  TH_CLASS,
+  TD_CLASS,
+  QUIET_LINK_CLASS,
+  RowSelectCheckbox,
+  HOVER_REVEAL_CLASS,
+  SortableTh,
+  SHOW_MORE_STEP,
+  ShowMoreFooter,
+} from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -171,6 +180,13 @@ export default function SupplierInvoicesPage() {
   // state, so the row reads "Att betala" instead of the attest chip.
   const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const [searchTerm, setSearchTerm] = useState('')
+  // The list draws its first 100 rows and more on request, as the invoice
+  // list does. It drew every row: 8 500 for the largest register in
+  // production, each with its links, chips and checkboxes, on every render
+  // and every keystroke in the search. Counts, select-all and the detail
+  // pager still cover the whole filtered list.
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
+  const resetPaging = () => setVisibleCount(SHOW_MORE_STEP)
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
   // Grouping sits behind a gear at the right and Betalfiler is in the nav,
@@ -182,6 +198,20 @@ export default function SupplierInvoicesPage() {
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  // A new tab, search or year starts the list from its first rows again.
+  const changeTab = (tab: ListTab) => {
+    setActiveTab(tab)
+    resetPaging()
+  }
+  const changeSearch = (term: string) => {
+    setSearchTerm(term)
+    resetPaging()
+  }
+  const changeFiscalYear = (periodId: string | null, period: FiscalPeriod | null) => {
+    setFyPeriodId(periodId)
+    setFyPeriod(period)
+    resetPaging()
+  }
   const [approvingId, setApprovingId] = useState<string | null>(null)
   // "Inlagd i banken" (#2220) in flight for one row: the bock disables while
   // the server confirms, so a double click cannot flip it twice.
@@ -305,6 +335,7 @@ export default function SupplierInvoicesPage() {
 
   // Tri-state cycle: asc → desc → back to the API default (due date asc).
   const updateSort = (column: SupplierInvoiceListSortColumn) => {
+    resetPaging()
     setSort((current) => {
       if (current?.column !== column) return { column, direction: 'asc' }
       return current.direction === 'asc' ? { column, direction: 'desc' } : null
@@ -360,6 +391,8 @@ export default function SupplierInvoicesPage() {
     }
     return { orderedInvoices: flat, rowGroupKeys: keys, groupMeta: grouped.meta }
   }, [groupMode, sortedInvoices])
+  // The rows on screen: the ordered list cut at visibleCount.
+  const visibleInvoices = orderedInvoices.slice(0, visibleCount)
   // Status sections only earn headers when there is more than one of them;
   // supplier/month grouping is an explicit ask, so headers always show.
   const showGroupHeaders = groupMode !== 'none' && (groupMode !== 'status' || groupMeta.size > 1)
@@ -384,6 +417,7 @@ export default function SupplierInvoicesPage() {
 
   const updateGroup = (mode: GroupMode) => {
     setGroupMode(mode)
+    resetPaging()
     const params = new URLSearchParams(searchParams.toString())
     // Flat is the default, so it owns the URL-less state; every other mode
     // is written out so it round-trips through reload and back-navigation.
@@ -411,10 +445,12 @@ export default function SupplierInvoicesPage() {
   const selectableInvoices = filteredInvoices.filter(isRowSelectable)
   // The selection is the payable invoices of the current tab, filter and
   // search: a row they hide leaves it (useBulkSelection). Ranges walk the
-  // rows in rendered order: sorted, then sectioned by the active grouping.
+  // rows on screen in rendered order (sorted, then sectioned by the active
+  // grouping): the list is cut at visibleCount, so rows below it are not in
+  // a range, as on the invoice list.
   const selection = useBulkSelection(
     selectableInvoices.map((inv) => inv.id),
-    { rangeIds: orderedInvoices.filter(isRowSelectable).map((inv) => inv.id) },
+    { rangeIds: visibleInvoices.filter(isRowSelectable).map((inv) => inv.id) },
   )
   const { selectedIds, toggle: toggleSelect } = selection
 
@@ -561,7 +597,7 @@ export default function SupplierInvoicesPage() {
       <div className="flex flex-wrap items-center gap-2">
         <ContextPicker
           value={activeTab}
-          onChange={(id) => setActiveTab(id as ListTab)}
+          onChange={(id) => changeTab(id as ListTab)}
           ariaLabel={t('status_picker_aria')}
           triggerLabel={(() => {
             const count =
@@ -593,15 +629,12 @@ export default function SupplierInvoicesPage() {
           containerClassName="min-w-[190px]"
           placeholder={t('search_placeholder')}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => changeSearch(e.target.value)}
         />
         <div className="ml-auto flex items-center gap-4">
           <FyPicker
             value={fyPeriodId}
-            onChange={(periodId, period) => {
-              setFyPeriodId(periodId)
-              setFyPeriod(period ?? null)
-            }}
+            onChange={(periodId, period) => changeFiscalYear(periodId, period ?? null)}
             includeAllOption
           />
           <DropdownMenu>
@@ -732,7 +765,7 @@ export default function SupplierInvoicesPage() {
               </tr>
             </thead>
             <tbody className="stagger-enter">
-              {orderedInvoices.map((inv, rowIndex) => {
+              {visibleInvoices.map((inv, rowIndex) => {
                 // One chip per row, the same as the detail header and the
                 // supplier page (lib/supplier-invoices/status-display.ts).
                 const statusDisplay = supplierInvoiceStatusDisplay(inv.status, { attests })
@@ -766,7 +799,7 @@ export default function SupplierInvoicesPage() {
                 // sibling row decided from the previous row's key.
                 const groupKey = rowGroupKeys.get(inv.id) ?? null
                 const prevKey =
-                  rowIndex > 0 ? rowGroupKeys.get(orderedInvoices[rowIndex - 1].id) ?? null : undefined
+                  rowIndex > 0 ? rowGroupKeys.get(visibleInvoices[rowIndex - 1].id) ?? null : undefined
                 const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 return (
                   <Fragment key={inv.id}>
@@ -934,6 +967,14 @@ export default function SupplierInvoicesPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!isLoading && (
+        <ShowMoreFooter
+          shown={visibleCount}
+          total={orderedInvoices.length}
+          onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+        />
       )}
 
       {showNewInvoice && (
