@@ -60,6 +60,8 @@ const LinksResponse = z.object({
       pair: PairSchema,
       code: z.string(),
       message: z.string(),
+      /** Skattekonto, ALREADY_LINKED on the verifikat: the rows that hold it. */
+      linked_external_ids: z.array(z.string()).optional(),
     }),
   ),
 })
@@ -79,6 +81,8 @@ registerEndpoint({
     'A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles), or ONE outside row against SEVERAL verifikat (all-or-nothing; bank: the slices must sum to the transaction; skattekonto: the verifikat\'s open amounts on 1630 must sum exactly to the event, no allow_remainder). Several rows against several verifikat are UNSUPPORTED_PAIR_SHAPE, never silently reduced.',
     'A pair must close to the row\'s amount on the expected side (a single matching line, or the entry\'s lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.',
     'Skattekonto rows against a summarised verifikat never close: PAIR_NOT_CLOSED names both sums and the remainder. Repeat the pair with allow_remainder: true only when the verifikat really books those events; a dry run shows remainder_amount first. The link never changes unexplained_difference: the rows leave unmatched_external and the same amount leaves the verifikat.',
+    'Skattekonto direction: a positive row is money into the skattekonto and needs a verifikat that debits the account, a negative row one that credits it. A row against a verifikat that books nothing on its side is WRONG_DIRECTION, with or without allow_remainder: link it to another verifikat, or book the row.',
+    'ALREADY_LINKED on a skattekonto verifikat carries linked_external_ids, the rows that hold it. Such a row can be missing from the open lists (an upcoming row, or one dated after the fetched saldo): the verifikat then lists held_by_uncounted_rows in unmatched_ledger. Unlink the holder with DELETE .../links/{linkId} when its link is the wrong one.',
     'Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id, or the settlement_id of a ledger-only pair).',
     'A ledger-only pair (no external_ids) is never proposed and never applied by use_proposals: two verifikat of opposite amounts are not necessarily a correction of each other, so name them explicitly. It books nothing: a verifikat that is wrong and has no correction yet still needs one.',
     'Idempotency-Key is required; repeating the same key replays the first response.',

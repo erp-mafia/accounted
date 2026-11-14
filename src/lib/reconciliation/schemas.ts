@@ -347,6 +347,22 @@ export const ReconciliationItemSchema = z.object({
     })
     .optional(),
   /**
+   * Skattekonto ledger rows only: Skatteverket rows point at this verifikat
+   * without being counted in the comparison yet (an upcoming row booked
+   * ahead, or a row dated after the fetched saldo), so `amount` does not
+   * subtract them. A new link to the verifikat is still judged with them on
+   * it and can answer ALREADY_LINKED: unlink a holder by its id when its
+   * link is the wrong one. `amount` is their sum; external_ids lists at most
+   * 20 of them.
+   */
+  held_by_uncounted_rows: z
+    .object({
+      count: z.number().int(),
+      amount: z.number(),
+      external_ids: z.array(z.string()),
+    })
+    .optional(),
+  /**
    * Skattekonto outside rows only: the event is already in the ledger through
    * verifikat on 1630 that no row is linked to (see skattekonto.covered).
    * Link it; booking it would record it a second time.

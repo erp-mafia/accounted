@@ -19,6 +19,7 @@ import { chunk } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import {
   evaluateSkattekontoLink,
+  fetchRowsLinkedToEntries,
   linkSkattekontoRow,
   linkSkattekontoRows,
   setSkattekontoRowIgnored,
@@ -91,6 +92,13 @@ export type PairSkipCode =
   | 'ENTRY_NOT_FOUND'
   | 'ENTRY_REVERSED'
   | 'PAIR_NOT_CLOSED'
+  /**
+   * Skattekonto: a row goes the opposite way to everything the verifikat
+   * books on the account. Its own code, not PAIR_NOT_CLOSED: that one reads
+   * as "almost, try allow_remainder", and no remainder turns a pair around
+   * (crm#1846). The remedy is another verifikat, or booking the row.
+   */
+  | 'WRONG_DIRECTION'
   | 'ROW_IGNORED'
   | 'NOT_FOUND'
   | 'LINK_RACE'
@@ -129,6 +137,13 @@ export interface SkippedPair {
   pair: ReconciliationPair
   code: PairSkipCode
   message: string
+  /**
+   * Skattekonto, ALREADY_LINKED on the verifikat: the rows that hold it. One
+   * of them may be absent from the open lists (still "kommande", or dated
+   * after the fetched saldo); unlink it by this id when its link is the
+   * wrong one.
+   */
+  linked_external_ids?: string[]
 }
 
 export interface MatchPairsInput {
@@ -156,7 +171,7 @@ export interface MatchPairsResult {
   considered: number
 }
 
-function skipCodeFor(err: unknown): { code: PairSkipCode; message: string } {
+function skipCodeFor(err: unknown): { code: PairSkipCode; message: string; linked_external_ids?: string[] } {
   if (err instanceof SkattekontoLinkError) {
     const map: Record<string, PairSkipCode> = {
       TRANSACTION_NOT_FOUND: 'NOT_FOUND',
@@ -165,10 +180,15 @@ function skipCodeFor(err: unknown): { code: PairSkipCode; message: string } {
       ENTRY_NOT_FOUND: 'ENTRY_NOT_FOUND',
       ENTRY_ALREADY_LINKED: 'ALREADY_LINKED',
       INVALID_CANDIDATE: 'PAIR_NOT_CLOSED',
+      WRONG_DIRECTION: 'WRONG_DIRECTION',
       NOT_LINKED: 'UNKNOWN',
       LINK_RACE: 'LINK_RACE',
     }
-    return { code: map[err.code] ?? 'UNKNOWN', message: err.message }
+    return {
+      code: map[err.code] ?? 'UNKNOWN',
+      message: err.message,
+      ...(err.linkedRowIds && err.linkedRowIds.length > 0 ? { linked_external_ids: err.linkedRowIds } : {}),
+    }
   }
   return { code: 'UNKNOWN', message: err instanceof Error ? err.message : String(err) }
 }
@@ -229,6 +249,8 @@ interface PairFacts {
   rows: Map<string, { is_ignored: boolean; linked: boolean; amount?: number; settled?: boolean }>
   /** Skattekonto only: amounts of the rows already linked to each verifikat. */
   linkedAmounts: Map<string, number[]>
+  /** Skattekonto only: the same rows' ids, in the same order. */
+  linkedIds: Map<string, string[]>
 }
 
 /**
@@ -309,6 +331,7 @@ async function readPairFacts(
 
   const entries: PairFacts['entries'] = new Map()
   const linkedAmounts: PairFacts['linkedAmounts'] = new Map()
+  const linkedIds: PairFacts['linkedIds'] = new Map()
   for (const part of chunk([...entryIds], FACT_READ_CHUNK)) {
     // Two literal selects so the phantom-column guard can read each one.
     const { data, error } =
@@ -336,18 +359,9 @@ async function readPairFacts(
       entries.set(e.id, e)
     }
     if (kind !== 'skattekonto') continue
-    const { data: linked, error: linkedError } = await supabase
-      .from('skattekonto_transactions')
-      .select('id, journal_entry_id, belopp_skatteverket')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', part)
-    if (linkedError) throw dbError(linkedError, 'Kunde inte läsa kopplade rader')
-    for (const r of (linked ?? []) as Array<{ journal_entry_id: string | null; belopp_skatteverket: number | string | null }>) {
-      if (!r.journal_entry_id) continue
-      linkedAmounts.set(r.journal_entry_id, [
-        ...(linkedAmounts.get(r.journal_entry_id) ?? []),
-        Number(r.belopp_skatteverket),
-      ])
+    for (const r of await fetchRowsLinkedToEntries(supabase, companyId, part)) {
+      linkedAmounts.set(r.journal_entry_id, [...(linkedAmounts.get(r.journal_entry_id) ?? []), r.amount])
+      linkedIds.set(r.journal_entry_id, [...(linkedIds.get(r.journal_entry_id) ?? []), r.id])
     }
   }
 
@@ -363,7 +377,7 @@ async function readPairFacts(
       ...(kind === 'skattekonto' ? { amount: r.amount, settled: r.settled } : { amount: r.amount }),
     })
   }
-  return { entries, rows, linkedAmounts }
+  return { entries, rows, linkedAmounts, linkedIds }
 }
 
 /**
@@ -380,13 +394,14 @@ function skattekontoAmountCheck(
   account: SkattekontoLedgerAccount,
 ):
   | { ok: true; via: 'line' | 'entry_total' | 'lines' | 'partial'; remainder: number }
-  | { ok: false; code: PairSkipCode; message: string } {
+  | { ok: false; code: PairSkipCode; message: string; linked_external_ids?: string[] } {
   if (externalIds.some((id) => facts.rows.get(id)?.settled === false)) {
     return { ok: false, code: 'PAIR_NOT_CLOSED', message: 'En kommande händelse kan inte kopplas ännu.' }
   }
   const lines = facts.entries.get(journalEntryId)?.lines ?? null
   const amounts = externalIds.map((id) => Number(facts.rows.get(id)?.amount))
   const linked = facts.linkedAmounts.get(journalEntryId) ?? []
+  const heldBy = facts.linkedIds.get(journalEntryId) ?? []
   const evaluation = evaluateSkattekontoLink(lines, linked, amounts, { allowRemainder, account })
   if (evaluation.ok && evaluation.via) {
     return { ok: true, via: evaluation.via, remainder: evaluation.remainder }
@@ -396,9 +411,16 @@ function skattekontoAmountCheck(
     rowsTotal: roundOre(amounts.reduce((sum, a) => sum + a, 0)),
     rowCount: amounts.length,
     alreadyLinked: linked.length,
+    linkedTotal: roundOre(linked.reduce((sum, a) => sum + a, 0)),
+    linkedIds: heldBy,
     account,
   })
-  return { ok: false, ...skipCodeFor(new SkattekontoLinkError(refusal.message, refusal.code)) }
+  return {
+    ok: false,
+    ...skipCodeFor(
+      new SkattekontoLinkError(refusal.message, refusal.code, refusal.code === 'ENTRY_ALREADY_LINKED' ? heldBy : undefined),
+    ),
+  }
 }
 
 function entrySkip(facts: PairFacts, journalEntryId: string): { code: PairSkipCode; message: string } | null {
@@ -834,7 +856,12 @@ export async function matchPairs(
           skattekontoAccount,
         )
         if (!amounts.ok) {
-          skipped.push({ pair, code: amounts.code, message: amounts.message })
+          skipped.push({
+            pair,
+            code: amounts.code,
+            message: amounts.message,
+            ...(amounts.linked_external_ids ? { linked_external_ids: amounts.linked_external_ids } : {}),
+          })
           continue
         }
         for (const externalId of externalIds) {
@@ -850,6 +877,7 @@ export async function matchPairs(
           ...(facts.linkedAmounts.get(journalEntryId) ?? []),
           ...externalIds.map((id) => Number(facts.rows.get(id)?.amount)),
         ])
+        facts.linkedIds.set(journalEntryId, [...(facts.linkedIds.get(journalEntryId) ?? []), ...externalIds])
         continue
       }
       // Bank rows link one by one (manualLink per transaction), so a bad row
@@ -924,8 +952,8 @@ export async function matchPairs(
         }
       }
     } catch (err) {
-      const { code, message } = skipCodeFor(err)
-      skipped.push({ pair, code, message })
+      // A verifikat held by other rows names them (linked_external_ids).
+      skipped.push({ pair, ...skipCodeFor(err) })
     }
   }
 

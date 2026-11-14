@@ -1219,6 +1219,81 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
     expect(upcoming?.skipped[0]).toMatchObject({ code: 'PAIR_NOT_CLOSED', message: 'En kommande händelse kan inte kopplas ännu.' })
   })
 
+  // crm#1846. All figures made up.
+  it('dry run: a row against a verifikat that books nothing on its side is WRONG_DIRECTION, with or without allow_remainder', async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    for (const allow_remainder of [false, true]) {
+      reset()
+      enqueue({ data: [skvRow(R1, -10000)] })
+      enqueue({ data: [summarised(E1, [{ account_number: '1630', debit_amount: 10000, credit_amount: 0 }])] })
+      enqueue({ data: [] })
+      const result = await matchPairs(
+        supabase as never,
+        COMPANY,
+        USER,
+        'skattekonto',
+        { pairs: [{ external_ids: [R1], journal_entry_ids: [E1], allow_remainder }] },
+        { dryRun: true },
+      )
+      expect(result?.applied).toEqual([])
+      expect(result?.skipped).toHaveLength(1)
+      expect(result?.skipped[0].code).toBe('WRONG_DIRECTION')
+      expect(result?.skipped[0].message).toContain('Riktningen stämmer inte')
+      expect(result?.skipped[0].message).not.toContain('står då kvar')
+    }
+  })
+
+  it('live: the helper\'s WRONG_DIRECTION keeps its own code instead of PAIR_NOT_CLOSED', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkMock.mockRejectedValueOnce(new SkattekontoLinkError('Riktningen stämmer inte', 'WRONG_DIRECTION'))
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1], allow_remainder: true }],
+    })
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped.map((s) => s.code)).toEqual(['WRONG_DIRECTION'])
+  })
+
+  it('dry run: a verifikat held by other rows is ALREADY_LINKED and names the rows that hold it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [skvRow(R1, -4521), skvRow(R2, -7704)] })
+    enqueue({ data: [summarised(E1, [{ account_number: '1630', debit_amount: 0, credit_amount: 12225 }])] })
+    enqueue({
+      data: [
+        { id: 'held-1', journal_entry_id: E1, belopp_skatteverket: -4521 },
+        { id: 'held-2', journal_entry_id: E1, belopp_skatteverket: -7704 },
+      ],
+    })
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ external_ids: [R1, R2], journal_entry_ids: [E1] }] },
+      { dryRun: true },
+    )
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped[0]).toMatchObject({ code: 'ALREADY_LINKED', linked_external_ids: ['held-1', 'held-2'] })
+    expect(result?.skipped[0].message).toContain('held-1, held-2')
+    expect(result?.skipped[0].message).toContain('Inget står kvar på verifikatet')
+    expect(result?.skipped[0].message).not.toContain('allow_remainder')
+  })
+
+  it('live: the rows that hold the verifikat ride on the skip', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkMock.mockRejectedValueOnce(new SkattekontoLinkError('redan kopplat', 'ENTRY_ALREADY_LINKED', ['held-1']))
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
+    })
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R1], journal_entry_ids: [E1] },
+        code: 'ALREADY_LINKED',
+        message: 'redan kopplat',
+        linked_external_ids: ['held-1'],
+      },
+    ])
+  })
+
   it('dry run: an exact pair previews as before, plus how it settles, and no remainder', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [skvRow(R1, -4521), skvRow(R2, -7704)] })

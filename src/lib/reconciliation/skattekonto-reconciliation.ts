@@ -524,6 +524,9 @@ function proposeLedgerPlan(input: {
     .slice(0, MAX_ITEMS_PER_BUCKET)
 }
 
+/** Holder ids listed per verifikat (held_by_uncounted_rows); the count and amount cover all of them. */
+const MAX_HOLDER_IDS = 20
+
 function inWindow(date: string, from: string | null | undefined, to: string | null | undefined): boolean {
   if (from && date < from) return false
   if (to && date > to) return false
@@ -680,6 +683,26 @@ export async function getSkattekontoReconciliationStatus(
   const beforeHistory = historyStart
     ? bookedToCutoff.filter((r) => r.transaktionsdatum < historyStart && openRow(r))
     : []
+
+  // Rows that point at a verifikat without being counted below: still
+  // "kommande" at Skatteverket, dated after the fetched saldo, or from
+  // before the history and linked to a verifikat outside it. The
+  // comparison is right to leave them out (Skatteverket's saldo does not hold
+  // them yet), so the verifikat stays open with its whole amount; but the
+  // link is real, and a new link to the verifikat is judged with these rows
+  // on it (skattekonto-link.ts reads every row that points at it). Named on
+  // the verifikat so the list and the matcher say the same thing (crm#1846:
+  // "unmatched" here, ALREADY_LINKED there, and no row to be seen), and
+  // never proposed for another row: that link would be refused.
+  const countedRowIds = new Set(booked.map((r) => r.id))
+  const uncountedHolders = new Map<string, { external_ids: string[]; amount: number }>()
+  for (const r of rows) {
+    if (!r.journal_entry_id || r.is_ignored || countedRowIds.has(r.id)) continue
+    const held = uncountedHolders.get(r.journal_entry_id) ?? { external_ids: [], amount: 0 }
+    held.external_ids.push(r.id)
+    held.amount = roundOre(held.amount + Number(r.belopp_skatteverket))
+    uncountedHolders.set(r.journal_entry_id, held)
+  }
 
   // Ledger side. Both reads may fail independently of the row reads; a
   // failed balance read yields null balances and a null residual rather than
@@ -861,7 +884,10 @@ export async function getSkattekontoReconciliationStatus(
       ? heads.get(row.suggested_journal_entry_id)
       : undefined
     const proposal =
-      suggestedHead && suggestedHead.status !== 'reversed' && !liveLinkedEntryIds.has(suggestedHead.id)
+      suggestedHead &&
+      suggestedHead.status !== 'reversed' &&
+      !liveLinkedEntryIds.has(suggestedHead.id) &&
+      !uncountedHolders.has(suggestedHead.id)
         ? proposalFrom(
             suggestedHead,
             row,
@@ -1009,6 +1035,7 @@ export async function getSkattekontoReconciliationStatus(
 
   const openLedger = new Map<string, SkattekontoOpenLedgerEntry>()
   for (const { head, entryAmount, amount, linked } of openCandidates) {
+    const holders = uncountedHolders.get(head.id)
     const ledgerItem = {
       item_id: head.id,
       item_type: 'journal_entry' as const,
@@ -1022,6 +1049,15 @@ export async function getSkattekontoReconciliationStatus(
       entry_status: head.status,
       ...(linked
         ? { partially_linked: { entry_amount: entryAmount, linked_amount: linked.sum, linked_count: linked.count } }
+        : {}),
+      ...(holders
+        ? {
+            held_by_uncounted_rows: {
+              count: holders.external_ids.length,
+              amount: holders.amount,
+              external_ids: holders.external_ids.slice(0, MAX_HOLDER_IDS),
+            },
+          }
         : {}),
     }
     const settled = settlements?.settled.get(head.id)
@@ -1065,6 +1101,8 @@ export async function getSkattekontoReconciliationStatus(
       description: row.transaktionstext,
       amount,
       currency: 'SEK',
+      // An upcoming row booked ahead holds its verifikat already.
+      ...(row.journal_entry_id ? { linked_journal_entry_id: row.journal_entry_id } : {}),
       actions: [],
     })
   }
@@ -1132,7 +1170,13 @@ export async function getSkattekontoReconciliationStatus(
         .map((e) => ({ ...e, linkable: !deadLinkRowIds.has(e.id) })),
       entries: openEntries
         .filter((e) => !proposedEntryIds.has(e.head.id))
-        .map(({ head, amount }) => ({ id: head.id, date: head.entry_date, amount, linkable: head.status === 'posted' })),
+        .map(({ head, amount }) => ({
+          id: head.id,
+          date: head.entry_date,
+          amount,
+          // A verifikat a link refuses: not posted, or held by rows already.
+          linkable: head.status === 'posted' && !uncountedHolders.has(head.id),
+        })),
     })
     const openById = new Map(openEntries.map((e) => [e.head.id, e]))
     proposeLedgerPlan({
