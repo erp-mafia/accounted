@@ -34,6 +34,9 @@
   "company.accounting_framework_changed": [
     "event-log"
   ],
+  "company.deleted": [
+    "deleted-company-bank-feeds"
+  ],
   "credit_note.created": [
     "event-log",
     "webhooks",

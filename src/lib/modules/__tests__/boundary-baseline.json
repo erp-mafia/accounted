@@ -70,6 +70,7 @@
       "lib/composition/event-consumers.ts -> lib/composition/async-event-consumers",
       "lib/composition/event-consumers.ts -> lib/events/consumers",
       "lib/composition/event-consumers.ts -> lib/events/handlers/agent-feedback-relay-handler",
+      "lib/composition/event-consumers.ts -> lib/events/handlers/company-deleted-bank-feed-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/document-read-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/event-log-handler",
       "lib/composition/event-consumers.ts -> lib/events/handlers/forecast-realise-handler",

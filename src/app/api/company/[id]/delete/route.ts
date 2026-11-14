@@ -11,6 +11,11 @@ import { getActiveCompanyId } from '@/lib/company/active-company'
 import { getStripe } from '@/lib/stripe/client'
 import { endCompanySubscriptions, readCompanyStripeRef } from '@/lib/stripe/company-subscription'
 
+// company.deleted ends the company's bank connections at the bank inline
+// (lib/events/handlers/company-deleted-bank-feed-handler.ts), up to 30 s a
+// bank call: room for that, so the request is not cut off after the archive.
+export const maxDuration = 300
+
 const log = createLogger('api/company/delete')
 
 const DeleteCompanySchema = z.object({
