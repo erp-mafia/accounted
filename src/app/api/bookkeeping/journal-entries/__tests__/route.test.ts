@@ -300,6 +300,114 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(ilikeCalls[0][1]).toBe('%hyra, kvartal 1 (50\\%)%')
   })
 
+  describe('account number search (crm#1847)', () => {
+    const emptyParams = { params: Promise.resolve({}) }
+    const ACCOUNT_SELECT = '*, lines:journal_entry_lines(*), account_match:journal_entry_lines()'
+
+    it('finds verifikat with a line on a four-digit account, next to the text match', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: ' 1630 ' },
+      })
+      const response = await GET(request, emptyParams)
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      // The lines are joined a second time under their own alias, with no
+      // columns: `lines` still carries every line of each verifikat.
+      const selectCalls = findCalls('journal_entries', 'select')
+      expect(selectCalls).toHaveLength(1)
+      expect(selectCalls[0]).toEqual([ACCOUNT_SELECT, { count: 'exact' }])
+      // The alias is narrowed to the account (a string, never a number)...
+      const eqCalls = findCalls('journal_entries', 'eq')
+      expect(eqCalls).toContainEqual(['account_match.account_number', '1630'])
+      // ...and a row matches on its text OR on having such a line.
+      const orCalls = findCalls('journal_entries', 'or')
+      expect(orCalls).toHaveLength(1)
+      expect(orCalls[0][0]).toBe('description.ilike."%1630%",account_match.not.is.null')
+      // The plain ilike must not also run, or it would AND the account arm away.
+      expect(findCalls('journal_entries', 'ilike')).toHaveLength(0)
+      // Still the caller's company and fiscal year only.
+      expect(eqCalls).toContainEqual(['company_id', 'company-1'])
+      expect(eqCalls).toContainEqual(['fiscal_period_id', 'period-1'])
+    })
+
+    it('counts and pages the widened set in the same statement', async () => {
+      const entries = [makeJournalEntry(), makeJournalEntry()]
+      enqueue({ data: entries, error: null, count: 137 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '1630', limit: '2', offset: '4' },
+      })
+      const response = await GET(request, emptyParams)
+      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(response)
+
+      expect(status).toBe(200)
+      // One read: no id list is fetched first, so the exact count and the
+      // page window both apply to text matches and account matches together.
+      expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+      expect(findCalls('journal_entries', 'select')[0][1]).toEqual({ count: 'exact' })
+      expect(findCalls('journal_entries', 'range')).toEqual([[4, 5]])
+      expect(body.data).toEqual(entries)
+      expect(body.count).toBe(137)
+    })
+
+    it('keeps the other list filters on an account search', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          period_id: 'period-1',
+          search: '1630',
+          series: 'B',
+          exclude_draft: 'true',
+          hide_reversed: 'true',
+          date_from: '2026-01-01',
+        },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'eq')).toContainEqual(['voucher_series', 'B'])
+      expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-01-01'])
+      const neqCalls = findCalls('journal_entries', 'neq')
+      expect(neqCalls).toContainEqual(['status', 'draft'])
+      expect(neqCalls).toContainEqual(['status', 'reversed'])
+    })
+
+    it('leaves every search that is not exactly four digits as it was', async () => {
+      for (const needle of ['163', '16300', '16 30', '1630a', 'konto 1630']) {
+        reset()
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+        enqueue({ data: [], error: null, count: 0 })
+        const request = createMockRequest('/api/bookkeeping/journal-entries', {
+          searchParams: { period_id: 'period-1', search: needle },
+        })
+        await GET(request, emptyParams)
+
+        expect(findCalls('journal_entries', 'select')[0][0], needle).toBe('*, lines:journal_entry_lines(*)')
+        expect(findCalls('journal_entries', 'or'), needle).toHaveLength(0)
+        expect(
+          findCalls('journal_entries', 'eq').some(([column]) => String(column).startsWith('account_match')),
+          needle,
+        ).toBe(false)
+        expect(findCalls('journal_entries', 'ilike'), needle).toHaveLength(1)
+      }
+    })
+
+    it('does not join the lines a second time when there is no search', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { include_related: 'false' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'select')[0][0]).toBe('*, lines:journal_entry_lines(*)')
+    })
+  })
+
   it('orders by the display_amount computed column on amount sort, bypassing the RPC', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

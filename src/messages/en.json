@@ -8262,7 +8262,7 @@
     "reverse_dialog_body": "A storno entry that mirrors and zeroes out the journal entry is posted. The original is not deleted: it is marked as reversed and the original → storno chain stays traceable (BFL ch. 5 § 5). To change accounts or amounts instead, use Correct.",
     "copy": "Copy",
     "copy_voucher_tooltip": "Copy voucher",
-    "search_placeholder": "Search description...",
+    "search_placeholder": "Search text, number or account...",
     "clear_search": "Clear search",
     "no_results_title": "No matches",
     "no_results_description": "No journal entries match your filters. Adjust your search or clear the filters.",

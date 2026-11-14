@@ -8262,7 +8262,7 @@
     "reverse_dialog_body": "En stornoverifikation som speglar och nollställer verifikatet bokförs. Originalet raderas inte: det markeras som omfört och kedjan original → storno förblir spårbar (BFL 5 kap. 5 §). Vill du istället byta konton eller belopp, använd Rätta.",
     "copy": "Kopiera",
     "copy_voucher_tooltip": "Kopiera verifikat",
-    "search_placeholder": "Sök verifikationstext...",
+    "search_placeholder": "Sök text, nummer eller konto...",
     "clear_search": "Rensa sökning",
     "no_results_title": "Inga träffar",
     "no_results_description": "Inga verifikationer matchar dina filter. Justera sökningen eller rensa filtren.",
