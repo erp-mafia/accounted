@@ -29,6 +29,10 @@ import {
  *
  * All settings sections compose these primitives; do not hand-roll row
  * layouts or inline help paragraphs in section components.
+ *
+ * One named exception: the connection rows on Kopplingar show the first
+ * sentence of their help as a muted line under the name (ConnectionLabel in
+ * sections/ConnectionsSettingsContent.tsx). It is not a pattern to copy.
  */
 
 interface SettingsSectionHeaderProps {

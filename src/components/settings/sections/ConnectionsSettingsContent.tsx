@@ -30,6 +30,7 @@ import { useFormat } from '@/lib/hooks/use-format'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
   fetchMailConnections,
@@ -53,6 +54,7 @@ import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 import { skvConnectionState, type SkvStatusLike } from '@/lib/notices/predicates'
 import { peppolConnectionState } from '@/lib/invoices/peppol-access'
+import { firstSentence } from '@/lib/settings/first-sentence'
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
@@ -79,6 +81,33 @@ function ProviderMarkOr({ src, children }: { src: string | null; children: React
   if (!src || failed) return <>{children}</>
   // eslint-disable-next-line @next/next/no-img-element
   return <img src={src} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
+}
+
+/**
+ * The label of a connection row: mark, name, and the first sentence of the
+ * row's help as one muted line under the name.
+ *
+ * This is the ONE place settings show help in the page flow (design
+ * conventions 7 and 15 name the exception): Kopplingar is a catalogue people
+ * choose from, and what a connection does is what its row is. Every other
+ * settings row keeps its help behind the "?" through SettingsRow's `help`.
+ * The "?" stays here only when the help has more than that first sentence,
+ * and then opens the rest.
+ */
+function ConnectionLabel({ logo, name, help }: { logo: React.ReactNode; name: React.ReactNode; help: string }) {
+  const { first, rest } = firstSentence(help)
+  return (
+    <span className="flex items-center gap-3">
+      <LogoTile>{logo}</LogoTile>
+      <span className="flex min-w-0 flex-col">
+        <span className="flex items-center gap-2">
+          {name}
+          {rest ? <HelpPopover className="shrink-0">{rest}</HelpPopover> : null}
+        </span>
+        <SettingsRowNote>{first}</SettingsRowNote>
+      </span>
+    </span>
+  )
 }
 
 interface Status {
@@ -320,12 +349,12 @@ export function ConnectionsSettingsContent() {
     return (
       <SettingsRow
         label={
-          <span className="flex items-center gap-3">
-            <LogoTile>{opts.logo}</LogoTile>
-            {opts.maskLabel ? <span data-ph-mask="">{opts.name}</span> : opts.name}
-          </span>
+          <ConnectionLabel
+            logo={opts.logo}
+            name={opts.maskLabel ? <span data-ph-mask="">{opts.name}</span> : opts.name}
+            help={opts.help}
+          />
         }
-        help={opts.help}
       >
         {opts.state ? (
           <SettingsRowNote fill className={opts.attention ? 'text-attn' : opts.connected ? 'text-foreground' : undefined}>
@@ -569,12 +598,12 @@ export function ConnectionsSettingsContent() {
           (inboxAddress ? (
             <SettingsRow
               label={
-                <span className="flex items-center gap-3">
-                  <LogoTile><EnvelopeIcon className="h-4 w-4 text-foreground" aria-hidden="true" /></LogoTile>
-                  {t('inbox_address')}
-                </span>
+                <ConnectionLabel
+                  logo={<EnvelopeIcon className="h-4 w-4 text-foreground" aria-hidden="true" />}
+                  name={t('inbox_address')}
+                  help={t('inbox_address_help')}
+                />
               }
-              help={t('inbox_address_help')}
             >
               {/* Read-only, not disabled: selecting it by hand is the way
                   out when the clipboard refuses the write. */}
