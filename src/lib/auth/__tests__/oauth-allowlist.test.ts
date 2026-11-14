@@ -374,3 +374,18 @@ describe('lookupCompanyRole', () => {
     expect(result.error).toBe('db down')
   })
 })
+
+describe('builtInOnwardOrigins', () => {
+  it("names cursor.com for Cursor's web callback, which forwards there", async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual(['https://cursor.com'])
+  })
+
+  it('names nothing for other callbacks, or for a www.cursor.com path that is not allowlisted', async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://claude.ai/api/mcp/auth_callback')).toEqual([])
+    expect(builtInOnwardOrigins('cursor://anysphere.cursor-mcp/oauth/callback')).toEqual([])
+    expect(builtInOnwardOrigins('https://www.cursor.com/other')).toEqual([])
+    expect(builtInOnwardOrigins('not a url')).toEqual([])
+  })
+})
