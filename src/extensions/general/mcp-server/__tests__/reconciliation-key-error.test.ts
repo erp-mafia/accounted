@@ -112,6 +112,30 @@ describe('unknownAccountKeyError', () => {
     expect(envelope(error).code).toBe('VALIDATION_ERROR')
   })
 
+  it('no account_key at all: says it is required and lists the keys, never "undefined"', async () => {
+    // Replays gnubok_reconcile_match / gnubok_list_reconciliation_items called
+    // without account_key (15 calls, 12 companies, 2026-10-29..11-12).
+    listMock.mockResolvedValue([{ account_key: BANK_KEY }, { account_key: 'skattekonto' }])
+    for (const missing of [undefined, null, '', '  ']) {
+      const error = await unknownAccountKeyError(supabase, COMPANY, missing)
+      expect(error.message).toBe(
+        `account_key is required. Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Known keys: ${BANK_KEY}, skattekonto.`,
+      )
+      expect(error.message).not.toContain('undefined')
+      expect(envelope(error)).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false })
+    }
+    expect(tokenMock).not.toHaveBeenCalled()
+  })
+
+  it('an account_key that is no string is named as sent, not as missing', async () => {
+    listMock.mockResolvedValue([{ account_key: BANK_KEY }])
+    const error = await unknownAccountKeyError(supabase, COMPANY, 1930)
+    expect(error.message).toBe(
+      `account_key must be a string (got 1930). Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Known keys: ${BANK_KEY}.`,
+    )
+    expect(envelope(error).code).toBe('VALIDATION_ERROR')
+  })
+
   it('a failing listing still answers with the unknown-key error', async () => {
     listMock.mockRejectedValue(new Error('boom'))
     const error = await unknownAccountKeyError(supabase, COMPANY, 'manual:1510')

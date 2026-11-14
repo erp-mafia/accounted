@@ -465,7 +465,7 @@ import {
   vatFilingVerdict,
   vatFilingVerdictWithReviews,
 } from '@/lib/reports/vat-close-check'
-import { describeAliasConflicts, describeArgHint, normalizeReportArgAliases } from './report-arg-aliases'
+import { describeAliasConflicts, describeArgHint, normalizeReportArgAliases, unknownArgNote } from './report-arg-aliases'
 import { decodeLiteralUnicodeEscapes, decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { loadSuggestedMatches, SUGGESTION_POINTER_COLUMNS, type SuggestionPointerRow } from './match-suggestions'
@@ -2859,6 +2859,13 @@ async function mapFilingSkvError(
 }
 
 /**
+ * gnubok_vat_declaration_status without a live Skatteverket session: the
+ * read that answers "was this period filed" from Accounted's own record.
+ */
+const VAT_STATUS_WITHOUT_SKATTEVERKET =
+  'gnubok_list_vat_filings needs no connection and lists the periods Accounted has on record as filed (through a Skatteverket kvittens or marked by hand). It is the local record, not what Skatteverket holds.'
+
+/**
  * The read tools' SKATTEVERKET_NOT_CONNECTED, with the filing tools' next
  * step: gnubok_connect_skatteverket, then wait for the user. Its words name
  * the session the read used (skvReadSessionMessage), since a read may run on
@@ -2868,9 +2875,14 @@ async function skvReadRefusal(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  opts: { ownOnly?: boolean } = {},
+  opts: { ownOnly?: boolean; meanwhile?: string } = {},
 ): Promise<Error> {
-  return codedRefusal('SKATTEVERKET_NOT_CONNECTED', await skvReadSessionMessage(supabase, companyId, userId, opts), {
+  // `meanwhile`: what answers the same question without Skatteverket. Only a
+  // person can connect, so without it the refusal left the agent nothing to
+  // call next (281 gnubok_vat_declaration_status refusals in 14 days, 113
+  // companies; 36 in 100 went on to anything that answered the question).
+  const message = await skvReadSessionMessage(supabase, companyId, userId, opts)
+  return codedRefusal('SKATTEVERKET_NOT_CONNECTED', opts.meanwhile ? `${message} Meanwhile: ${opts.meanwhile}` : message, {
     description:
       'A person signs in to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user. Do not retry until they confirm.',
     tool: 'gnubok_connect_skatteverket',
@@ -3281,9 +3293,26 @@ function isStorageObjectTooLarge(error: unknown): boolean {
   return e.status === 413 || e.statusCode === '413' || /exceeded the maximum allowed size/i.test(String(e.message ?? ''))
 }
 
-/** NOT_FOUND for a document_attachments id, naming the id the agent sent. */
+/**
+ * NOT_FOUND for a document_attachments id, naming the id the agent sent and
+ * where a document id comes from. An id that is no UUID can be no document's:
+ * one agent sent its chat client's own file id ("file_...") 37 times against
+ * the bare sentence, never learning that the file was not in Accounted.
+ */
 function documentNotFound(documentId: string): Error {
-  return codedRefusal('NOT_FOUND', `Document not found: no document with id ${documentId} in this company.`)
+  const sources =
+    'A document id is the UUID Accounted gave the file: document_id from gnubok_list_inbox_items or gnubok_list_unmatched_documents, the id in a document:<uuid> record_ref (gnubok_list_records, gnubok_search_records), or the result of an upload.'
+  if (!isUuid(String(documentId).trim())) {
+    return codedRefusal(
+      'NOT_FOUND',
+      `Document not found: ${JSON.stringify(documentId)} is not a document id. ${sources} A file that exists only in this conversation is not in Accounted yet.`,
+      {
+        description: 'To put a file from this conversation into Accounted, upload it: gnubok_create_document_upload returns where to send the bytes, then gnubok_complete_document_upload gives its document id.',
+        tool: 'gnubok_create_document_upload',
+      },
+    )
+  }
+  return codedRefusal('NOT_FOUND', `Document not found: no document with id ${documentId} in this company. ${sources}`)
 }
 
 /**
@@ -7069,6 +7098,22 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase) {
       const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : ''
+      // No host enforces `required`: a call without connection_id (or with a
+      // name where the id belongs) reached the database and came back as
+      // invalid input syntax for type uuid: "" (12 calls, 10 companies in 14
+      // days). Refused here with where the id comes from.
+      if (!isUuid(connectionId)) {
+        throw codedRefusal(
+          'VALIDATION_ERROR',
+          connectionId === ''
+            ? 'connection_id is required: the connection_id of one connection from gnubok_connect_bank.'
+            : `connection_id must be the UUID of a connection from gnubok_connect_bank (got ${JSON.stringify(connectionId)}).`,
+          {
+            description: 'gnubok_connect_bank lists the company\'s bank connections, each with its connection_id and last_synced_at. Call it, then gnubok_sync_bank with that connection_id.',
+            tool: 'gnubok_connect_bank',
+          },
+        )
+      }
       const input = { companyId, userId, connectionId, log }
       let result = await triggerConnectionSync(supabase, input)
       // The Enable Banking runner only knows its own connections. An Open
@@ -17791,7 +17836,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('invoice_inbox_items')
         .select(`
-          id, status, source, created_at, extracted_data, matched_supplier_id,
+          id, document_id, status, source, created_at, extracted_data, matched_supplier_id,
           matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id,
           routed_to_arkiv_at, email_from, email_subject, error_message, document_attachments(file_name, upload_source),
           intake_stamp:channel_context->>intake_source, intake_channel:channel_context->>channel, ${INBOX_ITEM_DOCUMENT_HOLD}
@@ -17845,6 +17890,10 @@ export const tools: McpTool[] = [
 
         return {
           id: item.id,
+          // The id the document tools take. A mail or WhatsApp arrival's
+          // document has an id of its own, and without it here agents sent
+          // the item id as document_id (17 of 31 missed ids in 14 days).
+          document_id: item.document_id ?? null,
           status: item.status,
           source: item.source,
           intake_source: inboxRowIntakeSource(item),
@@ -19361,7 +19410,8 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const documentId = args.document_id as string
+      // Trimmed: a UUID sent with a stray space missed its own document.
+      const documentId = String(args.document_id ?? '').trim()
       if (!documentId) throw badArgument('document_id', 'document_id is required')
       const { parts, invalid } = parseDocumentDetailParts(args.include)
       if (invalid.length > 0) {
@@ -19374,14 +19424,27 @@ export const tools: McpTool[] = [
         }
       }
 
-      const { data: doc, error: docError } = await supabase
-        .from('document_attachments')
-        .select('id, file_name, mime_type, file_size_bytes, storage_path, original_id, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model, journal_entry_id, journal_entry_line_id')
-        .eq('id', documentId)
-        .eq('company_id', companyId)
-        .maybeSingle()
+      const readDocument = (id: string) =>
+        supabase
+          .from('document_attachments')
+          .select('id, file_name, mime_type, file_size_bytes, storage_path, original_id, page_count, pages_read_at, read_error, doc_type, admission_state, extracted_data, extracted_at, extraction_model, journal_entry_id, journal_entry_line_id')
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .maybeSingle()
 
+      let { data: doc, error: docError } = await readDocument(documentId)
       if (!isLookupMiss(docError)) throw dbError(docError)
+      // An inbox item id where the document id belongs: read the document it
+      // holds, as gnubok_link_document_to_voucher does. 17 of the 31 ids this
+      // tool missed on in 14 days were inbox items of the same company whose
+      // mail or WhatsApp document has an id of its own.
+      if (!doc && isUuid(documentId)) {
+        const held = (await documentIdsForInboxItems(supabase, companyId, [documentId])).get(documentId)
+        if (held) {
+          ;({ data: doc, error: docError } = await readDocument(held))
+          if (!isLookupMiss(docError)) throw dbError(docError)
+        }
+      }
       if (!doc) throw documentNotFound(documentId)
 
       const ttlSeconds = 300
@@ -20368,7 +20431,28 @@ export const tools: McpTool[] = [
         if (error) throw dbError(error)
         if (!data) {
           const period = `${periodYear}-${String(periodMonth).padStart(2, '0')}`
-          throw codedRefusal('SALARY_RUN_NOT_FOUND', `No salary run for ${period} in this company.`, {
+          // Say which runs do exist: agents looking for the latest run asked
+          // month by month backwards (78 misses, 35 companies in 14 days; 20
+          // were followed at once by the same call for another month).
+          const { data: latest, error: latestError } = await supabase
+            .from('salary_runs')
+            .select('id, period_year, period_month, status')
+            .eq('company_id', companyId)
+            .neq('status', 'corrected')
+            .order('period_year', { ascending: false })
+            .order('period_month', { ascending: false })
+            .limit(3)
+          const runs = ((latest ?? []) as Array<{ id: string; period_year: number; period_month: number; status: string }>).map(
+            (r) => `${r.period_year}-${String(r.period_month).padStart(2, '0')} (${r.status}, salary_run_id ${r.id})`,
+          )
+          // A failed listing says nothing about the other months: the miss
+          // for the asked month still stands, without a claim about the rest.
+          const existing = latestError
+            ? ''
+            : runs.length > 0
+              ? ` Its latest runs: ${runs.join('; ')}.`
+              : ' The company has no salary runs at all, so no other month has one either.'
+          throw codedRefusal('SALARY_RUN_NOT_FOUND', `No salary run for ${period} in this company.${existing}`, {
             description: `No run exists for ${period} yet. Stage one with gnubok_create_salary_run (period_year, period_month, payment_date).`,
             tool: 'gnubok_create_salary_run',
             args: { period_year: periodYear, period_month: periodMonth },
@@ -20966,7 +21050,10 @@ export const tools: McpTool[] = [
     name: 'gnubok_vat_declaration_status',
     keywords: ['momsdeklaration', 'moms'],
     title: 'VAT Declaration Status (Momsdeklaration)',
-    description: 'Filing status of a momsdeklaration at Skatteverket: inlämnat (submitted) and/or beslutat (decided). Sections are null when nothing is on file yet.',
+    // Says up front that it is a live read and names the local record: 281
+    // calls in 14 days met SKATTEVERKET_NOT_CONNECTED. Kept at the length of
+    // the sentence it replaces: the tools/list budget is frozen.
+    description: 'Live read, needs a Skatteverket connection (else gnubok_list_vat_filings): momsdeklaration inlämnat and/or beslutat, null when not on file.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -20992,7 +21079,9 @@ export const tools: McpTool[] = [
         periodType, year, period, state: (args.state as SkvVatDeclarationState | undefined) ?? 'both',
       })
       if (!result.ok) {
-        if (result.code === 'SKATTEVERKET_NOT_CONNECTED') throw await skvReadRefusal(supabase, companyId, userId)
+        if (result.code === 'SKATTEVERKET_NOT_CONNECTED') {
+          throw await skvReadRefusal(supabase, companyId, userId, { meanwhile: VAT_STATUS_WITHOUT_SKATTEVERKET })
+        }
         throw codedRefusal(result.code, result.error)
       }
       const { redovisare, redovisningsperiod, submitted, decided } = result
@@ -21175,7 +21264,10 @@ export const tools: McpTool[] = [
         const mapped = mapSkatteverketError(err) as Error & { code?: string }
         // The receipts are read on the caller's own login only.
         if (mapped.code === 'SKATTEVERKET_NOT_CONNECTED') {
-          throw await skvReadRefusal(supabase, companyId, userId, { ownOnly: true })
+          throw await skvReadRefusal(supabase, companyId, userId, {
+            ownOnly: true,
+            meanwhile: `gnubok_get_salary_run with salary_run_id ${salaryRunId} needs no connection and shows what Accounted has on record for the run (status, agi_generated_at, agi_submitted_at). Only the Skatteverket receipts need the login.`,
+          })
         }
         throw mapped
       }
@@ -31057,11 +31149,13 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
           const hints = unknownArgKeys
             .map((k) => describeArgHint(k, validArgKeys, hintContext))
             .filter((h): h is string => h !== null)
+          const note = unknownArgNote(toolName)
           throw codedError(
             'VALIDATION_ERROR',
             `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${requestedToolName}. ` +
               (hints.length > 0 ? `Did you mean: ${hints.join(', ')}? ` : '') +
               `Valid parameters: ${validArgKeys.join(', ') || '(none)'}. Unknown keys are rejected, not ignored.` +
+              (note ? ` ${note}` : '') +
               (example ? ` A working call looks like: ${example}` : ''),
           )
         }

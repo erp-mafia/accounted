@@ -129,6 +129,29 @@ describe('reconciliation MCP tools', () => {
     ).rejects.toThrow(/Unknown account_key "manual:1510"/)
   })
 
+  // Replays the 15 calls (12 companies, 2026-10-29..11-12) that sent no
+  // account_key: the engine finds no account for it, and the tool answered
+  // Unknown account_key "undefined".
+  it('items and match without account_key say it is required, never "undefined"', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    itemsMock.mockResolvedValue(null)
+    matchMock.mockResolvedValue(null)
+    const calls = [
+      () => tool('gnubok_list_reconciliation_items').execute({}, COMPANY, USER, supabase as never),
+      () => tool('gnubok_reconcile_match').execute(
+        { use_proposals: true, dry_run: true },
+        COMPANY, USER, supabase as never, { type: 'api_key', id: 'key-1' } as never,
+      ),
+    ]
+    for (const call of calls) {
+      const error = await call().then(() => null, (err: Error) => err)
+      const envelope = toToolError(error, { toolName: 'gnubok_list_reconciliation_items' }).error
+      expect(envelope.code).toBe('VALIDATION_ERROR')
+      expect(envelope.message_en).toMatch(/^account_key is required\. Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>"\./)
+      expect(envelope.message_en).not.toContain('undefined')
+    }
+  })
+
   it('items forwards bucket and paging', async () => {
     const { supabase } = createQueuedMockSupabase()
     itemsMock.mockResolvedValue({ items: [], count: 0, total_count: 0, has_more: false, older_unmatched_count: 0 })

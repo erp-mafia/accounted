@@ -66,7 +66,9 @@ function parseRefOf<K extends string>(ref: unknown, kinds: readonly K[]): { kind
   if (typeof ref !== 'string') throw invalid('record_ref must be a string like document:<uuid>')
   const [kind, id] = ref.split(':')
   if (!(kinds as readonly string[]).includes(kind) || !UUID.test(id ?? '')) {
-    throw invalid(`record_ref must be <${kinds.join('|')}>:<uuid>`)
+    // With what was sent: after the format alone, 9 of 26 refused
+    // gnubok_ask_document calls in 14 days were followed by another refusal.
+    throw invalid(`record_ref must be <${kinds.join('|')}>:<uuid> (got ${sentValue(ref)})`)
   }
   return { kind: kind as K, id }
 }
@@ -83,6 +85,56 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const coded = (code: string, message: string): Error => Object.assign(new Error(message), { code })
 const invalid = (message: string) => coded('VALIDATION_ERROR', message)
 const notFound = (message: string) => coded('NOT_FOUND', message)
+
+// Where the id of each shelf kind comes from, for a record_ref that names a
+// kind the company holds no record of under that id. Each sentence names
+// only tools that return that kind: search has no parties, links no facts.
+const RECORD_ID_SOURCES: Record<RecordKind, string> = {
+  document:
+    'Documents are found with gnubok_list_records and gnubok_search_records, and gnubok_list_inbox_items gives each item\'s document_id; an inbox item id is not always a document id.',
+  journal_entry: 'Verifikat are found with gnubok_query_journal: each line carries its journal_entry_id.',
+  agreement: 'Agreements are found with gnubok_search_records, and gnubok_get_record_links on a document or party returns them.',
+  party: 'A party\'s record_ref comes from a record that names it: gnubok_get_record_links on a document or agreement returns it.',
+  fact: 'Facts are found with gnubok_search_records.',
+}
+
+/**
+ * gnubok_get_record for a well-formed record_ref no record answers to. It
+ * said only "Record not found" (32 calls, 10 companies in 14 days, 20 of
+ * them followed by another get_record), naming neither the kind it looked
+ * under nor the id, nor where a right id comes from.
+ */
+function recordNotFound(kind: RecordKind, id: string): Error {
+  return notFound(`Record not found: no ${kind} with id ${id} in this company. ${RECORD_ID_SOURCES[kind]}`)
+}
+
+/** A value as a refusal quotes it: JSON, cut short. */
+function sentValue(value: unknown): string {
+  const text = JSON.stringify(value) ?? String(value)
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text
+}
+
+/**
+ * The document a document-only tool reads (ask_document, get_source,
+ * read_document, resolve_missing), from `document:<uuid>` or the bare uuid:
+ * these tools read nothing but documents, so the prefix tells them nothing,
+ * and agents send the document_id other tools hand out as it is. Anything
+ * else is refused with what was sent and where document ids come from.
+ */
+function documentIdOf(value: unknown, param: string, whenMissing = `${param} is required`): string {
+  const text = typeof value === 'string' ? value.trim() : ''
+  const id = text.startsWith('document:') ? text.slice('document:'.length) : text
+  if (UUID.test(id)) return id
+  const missing = value === undefined || value === null || (typeof value === 'string' && text === '')
+  const problem = missing ? whenMissing : `${param} must be document:<uuid> or the document's uuid (got ${sentValue(value)})`
+  throw invalid(`${problem}. ${RECORD_ID_SOURCES.document}`)
+}
+
+/** get_source and read_document take the document as record_ref or as document_id. */
+const documentIdFromEither = (args: Record<string, unknown>): string =>
+  args.record_ref == null
+    ? documentIdOf(args.document_id, 'document_id', 'Pass record_ref as document:<uuid>, or document_id as a UUID')
+    : documentIdOf(args.record_ref, 'record_ref')
 
 // A timeout or a dropped connection; the status a reason opens with is read apart.
 const TRANSIENT_READER_FAILURE = /timed? ?out|timeout|overloaded|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|connection error/i
@@ -643,7 +695,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         switch (ref.kind) {
           case 'document': {
             const document = await documentRecord(supabase, companyId, ref.id, { withLedgerLinks: true })
-            if (!document) throw notFound('Record not found')
+            if (!document) throw recordNotFound('document', ref.id)
             return { ...base, document }
           }
           case 'transaction': {
@@ -669,23 +721,23 @@ export function createArkivTools(deps: Deps): McpTool[] {
           }
           case 'agreement': {
             const agreement = await agreementRecord(supabase, companyId, ref.id, asOf)
-            if (!agreement) throw notFound('Record not found')
+            if (!agreement) throw recordNotFound('agreement', ref.id)
             return { ...base, agreement }
           }
           case 'party': {
             const party = await partyRecord(supabase, companyId, ref.id)
-            if (!party) throw notFound('Record not found')
+            if (!party) throw recordNotFound('party', ref.id)
             return { ...base, party }
           }
           case 'journal_entry': {
             const journalEntry = await journalEntryRecord(supabase, companyId, ref.id)
-            if (!journalEntry) throw notFound('Record not found')
+            if (!journalEntry) throw recordNotFound('journal_entry', ref.id)
             return { ...base, journal_entry: journalEntry }
           }
           case 'fact': {
             const { data, error } = await supabase.from('company_facts').select('*').eq('id', ref.id).eq('company_id', companyId).maybeSingle()
             if (error) throw dbError(error)
-            if (!data) throw notFound('Record not found')
+            if (!data) throw recordNotFound('fact', ref.id)
             return { ...base, fact: factView(data as FactRow) }
           }
         }
@@ -828,8 +880,9 @@ export function createArkivTools(deps: Deps): McpTool[] {
       async execute(args, companyId, _userId, supabase) {
         // It answers from the raw page text with a verified quote and reads nothing the brain derived, so it works
         // wherever the shelf does (2026-09-25: every call from a company outside the brain was refused).
-        const ref = parseRecordRef(String(args.record_ref ?? ''))
-        if (!ref || ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
+        // A bare uuid too, the form the other document tools hand ids out
+        // in: the format refusal met 26 calls in 14 days (11 companies).
+        const documentId = documentIdOf(args.record_ref, 'record_ref')
         const question = String(args.question ?? '').trim()
         if (question.length < 3) throw invalid('question is required')
         const pages = Array.isArray(args.pages) ? [...new Set(args.pages.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1))] : undefined
@@ -838,20 +891,20 @@ export function createArkivTools(deps: Deps): McpTool[] {
         if (companyError) throw dbError(companyError)
         const out = await askDocument(supabase, {
           companyId,
-          documentId: ref.id,
+          documentId,
           question,
           ...(pages ? { pages } : {}),
           company: { name: (company as { name: string } | null)?.name ?? '' },
           askedBy: { agentName: 'mcp.ask', agentVersion: '1' },
         })
         if (out.status === 'skipped') {
-          if (out.reason === 'not_found') throw notFound('No such document in this company')
+          if (out.reason === 'not_found') throw recordNotFound('document', documentId)
           if (out.reason === 'ai_unconfigured') throw coded('EXTENSION_DISABLED', 'The reader is not configured on this installation')
-          throw noReadableText(ref.id, pages)
+          throw noReadableText(documentId, pages)
         }
         if (out.status === 'error') throw readerFailure(out.reason)
         return {
-          record_ref: recordRef('document', ref.id),
+          record_ref: recordRef('document', documentId),
           question,
           answer: fenceNullable(out.answer),
           not_found: out.not_found,
@@ -943,11 +996,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         const resolution = String(args.resolution ?? '')
         if (!['uploaded', 'not_exists', 'not_applicable'].includes(resolution)) throw invalid('resolution must be uploaded, not_exists or not_applicable')
         let documentId: string | null = null
-        if (args.document_ref != null) {
-          const ref = parseRecordRef(String(args.document_ref))
-          if (!ref || ref.kind !== 'document') throw invalid('document_ref must be document:<uuid>')
-          documentId = ref.id
-        }
+        if (args.document_ref != null) documentId = documentIdOf(args.document_ref, 'document_ref')
         const { data: finding, error: findError } = await supabase
           .from('arkiv_findings')
           .select('id, detail')
@@ -1002,10 +1051,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        const ref = args.record_ref === undefined ? null : parseRecordRef(args.record_ref)
-        if (ref && ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
-        const documentId = ref ? ref.id : String(args.document_id ?? '')
-        if (!UUID.test(documentId)) throw invalid('Pass record_ref as document:<uuid>, or document_id as a UUID')
+        const documentId = documentIdFromEither(args)
         const pageNo = Math.max(1, Number(args.page ?? 1))
         const { data: doc, error } = await supabase
           .from('document_attachments')
@@ -1014,7 +1060,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
           .eq('company_id', companyId)
           .maybeSingle()
         if (error) throw dbError(error)
-        if (!doc) throw notFound('Document not found')
+        if (!doc) throw recordNotFound('document', documentId)
         const d = doc as { id: string; file_name: string; storage_path: string; page_count: number | null }
         let { data: page, error: pageError } = await supabase.from('document_pages').select('text').eq('document_id', documentId).eq('page_no', pageNo).maybeSingle()
         if (pageError) throw dbError(pageError)
@@ -1122,15 +1168,13 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        const ref = args.record_ref === undefined ? null : parseRecordRef(args.record_ref)
-        if (ref && ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
-        const documentId = ref ? ref.id : String(args.document_id ?? '')
-        if (!UUID.test(documentId)) throw invalid('Pass record_ref as document:<uuid>, or document_id as a UUID')
+        const documentId = documentIdFromEither(args)
         const from = Math.max(1, Math.floor(Number(args.from_page ?? 1)))
         const to = Math.min(from + 19, Math.max(from, Math.floor(Number(args.to_page ?? from + 19))))
         const { data: doc, error } = await supabase.from('document_attachments').select('id, file_name, doc_type, page_count').eq('id', documentId).eq('company_id', companyId).maybeSingle()
         if (error) throw dbError(error)
-        if (!doc) throw notFound('Document not found')
+        // "Document not found" alone: 12 calls in 14 days (7 companies).
+        if (!doc) throw recordNotFound('document', documentId)
         const d = doc as { id: string; file_name: string; doc_type: string | null; page_count: number | null }
         let unreadable: string | null = null
         const readPages = () => supabase.from('document_pages').select('page_no, text').eq('document_id', documentId).gte('page_no', from).lte('page_no', to).order('page_no', { ascending: true })

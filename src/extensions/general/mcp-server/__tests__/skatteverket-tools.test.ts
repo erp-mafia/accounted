@@ -696,6 +696,28 @@ describe('Skatteverket read tools: a session that is gone', () => {
     const error = toToolError(thrown, { toolName: 'gnubok_agi_status' }).error
     expect(error).toMatchObject({ code: 'SKATTEVERKET_NOT_CONNECTED', retryable: false, remediation: { tool: 'gnubok_connect_skatteverket' } })
     expect(error.message_en).toMatch(/^This read uses your own Skatteverket BankID login/)
+    // Only a person can connect: the refusal also names the read that works
+    // without the login, with the run it was asked about.
+    expect(error.message_en).toContain('Meanwhile: gnubok_get_salary_run with salary_run_id sr-1 needs no connection')
+    expect(tools.some((t) => t.name === 'gnubok_get_salary_run')).toBe(true)
+  })
+
+  // Replays the 281 gnubok_vat_declaration_status refusals of 2026-10-29..
+  // 11-12 (113 companies): 36 in 100 went on to a call that answered whether
+  // the period was filed. Connecting is the user's step, so the refusal now
+  // also names the agent's own next call, and the description says up front
+  // that this is a live read.
+  it('gnubok_vat_declaration_status names the local record that needs no connection', async () => {
+    for (const tokens of [[], [row('user-1')], [row('user-2')]]) {
+      const error = await statusRefusal(tokens)
+      expect(error.code).toBe('SKATTEVERKET_NOT_CONNECTED')
+      expect(error.message_en).toContain('Do not retry until the user confirms.')
+      expect(error.message_en).toContain('Meanwhile: gnubok_list_vat_filings needs no connection')
+      expect(error.message_en).toContain('not what Skatteverket holds')
+    }
+    expect(tools.some((t) => t.name === 'gnubok_list_vat_filings')).toBe(true)
+    expect(vatStatus.description).toContain('needs a Skatteverket connection')
+    expect(vatStatus.description).toContain('gnubok_list_vat_filings')
   })
 })
 

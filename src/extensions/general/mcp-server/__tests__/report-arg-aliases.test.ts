@@ -131,6 +131,16 @@ describe('normalizeReportArgAliases: the names agents sent, 2026-10', () => {
     }
   })
 
+  it('get_measure reads measure as measure_id (2026-11 telemetry: 33 refusals, 18 companies)', () => {
+    expect(map('gnubok_get_measure', { measure: 'bank_balance', as_of_date: '2026-09-30' }).args).toEqual({
+      measure_id: 'bank_balance',
+      as_of_date: '2026-09-30',
+    })
+    expect(map('gnubok_get_measure', { measure: 'vat_payable', measure_id: 'bank_balance' }).conflicts).toEqual([
+      { alias: 'measure', readsAs: ['measure_id'], overlaps: 'measure_id' },
+    ])
+  })
+
   it('load_skill reads name and skill as slug', () => {
     expect(map('gnubok_load_skill', { name: 'month-end-close' }).args).toEqual({ slug: 'month-end-close' })
     expect(map('gnubok_load_skill', { skill: 'horizontal/swedish-vat' }).args).toEqual({ slug: 'horizontal/swedish-vat' })

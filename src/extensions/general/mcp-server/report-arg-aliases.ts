@@ -12,7 +12,7 @@
  * Covered: the report tools (income statement, balance sheet, trial balance,
  * general ledger, KPI report, query_journal) and, from the 2026-10 autopsy
  * of agent sessions, list_verifikat_without_documents, list_accounts,
- * load_skill and get_record.
+ * load_skill and get_record; from the 2026-11 telemetry, get_measure.
  *
  * Deliberately narrow: only read-only tools (a wrong guess can at worst
  * answer the wrong question, never write), only explicit per-tool mappings
@@ -220,6 +220,27 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
   gnubok_get_record: {
     id: { to: ['record_ref'], reads: RECORD_TYPE_KEYS, map: mapRecordId },
   },
+  // `measure` was refused 33 times in 14 days (18 companies, 2026-10-30..
+  // 11-12). An id that names no measure is still refused by the tool.
+  gnubok_get_measure: {
+    measure: { to: ['measure_id'] },
+  },
+}
+
+/**
+ * What a tool's parameter list cannot say: that the question belongs to
+ * another tool. Appended to that tool's unknown-parameter refusal.
+ */
+const UNKNOWN_ARG_NOTES: Readonly<Record<string, string>> = {
+  // 31 calls in 14 days (24 companies) sent a date, a date range or an
+  // account range, and read back only "Valid parameters: period_id, dimensions".
+  gnubok_get_trial_balance:
+    "The trial balance covers one whole fiscal period: period_id from gnubok_list_fiscal_periods, or none for the most recent. For a date or an account range, gnubok_get_general_ledger takes from_date, to_date, account_from and account_to and gives each account's opening and closing balance.",
+}
+
+/** The note for a tool's unknown-parameter refusal, or null. */
+export function unknownArgNote(toolName: string): string | null {
+  return Object.hasOwn(UNKNOWN_ARG_NOTES, toolName) ? UNKNOWN_ARG_NOTES[toolName] : null
 }
 
 export interface AliasConflict {
