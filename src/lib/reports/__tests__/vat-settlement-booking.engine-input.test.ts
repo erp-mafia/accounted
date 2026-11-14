@@ -66,6 +66,7 @@ function proposal(overrides: Partial<VatSettlementProposal>): VatSettlementPropo
     filed_net: 0,
     rounding_amount: 0,
     is_empty: false,
+    partly_settled: false,
     existing_entries: [],
     ...overrides,
   }

@@ -81,6 +81,7 @@ function proposal(overrides: Partial<VatSettlementProposal> = {}): VatSettlement
     filed_net: 2500,
     rounding_amount: 0,
     is_empty: false,
+    partly_settled: false,
     existing_entries: [],
     ...overrides,
   }

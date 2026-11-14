@@ -49,6 +49,7 @@ function makeProposal() {
     filed_net: 1500,
     rounding_amount: 0.25,
     is_empty: false,
+    partly_settled: false,
     existing_entries: [],
   }
 }

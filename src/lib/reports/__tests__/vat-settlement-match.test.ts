@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createFakeLedger, type FakeEntry, type FakeLedgerData } from '@/lib/measures/__tests__/fake-ledger'
-import { buildVatSettlementProposal, vatSettlementBookingStatus } from '../vat-settlement'
+import { balanceLeftToClear, buildVatSettlementProposal, vatSettlementBookingStatus } from '../vat-settlement'
 import { bookVatSettlement } from '../vat-settlement-booking'
 
 vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: vi.fn(async () => ({ locked: false })) }))
@@ -444,5 +444,135 @@ describe('a correction of an older period settled against the skattekonto inside
     expect(proposal.existing_entries).toEqual([])
     expect(proposal.filed_net).toBe(1_900)
     expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({ ok: true })
+  })
+})
+
+describe('a momsredovisning inside the period that cleared only part of it (crm#1855)', () => {
+  // The books carry 600 of input VAT on 2641 into Q3. Q3 adds 70 of its own
+  // and a reverse-charge purchase (2645 against 2614, 500.50). A settlement
+  // that came with an import, dated 31 August, clears all of 2641 (the 600
+  // carried in and Q3's 70) to 1650 and nothing else.
+  const ib = entry('2026-01-01', [{ account_number: '2641', debit: 600 }, { account_number: '1930', credit: 600 }], { source_type: 'opening_balance', description: 'Ingående balans' })
+  const years: FakeLedgerData['fiscalPeriods'] = [
+    { id: 'fp', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null, opening_balance_entry_id: ib.id },
+  ]
+  const purchase = entry('2026-07-02', [{ account_number: '2641', debit: 70 }, { account_number: '1930', credit: 70 }])
+  const reverseCharge = entry('2026-09-15', [{ account_number: '2645', debit: 500.5 }, { account_number: '2614', credit: 500.5 }])
+  const imported = entry('2026-08-31', [{ account_number: '1650', debit: 670 }, { account_number: '2641', credit: 670 }], { description: 'Omföring moms', source_type: 'import' })
+  const q3 = [ib, purchase, reverseCharge]
+
+  it('proposes only what is left on the accounts, never again what the settlement moved', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [...q3, imported], shaped: [imported] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.filed_net).toBe(-70)
+    expect(proposal.partly_settled).toBe(true)
+    // 2641 is at zero in the books: no line for it, and no 1650 line, the 70 is already there.
+    expect(proposal.lines).toEqual([
+      { account_number: '2614', debit_amount: 500.5, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 0, credit_amount: 500.5 },
+    ])
+    expect(proposal.rounding_amount).toBe(0)
+    expect(proposal.is_empty).toBe(false)
+  })
+
+  it('still names the settlement and refuses a second booking (#984)', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: [...q3, imported], shaped: [imported] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([imported.id])
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+    expect(await bookVatSettlement(ctxOf(supabase), { period_type: 'quarterly', year: 2026, period: 3 }, { dryRun: true })).toMatchObject({
+      ok: false,
+      code: 'VAT_SETTLEMENT_ALREADY_BOOKED',
+      details: { journal_entry_id: imported.id },
+    })
+  })
+
+  it('is the full period, unchanged, while no momsredovisning is posted for it, and reads no settlement lines', async () => {
+    const supabase = ledger({ fiscalPeriods: years, entries: q3, shaped: [] })
+    const from = vi.spyOn(supabase, 'from')
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(false)
+    expect(proposal.existing_entries).toEqual([])
+    expect(proposal.lines).toEqual([
+      { account_number: '2614', debit_amount: 500.5, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 0, credit_amount: 70 },
+      { account_number: '2645', debit_amount: 0, credit_amount: 500.5 },
+      { account_number: '1650', debit_amount: 70, credit_amount: 0, line_description: 'Moms att återfå' },
+    ])
+    // The remainder is computed from the posted settlements' lines only: with
+    // none, the lines are never read and the proposal is built as before.
+    expect(from.mock.calls.filter(([table]) => table === 'journal_entry_lines')).toEqual([])
+  })
+
+  it('is the full period, unchanged, when the settlement cleared it in full', async () => {
+    const full = entry('2026-09-30', [
+      { account_number: '2614', debit: 500.5 },
+      { account_number: '1650', debit: 70 },
+      { account_number: '2641', credit: 70 },
+      { account_number: '2645', credit: 500.5 },
+    ], { description: 'Momsredovisning Q3' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [...q3, full], shaped: [full] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(false)
+    expect(proposal.existing_entries.map((e) => e.id)).toEqual([full.id])
+    expect(proposal.lines).toHaveLength(4)
+    expect(proposal.lines).toContainEqual({ account_number: '2641', debit_amount: 0, credit_amount: 70 })
+  })
+
+  it('is the full period, unchanged, when the settlement was booked by the app itself', async () => {
+    const tagged = entry('2026-09-30', [
+      { account_number: '2614', debit: 500.5 },
+      { account_number: '1650', debit: 70 },
+      { account_number: '2641', credit: 70 },
+      { account_number: '2645', credit: 500.5 },
+    ], { description: 'Momsredovisning Kvartal 3 2026', source_type: 'vat_settlement' })
+    const supabase = ledger({ fiscalPeriods: years, entries: [...q3, tagged], shaped: [] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    expect(proposal.partly_settled).toBe(false)
+    expect(proposal.lines).toHaveLength(4)
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+  })
+
+  it('proposes the verifikat added after the period was settled, with the net it adds', async () => {
+    // Settled in full on the last day; a sale dated in Q3 (2611 400.40) is added afterwards.
+    const full = entry('2026-09-30', [
+      { account_number: '2614', debit: 500.5 },
+      { account_number: '1650', debit: 70 },
+      { account_number: '2641', credit: 70 },
+      { account_number: '2645', credit: 500.5 },
+    ], { description: 'Momsredovisning Q3' })
+    const added = entry('2026-09-20', [{ account_number: '1930', debit: 400.4 }, { account_number: '2611', credit: 400.4 }])
+    const supabase = ledger({ fiscalPeriods: years, entries: [...q3, full, added], shaped: [full] })
+    const proposal = await buildVatSettlementProposal(supabase, CO, 'quarterly', 2026, 3)
+    // Ruta 49 is now 330 (400.40 less 70, öre dropped); the settlement moved -70 of it.
+    expect(proposal.filed_net).toBe(330)
+    expect(proposal.partly_settled).toBe(true)
+    expect(proposal.lines).toEqual([
+      { account_number: '2611', debit_amount: 400.4, credit_amount: 0 },
+      { account_number: '2650', debit_amount: 0, credit_amount: 400, line_description: 'Moms att betala' },
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.4, line_description: 'Öres- och kronutjämning' },
+    ])
+    expect(vatSettlementBookingStatus(proposal.existing_entries)).toBe('booked')
+  })
+})
+
+describe('balanceLeftToClear', () => {
+  it('takes what the settlements cleared off the period balance', () => {
+    expect(balanceLeftToClear(1_650, 1_250)).toBe(400)
+    expect(balanceLeftToClear(-400, -150)).toBe(-250)
+  })
+
+  it('leaves nothing, never the other side, when more than the period balance was cleared', () => {
+    expect(balanceLeftToClear(-70, -670)).toBe(0)
+    expect(balanceLeftToClear(300, 380)).toBe(0)
+  })
+
+  it('leaves the period balance when the verifikat moved the account the other way', () => {
+    expect(balanceLeftToClear(300, -80)).toBe(300)
+    expect(balanceLeftToClear(-70, 25)).toBe(-70)
+  })
+
+  it('leaves nothing on an account the period did not touch', () => {
+    expect(balanceLeftToClear(0, 80)).toBe(0)
   })
 })

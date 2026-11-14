@@ -117,6 +117,7 @@ function proposal(overrides: Record<string, unknown> = {}) {
     filed_net: 18749,
     rounding_amount: 0.6,
     is_empty: false,
+    partly_settled: false,
     existing_entries: [],
     ...overrides,
   }
