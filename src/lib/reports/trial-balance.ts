@@ -4,6 +4,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { roundOre } from '@/lib/money'
 import type { EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
+import { findUnlinkedOpeningBalance } from '@/lib/import/opening-balance/unlinked'
 import type { TrialBalanceRow } from '@/types'
 
 /**
@@ -274,11 +275,16 @@ export async function generateTrialBalance(
     )
   }
 
-  // getOpeningBalances always reports the period's opening_balance_entry_id
-  // back as obEntryId (see lib/reports/opening-balances.ts), so the id is
-  // known before that fetch resolves and the activity read below can run in
-  // the same round trip as the opening-balance read.
-  const obEntryId = period?.opening_balance_entry_id ?? null
+  // The IB entry the activity read leaves out is known before the
+  // opening-balance read resolves, so the two can share a round trip: the
+  // period's opening_balance_entry_id, or for a period without one its posted
+  // but unlinked IB verifikat (one small read; see findUnlinkedOpeningBalance).
+  // getOpeningBalances is handed the lookup and reports the same id back.
+  const unlinkedOpeningBalance =
+    period && !period.opening_balance_entry_id
+      ? await findUnlinkedOpeningBalance(supabase, companyId, period.period_start)
+      : null
+  const obEntryId = period?.opening_balance_entry_id ?? unlinkedOpeningBalance?.entryId ?? null
 
   const scope: ActivityScope = {
     supabase,
@@ -294,7 +300,10 @@ export async function generateTrialBalance(
   // Wave 2: opening balances (IB) at period_start and the period activity
   // (roll-forward slice + period sums) are independent reads.
   const [obResult, activity] = await Promise.all([
-    getOpeningBalances(supabase, companyId, period, { dimensions: dimensionFilter }),
+    getOpeningBalances(supabase, companyId, period, {
+      dimensions: dimensionFilter,
+      unlinked: unlinkedOpeningBalance,
+    }),
     fetchActivityViaRpc(scope),
   ])
 

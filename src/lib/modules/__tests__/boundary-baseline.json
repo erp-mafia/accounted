@@ -5,7 +5,7 @@
     "ledger -> bank-feed": 1,
     "ledger -> collections": 2,
     "ledger -> deadlines": 4,
-    "ledger -> import": 7,
+    "ledger -> import": 9,
     "ledger -> inbox": 2,
     "ledger -> parties": 5,
     "ledger -> payroll": 7,
