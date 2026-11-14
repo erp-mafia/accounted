@@ -20,6 +20,8 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
 import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
+import { shouldOfferDiscordInvite } from '@/lib/community/discord-invite'
+import { flagEnabled } from '@/lib/env/public-flags'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
@@ -575,6 +577,17 @@ export default async function DashboardLayout({
   // persists via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
 
+  // One-time Discord invite above the sidebar's user menu. Who sees it
+  // (hosted app only, once per user) is decided here so a dismissed card
+  // never mounts.
+  const showDiscordInvite = shouldOfferDiscordInvite({
+    dismissedAt: uiState.discord_invite_dismissed_at,
+    isSandbox,
+    isAnonymous: user.is_anonymous,
+    onBrandHost: hostBrand != null,
+    selfHosted: flagEnabled(process.env.NEXT_PUBLIC_SELF_HOSTED),
+  })
+
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
     .map((m) => {
@@ -710,6 +723,7 @@ export default async function DashboardLayout({
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
+            showDiscordInvite={showDiscordInvite}
           />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>

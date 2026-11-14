@@ -28,6 +28,7 @@ import { SupportLink } from '@/components/ui/support-link'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import UserMenu from '@/components/dashboard/UserMenu'
 import SubscriptionTouchpoint from '@/components/billing/SubscriptionTouchpoint'
+import DiscordInviteCard from '@/components/community/DiscordInviteCard'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -108,6 +109,9 @@ interface DashboardNavProps {
   // distinct from the active COMPANY shown by CompanySwitcher up top.
   userName?: string | null
   userEmail?: string | null
+  /** One-time Discord invite above the user menu; the layout decides who
+   *  gets it (lib/community/discord-invite.ts). */
+  showDiscordInvite?: boolean
 }
 
 // Cockpit routes are byrå-scope, not company-scope: they decide which
@@ -130,7 +134,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, commitmentsEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, commitmentsEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, showDiscordInvite = false }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const { company, capabilities, byraTeam, role } = useCompany()
@@ -452,6 +456,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
         }
         userBlock={
           <div className="flex-shrink-0">
+            {showDiscordInvite && <DiscordInviteCard />}
             <SubscriptionTouchpoint variant="sidebar" />
             <div className="mx-3 border-t border-border" />
             <div className="px-3 py-2">

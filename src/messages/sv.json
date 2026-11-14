@@ -147,6 +147,12 @@
     "budget": "Budget",
     "bolaget": "Bolaget"
   },
+  "discord_invite": {
+    "title": "Gå med i vår Discord",
+    "body": "Hundratals företagare ställer frågor, delar tips och tycker till om vad vi bygger härnäst.",
+    "join": "Gå med",
+    "close": "Stäng"
+  },
   "trial_expired_dialog": {
     "title": "Vill du fortsätta använda Accounted med alla kopplingar och förmåner?",
     "title_lapsed": "Ditt abonnemang har avslutats",
