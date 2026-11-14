@@ -254,6 +254,46 @@ describe('POST /api/inkorg/items/:id/book', () => {
     expect(body.error.code).toBe('PERIOD_LOCKED')
   })
 
+  it('passes a voucher guard refusal through with the warnings to show, writing nothing more', async () => {
+    const warnings = [{ code: 'REVERSE_CHARGE_ONE_SIDED', message_sv: 'Omvänd moms saknar motrad.', message_en: 'Reverse charge has one side only.', details: {} }]
+    bookDirectMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: { code: 'VOUCHER_NEEDS_CONFIRMATION', message: 'Läs varningarna.', details: { warnings } } }, { status: 409 }),
+    })
+    const token = await tokenFor()
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: unknown[] } } }>(await post({ preview_token: token }))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings).toEqual(warnings)
+    // The first send acknowledges nothing.
+    expect(bookDirectMock.mock.calls[0][2]).not.toHaveProperty('acknowledged_warnings')
+  })
+
+  it('books the same plan past the warnings the person confirmed', async () => {
+    const token = await tokenFor()
+    const { status } = await post({ preview_token: token, transaction_id: TX_ID, acknowledged_warnings: ['REVERSE_CHARGE_ONE_SIDED'] })
+    expect(status).toBe(200)
+    const [, itemId, bookBody] = bookDirectMock.mock.calls[0]
+    expect(itemId).toBe(ITEM_ID)
+    expect(bookBody).toMatchObject({ entry_date: '2026-10-13', transaction_id: TX_ID, acknowledged_warnings: ['REVERSE_CHARGE_ONE_SIDED'] })
+  })
+
+  it('still refuses a stale token when warnings are acknowledged', async () => {
+    const token = await tokenFor()
+    loads({ ...WISPR, category: 'expense.professional_services.consulting' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post({ preview_token: token, acknowledged_warnings: ['REVERSE_CHARGE_ONE_SIDED'] }))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('PREVIEW_STALE')
+    expect(bookDirectMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an acknowledged warning that is not a warning code', async () => {
+    const token = await tokenFor()
+    const { status } = await post({ preview_token: token, acknowledged_warnings: ['NOT_A_WARNING'] })
+    expect(status).toBe(400)
+    expect(bookDirectMock).not.toHaveBeenCalled()
+  })
+
   it('registers an unpaid invoice, creating its supplier from the reading', async () => {
     loads({ ...CONSULTING, bank: null }, { ...ITEM, description: 'Konsult AB', reading: CONSULTING.reading })
     createSupplierMock.mockResolvedValue({ ok: true, data: { id: SUPPLIER_ID }, created: true })

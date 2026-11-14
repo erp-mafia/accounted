@@ -3504,12 +3504,15 @@ export const InboxItemBookingPlanQuerySchema = z.object(OneClickAnswerFields)
 
 /**
  * POST /api/inkorg/items/:id/book: the plan's preview token, the answers it
- * was planned with, and the bank row the page showed.
+ * was planned with, and the bank row the page showed. After a
+ * VOUCHER_NEEDS_CONFIRMATION answer the person read, the same request again
+ * with the codes it showed (AcknowledgedWarningsSchema).
  */
 export const BookInboxItemOneClickSchema = z.object({
   preview_token: z.string().regex(/^pv1\.[A-Za-z0-9_-]{43}$/, 'Not a preview token: send back the preview_token the booking plan answered.'),
   ...OneClickAnswerFields,
   transaction_id: uuid.optional(),
+  acknowledged_warnings: AcknowledgedWarningsSchema,
 })
 
 /** POST /api/inkorg/items/:id/companion: the receipt that came with the invoice :id as one purchase. */

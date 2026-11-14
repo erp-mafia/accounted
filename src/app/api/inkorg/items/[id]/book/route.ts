@@ -19,13 +19,17 @@ import { bookInkorgItem } from '@/lib/operations/inkorg-book'
  *     category, seller_country or editor);
  *   - 409 INBOX_ITEM_PAIR_ALREADY_BOOKED: the other half of the purchase is
  *     booked already;
+ *   - 409 VOUCHER_NEEDS_CONFIRMATION: the plan's lines look wrong
+ *     (details.warnings); nothing written. The person reads them and the
+ *     same body goes again with acknowledged_warnings naming the codes;
  *   - the engine's own refusals as they are (a locked period among them:
  *     the date is never moved, the page opens the editor).
  * Then the form runs through the shared internals: book-direct, the convert
  * door's registration, or register-and-settle. 200 { data: { form,
  * journal_entry_id, voucher, supplier_created, ... } }.
  *
- * Body: { preview_token, purchase_category?, seller_country?, transaction_id? }.
+ * Body: { preview_token, purchase_category?, seller_country?, transaction_id?,
+ * acknowledged_warnings? }.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'inkorg.book',

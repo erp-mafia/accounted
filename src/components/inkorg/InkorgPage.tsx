@@ -53,6 +53,9 @@ import type { InkorgBooked } from '@/lib/operations/inkorg-book'
 import { ToastAction } from '@/components/ui/toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import { voucherWarningsOfRefusal } from '@/lib/bookkeeping/voucher-warnings-refusal'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 /** How long "Klart" stays on a finished item when it did not leave the queue after all. */
 const DONE_MARK_MS = 600
@@ -159,6 +162,9 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   const [booking, setBooking] = useState<ReadonlySet<string>>(() => new Set())
   // A one-click booking refused for its date: that item opens its editor, prefilled.
   const [editorRequest, setEditorRequest] = useState<{ itemId: string; nonce: number } | null>(null)
+  // A one-click booking the voucher guard questions: its warnings, and the booking to send again if the person confirms.
+  const [voucherConfirm, setVoucherConfirm] = useState<{ itemId: string; body: OneClickBooking; warnings: VoucherWarning[] } | null>(null)
+  const [confirmingVoucher, setConfirmingVoucher] = useState(false)
   const queue = useMemo(
     () => queueFor(items, view).filter((item) => !following.has(item.id) && !booking.has(item.id)),
     [items, view, following, booking],
@@ -328,30 +334,39 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     })
   }, [])
 
-  const sendBooking = useCallback(
-    async (id: string) => {
-      const held = heldBookings.current.get(id)
-      if (!held) return
-      heldBookings.current.delete(id)
-      window.clearTimeout(held.timer)
+  // Another item's answer never closes the dialog of the one being confirmed.
+  const closeVoucherConfirm = useCallback((id: string) => setVoucherConfirm((current) => (current?.itemId === id ? null : current)), [])
+
+  const postBooking = useCallback(
+    async (id: string, body: OneClickBooking & { acknowledged_warnings?: string[] }) => {
       const errorLocale = locale === 'en' ? 'en' : 'sv'
       try {
         const res = await fetch(BOOK_URL(id), {
           method: 'POST',
           keepalive: true,
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(held.body),
+          body: JSON.stringify(body),
         })
         const json = (await res.json().catch(() => null)) as { data?: InkorgBooked; error?: { code?: string; details?: { ask?: string } } } | null
         if (!res.ok || !json?.data) {
           notifySessionExpired(res)
-          toast({ title: t('booking_failed'), description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }), variant: 'destructive' })
           // Back in the queue, in focus; a date the books refuse opens its editor.
           release(id)
           setMotionState({ direction: -1, completed: false })
           setFocusId(id)
+          // Lines the voucher guard questions: the warnings the refusal came
+          // with are shown at once, with "Bokför ändå" for the same plan and
+          // "Rätta raderna" for the editor. No toast: the dialog says it.
+          const warnings = voucherWarningsOfRefusal(json)
+          if (warnings) {
+            setVoucherConfirm({ itemId: id, body, warnings })
+            setRevision((r) => r + 1)
+            return
+          }
+          closeVoucherConfirm(id)
+          toast({ title: t('booking_failed'), description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }), variant: 'destructive' })
           const code = json?.error?.code ?? ''
-          // A plan the voucher guard questions opens in the editor too: the
+          // A voucher refusal that names no warnings opens in the editor: the
           // person sees the lines and confirms or corrects them there. So
           // does a booking a block (Spärr) holds: a person books it there.
           if (
@@ -365,6 +380,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
           setRevision((r) => r + 1)
           return
         }
+        closeVoucherConfirm(id)
         const booked = json.data
         if (booked.settled === false) {
           toast({ title: t('booking_registered_not_settled'), description: getErrorMessage({ error: booked.settlement_error }, { locale: errorLocale }), variant: 'destructive' })
@@ -375,12 +391,44 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
         await refresh()
         release(id)
       } catch {
+        closeVoucherConfirm(id)
         toast({ title: t('booking_failed'), variant: 'destructive' })
         release(id)
       }
     },
-    [locale, refresh, release, t, toast],
+    [closeVoucherConfirm, locale, refresh, release, t, toast],
   )
+
+  const sendBooking = useCallback(
+    async (id: string) => {
+      const held = heldBookings.current.get(id)
+      if (!held) return
+      heldBookings.current.delete(id)
+      window.clearTimeout(held.timer)
+      await postBooking(id, held.body)
+    },
+    [postBooking],
+  )
+
+  // "Bokför ändå": the same plan again, with the codes the dialog showed. The
+  // server checks again, so a new warning comes back to the same dialog.
+  const confirmVoucherWarnings = useCallback(async () => {
+    if (!voucherConfirm) return
+    setConfirmingVoucher(true)
+    try {
+      await postBooking(voucherConfirm.itemId, { ...voucherConfirm.body, acknowledged_warnings: voucherConfirm.warnings.map((w) => w.code) })
+    } finally {
+      setConfirmingVoucher(false)
+    }
+  }, [postBooking, voucherConfirm])
+
+  // "Rätta raderna": the item's editor, prefilled.
+  const correctVoucherLines = useCallback(() => {
+    // Not while "Bokför ändå" is on its way: its answer decides what opens.
+    if (!voucherConfirm || confirmingVoucher) return
+    setEditorRequest({ itemId: voucherConfirm.itemId, nonce: Date.now() })
+    setVoucherConfirm(null)
+  }, [voucherConfirm, confirmingVoucher])
   // The held booking's timer and the page's exit read the newest sendBooking (a new refresh).
   const sendBookingRef = useRef(sendBooking)
   useEffect(() => {
@@ -745,6 +793,12 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
 
       <AddMailboxDialog open={addOpen} onOpenChange={setAddOpen} />
       <PayInBankDialog target={payInBank} onClose={() => setPayInBank(null)} />
+      <VoucherWarningsDialog
+        warnings={voucherConfirm?.warnings ?? null}
+        processing={confirmingVoucher}
+        onCancel={correctVoucherLines}
+        onConfirm={() => void confirmVoucherWarnings()}
+      />
     </div>
   )
 }

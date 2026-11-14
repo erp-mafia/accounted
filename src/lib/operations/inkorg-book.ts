@@ -27,7 +27,9 @@
  * (lib/suppliers/create-supplier.ts), after one more identity match so a
  * register is never doubled; the answer says supplier_created. A date in a
  * locked period is not moved: the engine's refusal comes back as is, and
- * the page opens the editor.
+ * the page opens the editor. Lines the voucher guard questions come back as
+ * VOUCHER_NEEDS_CONFIRMATION with details.warnings; the page shows them at
+ * once and books the same plan again with acknowledged_warnings.
  */
 import type { NextResponse } from 'next/server'
 import { CreateSupplierInvoiceSchema, CreateSupplierSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
@@ -70,6 +72,12 @@ export interface InkorgBookRequest extends InkorgBookingAnswers {
   preview_token: string
   /** The bank row the page showed; the plan must still name it. */
   transaction_id?: string
+  /**
+   * The voucher warnings the person confirmed after the first refusal showed
+   * them (lib/bookkeeping/voucher-warnings-guard.ts). Only the direct form
+   * asks; the plan and its token are checked again all the same.
+   */
+  acknowledged_warnings?: string[]
 }
 
 export interface InkorgBooked {
@@ -286,6 +294,7 @@ async function bookInkorgItemOneClick(
         ...(line.description ? { line_description: line.description } : {}),
       })),
       ...(plan.transactionId ? { transaction_id: plan.transactionId } : {}),
+      ...(request.acknowledged_warnings?.length ? { acknowledged_warnings: request.acknowledged_warnings } : {}),
     })
     if (!parsed.success) return refused(editorAfterAll(parsed.error.issues))
     const outcome = await bookInboxItemDirectly(ctx, itemId, parsed.data)
