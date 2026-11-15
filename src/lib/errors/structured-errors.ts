@@ -2022,6 +2022,29 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Personnumret för skattereduktionen är ogiltigt.',
     message_en: 'The personnummer provided for the tax reduction is invalid.',
   },
+  // Konsumentkreditlag (2026:1011), särskild fakturakredit (1 kap. 3 §)
+  INVOICE_CONSUMER_CREDIT_TERMS_TOO_LONG: {
+    httpStatus: 400,
+    message_sv:
+      'En faktura till en privatperson ska förfalla inom 50 dagar från leveransen (konsumentkreditlagen). Välj ett tidigare förfallodatum.',
+    message_en:
+      'An invoice to a private person must fall due within 50 days of delivery (the Swedish Consumer Credit Act). Choose an earlier due date.',
+    remediation: {
+      description:
+        'details.latestDueDate is the last due date allowed, counted from details.countedFrom (the delivery date, else the invoice date). Send a due_date on or before it. Longer terms would make the invoice a regulated consumer credit with a credit assessment, which is not supported.',
+    },
+  },
+  INVOICE_CONSUMER_CREDIT_FEE: {
+    httpStatus: 400,
+    message_sv:
+      'En faktura till en privatperson kan inte ha en fakturaavgift (konsumentkreditlagen). Ta bort raden eller lägg kostnaden i priset.',
+    message_en:
+      'An invoice to a private person cannot carry an invoice fee (the Swedish Consumer Credit Act). Remove the line or include the cost in the price.',
+    remediation: {
+      description:
+        'details.lines names the lines read as a fee for paying by invoice. Remove them. A reminder fee or late-payment interest on an overdue invoice is not affected.',
+    },
+  },
   // Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
   ROT_RUT_REQUEST_NOT_FOUND: {
     httpStatus: 404,

@@ -68,6 +68,7 @@ import {
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { createLogger, type Logger } from '@/lib/logger'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerCreditApplies, consumerInvoiceTerms, isInvoiceFeeLine } from '@/lib/invoices/consumer-credit'
 import {
   firstRunDateOnOrAfter,
   getStockholmDateHour,
@@ -453,7 +454,15 @@ export async function executeRecurringSchedule(
   //    it until 01:00/02:00, so a run at 00:30 on the 1st would date the
   //    invoice, its verifikat and {månad} in the previous month (#58).
   const invoiceDate = todayIsoStockholm(today)
-  const dueDate = invoiceDueDate(invoiceDate, schedule.payment_terms_days)
+  //    A consumer's invoice is due within 50 days and carries no invoice fee
+  //    (konsumentkreditlagen 2026:1011, lib/invoices/consumer-credit).
+  const dueDate = invoiceDueDate(
+    invoiceDate,
+    consumerInvoiceTerms(schedule.payment_terms_days, customer.customer_type, invoiceDate),
+  )
+  if (consumerCreditApplies(customer.customer_type, invoiceDate) && items.some(isInvoiceFeeLine)) {
+    throw new Error('invoice fee line not allowed on an invoice to a private person (konsumentkreditlagen)')
+  }
 
   // Placeholders ({månad}, {år}, {periodstart} ...) resolve against the
   // invoice date and the schedule's current period; month names follow the

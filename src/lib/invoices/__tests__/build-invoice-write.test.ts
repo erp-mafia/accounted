@@ -966,3 +966,66 @@ describe('buildInvoiceWriteData: loan invoice rows on amortization and interest 
     expect(result.details).toEqual({ invalidAccounts: ['8410', '4010'] })
   })
 })
+
+describe('buildInvoiceWriteData konsumentkreditlagen (2026:1011)', () => {
+  const line = { description: 'Trädgårdsarbete', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25 }
+  const header = { ...baseHeader, invoice_date: '2026-12-01' }
+
+  it('refuses an invoice to a private person that falls due later than 50 days', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, makeCustomer({ customer_type: 'individual' }), {
+      ...header,
+      due_date: '2027-01-30',
+      items: [line],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CONSUMER_CREDIT_TERMS_TOO_LONG')
+    expect(result.details).toMatchObject({ latestDueDate: '2027-01-20', countedFrom: '2026-12-01' })
+  })
+
+  it('refuses an invoice fee line on an invoice to a private person', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, makeCustomer({ customer_type: 'individual' }), {
+      ...header,
+      due_date: '2026-12-31',
+      items: [line, { description: 'Fakturaavgift', quantity: 1, unit: 'st', unit_price: 49, vat_rate: 25 }],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CONSUMER_CREDIT_FEE')
+    expect(result.details).toEqual({ lines: ['Fakturaavgift'] })
+  })
+
+  it('lets the same terms and fee through to a business, and a private invoice within 50 days', async () => {
+    const business = createQueuedMockSupabase()
+    business.enqueue({ data: { vat_registered: true }, error: null })
+    const toBusiness = await call(
+      business.enqueue,
+      business.supabase as unknown as SupabaseClient,
+      makeCustomer({ customer_type: 'swedish_business' }),
+      {
+        ...header,
+        due_date: '2027-03-01',
+        items: [line, { description: 'Fakturaavgift', quantity: 1, unit: 'st', unit_price: 49, vat_rate: 25 }],
+      },
+    )
+    expect(toBusiness.ok).toBe(true)
+
+    const consumer = createQueuedMockSupabase()
+    consumer.enqueue({ data: { vat_registered: true }, error: null })
+    const toConsumer = await call(
+      consumer.enqueue,
+      consumer.supabase as unknown as SupabaseClient,
+      makeCustomer({ customer_type: 'individual' }),
+      { ...header, due_date: '2027-01-20', items: [line] },
+    )
+    expect(toConsumer.ok).toBe(true)
+  })
+})

@@ -13,6 +13,7 @@ import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 
@@ -265,7 +266,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // The due date counts the terms from the invoice date itself: a UTC
     // clock lands one day short between midnight and 01:00/02:00 in Sweden.
     const invoiceDate = todayIsoStockholm()
-    const dueDate = invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms))
+    const dueDate = invoiceDueDate(
+      invoiceDate,
+      consumerInvoiceTerms(await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms), customer.customer_type, invoiceDate),
+    )
 
     const input: InvoiceWriteInput = {
       customer_id: customer.id,

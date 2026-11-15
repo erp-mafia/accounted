@@ -39,6 +39,7 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import type { CreateCustomerInput } from '@/types'
+import { CONSUMER_INVOICE_MAX_DAYS } from '@/lib/invoices/consumer-credit'
 
 /**
  * What the register may fill on a Swedish company's org number. No VAT
@@ -112,6 +113,15 @@ export default function CustomerForm({
     invoice_marking: z.string().max(200, t('invoice_marking_too_long')).optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
+    // Konsumentkreditlagen (2026:1011): an invoice to a private person is
+    // due within 50 days, so the card cannot ask for more.
+    if (customer.customer_type === 'individual' && customer.default_payment_terms > CONSUMER_INVOICE_MAX_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['default_payment_terms'],
+        message: t('payment_terms_private_max', { days: CONSUMER_INVOICE_MAX_DAYS }),
+      })
+    }
     // Country vs customer type vs VAT prefix (#2025): an EU customer with
     // land Sverige got reverse charge and nothing objected until the
     // periodisk sammanställning, after the invoice was sent. The API refuses

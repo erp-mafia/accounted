@@ -6,6 +6,7 @@ import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/bu
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 import { loadSalesOrder } from './load'
 import { qtyGreater, roundQty } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
@@ -155,7 +156,10 @@ export async function createInvoiceFromSalesOrder(
   }
 
   const invoiceDate = input.invoice_date ?? todayIsoStockholm()
-  const dueDate = input.due_date || invoiceDueDate(invoiceDate, await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms))
+  const dueDate = input.due_date || invoiceDueDate(
+    invoiceDate,
+    consumerInvoiceTerms(await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms), customer.customer_type, invoiceDate),
+  )
   const deliveryDate = deliveryDateFor(picked)
 
   const pickedById = new Map(picked.map((p) => [p.item.id, p]))
