@@ -74,9 +74,15 @@ describe('v1 route scopes come from the endpoint definitions', () => {
     const endpoints = listEndpoints()
     expect(endpoints.filter((e) => e.scope === undefined).map((e) => e.operation)).toEqual([])
     expect(endpoints.filter((e) => e.scope === null).map((e) => `${e.method} ${e.path}`)).toEqual(['GET /api/v1/health'])
-    expect(endpoints.filter((e) => e.scope === 'authenticated').map((e) => `${e.method} ${e.path}`)).toEqual([
-      'GET /api/v1/api-key',
-    ])
+    // The withdrawal takes no scope because ownership is its gate: only the
+    // key that staged a pending operation can take it back
+    // (lib/pending-operations/withdraw.ts).
+    expect(
+      endpoints
+        .filter((e) => e.scope === 'authenticated')
+        .map((e) => `${e.method} ${e.path}`)
+        .sort(),
+    ).toEqual(['GET /api/v1/api-key', 'POST /api/v1/companies/:companyId/pending-operations/:id/withdraw'])
   })
 
   it.each([

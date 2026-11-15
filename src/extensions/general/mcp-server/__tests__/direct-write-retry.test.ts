@@ -59,6 +59,8 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
     'Sets the decision with a compare-and-set on the current quote_status: a repeat writes the same status and keeps quote_decided_at.',
   gnubok_set_inbox_extracted_data: 'Overwrites the inbox item\'s extracted fields: a repeat writes the same values.',
   gnubok_resolve_missing: 'Closes one open finding: a repeat finds it closed and changes nothing.',
+  gnubok_withdraw_pending_operation:
+    'A compare-and-set on status pending: a repeat finds the operation withdrawn, answers already_withdrawn and writes nothing.',
 }
 
 const isDirectWrite = (tool: McpTool) => tool.annotations.readOnlyHint !== true && !isStagingTool(tool)

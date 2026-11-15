@@ -384,6 +384,8 @@ export const V1_DOORS: Readonly<Record<string, DoorSpec | OutsideDoor>> = Object
   'POST /api/v1/companies': OUTSIDE.newCompany,
   [`POST ${V1}/pending-operations/:id/approve`]: OUTSIDE.approval,
   [`POST ${V1}/pending-operations/:id/reject`]: OUTSIDE.approval,
+  // Settles a staged operation too, decided per operation: by who staged it.
+  [`POST ${V1}/pending-operations/:id/withdraw`]: OUTSIDE.approval,
   [`POST ${V1}/assets`]: BOOK_RECORD,
   [`PATCH ${V1}/assets/:id`]: BOOK_RECORD,
   [`DELETE ${V1}/assets/:id`]: BOOK_RECORD,

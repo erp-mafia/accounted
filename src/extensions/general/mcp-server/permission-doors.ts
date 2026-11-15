@@ -46,6 +46,8 @@ export const MCP_TOOL_DOORS: Readonly<Record<string, DoorSpec | OutsideDoor>> = 
   gnubok_approve_pending_operation: OUTSIDE.approval,
   gnubok_approve_from_view: OUTSIDE.approval,
   gnubok_reject_pending_operation: OUTSIDE.approval,
+  // Settles a staged operation too, decided per operation: by who staged it.
+  gnubok_withdraw_pending_operation: OUTSIDE.approval,
   // A new company, which the person will own: no membership exists yet.
   gnubok_create_company: OUTSIDE.newCompany,
   // Feedback to the product team: anyone who reads the books may send it.

@@ -44,6 +44,12 @@ export interface RejectPendingOperationsInput {
   actor: RejectActor
   /** The door: the dashboard, the MCP tool, or the v1 REST endpoint. */
   channel: 'app' | 'mcp' | 'api'
+  /**
+   * The stager took its own proposal back (./withdraw.ts): recorded in
+   * result_data and in the audit row, so a withdrawal is told apart from a
+   * rejection somebody else made.
+   */
+  withdrawn?: boolean
 }
 
 export type RejectOutcome =
@@ -68,6 +74,7 @@ export async function rejectPendingOperations(
   input: RejectPendingOperationsInput,
 ): Promise<RejectPendingOperationsResult> {
   const { companyId, ids, category, actor, channel } = input
+  const withdrawn = input.withdrawn === true
   const reason = input.reason?.trim() || undefined
 
   // A malformed id fails this read with 22P02 (code kept, so a door can
@@ -98,6 +105,7 @@ export async function rejectPendingOperations(
           rejected_via: actor.type,
           ...(actor.id ? { actor_id: actor.id } : {}),
           ...(reason ? { reason } : {}),
+          ...(withdrawn ? { withdrawn: true } : {}),
         },
       })
       .in('id', pendingIds)
@@ -127,6 +135,7 @@ export async function rejectPendingOperations(
             risk_level: row.risk_level,
             channel,
             has_reason: reason !== undefined,
+            ...(withdrawn ? { withdrawn: true } : {}),
           },
           actor: {
             // A key records its own kind: a service account's key as

@@ -138,6 +138,7 @@ export const V1_HANDLE_COVERAGE: Readonly<Record<string, HandleDeclaration>> = O
   'pending-operations.get': POP,
   'pending-operations.approve': POP,
   'pending-operations.reject': POP,
+  'pending-operations.withdraw': POP,
 
   // Parties
   'customers.list': CUS,

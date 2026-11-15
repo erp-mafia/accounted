@@ -41,13 +41,22 @@ describe('MCP tool inputSchema strictness', () => {
     // scope of its own, provided every tool it can carry has one, which the
     // next test requires with no allowlist to hide behind.
     const dispatcherRewrittenBridges = new Set(['gnubok_stage_tool'])
+    // A third category: a write whose gate is ownership, not a scope. It can
+    // only close a pending operation the calling key staged itself
+    // (lib/pending-operations/withdraw.ts refuses every other row), and the
+    // key passed the role guard under its write scope when it staged. A role
+    // lowered since then must not keep the agent from taking its own
+    // proposal out of the queue, and no single scope fits (the invoicer's
+    // agent staged under invoices:write, the bookkeeper's under another).
+    const ownershipGatedWrites = new Set(['gnubok_withdraw_pending_operation'])
     const missing = tools
       .filter(
         (tool) =>
           tool.annotations.readOnlyHint !== true &&
           !isTenantWriteScope(TOOL_SCOPE_MAP[tool.name]) &&
           !allowedNonTenantWrites.has(tool.name) &&
-          !dispatcherRewrittenBridges.has(tool.name)
+          !dispatcherRewrittenBridges.has(tool.name) &&
+          !ownershipGatedWrites.has(tool.name)
       )
       .map((tool) => tool.name)
 

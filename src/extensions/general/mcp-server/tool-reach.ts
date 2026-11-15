@@ -89,6 +89,10 @@ export const SEARCH_ONLY_READ_NOTE = 'not in tools/list: invoke it through gnubo
 export const SEARCH_ONLY_STAGED_NOTE =
   'not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation'
 
+/** Reach note for the search-only withdrawal of the caller's own staged operation. */
+export const SEARCH_ONLY_WITHDRAW_NOTE =
+  'not in tools/list: invoke it through gnubok_stage_tool (gnubok_call_tool if your client lacks it). It withdraws at once; no approval follows'
+
 /**
  * What a refresh or reconnect does NOT do on its own: a chat that is already
  * running keeps the tool list it started with. A ChatGPT connector added

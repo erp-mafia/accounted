@@ -19,6 +19,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_approve_pending_operation',
     'gnubok_approve_from_view',
     'gnubok_reject_pending_operation',
+    'gnubok_withdraw_pending_operation',
     'gnubok_list_pending_operations',
     'gnubok_get_task',
     'gnubok_call_tool',
