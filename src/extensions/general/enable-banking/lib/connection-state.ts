@@ -45,9 +45,20 @@ const DAY_MS = 24 * 60 * 60 * 1000
  */
 export type SunsetPath = 'switch' | 'import'
 
+/**
+ * Why the company's syncs are paused: it holds no bank_sync capability, so
+ * the sync cron skips every connection and "Synka" and a renewed consent are
+ * refused (requireCapability). Hosted, that is a subscription the company
+ * lacks (a trial that ended); self-hosted, the connector key. The same rule
+ * the transactions page's chip reads (lib/transactions/bank-sync-chip-state.ts
+ * 'paused'), so the two pages say the same thing.
+ */
+export type SyncPauseReason = 'subscription' | 'connector_key'
+
 /** Presentation state, from most to least urgent (see STATE_PRECEDENCE). */
 export type ConnectionUiState =
   | 'sunset'
+  | 'paused'
   | 'pending_selection'
   | 'pending'
   | 'abandoned'
@@ -78,6 +89,11 @@ export interface ConnectionStateInput {
    *  expiring, a sync that is stale or a stored error no longer matter when
    *  the provider is gone. An in-flight 'pending' attempt keeps its own UI. */
   sunset?: SunsetPath | null
+  /** The company's syncs are paused (SyncPauseReason). Outranks every state
+   *  but sunset: an expiring consent, a stale sync or a stored error cannot be
+   *  acted on until the capability is back, and "Synka" would only be
+   *  refused. An in-flight 'pending' attempt keeps its own UI. */
+  paused?: SyncPauseReason | null
 }
 
 export function getConnectionUiState(
@@ -85,6 +101,7 @@ export function getConnectionUiState(
   now: number = Date.now(),
 ): ConnectionUiState {
   if (connection.sunset && connection.status !== 'pending') return 'sunset'
+  if (connection.paused && connection.status !== 'pending') return 'paused'
   switch (connection.status) {
     case 'pending_selection':
       return 'pending_selection'
@@ -175,16 +192,17 @@ export function nextScheduledSyncFrom(
  *  the user first sits first. */
 const STATE_PRECEDENCE: Record<ConnectionUiState, number> = {
   sunset: 0,
-  pending_selection: 1,
-  pending: 2,
-  abandoned: 3,
-  error: 4,
-  needs_configuration: 5,
-  expired: 6,
-  expiring: 7,
-  stale: 8,
-  never_synced: 9,
-  active: 10,
+  paused: 1,
+  pending_selection: 2,
+  pending: 3,
+  abandoned: 4,
+  error: 5,
+  needs_configuration: 6,
+  expired: 7,
+  expiring: 8,
+  stale: 9,
+  never_synced: 10,
+  active: 11,
 }
 
 export function sortConnectionsByPrecedence<
@@ -204,6 +222,7 @@ export function sortConnectionsByPrecedence<
  *  attention is ONE ochre sentence per page). Worst first. */
 export type PageAttentionState =
   | 'sunset'
+  | 'paused'
   | 'error'
   | 'needs_configuration'
   | 'abandoned'
@@ -214,6 +233,7 @@ export type PageAttentionState =
 
 const ATTENTION_PRECEDENCE: PageAttentionState[] = [
   'sunset',
+  'paused',
   'error',
   'needs_configuration',
   'abandoned',
@@ -255,6 +275,12 @@ export function buildPageAttentionSentence(
       return attention.connection.sunset === 'import'
         ? `${bank}: den gamla bankkopplingen har upphört, och banken nås inte än genom den nya leverantören. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.`
         : `${bank}: den gamla bankkopplingen har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.`
+    case 'paused':
+      // The cron skips the company and "Synka" is refused, so the only way on
+      // is the capability: never "kör Synka", which reads as a broken bank.
+      return attention.connection.paused === 'connector_key'
+        ? `${bank}: synkningen är pausad eftersom connector-nyckeln saknas. Lägg in nyckeln för att hämta transaktioner igen.`
+        : `${bank}: synkningen är pausad eftersom abonnemanget saknas. Uppgradera för att hämta transaktioner igen.`
     case 'error':
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
     case 'needs_configuration':

@@ -15,7 +15,7 @@ import {
 import { cn, formatDate } from '@/lib/utils'
 import { ChevronRightIcon, EllipsisHorizontalIcon, SpinnerIcon } from '@/components/icons'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
-import { getConnectionUiState, offersAccountChoice, type SunsetPath } from '../lib/connection-state'
+import { getConnectionUiState, offersAccountChoice, type SunsetPath, type SyncPauseReason } from '../lib/connection-state'
 import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 
@@ -33,6 +33,10 @@ interface BankConnectionStatusProps {
    *  SunsetPath): 'switch' offers the switch to the new connection, 'import'
    *  the bank file import. Null while the feed runs. */
   sunset?: SunsetPath | null
+  /** The company's syncs are paused (lib/connection-state.ts SyncPauseReason):
+   *  no bank_sync capability, so the row offers the way back instead of a
+   *  Synka the server would refuse. Null while syncs run. */
+  paused?: SyncPauseReason | null
 }
 
 /**
@@ -54,11 +58,12 @@ export function BankConnectionStatus({
   onRetry,
   isSyncing = false,
   sunset = null,
+  paused = null,
 }: BankConnectionStatusProps) {
   const [now] = useState(() => Date.now())
   const [detailsOpen, setDetailsOpen] = useState(false)
 
-  const uiState = getConnectionUiState({ ...connection, sunset }, now)
+  const uiState = getConnectionUiState({ ...connection, sunset, paused }, now)
 
   // Parse accounts from connection
   const accounts = (connection.accounts_data as Array<{
@@ -151,6 +156,8 @@ export function BankConnectionStatus({
     switch (uiState) {
       case 'sunset':
         return { kind: 'badge', label: 'Upphört', variant: 'destructive' }
+      case 'paused':
+        return { kind: 'badge', label: 'Pausad', variant: 'warning' }
       case 'pending_selection':
         return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
       case 'error':
@@ -168,9 +175,11 @@ export function BankConnectionStatus({
 
   const isExpired = uiState === 'expired'
   const isSunset = uiState === 'sunset'
-  // The old provider is gone: nothing to sync, no consent worth renewing.
-  const canReconnect = !!onReconnect && !isSunset
-  const canSync = (connection.status === 'active' || connection.status === 'error') && !isSunset
+  const isPaused = uiState === 'paused'
+  // The old provider is gone, or the company's syncs are paused: nothing to
+  // sync and no consent worth renewing (the server refuses both while paused).
+  const canReconnect = !!onReconnect && !isSunset && !isPaused
+  const canSync = (connection.status === 'active' || connection.status === 'error') && !isSunset && !isPaused
 
   // Exactly ONE primary action per state; everything else goes in the menu.
   function renderPrimaryAction() {
@@ -188,6 +197,14 @@ export function BankConnectionStatus({
             <Link href={switchDeepLink(connection.id)}>Byt till ny koppling</Link>
           </Button>
         )
+      case 'paused':
+        // Hosted, the subscription brings the feed back; self-hosted, the
+        // connector key, which the page's sentence names.
+        return paused === 'subscription' ? (
+          <Button size="sm" asChild>
+            <Link href="/settings/billing">Uppgradera</Link>
+          </Button>
+        ) : null
       case 'pending_selection':
       case 'needs_configuration':
         return onManageAccounts ? (

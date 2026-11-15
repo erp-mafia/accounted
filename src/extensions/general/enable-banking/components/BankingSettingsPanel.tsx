@@ -43,9 +43,11 @@ import {
   selectPageAttention,
   sortConnectionsByPrecedence,
   type SunsetPath,
+  type SyncPauseReason,
 } from '../lib/connection-state'
 import { sameBankWarning } from '../lib/connection-warning'
 import { hasSelectableAccounts } from '../lib/claimed-accounts'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -136,6 +138,10 @@ export default function BankingSettingsPanel() {
   const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && switchCampaign.progress.company)
   const sunsetFor = (connection: { bank_name: string | null }): SunsetPath | null =>
     sunsetActive ? (bankCoveredByOpenPayments(connection.bank_name) ? 'switch' : 'import') : null
+  // No bank_sync capability (a trial that ended, no subscription; self-hosted,
+  // no connector key): the sync cron skips the company and Synka is refused,
+  // so every row and the page's sentence say why instead of "kör Synka".
+  const syncPause: SyncPauseReason | null = hasBankSync ? null : isSelfHosted() ? 'connector_key' : 'subscription'
 
   // Where Open Payments reads the company's bank, a new connection goes
   // through its Koppla bank (crm#1363): this list then offers only the banks
@@ -806,7 +812,9 @@ export default function BankingSettingsPanel() {
   // Revoked rows stay hidden, exactly as before.
   const stateNow = Date.now()
   const visibleConnections = sortConnectionsByPrecedence(
-    bankConnections.filter((c) => c.status !== 'revoked').map((c) => ({ ...c, sunset: sunsetFor(c) })),
+    bankConnections
+      .filter((c) => c.status !== 'revoked')
+      .map((c) => ({ ...c, sunset: sunsetFor(c), paused: syncPause })),
     stateNow,
   )
   const hasVisibleConnections = visibleConnections.length > 0
@@ -946,6 +954,7 @@ export default function BankingSettingsPanel() {
               key={connection.id}
               connection={connection}
               sunset={connection.sunset}
+              paused={connection.paused}
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}
