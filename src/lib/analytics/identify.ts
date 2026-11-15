@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { initAnalytics } from './client'
+import { analyticsReady, initAnalytics } from './client'
 import {
   buildGroupProperties,
   buildPersonProperties,
@@ -47,11 +46,19 @@ export function identifySignedInPerson(input: SignedInAnalyticsInput): boolean {
   if (!initAnalytics()) return false
 
   const { user, identityHash, company } = input
-  if (identityHash) posthog.setIdentity(user.userId, identityHash)
-  posthog.identify(user.userId, buildPersonProperties(user))
+  // Queued behind posthog.init: the SDK loads after the page (client.ts).
+  void analyticsReady().then((posthog) => {
+    if (!posthog) return
+    try {
+      if (identityHash) posthog.setIdentity(user.userId, identityHash)
+      posthog.identify(user.userId, buildPersonProperties(user))
 
-  if (company?.id && company.name) {
-    posthog.group('company', company.id, buildGroupProperties(company))
-  }
+      if (company?.id && company.name) {
+        posthog.group('company', company.id, buildGroupProperties(company))
+      }
+    } catch {
+      // Telemetry must never break the page that identified the person.
+    }
+  })
   return true
 }

@@ -22,7 +22,21 @@ vi.mock('posthog-js', () => ({
 let consented = true
 vi.mock('@/lib/analytics/client', async () => {
   const { isAnalyticsEnabled } = await import('@/lib/analytics/enabled')
-  return { isAnalyticsActive: () => consented && isAnalyticsEnabled() }
+  const { default: sdk } = await import('posthog-js')
+  const active = () => consented && isAnalyticsEnabled()
+  return {
+    isAnalyticsActive: active,
+    loadedAnalytics: () => (active() ? sdk : null),
+    // As client.ts: only when analytics runs, and never throws into the caller.
+    captureAnalyticsEvent: (event: string, properties?: Record<string, unknown>) => {
+      if (!active()) return
+      try {
+        sdk.capture(event, properties)
+      } catch {
+        // The real helper swallows a throwing SDK the same way.
+      }
+    },
+  }
 })
 
 describe('submitFeedback', () => {

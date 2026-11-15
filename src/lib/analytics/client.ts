@@ -1,4 +1,4 @@
-import posthog from 'posthog-js'
+import type { PostHog } from 'posthog-js'
 import { drainEarlyErrors } from './early-errors'
 import { isAnalyticsEnabled } from './enabled'
 import { replayMaskText } from './replay-masking'
@@ -16,9 +16,12 @@ import { replayMaskText } from './replay-masking'
  *
  * identifySignedInPerson() (lib/analytics/identify.ts, from AnalyticsIdentify
  * in the dashboard and onboarding layouts) calls initAnalytics() right before
- * identify. Every other browser caller asks isAnalyticsActive(), which is
- * false until then, so a capture before the start is a no-op instead of
- * PostHog's "initialize first" console error.
+ * identify. isAnalyticsActive() is true from that call, but the SDK arrives
+ * later (choice 5 below), so nothing calls the SDK directly: a capture goes
+ * through captureAnalyticsEvent(), other work through analyticsReady() or
+ * loadedAnalytics(). An SDK called before posthog.init drops the call with
+ * an "initialize first" console error. scripts/checks/one-definition/
+ * posthog-sdk-import.mjs keeps every other module from importing it.
  *
  * Choices that are deliberate and worth not "fixing":
  *
@@ -56,6 +59,18 @@ import { replayMaskText } from './replay-masking'
  *    (lib/support/submit-feedback.ts), which turns it into the same ticket.
  *    A message the person writes to us is a service they asked for; it never
  *    needed the analytics SDK, so the SDK is not started for it.
+ *
+ * 5. The SDK is loaded when analytics starts, not with the page. It is about
+ *    62 kB compressed (222 kB of script), and it sat in the first load of
+ *    every page, the login page and every page of a person who switched
+ *    analytics off included (scripts/perf/README.md, "Page budgets"). Now
+ *    initAnalytics() marks analytics as started at once and fetches the SDK
+ *    in the background; everything that talks to PostHog goes through
+ *    analyticsReady() or loadedAnalytics() below, so an event captured
+ *    while the SDK loads waits behind posthog.init instead of being lost.
+ *    A person who never consents never downloads it, once no other module
+ *    imports it (the one-definition rule above lists the one that still
+ *    does).
  */
 
 /**
@@ -81,6 +96,18 @@ function tracingHosts(): string[] {
 }
 
 let started = false
+// Set by stopAnalytics(): an SDK still loading when consent is withdrawn is
+// never initialised.
+let stopped = false
+// The started SDK: settles once it has loaded and posthog.init has run, and
+// resolves null when it could not load (blocked, offline) or consent was
+// withdrawn first. Set by the first initAnalytics() of the tab.
+let ready: Promise<PostHog | null> | null = null
+// The same SDK once ready has settled with it, for the synchronous readers.
+let loaded: PostHog | null = null
+// The SDK could not load or start: analytics stays silent for this page
+// load, and Support stops waiting for it (lib/support/conversations.ts).
+let failed = false
 
 /**
  * Start PostHog in this browser. Call only for a signed-in person who has not
@@ -90,35 +117,105 @@ export function initAnalytics(): boolean {
   if (typeof window === 'undefined') return false
   if (started) return true
   if (!isAnalyticsEnabled()) return false
-  posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
-    api_host: '/rl',
-    ui_host: 'https://eu.posthog.com',
-    defaults: '2026-05-30',
-    // Only create person profiles for users we actually identify.
-    person_profiles: 'identified_only',
-    persistence: 'memory',
-    capture_exceptions: true,
-    // Masks these query parameters in $current_url and the initial-URL person
-    // properties: a sole trader's org number is the owner's personnummer
-    // (#58). The flag also masks ad click ids (gclid, fbclid, ...).
-    mask_personal_data_properties: true,
-    custom_personal_data_properties: ['org_number', 'personnummer', 'personal_number'],
-    tracing_headers: tracingHosts(),
-    session_recording: {
-      maskAllInputs: true,
-      maskTextSelector: '*',
-      maskTextFn: replayMaskText,
-    },
-    debug: process.env.NODE_ENV === 'development',
-  })
   started = true
-  // Errors this page raised before the start, hydration mismatches above
-  // all, which happen before AnalyticsIdentify's effect can run
-  // (lib/analytics/early-errors.ts).
-  for (const error of drainEarlyErrors(window.location.pathname)) {
-    posthog.captureException(error, { before_analytics_start: true })
-  }
+  // The page the errors held before the start belong to (early-errors.ts),
+  // read now: a client-side navigation may move on while the SDK loads.
+  const pathname = window.location.pathname
+  ready = import('posthog-js').then(
+    ({ default: posthog }) => {
+      if (stopped) return null
+      try {
+        posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
+          api_host: '/rl',
+          ui_host: 'https://eu.posthog.com',
+          defaults: '2026-05-30',
+          // Only create person profiles for users we actually identify.
+          person_profiles: 'identified_only',
+          persistence: 'memory',
+          capture_exceptions: true,
+          // Masks these query parameters in $current_url and the initial-URL person
+          // properties: a sole trader's org number is the owner's personnummer
+          // (#58). The flag also masks ad click ids (gclid, fbclid, ...).
+          mask_personal_data_properties: true,
+          custom_personal_data_properties: ['org_number', 'personnummer', 'personal_number'],
+          tracing_headers: tracingHosts(),
+          session_recording: {
+            maskAllInputs: true,
+            maskTextSelector: '*',
+            maskTextFn: replayMaskText,
+          },
+          debug: process.env.NODE_ENV === 'development',
+        })
+      } catch {
+        // An SDK that throws in init is treated as one that did not load:
+        // nothing is sent through it for the rest of this page load.
+        failed = true
+        return null
+      }
+      try {
+        // Errors this page raised before the start, hydration mismatches above
+        // all, which happen before AnalyticsIdentify's effect can run
+        // (lib/analytics/early-errors.ts).
+        for (const error of drainEarlyErrors(pathname)) {
+          posthog.captureException(error, { before_analytics_start: true })
+        }
+      } catch {
+        // The held errors are a best-effort report; the started SDK still
+        // takes the identify and the events queued behind it.
+      }
+      // Set last: a synchronous reader sees the SDK only once it has started.
+      loaded = posthog
+      return posthog
+    },
+    () => {
+      // The SDK did not load (an ad blocker, a dropped connection): analytics
+      // stays silent for this page load, as it does without consent.
+      failed = true
+      return null
+    },
+  )
   return true
+}
+
+/**
+ * The started SDK, once it has loaded; null while it loads, when it could not
+ * load, and whenever analytics does not run in this browser. For the
+ * synchronous readers (is Support available, which ticket is current).
+ */
+export function loadedAnalytics(): PostHog | null {
+  return isAnalyticsActive() ? loaded : null
+}
+
+/**
+ * True once the SDK has failed to load or to start in this page load: the
+ * readers that wait for it (Support) can stop waiting.
+ */
+export function analyticsLoadFailed(): boolean {
+  return failed
+}
+
+/**
+ * Resolves with the started SDK once it has loaded and posthog.init has run,
+ * or null when analytics does not run in this browser or the SDK could not
+ * load. Work queued on it runs in the order it was queued, after init.
+ */
+export function analyticsReady(): Promise<PostHog | null> {
+  return isAnalyticsActive() && ready ? ready : Promise.resolve(null)
+}
+
+/**
+ * Capture one product event when analytics runs, after the SDK has loaded.
+ * Never throws and never affects the caller.
+ */
+export function captureAnalyticsEvent(event: string, properties?: Record<string, unknown>): void {
+  if (!isAnalyticsActive()) return
+  void analyticsReady().then((posthog) => {
+    try {
+      posthog?.capture(event, properties)
+    } catch {
+      // Telemetry must never affect the flow that reported it.
+    }
+  })
 }
 
 /**
@@ -129,9 +226,11 @@ export function initAnalytics(): boolean {
  */
 export function stopAnalytics(): void {
   if (!started) return
+  stopped = true
+  if (!loaded) return
   try {
-    posthog.stopSessionRecording()
-    posthog.reset()
+    loaded.stopSessionRecording()
+    loaded.reset()
   } catch {
     // best-effort: the reload that follows ends it either way
   }

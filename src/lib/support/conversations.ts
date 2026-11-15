@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { analyticsLoadFailed, analyticsReady, isAnalyticsActive, loadedAnalytics } from '@/lib/analytics/client'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 
 /**
@@ -140,7 +139,10 @@ export function splitByStatus(tickets: TicketSummary[]): { open: TicketSummary[]
 }
 
 export function conversationsAvailable(): boolean {
-  if (!isAnalyticsActive()) return false
+  // Null while the SDK loads after the page (lib/analytics/client.ts):
+  // whenConversationsReady() below waits for it like for the remote config.
+  const posthog = loadedAnalytics()
+  if (!posthog) return false
   try {
     return Boolean(posthog.conversations?.isAvailable?.())
   } catch {
@@ -164,6 +166,11 @@ const READY_POLL_MS = 100
  * without PostHog, after START_GRACE_MS when PostHog has not started in this
  * browser (analytics switched off), and after READY_TIMEOUT_MS when Support
  * never comes up; the dialog then falls back to the mail form as before.
+ *
+ * The SDK itself loads after the page (lib/analytics/client.ts), so the
+ * READY_TIMEOUT_MS for Support counts from when it has loaded: a slow
+ * download must not eat the time the remote config and the conversations
+ * bundle need. A failed load answers false at once, as no PostHog does.
  */
 export async function whenConversationsReady({
   timeoutMs = READY_TIMEOUT_MS,
@@ -173,18 +180,27 @@ export async function whenConversationsReady({
   if (conversationsAvailable()) return true
   if (!isAnalyticsEnabled()) return false
   const startedAt = Date.now()
+  // When the Support timeout starts: at the call, and again once the SDK has
+  // loaded, so its download does not count against Support.
+  let clockFrom = startedAt
+  let sdkLoaded = loadedAnalytics() !== null
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, pollMs))
     if (conversationsAvailable()) return true
-    const waited = Date.now() - startedAt
-    if (waited >= timeoutMs) return false
-    if (!isAnalyticsActive() && waited >= startGraceMs) return false
+    if (analyticsLoadFailed()) return false
+    const now = Date.now()
+    if (!sdkLoaded && loadedAnalytics() !== null) {
+      sdkLoaded = true
+      clockFrom = now
+    }
+    if (now - clockFrom >= timeoutMs) return false
+    if (!isAnalyticsActive() && now - startedAt >= startGraceMs) return false
   }
 }
 
 export function currentTicketId(): string | null {
   try {
-    return posthog.conversations?.getCurrentTicketId?.() ?? null
+    return loadedAnalytics()?.conversations?.getCurrentTicketId?.() ?? null
   } catch {
     return null
   }
@@ -192,6 +208,8 @@ export function currentTicketId(): string | null {
 
 export async function listTickets(): Promise<TicketSummary[]> {
   try {
+    const posthog = await analyticsReady()
+    if (!posthog) return []
     const res = await posthog.conversations.getTickets({ limit: 20 })
     return (res?.results ?? []).map((t) => toSummary(t as RawTicket))
   } catch {
@@ -205,6 +223,8 @@ export async function listTickets(): Promise<TicketSummary[]> {
  */
 export async function loadThread(ticketId: string): Promise<Thread | null> {
   try {
+    const posthog = await analyticsReady()
+    if (!posthog) return null
     const res = await posthog.conversations.getMessages(ticketId)
     if (!res) return null
     return {
@@ -230,6 +250,8 @@ export async function loadThread(ticketId: string): Promise<Thread | null> {
  */
 export async function replyInThread(ticketId: string, text: string): Promise<{ ticketId: string } | null> {
   try {
+    const posthog = await analyticsReady()
+    if (!posthog) return null
     if (currentTicketId() !== ticketId) await posthog.conversations.getMessages(ticketId).catch(() => null)
     if (currentTicketId() !== ticketId) return null
     const res = await posthog.conversations.sendMessage(text)
@@ -241,6 +263,8 @@ export async function replyInThread(ticketId: string, text: string): Promise<{ t
 
 export async function startThread(text: string): Promise<{ ticketId: string } | null> {
   try {
+    const posthog = await analyticsReady()
+    if (!posthog) return null
     const res = await posthog.conversations.sendMessage(text, undefined, true)
     return res ? { ticketId: res.ticket_id } : null
   } catch {
@@ -250,6 +274,8 @@ export async function startThread(text: string): Promise<{ ticketId: string } | 
 
 export async function markThreadRead(ticketId: string): Promise<void> {
   try {
+    const posthog = await analyticsReady()
+    if (!posthog) return
     await posthog.conversations.markAsRead(ticketId)
   } catch {
     // Unread state is a convenience; losing it must not surface.

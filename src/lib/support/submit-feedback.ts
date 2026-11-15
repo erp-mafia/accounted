@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent, isAnalyticsActive, loadedAnalytics } from '@/lib/analytics/client'
 
 export interface SubmitFeedbackInput {
   message: string
@@ -123,22 +122,18 @@ function noteInAnalytics(
   { subject }: SubmitFeedbackInput,
   outcomes: { email: 'ok' | 'failed' | 'skipped'; ticket: ChannelOutcome | 'skipped' }
 ): void {
-  if (!isAnalyticsActive()) return
-  try {
-    const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
-    posthog.capture('support_feedback_submitted', {
-      subject: subject ?? null,
-      // Kept for continuity: existing insights filter on `delivered`.
-      delivered,
-      email: outcomes.email,
-      ticket: outcomes.ticket,
-      // True only when the user's message reached neither channel. This is the
-      // one that deserves an alert.
-      lost: !delivered,
-    })
-  } catch {
-    // Telemetry must never affect whether the user's message went out.
-  }
+  const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
+  // Never throws: telemetry must never affect whether the user's message went out.
+  captureAnalyticsEvent('support_feedback_submitted', {
+    subject: subject ?? null,
+    // Kept for continuity: existing insights filter on `delivered`.
+    delivered,
+    email: outcomes.email,
+    ticket: outcomes.ticket,
+    // True only when the user's message reached neither channel. This is the
+    // one that deserves an alert.
+    lost: !delivered,
+  })
 }
 
 /**
@@ -155,7 +150,9 @@ function noteInAnalytics(
 async function submitViaTicket({ message, subject, newTicket }: SubmitFeedbackInput): Promise<ChannelOutcome> {
   if (!isAnalyticsActive()) return 'unavailable'
   try {
-    const conversations = posthog.conversations
+    // Not loaded yet reads as unavailable, as a Support still starting up
+    // always has: the mail goes out instead.
+    const conversations = loadedAnalytics()?.conversations
     if (!conversations?.isAvailable?.()) return 'unavailable'
     // The SDK resolves null (not a rejection) when the ticket could not be
     // created; that must count as failed so email takes over.

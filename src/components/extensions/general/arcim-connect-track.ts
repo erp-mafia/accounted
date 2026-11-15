@@ -1,7 +1,6 @@
 'use client'
 
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 
 /**
  * The migration connect funnel. The server already records that a connect
@@ -13,12 +12,7 @@ import { isAnalyticsActive } from '@/lib/analytics/client'
 export type MigrationConnectOutcome = 'success' | 'provider_error' | 'cancelled' | 'window_closed'
 
 function capture(event: string, properties: Record<string, string>): void {
-  if (!isAnalyticsActive()) return
-  try {
-    posthog.capture(event, properties)
-  } catch {
-    // Telemetry must never affect the wizard.
-  }
+  captureAnalyticsEvent(event, properties)
 }
 
 /** The provider login, Lundify activation or credential submit was pressed. */

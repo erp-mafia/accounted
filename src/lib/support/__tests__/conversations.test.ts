@@ -12,8 +12,22 @@ let sdkCurrent: string | null = 'cur'
 let sdkAvailable = true
 let analyticsEnabled = true
 let analyticsStarted = true
+// client.ts loads the SDK after the page: null from loadedAnalytics() until
+// it has arrived, and analyticsLoadFailed() once it could not.
+let sdkLoaded = true
+let sdkLoadFailed = false
 vi.mock('@/lib/analytics/enabled', () => ({ isAnalyticsEnabled: () => analyticsEnabled }))
-vi.mock('@/lib/analytics/client', () => ({ isAnalyticsActive: () => analyticsEnabled && analyticsStarted }))
+// The SDK is the posthog-js mock below once analytics runs and it has loaded.
+vi.mock('@/lib/analytics/client', async () => {
+  const { default: sdk } = await import('posthog-js')
+  const active = () => analyticsEnabled && analyticsStarted
+  return {
+    isAnalyticsActive: active,
+    loadedAnalytics: () => (active() && sdkLoaded ? sdk : null),
+    analyticsReady: async () => (active() ? sdk : null),
+    analyticsLoadFailed: () => sdkLoadFailed,
+  }
+})
 vi.mock('posthog-js', () => ({
   default: {
     conversations: {
@@ -179,12 +193,16 @@ describe('whenConversationsReady (crm#1393)', () => {
     sdkAvailable = true
     analyticsEnabled = true
     analyticsStarted = true
+    sdkLoaded = true
+    sdkLoadFailed = false
   })
   afterEach(() => {
     vi.useRealTimers()
     sdkAvailable = true
     analyticsEnabled = true
     analyticsStarted = true
+    sdkLoaded = true
+    sdkLoadFailed = false
   })
 
   it('answers true at once when the SDK is ready', async () => {
@@ -245,6 +263,49 @@ describe('whenConversationsReady (crm#1393)', () => {
     await vi.advanceTimersByTimeAsync(4_800)
     expect(answer).toBeUndefined()
     await vi.advanceTimersByTimeAsync(300)
+    expect(answer).toBe(false)
+  })
+
+  it('counts the timeout from when the SDK has loaded, so a slow download does not eat it', async () => {
+    sdkAvailable = false
+    sdkLoaded = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(4_000)
+    sdkLoaded = true
+    // Seen at the next poll (4.1 s): Support gets its full five seconds from there.
+    await vi.advanceTimersByTimeAsync(4_800)
+    expect(answer).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(answer).toBe(false)
+  })
+
+  it('is still bounded when the SDK never arrives', async () => {
+    sdkAvailable = false
+    sdkLoaded = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(4_800)
+    expect(answer).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(300)
+    expect(answer).toBe(false)
+  })
+
+  it('answers false as soon as the SDK fails to load, without the timeout', async () => {
+    sdkAvailable = false
+    sdkLoaded = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(answer).toBeUndefined()
+    sdkLoadFailed = true
+    await vi.advanceTimersByTimeAsync(100)
     expect(answer).toBe(false)
   })
 })
