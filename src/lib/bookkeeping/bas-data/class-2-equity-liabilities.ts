@@ -2992,3 +2992,12 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     k2_excluded: false,
   },
 ]
+
+/**
+ * Whether an account lies in BAS kontogrupp 20, Eget kapital. A chart built
+ * on BAS keeps all equity there, sub-accounts this reference does not list
+ * included, so the group decides where getBASReference has no row.
+ */
+export function isBASEquityGroupAccount(accountNumber: string): boolean {
+  return accountNumber.startsWith('20')
+}

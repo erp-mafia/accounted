@@ -699,6 +699,11 @@ export interface OpeningBalanceContinuity {
   bookedOpeningBalance?: BookedOpeningBalance
   /** Only when carriedForward: the accounts where the books will differ from the file. */
   differences: OpeningBalanceDifference[]
+  /**
+   * The books open on the file's own #UB -1 on every account, so the file's
+   * #IB is the side that is off (booksMatchFilePreviousYear). Absent: no.
+   */
+  fileOpeningOff?: boolean
   /** The file's #IB 0 against its own #UB -1, in source account numbers. */
   sourceEdits: SourceOpeningBalanceEdit[]
   /** Fiscal years missing between the company's years and the file's year. */

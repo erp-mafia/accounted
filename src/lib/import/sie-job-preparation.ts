@@ -141,6 +141,15 @@ export async function readSIESnapshot(supabase:SupabaseClient,job:SIEJob):Promis
   return snapshot
 }
 
+/**
+ * The file's #UB rows, read back from the metadata groups: the root snapshot
+ * is sealed with every SNAPSHOT_ARRAYS key emptied, so a parsed file read with
+ * readCheckpoint has none.
+ */
+export async function readSIEClosingBalances(supabase:SupabaseClient,job:SIEJob):Promise<ParsedSIEFile['closingBalances']> {
+  return (await readSIESnapshot(supabase,job)).parsed.closingBalances
+}
+
 function boundedChunks<T extends {sourceId:string;lines:unknown[]}>(entries:T[]):T[][] {
   try { return [...chunkSIEEntries(entries)] }
   catch (error) { throw new SIEJobValidationError(error instanceof Error ? error.message : 'SIE-posten är för stor.') }

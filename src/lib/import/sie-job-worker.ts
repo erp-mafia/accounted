@@ -4,19 +4,21 @@ import { createLogger } from '@/lib/logger'
 import { commitSIEImportChunk, reverseSIEImportChunk } from '@/lib/bookkeeping/engine'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIESourceVouchers, SIE_CHECKPOINTS, sieJobRPC,
-  type SIEAppendCounts } from './sie-job-preparation'
+import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIEClosingBalances, readSIESourceVouchers,
+  SIE_CHECKPOINTS, sieJobRPC, type SIEAppendCounts } from './sie-job-preparation'
 import { getSIEJob, runsSIEJobs, SIEJobValidationError } from './sie-jobs'
 import { isSIEJobUnresolved, type SIEChunkResult, type SIEJob } from './sie-job-contract'
 import { getMappingStats } from './account-mapper'
 import { computeVoucherNumberRanges } from './sie-import'
-import type { ImportResult, MigrationDocumentation, ParsedSIEFile, SIEVoucher } from './types'
+import type { AccountMapping, ImportResult, MigrationDocumentation, OpeningBalanceDifference, ParsedSIEFile,
+  SIEVoucher } from './types'
 import { legacyNotices } from './notices'
 import { openingBalanceSplitRefusedNotice, type OpeningBalanceSplitRefusal } from './sie-object-balances'
 import { buildSIEVatDefaults } from './account-sync'
 import { isoDay, sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
 import { diagnoseUntransferredResults, learnFromCompletedSIEImport, vouchersForLearning } from './sie-import-learning'
-import { continuityNotices, diagnoseCarriedForwardDifferences } from './sie-continuity'
+import { booksMatchFilePreviousYear, continuityNotices, diagnoseCarriedForwardDifferences,
+  storedOpeningBalances } from './sie-continuity'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { postingPort } from '@/lib/posting/port'
@@ -27,6 +29,35 @@ const log = createLogger('sie-worker')
 interface CheckpointRow { phase:string; chunk_no:number; payload_hash:string; result:Record<string,unknown> | SIEChunkResult }
 /** What finalize leaves for the learning after completion (sie-import-learning.ts). */
 export interface FinalizeLearning { completed?:boolean; vouchers?:SIEVoucher[] }
+
+/**
+ * A continuation import never books the file's #IB (prior_activity): the year
+ * opens on the carried-forward balance, or on its own IB verifikat when it has
+ * one (crm#1272). Where that differs from what the file stated, the result
+ * says so with the amounts (crm#1099), and names the file's #IB as the side
+ * that is off when the books open on the file's own #UB -1. The #UB rows are
+ * read back from the metadata groups: the root snapshot behind finalize's
+ * parsed file carries none. A failed read costs that sentence, not the import.
+ */
+export async function carriedForwardContinuity(
+  supabase: SupabaseClient,
+  job: SIEJob,
+  mappings: AccountMapping[],
+): Promise<{ differences: OpeningBalanceDifference[]; fileOpeningOff: boolean }> {
+  const yearStart = isoDay(job.fiscal_year_start)
+  if (!job.manifest.prior_activity || !yearStart) return {differences:[],fileOpeningOff:false}
+  const differences = await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,
+    job.manifest.effectiveOpeningBalances,mappings,job.fiscal_period_id)
+  if (differences.length === 0) return {differences,fileOpeningOff:false}
+  let closing: ParsedSIEFile['closingBalances'] = []
+  try { closing = await readSIEClosingBalances(supabase,job) }
+  catch (err) {
+    log.warn('SIE #UB rows unreadable; the opening-balance notice cannot say which side is off',
+      {companyId:job.company_id,importId:job.id,message:err instanceof Error ? err.message : String(err)})
+  }
+  return {differences,fileOpeningOff:booksMatchFilePreviousYear(differences,
+    {opening:storedOpeningBalances(job.manifest.effectiveOpeningBalances),closing},mappings)}
+}
 
 async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number, learning: FinalizeLearning): Promise<boolean> {
   const { options, mappings } = jobInput(job)
@@ -117,18 +148,13 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     : {results:[],warnings:[],notices:[]}
   warnings.push(...untransferred.warnings)
   notices.push(...untransferred.notices)
-  // A continuation import never books the file's #IB (prior_activity): the
-  // year opens on the carried-forward balance, or on its own IB verifikat
-  // when it has one (crm#1272). Where that differs from what the file stated,
-  // the result says so with the amounts (crm#1099); an ended year whose file
-  // held no vouchers is missing its bookkeeping.
+  // The opening balance against the file (carriedForwardContinuity); an ended
+  // year whose file held no vouchers is missing its bookkeeping.
   const yearStart = isoDay(job.fiscal_year_start)
   const yearEnd = parsed.stats.fiscalYearEnd
-  const ibDifferences = diagnoses && job.manifest.prior_activity && yearStart
-    ? await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,job.manifest.effectiveOpeningBalances,mappings,
-      job.fiscal_period_id)
-    : []
-  const continuity = continuityNotices({differences:ibDifferences,
+  const {differences:ibDifferences,fileOpeningOff} = diagnoses ? await carriedForwardContinuity(supabase,job,mappings)
+    : {differences:[],fileOpeningOff:false}
+  const continuity = continuityNotices({differences:ibDifferences,fileOpeningOff,
     noVouchers:diagnoses && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()
       ? {from:yearStart,to:yearEnd} : null})
   warnings.push(...continuity.warnings)

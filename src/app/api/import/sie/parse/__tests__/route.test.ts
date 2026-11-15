@@ -458,6 +458,8 @@ describe('POST /api/import/sie/parse', () => {
           { account: '1930', file: 1036, books: 1000, difference: -36 },
           { account: '2990', file: -1036, books: -1000, difference: 36 },
         ],
+        // The books open on the file's own #UB -1: the file's #IB is the side that is off.
+        fileOpeningOff: true,
         sourceEdits: [
           { account: '1930', previousClosing: 1000, opening: 1036, difference: 36 },
           { account: '2990', previousClosing: -1000, opening: -1036, difference: -36 },

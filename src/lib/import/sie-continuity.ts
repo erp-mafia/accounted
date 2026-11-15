@@ -6,6 +6,7 @@ import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
+import { isBASEquityGroupAccount } from '@/lib/bookkeeping/bas-data/class-2-equity-liabilities'
 import { mappingsToMap } from './account-mapper'
 import { getEffectiveOpeningBalances, isBalanceSheetAccount } from './sie-parser'
 import { makeNotice, type ImportNotice } from './notices'
@@ -92,6 +93,77 @@ export function fileOpeningBalanceByAccount(
   }
   return byAccount
 }
+
+/**
+ * The file's own previous-year closing balance (#UB -1) per company account,
+ * mapped and summed as fileOpeningBalanceByAccount maps the #IB; an account
+ * the file leaves out closes at zero (SIE spec 5.17). Null when the file
+ * states no #UB -1, or only zeros (a first year written out with empty rows):
+ * books without earlier years would match it on every account.
+ */
+export function filePreviousClosingByAccount(
+  closingBalances: readonly { account: string; amount: number; yearIndex: number }[],
+  mappings: AccountMapping[],
+): Map<string, number> | null {
+  const previous = closingBalances.filter((balance) => balance.yearIndex === -1)
+  if (previous.every((balance) => !(Math.abs(balance.amount) >= ORE_TOLERANCE))) return null
+  return fileOpeningBalanceByAccount(previous.map((balance) => ({ ...balance, yearIndex: 0 })), mappings)
+}
+
+/**
+ * Which side of an opening-balance difference is off (crm#1099). True when
+ * the books differ from the file's #IB and open on the file's own #UB -1 on
+ * every balance-sheet account: the books agree with the source system's
+ * previous year, and it is the file's #IB that departs from that year. Two
+ * causes leave this and the data cannot tell them apart: the previous year
+ * changed after the source system created the year's #IB (the books' opening
+ * is the right one), or the #IB was changed by hand there (that change is not
+ * in the books). In the 30 days to 2026-11-12, 135 continuation imports
+ * differed from the file's #IB on accounts outside equity, and every one was
+ * told only "Stäm av mot källsystemet".
+ *
+ * `file.opening` must be the rows `differences` was computed from (the
+ * effective #IB). Every account counts, not only the differing ones: where
+ * the books equal the file's #IB, that #IB must equal the #UB -1 as well.
+ *
+ * Not covered, so the general reconcile text stays:
+ * - differences only within equity (BAS kontogrupp 20): a program that moves
+ *   2019 to 2010, or 2099 to 2098, in the new year's #IB, which neither cause
+ *   describes;
+ * - a #UB -1 without the previous year's result booked: the books carry that
+ *   result on the result-closing account, so they differ from #UB -1 there.
+ */
+export function booksMatchFilePreviousYear(
+  differences: readonly OpeningBalanceDifference[],
+  file: {
+    opening: readonly { account: string; amount: number; yearIndex?: number }[]
+    closing: readonly { account: string; amount: number; yearIndex: number }[]
+  },
+  mappings: AccountMapping[],
+): boolean {
+  if (differences.every((row) => isBASEquityGroupAccount(row.account))) return false
+  const previousClosing = filePreviousClosingByAccount(file.closing, mappings)
+  if (!previousClosing) return false
+  const opening = fileOpeningBalanceByAccount(file.opening, mappings)
+  // compareOpeningBalances lists only the accounts where the books differ from
+  // the file's #IB: everywhere else the books open on that #IB.
+  const books = new Map(differences.map((row) => [row.account, row.books]))
+  for (const account of new Set([...opening.keys(), ...previousClosing.keys(), ...books.keys()])) {
+    if (!isBalanceSheetAccount(account)) continue
+    const opensOn = books.get(account) ?? opening.get(account) ?? 0
+    if (Math.abs(roundOre((previousClosing.get(account) ?? 0) - opensOn)) >= ORE_TOLERANCE) return false
+  }
+  return true
+}
+
+/**
+ * What each cause booksMatchFilePreviousYear cannot tell apart means for the
+ * books. It names no year to book a change in: that is the customer's call.
+ */
+const FILE_OPENING_OFF_CAUSES =
+  'Om föregående år ändrades efter att det gamla programmet skapade årets ingående balans är det bokföringens ' +
+  'ingående balans som stämmer. Om den ingående balansen ändrades för hand i det gamla programmet finns den ' +
+  'ändringen inte i bokföringen; ska den med behöver den bokföras som en verifikation.'
 
 /** Balance-sheet accounts where the carried-forward balance and the file's #IB differ, sorted by account. */
 export function compareOpeningBalances(
@@ -242,14 +314,16 @@ export async function diagnoseOpeningBalanceContinuity(
     const replacesImportId = options.replacesImportId ?? null
     const booked = await findBookedOpeningBalance(supabase, companyId, { start, end }, replacesImportId)
     const carriedForward = booked !== null || (await willCarryForward(supabase, companyId, end, replacesImportId))
+    const opening = getEffectiveOpeningBalances(parsed).balances
     const differences = carriedForward
-      ? await compareWithBooks(supabase, companyId, start, getEffectiveOpeningBalances(parsed).balances, mappings,
-          booked?.entryId ?? null)
+      ? await compareWithBooks(supabase, companyId, start, opening, mappings, booked?.entryId ?? null)
       : []
+    const fileOpeningOff = booksMatchFilePreviousYear(differences, { opening, closing: parsed.closingBalances }, mappings)
     return {
       carriedForward,
       ...(booked ? { bookedOpeningBalance: booked } : {}),
       differences,
+      ...(fileOpeningOff ? { fileOpeningOff } : {}),
       sourceEdits: findSourceOpeningBalanceEdits(parsed),
       missingYears: await findMissingYears(supabase, companyId, start, end),
       noVouchers: parsed.stats.totalVouchers === 0 && end < todayIsoStockholm(),
@@ -324,17 +398,30 @@ export function totalDifference(rows: readonly { difference: number }[]): number
 export function continuityNotices(input: {
   differences: readonly OpeningBalanceDifference[]
   noVouchers: { from: string; to: string } | null
+  /** booksMatchFilePreviousYear: the file's #IB is the side that is off. */
+  fileOpeningOff?: boolean
 }): { warnings: string[]; notices: ImportNotice[] } {
   const warnings: string[] = []
   const notices: ImportNotice[] = []
   if (input.differences.length > 0) {
     const count = input.differences.length
+    const accounts = count === 1 ? 'konto' : 'konton'
     const amount = sek(totalDifference(input.differences))
-    warnings.push(
-      `Ingående balans följer föregående års utgående balans och skiljer sig från filens ingående balans på ${count} ` +
-        `${count === 1 ? 'konto' : 'konton'} (sammanlagt ${amount}). Stäm av mot källsystemet.`,
-    )
-    notices.push(makeNotice('sie_ib_differs_from_file', 'action', { count, amount }))
+    if (input.fileOpeningOff) {
+      // Still an action: only the customer can tell which cause it was.
+      warnings.push(
+        `Filens ingående balans skiljer sig från filens egen utgående balans för föregående år på ${count} ${accounts} ` +
+          `(sammanlagt ${amount}). Bokföringens ingående balans stämmer med föregående års utgående balans i filen. ` +
+          FILE_OPENING_OFF_CAUSES,
+      )
+      notices.push(makeNotice('sie_ib_file_differs_from_previous_year', 'action', { count, amount }))
+    } else {
+      warnings.push(
+        `Ingående balans följer föregående års utgående balans och skiljer sig från filens ingående balans på ${count} ` +
+          `${accounts} (sammanlagt ${amount}). Stäm av mot källsystemet.`,
+      )
+      notices.push(makeNotice('sie_ib_differs_from_file', 'action', { count, amount }))
+    }
   }
   if (input.noVouchers) {
     warnings.push(
@@ -360,7 +447,18 @@ export function continuityWarnings(
   for (const gap of continuity.missingYears) {
     lines.push(`Räkenskapsår saknas mellan företagets bokföring och filen: ${gap.from} till ${gap.to}.`)
   }
-  if (continuity.differences.length > 0 && continuity.bookedOpeningBalance) {
+  if (continuity.differences.length > 0 && continuity.fileOpeningOff) {
+    const opensOn = continuity.bookedOpeningBalance
+      ? `räkenskapsåret har redan en bokförd ingående balans (verifikation ${continuity.bookedOpeningBalance.voucher})`
+      : 'företaget har redan bokföring fram till räkenskapsårets slut, så året öppnar på föregående års utgående balans'
+    // The file's IB is the subject here: its deviation is file minus books.
+    const fileDeviations = continuity.differences.map((row) => ({ ...row, difference: roundOre(-row.difference) }))
+    lines.push(
+      `Filens ingående balans bokförs inte: ${opensOn}. Bokföringens ingående balans stämmer med föregående års ` +
+        `utgående balans i filen; det är filens ingående balans som avviker från den, på ` +
+        `${accountList(fileDeviations)}. ${FILE_OPENING_OFF_CAUSES}`,
+    )
+  } else if (continuity.differences.length > 0 && continuity.bookedOpeningBalance) {
     lines.push(
       `Filens ingående balans bokförs inte: räkenskapsåret har redan en bokförd ingående balans (verifikation ${continuity.bookedOpeningBalance.voucher}). ` +
         `Den skiljer sig från filen på ${accountList(continuity.differences)}. Stäm av mot källsystemet innan importen; ` +
