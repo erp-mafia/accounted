@@ -118,7 +118,10 @@ import {
   purchaseSellerRegion,
   reverseChargeBoxAsk,
   reverseChargeBoxFor,
+  FOREIGN_SELLER_VAT_FLAG,
   sellerChargedVat,
+  sellerVatOnReverseCharge,
+  sellerVatRefusalMessage,
   type ChargedVatReading,
   type ReverseChargeBoxParam,
   type ReverseChargeBoxRefusal,
@@ -176,6 +179,13 @@ export interface CategorizeInput {
    * (the staged allow_duplicate). The dismissal is recorded all the same.
    */
   allow_duplicate?: boolean
+  /**
+   * The caller's word that the VAT the underlag shows is foreign VAT the
+   * seller charged in error (crm#1765): a reverse charge is then booked on
+   * the whole amount paid instead of refused. Never honoured when the
+   * document names a Swedish seller (lib/vat/reverse-charge-box.ts).
+   */
+  confirm_foreign_seller_vat?: boolean
   /** Audit text appended to the verifikat description (agent and bulk doors). */
   notes?: string
 }
@@ -228,6 +238,12 @@ export interface CategorizeUnderlag {
   total: number | null
   vat_amount: number | null
   currency: string | null
+  /**
+   * Set on a reverse charge booked under confirm_foreign_seller_vat: the
+   * charge is in the basis and the cost, never deducted. could_be_swedish_vat
+   * when it is 25 % of the price, which the document cannot tell from Swedish VAT.
+   */
+  foreign_seller_vat?: { could_be_swedish_vat: boolean }
 }
 
 export interface CategorizePreview {
@@ -839,11 +855,15 @@ export async function categorizeTransaction(
   const { context } = resolved
   const { finalCategory } = context
 
-  // The pinned document's own reading: shown on a preview, and the check that
-  // a reverse-charge booking is not made on an invoice where the seller
-  // already charged moms (that produced fictive 2645/2614 lines on 25 % of a
-  // foreign charge). Omvänd skattskyldighet only covers invoices without the
-  // seller's VAT; the foreign VAT is then part of the cost.
+  // The pinned document's own reading: shown on a preview, and the check on a
+  // reverse charge asked for on an invoice where the seller charged moms.
+  // Refused by default, since Swedish moms on an invoice is ordinary ingående
+  // moms. Booked when the caller states the charge is foreign VAT debited in
+  // error (crm#1765): the buyer is still liable (ML 16 kap. 9 §) on all the
+  // seller was paid, which is the bank row's amount the mapping below already
+  // takes as cost and basis, and no line deducts the seller's VAT (vat_amount
+  // is refused with reverse_charge). A document naming a Swedish seller is
+  // refused whatever is stated.
   let underlag: CategorizeUnderlag | null = null
   let documentSeller: SellerIdentity | null = null
   if (transaction.document_id && (dryRun || input.vat_treatment === 'reverse_charge')) {
@@ -864,21 +884,33 @@ export async function categorizeTransaction(
         vat_amount: ex?.totals?.vatAmount ?? null,
         currency: ex?.invoice?.currency ?? null,
       }
-      if (input.vat_treatment === 'reverse_charge' && (underlag.vat_amount ?? 0) > 0) {
-        return refuseFor(
-          'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
-          { document_id: underlag.document_id, seller_vat_amount: underlag.vat_amount, currency: underlag.currency },
-          {
-            message: {
-              sv:
-                `Omvänd skattskyldighet avvisas: underlaget (document_id=${underlag.document_id}) visar att säljaren redan har debiterat moms ` +
-                `(${underlag.vat_amount} ${underlag.currency ?? ''}). Omvänd skattskyldighet gäller bara fakturor utan säljarens moms. ` +
-                'Bokför som vanlig kostnad (utan vat_treatment, eller standard_25 om svensk faktura): den utländska momsen ingår i kostnaden.',
+      if (input.vat_treatment === 'reverse_charge') {
+        const sellerVat = sellerVatOnReverseCharge({
+          sellerVat: underlag.vat_amount,
+          total: underlag.total,
+          seller: documentSeller,
+          confirmedForeign: input.confirm_foreign_seller_vat === true,
+        })
+        if (sellerVat.verdict === 'refused') {
+          return refuseFor(
+            'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+            {
+              document_id: underlag.document_id,
+              seller_vat_amount: underlag.vat_amount,
+              currency: underlag.currency,
+              reason: sellerVat.reason,
+              ...(sellerVat.reason === 'not_confirmed' ? { confirm_with: FOREIGN_SELLER_VAT_FLAG } : {}),
             },
-          },
-        )
+            { message: sellerVatRefusalMessage(sellerVat.reason, [underlag.vat_amount, underlag.currency].filter(Boolean).join(' ')) },
+          )
+        }
+        if (sellerVat.verdict === 'confirmed') {
+          underlag.foreign_seller_vat = { could_be_swedish_vat: sellerVat.couldBeSwedishVat }
+          checks.push(warned('reverse_charge_seller_vat', FOREIGN_SELLER_VAT_FLAG))
+        } else {
+          checks.push(passed('reverse_charge_seller_vat'))
+        }
       }
-      if (input.vat_treatment === 'reverse_charge') checks.push(passed('reverse_charge_seller_vat'))
     }
   }
 
@@ -1505,6 +1537,8 @@ export interface CategorizeMatchedTransactionOpts {
   notes?: string
   /** Book over a detected possible duplicate (the staged allow_duplicate). */
   allowDuplicate?: boolean
+  /** The staged confirm_foreign_seller_vat (CategorizeInput). */
+  confirmForeignSellerVat?: boolean
   /**
    * The approver looked at the detected candidate in the app and books anyway:
    * a force bound to that verifikat, re-detected by the guard like the
@@ -1534,6 +1568,7 @@ export function categorizeInputFromStaged(opts: CategorizeMatchedTransactionOpts
     notes: opts.notes,
     proposal_id: opts.proposalId,
     allow_duplicate: opts.allowDuplicate,
+    ...(opts.confirmForeignSellerVat ? { confirm_foreign_seller_vat: true } : {}),
     ...(opts.expectedDuplicateJournalEntryId
       ? { force: true, expected_duplicate_journal_entry_id: opts.expectedDuplicateJournalEntryId }
       : {}),
@@ -1753,11 +1788,13 @@ export async function bulkBookMatchedInboxItems(
     // batch. An item whose box cannot be told is left out with the reason
     // (lib/vat/reverse-charge-box.ts) instead of landing in ruta 21 by default.
     let reverseChargeKind: ReverseChargeKind | undefined
-    // Omvänd skattskyldighet only covers a purchase the seller charged no VAT
-    // on: an underlag that shows a charge is left out (#94), as the single
-    // door refuses it (TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT) and the
-    // Inkorg's one click sends it to the editor. The item's document is not
-    // on its bank row yet, so the single door's check would not see it.
+    // An underlag that shows the seller's VAT is left out of a bulk reverse
+    // charge (#94), as the single door refuses it by default
+    // (TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT) and the Inkorg's one click
+    // sends it to the editor. Whether the charge is foreign VAT debited in
+    // error is stated per purchase at the single door (crm#1765), never for
+    // a batch. The item's document is not on its bank row yet, so the single
+    // door's check would not see it.
     const sellerVat = vat_treatment === 'reverse_charge' ? sellerChargedVat(item.extracted_data as ChargedVatReading | null) : 0
     if (sellerVat > 0) {
       const currency = (item.extracted_data as { invoice?: { currency?: string | null } } | null)?.invoice?.currency
@@ -1766,9 +1803,9 @@ export async function bulkBookMatchedInboxItems(
         item_id: itemId,
         reason: 'reverse_charge_seller_vat',
         detail:
-          `Underlaget visar att säljaren har debiterat moms (${amount}), och omvänd skattskyldighet gäller bara ` +
-          'köp utan säljarens moms. Bokför underlaget för sig: svensk moms som ingående moms, utländsk moms som en ' +
-          'del av kostnaden.',
+          `Underlaget visar att säljaren har debiterat moms (${amount}). Bokför underlaget för sig: svensk moms som ` +
+          'ingående moms. Är det utländsk moms som säljaren debiterat felaktigt bokförs köpet med omvänd skattskyldighet ' +
+          `på hela beloppet, bekräftat för det köpet (${FOREIGN_SELLER_VAT_FLAG}).`,
       })
       continue
     }

@@ -1163,12 +1163,12 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
     httpStatus: 400,
     message_sv:
-      'Omvänd skattskyldighet avvisas: underlaget visar att säljaren redan har debiterat moms. Bokför som vanlig kostnad: den utländska momsen ingår i kostnaden.',
+      'Omvänd skattskyldighet avvisas: underlaget visar att säljaren har debiterat moms. Är det utländsk moms som säljaren debiterat felaktigt, bekräfta det (confirm_foreign_seller_vat): köpet bokförs då med omvänd skattskyldighet på hela det betalda beloppet och den utländska momsen dras inte av. Svensk moms bokförs med momssatsen.',
     message_en:
-      'Reverse charge refused: the attached document shows the seller already charged VAT. Book it as an ordinary cost; the foreign VAT is part of the cost.',
+      'Reverse charge refused: the attached document shows the seller charged VAT. If it is foreign VAT the seller charged in error, confirm it (confirm_foreign_seller_vat): the purchase is then booked as reverse charge on the whole amount paid and the foreign VAT is not deducted. Swedish VAT is booked at its rate.',
     remediation: {
       description:
-        'Resend without vat_treatment reverse_charge (omit it, or standard_25 for a Swedish invoice). Omvänd skattskyldighet only covers invoices without the seller\'s VAT.',
+        'details.reason "not_confirmed": if the VAT on the document is another country\'s VAT the seller charged in error, resend with confirm_foreign_seller_vat=true. That states the VAT is foreign: the reverse charge is booked on the whole amount paid (the foreign VAT included, never deducted), and the user should ask the seller for a credit note. If it is Swedish VAT, resend with the rate (standard_25) and no reverse charge. details.reason "seller_vat_swedish": the document names a Swedish seller, so the flag is not honoured; book with the rate.',
     },
   },
   // The row's one click (review_shown false) on a proposal the direct-booking

@@ -2762,6 +2762,12 @@ export const CategorizeTransactionSchema = z
     // the person picked the account themselves.
     proposal_id: z.string().min(1).max(200).optional(),
     confirm_no_match: z.boolean().optional(),
+    // The caller's word that the VAT the row's underlag shows is foreign VAT
+    // the seller charged in error: a reverse charge is then booked on the
+    // whole amount paid instead of refused (crm#1765,
+    // TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT). A Swedish seller's VAT is
+    // refused all the same.
+    confirm_foreign_seller_vat: z.boolean().optional(),
     // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). force
     // bypasses it after the user reviews the candidate; the bypass is bound to
     // the specific already-booked candidate (re-detected server-side, so a

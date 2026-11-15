@@ -242,6 +242,9 @@ export const SILENT_GRANT_REFUSALS: ReadonlySet<string> = new Set([
   'no_grant_for_counterparty',
   // No rule for the supplier the staged invoice names.
   'unknown_supplier',
+  // Staged with confirm_foreign_seller_vat: never asked of a grant, and the
+  // staged answer already carries the note the person reads.
+  'foreign_seller_vat',
 ])
 
 /** One posting a grant let through, as Att göra and the agent briefing list it. */

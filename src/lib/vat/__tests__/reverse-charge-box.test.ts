@@ -7,7 +7,15 @@
  * declaration's account map, so the box is pinned end to end.
  */
 import { describe, it, expect } from 'vitest'
-import { purchaseSellerRegion, reverseChargeBoxAsk, reverseChargeBoxFor, sellerChargedVat } from '../reverse-charge-box'
+import {
+  FOREIGN_SELLER_VAT_FLAG,
+  purchaseSellerRegion,
+  reverseChargeBoxAsk,
+  reverseChargeBoxFor,
+  sellerChargedVat,
+  sellerVatOnReverseCharge,
+  sellerVatRefusalMessage,
+} from '../reverse-charge-box'
 import { generateReverseChargePurchaseLines, reverseChargeKindRuta, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { ACCOUNT_TO_BOX } from '../moms-box-mapping'
 
@@ -109,5 +117,76 @@ describe('sellerChargedVat', () => {
     expect(sellerChargedVat({ totals: { vatAmount: 0 } })).toBe(0)
     expect(sellerChargedVat({ totals: { vatAmount: -5 } })).toBe(0)
     expect(sellerChargedVat(null)).toBe(0)
+  })
+})
+
+// crm#1765: the seller charged VAT on a purchase the buyer is liable for.
+describe('sellerVatOnReverseCharge', () => {
+  it('is a plain reverse charge when the underlag shows no charge', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 0, confirmedForeign: false })).toEqual({ verdict: 'no_seller_vat' })
+    expect(sellerVatOnReverseCharge({ sellerVat: null, confirmedForeign: true })).toEqual({ verdict: 'no_seller_vat' })
+  })
+
+  it('refuses a charge nobody has stated to be foreign', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 21, total: 121, confirmedForeign: false })).toEqual({
+      verdict: 'refused',
+      reason: 'not_confirmed',
+    })
+  })
+
+  it('allows a charge stated to be foreign, and tells a rate that is not the Swedish one', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 21, total: 121, seller: { vatNumber: 'NL123456789B01' }, confirmedForeign: true })).toEqual({
+      verdict: 'confirmed',
+      couldBeSwedishVat: false,
+    })
+  })
+
+  it('cannot rule Swedish VAT out at 25 % of the price, or without a total to measure against', () => {
+    expect(sellerVatOnReverseCharge({ sellerVat: 25, total: 125, confirmedForeign: true })).toEqual({ verdict: 'confirmed', couldBeSwedishVat: true })
+    expect(sellerVatOnReverseCharge({ sellerVat: 25, total: null, confirmedForeign: true })).toEqual({ verdict: 'confirmed', couldBeSwedishVat: true })
+  })
+
+  it('refuses a seller the document names as Swedish, stated foreign or not', () => {
+    for (const confirmedForeign of [true, false]) {
+      expect(sellerVatOnReverseCharge({ sellerVat: 25, total: 125, seller: { vatNumber: 'SE556677889901' }, confirmedForeign })).toEqual({
+        verdict: 'refused',
+        reason: 'seller_vat_swedish',
+        source: 'vat_number',
+      })
+    }
+  })
+
+  it('reads a foreign seller registered for VAT in Sweden by its SE number, whatever its address says', () => {
+    expect(
+      sellerVatOnReverseCharge({
+        sellerVat: 25,
+        total: 125,
+        seller: { vatNumber: 'SE502012345601', address: '1 Main St, Austin, Texas 78701, United States' },
+        confirmedForeign: true,
+      }),
+    ).toMatchObject({ verdict: 'refused', reason: 'seller_vat_swedish' })
+  })
+
+  it('words each refusal in both locales: the flag by name, or why it is not honoured', () => {
+    const ask = sellerVatRefusalMessage('not_confirmed', '21 EUR')
+    expect(ask.sv).toContain(`${FOREIGN_SELLER_VAT_FLAG}=true`)
+    expect(ask.en).toContain(`${FOREIGN_SELLER_VAT_FLAG}=true`)
+    expect(ask.sv).toContain('21 EUR')
+    const swedish = sellerVatRefusalMessage('seller_vat_swedish', '25 SEK')
+    expect(swedish.sv).toMatch(/svensk moms/)
+    expect(swedish.en).toMatch(/Swedish VAT/)
+  })
+
+  it('puts the whole amount paid in the box of the purchase: EU service 21, non-EU service 22, EU goods 20', () => {
+    // Paid 121: a price of 100 and 21 foreign VAT. The basis is 121, never 100.
+    for (const [kind, ruta] of [['eu_services', '21'], ['non_eu_services', '22'], ['eu_goods', '20']] as const) {
+      const lines = generateReverseChargePurchaseLines({ base: 121, kind })
+      const basis = lines.find((l) => l.debit_amount > 0 && ACCOUNT_TO_BOX[l.account_number] === ruta)
+      expect(basis?.debit_amount).toBe(121)
+      // Utgående moms in ruta 30 and the calculated ingående moms, both on 121.
+      expect(lines.find((l) => l.account_number === '2614')?.credit_amount).toBe(30.25)
+      expect(lines.find((l) => l.account_number === '2645')?.debit_amount).toBe(30.25)
+      expect(lines.map((l) => l.account_number)).not.toContain('2641')
+    }
   })
 })

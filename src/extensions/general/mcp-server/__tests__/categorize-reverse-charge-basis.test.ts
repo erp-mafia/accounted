@@ -271,3 +271,97 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     expect(result.preview).not.toHaveProperty('reverse_charge')
   })
 })
+
+// crm#1765: a foreign seller that wrongly charged its own country's VAT. The
+// buyer is still liable in Sweden on everything the seller was paid, and the
+// foreign VAT is never ingående moms (docs/decisions/2026-11/
+// 2026-11-12-reverse-charge-with-foreign-seller-vat.md). Refused unless the
+// caller states it with confirm_foreign_seller_vat.
+describe('gnubok_categorize_transaction: reverse charge on an underlag with the seller\'s VAT', () => {
+  // The bank row is what the seller was paid: 250 = 206.61 price + 43.39 VAT at 21 %.
+  const dutchVat = { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 250, vatAmount: 43.39 }, invoice: { currency: 'SEK' } }
+  const usSeller = { supplier: { address: '548 Market St, San Francisco, California 94104, United States' }, totals: { total: 250, vatAmount: 50 } }
+  const rows = (lines: Line[]) => lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('names the flag in the tool schema', () => {
+    const schema = categorize.inputSchema as { properties: Record<string, { type: string }> }
+    expect(schema.properties.confirm_foreign_seller_vat).toMatchObject({ type: 'boolean' })
+  })
+
+  it('refuses without the flag, and the refusal names it', async () => {
+    await expect(stage({ vat_treatment: 'reverse_charge_eu_services' }, undefined, [], dutchVat)).rejects.toMatchObject({
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { reason: 'not_confirmed', confirm_with: 'confirm_foreign_seller_vat', seller_vat_amount: 43.39 },
+    })
+  })
+
+  it('EU seller, with the flag: the whole amount paid is cost and basis in ruta 21, and no line deducts the seller\'s VAT', async () => {
+    const { result, params, lines } = await stage(
+      { vat_treatment: 'reverse_charge_eu_services', confirm_foreign_seller_vat: true },
+      undefined,
+      [],
+      dutchVat,
+    )
+
+    expect(result.staged).toBe(true)
+    expect(rows(lines)).toEqual(expect.arrayContaining([
+      ['5420', 250, 0],
+      ['1930', 0, 250],
+      ['2645', 62.5, 0],
+      ['2614', 0, 62.5],
+      ['4535', 250, 0],
+      ['4598', 0, 250],
+    ]))
+    expect(lines).toHaveLength(6)
+    expect(balanced(lines)).toBe(true)
+    expect(lines.map((l) => l.account_number)).not.toContain('2641')
+    // The approval books under the same statement, and the approver reads what it means.
+    expect(params.confirm_foreign_seller_vat).toBe(true)
+    expect(result.preview.compliance_warning).toMatch(/inte avdragsgill i Sverige/)
+    expect(result.preview.compliance_warning).toMatch(/kreditfaktura/)
+    // 21 % is not the Swedish rate: no doubt to raise about whose VAT it is.
+    expect(result.preview.compliance_warning).not.toMatch(/25 %/)
+  })
+
+  it('non-EU seller, with the flag: the same lines on ruta 22, with the warning when the charge is 25 % of the price', async () => {
+    const { result, lines } = await stage(
+      { vat_treatment: 'reverse_charge_non_eu_services', confirm_foreign_seller_vat: true },
+      undefined,
+      [],
+      usSeller,
+    )
+
+    expect(rows(lines)).toEqual(expect.arrayContaining([
+      ['5420', 250, 0],
+      ['2645', 62.5, 0],
+      ['2614', 0, 62.5],
+      ['4531', 250, 0],
+      ['4598', 0, 250],
+    ]))
+    expect(lines.map((l) => l.account_number)).not.toContain('4535')
+    expect(lines.map((l) => l.account_number)).not.toContain('2641')
+    expect(balanced(lines)).toBe(true)
+    expect(result.preview.compliance_warning).toMatch(/Kontrollera att det är utländsk moms/)
+  })
+
+  it('keeps refusing a seller with a Swedish VAT number, flag or not: that VAT is Swedish', async () => {
+    const swedish = { supplier: { vatNumber: 'SE556677889901' }, totals: { total: 250, vatAmount: 50 } }
+    await expect(
+      stage({ vat_treatment: 'reverse_charge_eu_services', confirm_foreign_seller_vat: true }, undefined, [], swedish),
+    ).rejects.toMatchObject({
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { reason: 'seller_vat_swedish' },
+    })
+  })
+
+  it('stages nothing about the flag on an underlag without the seller\'s VAT', async () => {
+    const { result, params } = await stage(
+      { vat_treatment: 'reverse_charge_eu_services', confirm_foreign_seller_vat: true },
+      undefined,
+      [],
+      { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 250, vatAmount: 0 } },
+    )
+    expect(params).not.toHaveProperty('confirm_foreign_seller_vat')
+    expect(result.preview).not.toHaveProperty('compliance_warning')
+  })
+})

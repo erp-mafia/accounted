@@ -951,6 +951,13 @@ describe('tools/list payload size guard', () => {
     // paid for on the two upload tools (shorter mime_type, upload_id and
     // deduplicated notes). Measured 63 092 (full catalog 67 542; main 63 096
     // and 67 547). Ceiling unchanged.
+    // 2026-11-12 (crm#1765): confirm_foreign_seller_vat on
+    // gnubok_categorize_transaction, paid for on the same tool (shorter
+    // vat_treatment, notes and allow_duplicate notes; the refusal that names
+    // the flag says what it means). Measured 63 094 on its own base; after
+    // merging the main of 2026-11-14 the allow_duplicate note lost its
+    // example to stay under.
+    // Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

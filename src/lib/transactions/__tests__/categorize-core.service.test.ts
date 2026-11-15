@@ -383,6 +383,132 @@ describe('categorizeTransaction: refusals every door shares', () => {
     expect(createTxJE).not.toHaveBeenCalled()
   })
 
+  // crm#1765: foreign VAT the seller charged in error. Sources and the
+  // reasoning: docs/decisions/2026-11/2026-11-12-reverse-charge-with-foreign-seller-vat.md.
+  describe('reverse charge on an underlag that shows the seller\'s VAT', () => {
+    // Paid 1 250: a price of 1 033.06 and 216.94 Dutch VAT (21 %).
+    const withUnderlag = (extracted: Record<string, unknown>) =>
+      ledger({
+        transactions: { data: row({ document_id: 'doc-1' }), error: null },
+        document_attachments: { data: { id: 'doc-1', extracted_data: extracted }, error: null },
+      })
+    const dutch = { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 1250, vatAmount: 216.94 }, invoice: { currency: 'SEK' } }
+    const software = { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' } as const
+    const dry: CategorizeOptions = { onBooked: 'refuse', dryRun: true }
+
+    it('names the flag and what it states when it refuses', async () => {
+      const outcome = await categorizeTransaction(withUnderlag(dutch).supabase as never, 'user-1', COMPANY_ID, TX_ID, software, dry)
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+        details: { reason: 'not_confirmed', confirm_with: 'confirm_foreign_seller_vat' },
+      })
+      if (!outcome.ok) {
+        expect(outcome.message?.sv).toMatch(/confirm_foreign_seller_vat=true/)
+        expect(outcome.message?.sv).toMatch(/hela det betalda beloppet/)
+        expect(outcome.message?.en).toMatch(/confirm_foreign_seller_vat=true/)
+      }
+    })
+
+    it.each([
+      ['eu_services', '4535'],
+      ['non_eu_services', '4531'],
+      ['eu_goods', '4515'],
+    ] as const)('with the flag, %s books the whole amount paid as cost and basis on %s', async (kind, basisAccount) => {
+      const outcome = await categorizeTransaction(
+        withUnderlag(dutch).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, reverse_charge_kind: kind, confirm_foreign_seller_vat: true },
+        dry,
+      )
+
+      expect(outcome.ok && outcome.dryRun).toBe(true)
+      if (!outcome.ok || !outcome.dryRun) return
+      const lines = outcome.preview.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+      expect(lines).toHaveLength(6)
+      expect(lines).toEqual(expect.arrayContaining([
+        // The cost is everything the seller was paid, the foreign VAT included.
+        ['5420', 1250, 0],
+        ['1930', 0, 1250],
+        // Fiktiv moms on the same basis: 25 % of 1 250.
+        ['2645', 312.5, 0],
+        ['2614', 0, 312.5],
+        [basisAccount, 1250, 0],
+        ['4598', 0, 1250],
+      ]))
+      // The seller's VAT is never debiterad ingående moms.
+      expect(lines.map(([account]) => account)).not.toContain('2641')
+      const debit = outcome.preview.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+      const credit = outcome.preview.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+      expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+      expect(outcome.preview.underlag?.foreign_seller_vat).toEqual({ could_be_swedish_vat: false })
+    })
+
+    it('says when the charge is 25 % of the price and the document cannot tell whose VAT it is', async () => {
+      const outcome = await categorizeTransaction(
+        withUnderlag({ supplier: { address: '1 Main St, Austin, Texas 78701, United States' }, totals: { total: 1250, vatAmount: 250 } }).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, reverse_charge_kind: 'non_eu_services', confirm_foreign_seller_vat: true },
+        dry,
+      )
+      expect(outcome.ok && outcome.dryRun && outcome.preview.underlag?.foreign_seller_vat).toEqual({ could_be_swedish_vat: true })
+    })
+
+    it('refuses a Swedish seller\'s VAT whatever the caller states', async () => {
+      const outcome = await categorizeTransaction(
+        withUnderlag({ supplier: { vatNumber: 'SE556677889901' }, totals: { total: 1250, vatAmount: 250 } }).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, reverse_charge_kind: 'eu_services', confirm_foreign_seller_vat: true },
+        dry,
+      )
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+        details: { reason: 'seller_vat_swedish' },
+      })
+      if (!outcome.ok) {
+        expect(outcome.details).not.toHaveProperty('confirm_with')
+        expect(outcome.message?.sv).toMatch(/svensk moms/)
+      }
+    })
+
+    it('never takes the seller\'s VAT as a deduction: vat_amount stays refused with reverse charge', async () => {
+      const outcome = await categorizeTransaction(
+        withUnderlag(dutch).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, reverse_charge_kind: 'eu_services', confirm_foreign_seller_vat: true, vat_amount: 216.94 },
+        dry,
+      )
+      expect(outcome).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_INVALID_VAT_AMOUNT' })
+    })
+
+    it('books it live and records the statement as a warned check', async () => {
+      const outcome = await categorizeTransaction(
+        withUnderlag(dutch).supabase as never,
+        'user-1',
+        COMPANY_ID,
+        TX_ID,
+        { ...software, reverse_charge_kind: 'eu_services', confirm_foreign_seller_vat: true },
+        { onBooked: 'refuse' },
+      )
+
+      expect(outcome.ok).toBe(true)
+      expect(createTxJE).toHaveBeenCalledTimes(1)
+      const checks = vi.mocked(recordDecisions).mock.calls[0]?.[2][0]?.checks
+      expect(checks).toContainEqual({ id: 'reverse_charge_seller_vat', result: 'warn', detail: 'confirm_foreign_seller_vat' })
+    })
+  })
+
   it('refuses an account override on a private marking', async () => {
     const outcome = await categorizeTransaction(
       ledger().supabase as never,
