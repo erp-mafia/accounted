@@ -26,6 +26,7 @@ function conn(overrides: {
   bank_name?: string
   error_message?: string | null
   sunset?: 'switch' | 'import' | null
+  paused?: 'subscription' | 'connector_key' | null
 }) {
   return {
     status: 'active',
@@ -94,6 +95,41 @@ describe('getConnectionUiState', () => {
 
   it('handles a row with no consent date', () => {
     expect(getConnectionUiState(conn({ consent_expires: null }), NOW)).toBe('active')
+  })
+})
+
+describe('the paused state (the company holds no bank_sync capability)', () => {
+  it('outranks every state but sunset and an attempt still at the bank', () => {
+    expect(getConnectionUiState(conn({ paused: 'subscription', last_synced_at: iso(-60) }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'expired' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'error', error_message: 'x' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', consent_expires: iso(2) }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'connector_key', status: 'pending_selection' }), NOW)).toBe('paused')
+    expect(getConnectionUiState(conn({ paused: 'subscription', status: 'pending', created_at: iso(0) }), NOW)).toBe('pending')
+    expect(getConnectionUiState(conn({ paused: 'subscription', sunset: 'switch' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ paused: null, last_synced_at: iso(-60) }), NOW)).toBe('stale')
+  })
+
+  it('sorts paused rows right after sunset ones and makes them the page attention instead of "stale"', () => {
+    const rows = [
+      conn({ bank_name: 'Healthy' }),
+      conn({ bank_name: 'Svea', paused: 'subscription', last_synced_at: iso(-60) }),
+      conn({ bank_name: 'Gone', sunset: 'switch' }),
+    ]
+    expect(sortConnectionsByPrecedence(rows, NOW).map((r) => r.bank_name)).toEqual(['Gone', 'Svea', 'Healthy'])
+    const pausedOnly = [conn({ bank_name: 'Svea', paused: 'subscription', last_synced_at: iso(-60) })]
+    expect(selectPageAttention(pausedOnly, NOW)).toMatchObject({ state: 'paused', connection: { bank_name: 'Svea' } })
+  })
+
+  it('says the syncs are paused and why, never "kör Synka"', () => {
+    const hosted = selectPageAttention([conn({ bank_name: 'Svea Bank', paused: 'subscription', last_synced_at: iso(-60) })], NOW)!
+    expect(buildPageAttentionSentence(hosted, NOW)).toBe(
+      'Svea Bank: synkningen är pausad eftersom abonnemanget saknas. Uppgradera för att hämta transaktioner igen.',
+    )
+    const selfHosted = selectPageAttention([conn({ bank_name: 'SEB', paused: 'connector_key' })], NOW)!
+    expect(buildPageAttentionSentence(selfHosted, NOW)).toBe(
+      'SEB: synkningen är pausad eftersom connector-nyckeln saknas. Lägg in nyckeln för att hämta transaktioner igen.',
+    )
   })
 })
 
