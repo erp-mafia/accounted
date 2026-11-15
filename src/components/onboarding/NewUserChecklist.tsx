@@ -5,14 +5,13 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { CheckIcon } from '@/components/icons'
-import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import JourneyOrb from '@/components/onboarding/journey/JourneyOrb'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 import {
   canRecordInitialSetup,
   checklistNumbers,
@@ -80,12 +79,7 @@ interface NewUserChecklistProps {
  * initial_setup is seeded completed+dismissed), so no sandbox gate needed.
  */
 function captureSetup(event: string, properties?: Record<string, unknown>) {
-  if (!isAnalyticsActive()) return
-  try {
-    posthog.capture(event, properties)
-  } catch {
-    // Telemetry must never affect the checklist.
-  }
+  captureAnalyticsEvent(event, properties)
 }
 
 /**

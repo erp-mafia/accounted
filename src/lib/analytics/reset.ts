@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from './client'
+import { analyticsReady, loadedAnalytics } from './client'
 
 /**
  * Detach the current person from PostHog on logout.
@@ -28,10 +27,23 @@ import { isAnalyticsActive } from './client'
  */
 export function resetAnalyticsIdentity(): void {
   if (typeof window === 'undefined') return
-  if (!isAnalyticsActive()) return
-  try {
-    posthog.reset()
-  } catch {
-    // best-effort: we're already in a logout flow
+  const posthog = loadedAnalytics()
+  if (posthog) {
+    try {
+      posthog.reset()
+    } catch {
+      // best-effort: we're already in a logout flow
+    }
+    return
   }
+  // Still loading: the identify of the person who is leaving is queued
+  // behind posthog.init (identify.ts), so the reset queues behind it, or
+  // the tab would stay identified as them once the SDK arrives.
+  void analyticsReady().then((loadedLater) => {
+    try {
+      loadedLater?.reset()
+    } catch {
+      // best-effort: we're already in a logout flow
+    }
+  })
 }

@@ -1,8 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 import { nextStepEvent, ONBOARDING_STEP_EVENT, type OnboardingStepInput } from '@/lib/onboarding/step-event'
 
 /**
@@ -18,11 +17,6 @@ export function useOnboardingStepEvent(input: OnboardingStepInput): void {
     const event = nextStepEvent(lastKey.current, { journey, step, ready, mode, entityType, path, provider })
     if (!event) return
     lastKey.current = event.key
-    if (!isAnalyticsActive()) return
-    try {
-      posthog.capture(ONBOARDING_STEP_EVENT, event.properties)
-    } catch {
-      // Telemetry must never affect the journey.
-    }
+    captureAnalyticsEvent(ONBOARDING_STEP_EVENT, event.properties)
   }, [journey, step, ready, mode, entityType, path, provider])
 }

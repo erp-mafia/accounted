@@ -1,7 +1,6 @@
 'use client'
 
-import posthog from 'posthog-js'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 
 /**
  * The Instruktioner funnel, the clicks the launch is judged on: someone
@@ -19,10 +18,5 @@ export type InstructionsEvent =
   | 'instructions_routine_opened'
 
 export function trackInstructions(event: InstructionsEvent, properties: Record<string, string | number | boolean | null>): void {
-  if (!isAnalyticsActive()) return
-  try {
-    posthog.capture(event, properties)
-  } catch {
-    // Telemetry must never affect the page.
-  }
+  captureAnalyticsEvent(event, properties)
 }

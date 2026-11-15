@@ -98,12 +98,14 @@ describe('initAnalytics sends the held errors on', () => {
     vi.stubGlobal('window', win)
     vi.resetModules()
     const { bufferEarlyErrors } = await import('../early-errors')
-    const { initAnalytics } = await import('../client')
+    const { initAnalytics, analyticsReady } = await import('../client')
     bufferEarlyErrors(win as unknown as Window)
     const hydration = new Error('Minified React error #418')
     win.dispatchEvent(errorEvent(hydration))
 
     expect(initAnalytics()).toBe(true)
+    // The SDK loads after the page (client.ts): init and the held errors follow it.
+    await analyticsReady()
     expect(posthogMock.init).toHaveBeenCalledTimes(1)
     expect(posthogMock.captureException).toHaveBeenCalledTimes(1)
     expect(posthogMock.captureException).toHaveBeenCalledWith(hydration, { before_analytics_start: true })
@@ -113,6 +115,8 @@ describe('initAnalytics sends the held errors on', () => {
 
     // A second call (another layout effect run) starts nothing and resends nothing.
     expect(initAnalytics()).toBe(true)
+    await analyticsReady()
+    expect(posthogMock.init).toHaveBeenCalledTimes(1)
     expect(posthogMock.captureException).toHaveBeenCalledTimes(1)
   })
 
