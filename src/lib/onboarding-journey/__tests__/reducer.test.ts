@@ -912,6 +912,23 @@ describe('journeyReducer: a company without an org number', () => {
     expect(typed.lookupPending).toBe(true)
   })
 
+  it('a name search keeps the VAT reason for the number until a hit is picked (crm#1909)', () => {
+    const sent = journeyReducer(withoutOrgAtMomsyn(), { type: 'VAT_ANSWERED', registered: true })
+    const hit = { orgNumber: '5566778899', result: lookup() }
+    const waiting = run(
+      sent,
+      { type: 'SEARCH_SUBMITTED', query: 'Testbolaget' },
+      { type: 'SEARCH_RESULT', outcome: { status: 'found', hits: [hit] } },
+    )
+    // The UI hides "Fortsätt utan" on this reason: continuing without a
+    // number would drop every kept answer and loop back to the VAT question.
+    expect(waiting.step).toBe('orgnr')
+    expect(waiting.serverError).toBe('vat_needs_org_number')
+    const picked = journeyReducer(waiting, { type: 'SEARCH_HIT_PICKED', hit })
+    expect(picked.serverError).toBeNull()
+    expect(picked.settings.org_number).toBe('5566778899')
+  })
+
   it('drops a BankID prefill: the name and form belonged to a number', () => {
     const s = journeyReducer(
       initJourney({ initialOrgNumber: '556677-8899', initialEntityType: 'aktiebolag', initialLegalName: 'Nordvik Bygg & Konsult AB' }),

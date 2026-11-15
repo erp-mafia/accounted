@@ -364,9 +364,6 @@ export default function OnboardingJourney({
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'SEARCH_RESULT', outcome })
-        if (outcome.status === 'found' && outcome.hits.length === 1) {
-          checkDuplicate(outcome.hits[0].orgNumber)
-        }
       })
     },
     [ticEnabled, shakeOrg, checkDuplicate, lookupFor],
@@ -717,13 +714,13 @@ export default function OnboardingJourney({
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
-                : state.serverError === 'vat_needs_org_number'
-                  ? t('journey_err_vat_needs_orgnr')
-                  : state.lookupNote === 'error'
+                : state.lookupNote === 'error'
                   ? t('journey_lookup_error')
                   : state.lookupNote === 'nomatch'
                     ? t('journey_search_nomatch')
-                    : undefined
+                    : state.serverError === 'vat_needs_org_number'
+                      ? t('journey_err_vat_needs_orgnr')
+                      : undefined
             }
           >
             <div className={`jny-biginput${orgShake ? ' is-err' : ''}`} style={{ marginTop: 26 }}>
@@ -783,9 +780,13 @@ export default function OnboardingJourney({
             ) : suggestTruncated ? (
               // SCB counted a flood for a short prefix and sent no rows.
               <p className="jny-enterhint">{t('journey_suggest_more')}</p>
-            ) : state.searchHits.length > 1 ? (
+            ) : state.searchHits.length > 0 ? (
               <>
-                <p className="jny-enterhint">{t('journey_search_pick')}</p>
+                {/* A lone hit is a guess too (fuzzy name ranking): it is
+                    confirmed like several, never applied by itself. */}
+                <p className="jny-enterhint">
+                  {state.searchHits.length === 1 ? t('journey_search_pick_one') : t('journey_search_pick')}
+                </p>
                 <ChipRow
                   options={state.searchHits.map((h) => {
                     const ident = identFor(h.result.legalEntityType, h.orgNumber)
@@ -830,34 +831,36 @@ export default function OnboardingJourney({
                 {state.lookupNote === 'nomatch' ? (
                   <p className="jny-more">{t('journey_search_nomatch_joint')}</p>
                 ) : null}
-                {/* The org number is optional until the company is VAT
-                    registered: one not registered yet, or a test company,
-                    takes the manual path without it. Not offered right
-                    after a VAT yes sent the user here for the number. */}
                 {/* A sole trader has a number and often does not know it is
                     this one: without the line, "no organisation number yet"
                     reads as their case. */}
                 <p className="jny-more">{t('journey_orgnr_ef_hint')}</p>
-                {state.serverError === 'vat_needs_org_number' ? null : (
-                  <p className="jny-more jny-more-next">
-                    {t('journey_no_orgnr_pre')}{' '}
-                    <button
-                      type="button"
-                      className="jny-link"
-                      disabled={state.lookupPending}
-                      onClick={() => {
-                        // A duplicate found for an earlier number is not this company's.
-                        setDupName(null)
-                        setDupMatch(null)
-                        dispatch({ type: 'NO_ORG_CONTINUE' })
-                      }}
-                    >
-                      {t('journey_no_orgnr_link')}
-                    </button>
-                    .
-                  </p>
-                )}
               </>
+            )}
+            {/* The org number is optional until the company is VAT
+                registered: one not registered yet, or a test company, takes
+                the manual path without it, whatever the field shows (a test
+                company's name can match a registered one, crm#1909). Not
+                offered right after a VAT yes sent the user here for the
+                number. */}
+            {state.serverError === 'vat_needs_org_number' ? null : (
+              <p className="jny-more jny-more-next">
+                {t('journey_no_orgnr_pre')}{' '}
+                <button
+                  type="button"
+                  className="jny-link"
+                  disabled={state.lookupPending}
+                  onClick={() => {
+                    // A duplicate found for an earlier number is not this company's.
+                    setDupName(null)
+                    setDupMatch(null)
+                    dispatch({ type: 'NO_ORG_CONTINUE' })
+                  }}
+                >
+                  {t('journey_no_orgnr_link')}
+                </button>
+                .
+              </p>
             )}
           </Question>
         )

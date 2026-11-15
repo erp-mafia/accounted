@@ -2628,6 +2628,7 @@
     "journey_search_nomatch": "Inget företag matchade. En nyregistrerad firma kan ta några dagar innan den syns i sökningen. Skriv organisationsnumret, för enskild firma ditt personnummer, så kan du fortsätta manuellt.",
     "journey_search_nomatch_joint": "Äger ni något tillsammans, till exempel en fastighet? En enskild firma har bara en ägare, så två personnummer kan inte dela en. Hör din del till din näringsverksamhet bokför du den i din egen firma, gärna som ett eget projekt.",
     "journey_search_pick": "Vilket företag menar du?",
+    "journey_search_pick_one": "Menar du det här företaget?",
     "journey_search_pick_missing": "Inte med? En nyregistrerad firma kan ta några dagar innan den syns här. Skriv organisationsnumret, för enskild firma ditt personnummer, så kan du fortsätta manuellt.",
     "journey_ceased_title": "Företaget är avregistrerat.",
     "journey_ceased_sub": "Enligt Bolagsverket är företaget avregistrerat.",
