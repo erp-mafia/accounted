@@ -16796,6 +16796,8 @@
     "provider_AMOUNT_INVALID": "The bank does not accept the amount.",
     "provider_PAYMENT_REFUSED": "The bank refused the payment.",
     "provider_CONNECTOR_BANK_THROTTLED": "The bank is busy, try again in a moment.",
+    "provider_CONNECTOR_QUOTA_EXCEEDED": "The connector key has used its bank payments for this month. Contact support@accounted.se if you need more.",
+    "provider_CONNECTOR_NOT_OWNED": "The connector key does not cover this company or this payment. Contact support@accounted.se to add the company.",
     "provider_FUNDS_NOT_AVAILABLE": "The payment could not be completed: insufficient funds on the account.",
     "provider_CREDITOR_ACCOUNT_INVALID": "The payment failed: invalid payee account. Check the payee account details.",
     "provider_DEBTOR_ACCOUNT_INVALID": "The payment failed: invalid paying account. Check the account you pay from.",

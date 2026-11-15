@@ -16796,6 +16796,8 @@
     "provider_AMOUNT_INVALID": "Beloppet godtas inte av banken.",
     "provider_PAYMENT_REFUSED": "Banken avvisade betalningen.",
     "provider_CONNECTOR_BANK_THROTTLED": "Banken är upptagen, försök om en stund.",
+    "provider_CONNECTOR_QUOTA_EXCEEDED": "Anslutningsnyckelns bankbetalningar för månaden är slut. Kontakta support@accounted.se om du behöver fler.",
+    "provider_CONNECTOR_NOT_OWNED": "Anslutningsnyckeln gäller inte det här bolaget eller den här betalningen. Kontakta support@accounted.se för att lägga till bolaget.",
     "provider_FUNDS_NOT_AVAILABLE": "Betalningen kunde inte genomföras: otillräckliga medel på kontot.",
     "provider_CREDITOR_ACCOUNT_INVALID": "Betalningen misslyckades: ogiltigt mottagarkonto. Kontrollera mottagarens kontouppgifter.",
     "provider_DEBTOR_ACCOUNT_INVALID": "Betalningen misslyckades: ogiltigt avsändarkonto. Kontrollera kontot du betalar från.",
