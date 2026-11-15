@@ -362,8 +362,8 @@ export function shouldRegenerateTaxDeadlines(
  * conservative choice for a compliance surface: a stale filing date is a
  * missed filing, a lost title edit is cosmetic.
  */
-// due_date is read, never inherited: an open helårsmoms row's date decides
-// whether a recorded EU-trade period still dates it (euTradeYearsInForce).
+// due_date is read, never inherited: once a helårsmoms period's earlier date
+// has passed, its open row's date decides where it stays (helarsmomsSettledByOpenRows).
 const SUPERSEDED_ROW_SELECT =
   'tax_deadline_type, tax_period, due_date, status, status_changed_at, notes, due_time, priority, customer_id' as const
 
@@ -588,11 +588,11 @@ export async function generateTaxDeadlinesForUser(
     supersededByKey.set(`${row.tax_deadline_type}:${row.tax_period}`, row)
   }
 
-  // A recorded EU-trade period whose earlier date has passed while its open
-  // row is still ahead keeps that row (euTradeYearsInForce).
+  // Once a helårsmoms period's earlier date has passed, its open row stays
+  // where it is, whatever the EU-trade answer says now.
   settings = {
     ...settings,
-    eu_trade_fiscal_year_ends: euTradeYearsInForce(
+    helarsmoms_settled: helarsmomsSettledByOpenRows(
       settings,
       (supersededRows ?? []) as SupersededDeadlineRow[],
       todayIso,
@@ -984,14 +984,14 @@ function groupRowsByCompany(rows: readonly UpcomingDeadlineCompanyRow[]): Map<st
   return byCompany
 }
 
-/** Detection reads euTradeYearsInForce from the same open rows the generator replaces. */
-function withEuTradeInForce(
+/** Detection reads helarsmomsSettledByOpenRows from the same open rows the generator replaces. */
+function withHelarsmomsSettled(
   settings: CompanySettingsForDeadlines,
   rows: readonly UpcomingDeadlineCompanyRow[],
   todayIso: string,
 ): CompanySettingsForDeadlines {
   const open = rows.filter((row) => !row.is_completed && !row.dismissed_at)
-  return { ...settings, eu_trade_fiscal_year_ends: euTradeYearsInForce(settings, open, todayIso) }
+  return { ...settings, helarsmoms_settled: helarsmomsSettledByOpenRows(settings, open, todayIso) }
 }
 
 export function findSettingsMissingUpcomingDeadlines(
@@ -1019,7 +1019,7 @@ export function findSettingsMissingUpcomingDeadlines(
   return settingsRows.filter((settings) => {
     try {
       const expectedKeys = getExpectedUpcomingDeadlineKeys(
-        withEuTradeInForce(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
+        withHelarsmomsSettled(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
         years,
         fromDate,
       )
@@ -1088,7 +1088,7 @@ export function findSettingsWithStaleUpcomingDeadlines(
     if (!rows) return false
     try {
       const expectedKeys = getExpectedUpcomingDeadlineKeys(
-        withEuTradeInForce(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
+        withHelarsmomsSettled(toDeadlineSettings(settings), rowsByCompany.get(settings.company_id) ?? [], todayIso),
         windowYears,
         fromDate,
       )
@@ -1284,37 +1284,55 @@ function dueIso(instance: DeadlineInstance): string {
 }
 
 /**
- * The recorded EU-trade periods that date a helårsmoms row today. A period
- * whose EU-trade date has passed while its open row is still on a later date
- * is left out, so that row stays where it is: the generator writes no row in
- * the past, so with the period in, the repair would replace the row by none.
- * That state is reached when the row was not moved before the earlier date
- * passed: a regeneration that failed after the period was recorded, a row
- * filed and then unmarked, a revert. The generator and the repair's detection
- * both read this, from the same open rows, so they agree.
+ * The helårsmoms periods whose EU-trade date has passed, keyed like
+ * eu_trade_fiscal_year_ends, with the EU-trade answer their open row was
+ * placed by (CompanySettingsForDeadlines.helarsmoms_settled). The generator
+ * writes no row in the past, so without this a later answer would undo the
+ * row: the books recorded after the row should have moved, or the setting
+ * turned on, would delete a row still ahead and write none; the setting
+ * turned off would add a second, later row next to the overdue one. A row
+ * still ahead stays on the later date (false); otherwise a row on the earlier
+ * date stays the period's row (true). A label two periods share (a re-laid
+ * aktiebolag year) is left to the plain answer: its rows cannot be told
+ * apart.
  */
-export function euTradeYearsInForce(
+export function helarsmomsSettledByOpenRows(
   settings: CompanySettingsForDeadlines,
   openRows: ReadonlyArray<{ tax_deadline_type: string | null; tax_period: string | null; due_date: string | null }>,
   todayIso: string,
-): readonly string[] | undefined {
-  const recorded = settings.eu_trade_fiscal_year_ends
-  if (!recorded || recorded.length === 0) return recorded
-  const openAhead = new Set(
-    openRows
-      .filter((row) => row.tax_deadline_type === 'moms_yearly' && row.due_date !== null && row.due_date >= todayIso)
-      .map((row) => row.tax_period),
+): Readonly<Record<string, boolean>> | undefined {
+  const open = openRows.filter((row) => row.tax_deadline_type === 'moms_yearly' && row.tax_period && row.due_date)
+  if (open.length === 0) return undefined
+  const year = Number(todayIso.slice(0, 4))
+  const periods = fiscalYearsEndingIn([year - 2, year - 1, year, year + 1], settings).flatMap((fy) => {
+    const withTrade = helarsmomsDeadline(fy, settings, true)
+    if (!withTrade) return []
+    const without = helarsmomsDeadline(fy, settings, false)
+    return [{
+      key: fiscalYearEndKey(helarsmomsPeriodOf(fy, settings)),
+      label: withTrade.period,
+      earlier: dueIso(withTrade),
+      later: without ? dueIso(without) : null,
+    }]
+  })
+  // Two periods (not two räkenskapsår of one period, as an enskild firma's
+  // broken years re-laid to the calendar year are) under one label.
+  const sharedLabels = new Set(
+    periods
+      .filter((period) => periods.some((other) => other.label === period.label && other.key !== period.key))
+      .map((period) => period.label),
   )
-  if (openAhead.size === 0) return recorded
-  const passed = new Set<string>()
-  const endYears = Array.from(new Set(recorded.map((key) => Number(key.slice(0, 4)))))
-  for (const fy of fiscalYearsEndingIn(endYears, settings)) {
-    const key = fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))
-    if (!recorded.includes(key)) continue
-    const instance = helarsmomsDeadline(fy, settings, true)
-    if (instance && openAhead.has(instance.period) && dueIso(instance) < todayIso) passed.add(key)
+  const settled: Record<string, boolean> = {}
+  for (const period of periods) {
+    if (period.earlier >= todayIso || sharedLabels.has(period.label)) continue
+    const rows = open.filter((row) => row.tax_period === period.label)
+    // A row still ahead first: a period that already has one next to an
+    // overdue row (the setting turned off after the earlier date, before this
+    // rule) keeps both rather than losing the one the user goes by.
+    if (period.later !== null && rows.some((row) => row.due_date! >= todayIso)) settled[period.key] = false
+    else if (rows.some((row) => row.due_date === period.earlier)) settled[period.key] = true
   }
-  return passed.size === 0 ? recorded : recorded.filter((key) => !passed.has(key))
+  return Object.keys(settled).length > 0 ? settled : undefined
 }
 
 /**
@@ -1322,7 +1340,7 @@ export function euTradeYearsInForce(
  * generator dates for `years` that the books can still move: started, not
  * recorded with EU trade, and with the EU-trade date still ahead. Without EU
  * trade the date is later, so once the EU-trade date has passed the row stays
- * where it is (euTradeYearsInForce).
+ * where it is (helarsmomsSettledByOpenRows).
  */
 function periodsTheBooksCanMove(
   settings: CompanySettingsForDeadlines,
@@ -1416,6 +1434,15 @@ export async function alignYearlyVatDeadlinesWithBooks(
       companiesMoved++
     } catch (err) {
       log.error(`Error reading EU trade for the helårsmoms of company ${entry.companyId}:`, err)
+      // Written as read without EU trade, so a company whose read keeps
+      // failing does not go first every night and spend the pass on itself: a
+      // no only orders the queue, and the next read decides. A yes is never
+      // overwritten (recordEuTradeChecks).
+      await recordEuTradeChecks(
+        supabase,
+        entry.companyId,
+        entry.open.map((period) => ({ key: fiscalYearEndKey(period), hasEuTrade: false })),
+      ).catch((touchError) => log.warn(`EU-trade read time not recorded for company ${entry.companyId}`, { error: String(touchError) }))
     }
   }
   return { companiesChecked, companiesMoved, companiesNotReached: 0 }

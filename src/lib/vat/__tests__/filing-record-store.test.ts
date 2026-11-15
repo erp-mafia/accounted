@@ -173,6 +173,14 @@ describe('a stale settings month against the recorded räkenskapsår', () => {
     expect(deadline).toMatchObject({ tax_period: '2025/2026', due_date: '2026-08-26' })
   })
 
+  it('reads the recorded EU trade whenever the setting is not on, as the generator does', async () => {
+    const unset = { data: { ...CALENDAR_AB.data, vat_has_eu_trade: null } }
+    const { supabase } = createStoreSupabase([unset, { data: null }], [], ['2026-12'])
+    await expect(
+      vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 }),
+    ).resolves.toMatchObject({ tax_period: '2026', due_date: '2027-02-26' })
+  })
+
   it('places the date by the setting when the recorded EU trade cannot be read, rather than failing', async () => {
     const { supabase } = createStoreSupabase([CALENDAR_AB, { data: null }], RECORDED, 'unreadable')
     const deadline = await vatPeriodDeadline(supabase, COMPANY, { periodType: 'yearly', year: 2026, period: 1 })
@@ -188,7 +196,7 @@ describe('a stale settings month against the recorded räkenskapsår', () => {
     const other = createStoreSupabase([ef, { data: null }], RECORDED, ['2025-06'])
     await expect(
       vatPeriodDeadline(other.supabase, COMPANY, { periodType: 'yearly', year: 2025, period: 1 }),
-    ).resolves.not.toMatchObject({ due_date: '2026-02-26' })
+    ).resolves.toMatchObject({ tax_period: '2025', due_date: '2026-05-12' })
   })
 
   it('labels the period for the Skatteverket panel the same way', async () => {
