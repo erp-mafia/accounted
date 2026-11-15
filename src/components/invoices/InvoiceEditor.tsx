@@ -254,6 +254,7 @@ import {
   type InvoiceQrMode,
 } from '@/types'
 import { addDaysIso, todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 
 const currencies: readonly Currency[] = CURRENCIES
 
@@ -1736,7 +1737,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           if (customer.default_payment_terms != null) {
             const fill = planCustomerTermsFill({
               invoiceDate: getValues('invoice_date') || '',
-              terms: customer.default_payment_terms,
+              // A private person's invoice is due within 50 days
+              // (konsumentkreditlagen): a longer term on the card is held there.
+              terms: consumerInvoiceTerms(
+                customer.default_payment_terms,
+                customer.customer_type,
+                getValues('invoice_date') || todayIsoStockholm(),
+              ),
               today: todayIsoStockholm(),
             })
             setValue('due_date', fill.dueDate)

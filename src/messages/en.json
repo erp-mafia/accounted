@@ -2422,6 +2422,7 @@
     "payment_terms_label": "Payment terms (days)",
     "payment_terms_help": "Days from invoice date to due date. 0 means payment on receipt.",
     "payment_terms_invalid": "Enter payment terms in whole days, 0 to 365. 0 means payment on receipt.",
+    "payment_terms_private_max": "An invoice to a private person must fall due within {days} days (the Consumer Credit Act). Enter {days} days or fewer.",
     "invoice_reference_label": "Invoice reference",
     "invoice_reference_placeholder": "E.g. cost centre 4410",
     "invoice_reference_hint": "Filled in as Your reference on new invoices",

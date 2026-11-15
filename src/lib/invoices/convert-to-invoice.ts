@@ -14,8 +14,9 @@ import {
   type QuoteInvoicePart,
   type QuoteSourceLine,
 } from '@/lib/invoices/quote-partial-invoice'
-import type { Invoice } from '@/types'
+import type { CustomerType, Invoice } from '@/types'
 import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 
 /**
@@ -77,6 +78,7 @@ type SourceItem = QuoteSourceLine
 type SourceRow = Invoice & {
   items?: SourceItem[] | null
   customer?: {
+    customer_type?: CustomerType | null
     default_payment_terms?: number | null
     language?: string | null
     invoice_reference?: string | null
@@ -97,7 +99,7 @@ export async function convertToInvoice(params: {
 
   const { data: sourceRaw, error: sourceError } = await supabase
     .from('invoices')
-    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language, invoice_reference, invoice_marking)')
+    .select('*, items:invoice_items(*), customer:customers(customer_type, default_payment_terms, language, invoice_reference, invoice_marking)')
     .eq('id', sourceId)
     .eq('company_id', companyId)
     .single()
@@ -180,7 +182,14 @@ export async function convertToInvoice(params: {
     }
 
     try {
-      dueDate = invoiceDueDate(today, await loadInvoiceTerms(supabase, companyId, source.customer?.default_payment_terms))
+      dueDate = invoiceDueDate(
+        today,
+        consumerInvoiceTerms(
+          await loadInvoiceTerms(supabase, companyId, source.customer?.default_payment_terms),
+          source.customer?.customer_type,
+          today,
+        ),
+      )
     } catch (cause) {
       return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: cause as Error }
     }

@@ -38,6 +38,7 @@ import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-pers
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import { consumerCreditRefusal } from '@/lib/invoices/consumer-credit'
 import {
   accountsWithBookedSales,
   articleTypeCandidateAccount,
@@ -490,6 +491,20 @@ export async function buildInvoiceWriteData(params: {
     }
   }
   const total = documentType === 'delivery_note' ? 0 : roundOre(subtotal + vatAmount)
+
+  // Konsumentkreditlag (2026:1011): an invoice to a consumer stays a särskild
+  // fakturakredit only without an invoice fee and due within 50 days of
+  // delivery. Checked here so every door that writes an invoice answers alike.
+  const creditRefusal = consumerCreditRefusal({
+    customerType: customer.customer_type,
+    documentType,
+    invoiceDate: input.invoice_date,
+    dueDate: input.due_date,
+    deliveryDate: input.delivery_date,
+    total,
+    items,
+  })
+  if (creditRefusal) return { ok: false, code: creditRefusal.code, details: creditRefusal.details }
 
   // Validate any per-line posting-account override against the company's chart
   // of accounts. The legacy field name is revenue_account, but balance-sheet

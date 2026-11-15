@@ -2422,6 +2422,7 @@
     "payment_terms_label": "Betalningsvillkor (dagar)",
     "payment_terms_help": "Dagar från fakturadatum till förfallodag. 0 betyder betalning direkt.",
     "payment_terms_invalid": "Ange betalningsvillkor i hela dagar, 0 till 365. 0 betyder betalning direkt.",
+    "payment_terms_private_max": "En faktura till en privatperson ska förfalla inom {days} dagar (konsumentkreditlagen). Ange högst {days} dagar.",
     "invoice_reference_label": "Fakturareferens",
     "invoice_reference_placeholder": "T.ex. kostnadsställe 4410",
     "invoice_reference_hint": "Fylls i som Er referens på nya fakturor",
