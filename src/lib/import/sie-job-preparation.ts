@@ -14,7 +14,8 @@ import { dimensionValueSnapshot, emitDimensionValuesCreated, type DimensionValue
 import { validateEntryDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { DimensionValidationError } from '@/lib/bookkeeping/dimension-errors'
 import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
-import { chunkSIEEntries, exceedsSIEEntryLimits, hashSIEPayload, SIE_JOB_VERSION, SIE_LIMITS, type SIEJob, type SIEPreparedEntry } from './sie-job-contract'
+import { chunkSIEEntries, exceedsSIEEntryLimits, hashSIEPayload, SIE_JOB_VERSION, SIE_LIMITS, sieFinalOrdinals, type SIEJob,
+  type SIEPreparedEntry } from './sie-job-contract'
 import type { OpeningBalanceSplitRefusal } from './sie-object-balances'
 import { applySIEFiscalYear, assertSIEReportingAccounts, readSIEJobSource, SIEJobValidationError, validateSIEAccountingAmounts, validateSIEJobInput, validateSIEReportingMappings, type SIEJobInput } from './sie-jobs'
 import type { ParsedSIEFile, SIEVoucher } from './types'
@@ -107,13 +108,31 @@ function reviveVoucher(value: SIEVoucher): SIEVoucher {
   return { ...value, date: new Date(value.date), registrationDate: value.registrationDate ? new Date(value.registrationDate) : undefined }
 }
 
+/**
+ * Source voucher groups per read. The read runs between the worker's last
+ * lease renewal and complete_sie_import_job, which needs the 2-minute lease
+ * still alive: a 150 000-voucher year has about 750 groups, one request each
+ * before. Twenty groups of at most 1 MiB keep a response bounded.
+ */
+const SOURCE_GROUPS_PER_READ = 20
+
 /** Every source voucher, revived. Read before complete_sie_import_job, which deletes the groups. */
 export async function readSIESourceVouchers(supabase: SupabaseClient, job: SIEJob, groups: number): Promise<SIEVoucher[]> {
   const vouchers: SIEVoucher[] = []
-  for (let group = 0; group < groups; group++) {
-    const raw = await readCheckpoint<SIEVoucher[]>(supabase,job,SIE_CHECKPOINTS.snapshot+1+group)
-    if (!raw) throw new Error('SIE source group missing')
-    for (const voucher of raw) vouchers.push(reviveVoucher(voucher))
+  for (let first = 0; first < groups; first += SOURCE_GROUPS_PER_READ) {
+    const count = Math.min(SOURCE_GROUPS_PER_READ, groups - first)
+    const start = SIE_CHECKPOINTS.snapshot + 1 + first
+    const { data, error } = await supabase.from('sie_import_chunks').select('chunk_no,payload')
+      .eq('company_id',job.company_id).eq('import_id',job.id).eq('phase','prepare')
+      .gte('chunk_no',start).lt('chunk_no',start + count).order('chunk_no').range(0,count - 1)
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as Array<{ chunk_no: number; payload: [SIEVoucher[]] | null }>
+    if (rows.length !== count) throw new Error('SIE source group missing')
+    for (const row of rows) {
+      const raw = row.payload?.[0]
+      if (!raw) throw new Error('SIE source group missing')
+      for (const voucher of raw) vouchers.push(reviveVoucher(voucher))
+    }
   }
   return vouchers
 }
@@ -295,7 +314,8 @@ export function toPrepared(input: CreateJournalEntryInput, job: Pick<SIEJob,'id'
     entry.amount = roundOre(entry.amount+line.debit_amount-line.credit_amount)
     net.set(key,entry)
   }
-  return { sourceId:ordinal === 50_000 ? 'IB' : 'MIGRATION_ADJUSTMENT',sourceOrdinal:ordinal,
+  // The two generated entries (sieFinalOrdinals): the IB and the migration adjustment.
+  return { sourceId:input.source_type === 'opening_balance' ? 'IB' : 'MIGRATION_ADJUSTMENT',sourceOrdinal:ordinal,
     sieImportId:job.id,series:input.voucher_series ?? 'M',date:input.entry_date,description:input.description,
     sourceSeries:null,sourceNumber:null,sourceType:input.source_type === 'opening_balance' ? 'opening_balance' : 'import',
     lines:[...net.values()].filter(({amount}) => amount !== 0).map(({account,dimensions,amount},index) => ({account_number:account,
@@ -458,6 +478,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   const parsed = {...snapshot.parsed,openingBalances:job.manifest.effectiveOpeningBalances as ParsedSIEFile['openingBalances']}
   if (!snapshot.hasCurrentYearIb) parsed.closingBalances = parsed.closingBalances.filter(b => b.yearIndex !== -1)
   const finalEntries: SIEPreparedEntry[] = []
+  // Every voucher group is prepared: sourceOrdinal is the first ordinal past them.
+  const finalOrdinals = sieFinalOrdinals(sourceOrdinal)
   let rounding = 0
   let openingBalanceDifferenceAccount: string | undefined
   let openingBalanceSplitRefused: OpeningBalanceSplitRefusal | undefined
@@ -478,7 +500,7 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
         split && accumulating ? {rows:objectRows,accumulating} : {rows:[]})
       if (entry && job.manifest.derivedFromPriorYearUB) entry.description += ' (härledda från föregående års utgående balans)'
       return entry
-    },objectRows.length > 0,entry => toPrepared(entry,job,50_000,accountIds))
+    },objectRows.length > 0,entry => toPrepared(entry,job,finalOrdinals.openingBalance,accountIds))
     if (opening) {
       finalEntries.push(opening.prepared)
       openingBalanceSplitRefused = opening.splitRefused
@@ -486,7 +508,7 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   }
   const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount,
     new Map(totals.resultClosingMovements ?? [])) : null
-  if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,50_001,accountIds))
+  if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,finalOrdinals.adjustment,accountIds))
   assertSIEReportingAccounts(finalEntries.flatMap(entry => entry.lines.map(line => line.account_number)))
   if (append && totals.entries === 0) {
     throw new SIEJobValidationError(appendNothingNewRefusal(totals.append?.present ?? 0,totals.append?.possibleDuplicatesSkipped ?? 0).message)
@@ -504,7 +526,7 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     migrationAdjustmentAccounts:adjustment?.deltaAccounts ?? 0,
     preparationWarnings:[...(adjustment?.warnings ?? []),...(snapshot.artifactWarning ? [snapshot.artifactWarning] : [])],finalChunks:finalChunk,
     skippedCounts:totals.skippedCounts,
-    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input),
+    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input),finalOrdinals,
     ...(append ? {appendCounts:totals.append ?? {present:0,possibleDuplicatesSkipped:0,possibleDuplicatesIncluded:0}} : {})}
   await sieJobRPC(supabase,job,'seal_sie_import_preparation',{p_manifest:manifest,p_chunks_total:chunkNo})
   job.manifest = manifest

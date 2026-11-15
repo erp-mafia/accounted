@@ -11,7 +11,7 @@
  * The original is not stored again: submitSIEJob has already archived it in
  * the sie-files bucket (the bytes as uploaded, or the text as provided), and
  * the arrival points at that object. No arrival_outputs: an import produces
- * up to 50 000 verifikat, and each already carries the import's id, which is
+ * up to 150 000 verifikat (SIE_LIMITS.fileVouchers), and each already carries the import's id, which is
  * this arrival's reference.
  *
  * Best effort: never throws; a failure is logged by recordArrival and the
