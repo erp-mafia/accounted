@@ -180,6 +180,45 @@ export async function checkTransactionClaims(
 }
 
 /**
+ * The open proposal that holds each of these bank rows, for a list that
+ * shows it beside the row (pending_operation_id, crm#1264): an agent that
+ * sees the id does not stage the row a second time, where it used to learn
+ * of the proposal only from the TRANSACTION_ALREADY_STAGED refusal. Same
+ * definition as the staging check above (types, statuses, where the params
+ * name the rows). One read for the whole page, none for an empty one. Two
+ * open proposals on one row (stagings in the same instant) answer the older.
+ * A failed read throws: a row listed without its proposal reads as free.
+ */
+export async function openTransactionClaims(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<Map<string, string>> {
+  const claims = new Map<string, string>()
+  const wanted = new Set(transactionIds)
+  if (wanted.size === 0) return claims
+
+  type OpenOperation = Pick<PendingOperation, 'id' | 'operation_type' | 'params'>
+  const open = await fetchAllRows<OpenOperation>(({ from, to }) =>
+    supabase
+      .from('pending_operations')
+      .select('id, operation_type, params')
+      .eq('company_id', companyId)
+      .in('status', OPEN_STATUSES)
+      .in('operation_type', CLAIMING_TYPES)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  for (const operation of open) {
+    for (const transactionId of claimedTransactionIds(operation.operation_type, operation.params)) {
+      if (wanted.has(transactionId) && !claims.has(transactionId)) claims.set(transactionId, operation.id)
+    }
+  }
+  return claims
+}
+
+/**
  * Reject the older proposals a new one replaced, through the one reject
  * path (status, rejection_category 'superseded', the reason naming the new
  * operation, who did it, one PendingOperationRejected audit row each), CAS

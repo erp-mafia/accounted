@@ -29,6 +29,13 @@ beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
 
+// The transactions list also names the open proposal holding each row (crm#1264).
+// That read has its own tests; here it answers 'none' so only the paging is exercised.
+vi.mock('@/lib/pending-operations/transaction-claims', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pending-operations/transaction-claims')>()),
+  openTransactionClaims: vi.fn(async (..._args: unknown[]) => new Map<string, string>()),
+}))
+
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
   return {

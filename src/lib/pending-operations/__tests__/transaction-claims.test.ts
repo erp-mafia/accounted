@@ -9,6 +9,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import {
   checkTransactionClaims,
   claimedTransactionIds,
+  openTransactionClaims,
   supersedeTransactionClaims,
   transactionAlreadyStagedFailure,
 } from '../transaction-claims'
@@ -230,6 +231,61 @@ describe('supersedeTransactionClaims', () => {
     enqueue({ data: null, error: { message: 'connection reset' } })
 
     await expect(supersedeTransactionClaims(supabase as never, 'company-1', [op({})] as never, replacement)).resolves.toEqual([])
+  })
+})
+
+describe('openTransactionClaims', () => {
+  it('maps each listed row to the open proposal that holds it, in one read for the whole page', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-bulk', operation_type: 'bulk_book_transactions', params: { tx_ids: [TX_1, TX_3] } },
+        { id: 'op-cat', operation_type: 'categorize_transaction', params: { transaction_id: TX_2 } },
+      ],
+      error: null,
+    })
+
+    const claims = await openTransactionClaims(supabase as never, 'company-1', [TX_1, TX_2])
+
+    // TX_3 is in the proposal but not on the page: not in the answer.
+    expect([...claims]).toEqual([[TX_1, 'op-bulk'], [TX_2, 'op-cat']])
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(findCalls('pending_operations', 'eq')).toEqual([['company_id', 'company-1']])
+    // The staging check's definition of open and of a claiming type.
+    expect(findCalls('pending_operations', 'in')).toEqual([
+      ['status', ['pending', 'committing']],
+      ['operation_type', ['categorize_transaction', 'bulk_book_transactions']],
+    ])
+  })
+
+  it('answers the older proposal when two hold one row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The read is ordered oldest first.
+    enqueue({
+      data: [
+        { id: 'op-older', operation_type: 'categorize_transaction', params: { transaction_id: TX_1 } },
+        { id: 'op-newer', operation_type: 'bulk_book_transactions', params: { tx_ids: [TX_1] } },
+      ],
+      error: null,
+    })
+
+    const claims = await openTransactionClaims(supabase as never, 'company-1', [TX_1])
+
+    expect(claims.get(TX_1)).toBe('op-older')
+  })
+
+  it('reads nothing for an empty page', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    expect((await openTransactionClaims(supabase as never, 'company-1', [])).size).toBe(0)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('throws on a failed read: a row listed without its proposal reads as free', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+
+    await expect(openTransactionClaims(supabase as never, 'company-1', [TX_1])).rejects.toThrow('statement timeout')
   })
 })
 

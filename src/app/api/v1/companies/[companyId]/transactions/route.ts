@@ -19,6 +19,7 @@ import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import { applyBookedFilter } from '@/lib/transactions/unbooked'
+import { openTransactionClaims } from '@/lib/pending-operations/transaction-claims'
 
 const TransactionSummary = z.object({
   id: z.string().uuid(),
@@ -36,6 +37,13 @@ const TransactionSummary = z.object({
   import_source: z.string().nullable(),
   cash_account_id: z.string().uuid().nullable(),
   created_at: z.string(),
+  pending_operation_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe(
+      'The open proposal (a staged categorize or bulk booking, awaiting approval) that already holds this row; null when none does. Approve or reject that one: staging the row again answers TRANSACTION_ALREADY_STAGED.',
+    ),
 })
 
 const TransactionListResponse = listEnvelope(TransactionSummary)
@@ -195,7 +203,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
         : null
 
-    return paginated(trimmed, {
+    // crm#1264: the open proposal that already holds a row, the staging
+    // check's own definition, so a client sees it before it stages the row a
+    // second time. One read per page; a booked row is in no open proposal
+    // that can still book it, so a booked-only page reads nothing.
+    let openClaims = new Map<string, string>()
+    if (f.status !== 'booked') {
+      try {
+        openClaims = await openTransactionClaims(ctx.supabase, ctx.companyId!, trimmed.map((row) => row.id))
+      } catch (claimsError) {
+        return v1ErrorResponse(claimsError, ctx.log, { requestId: ctx.requestId })
+      }
+    }
+    const withClaims = trimmed.map((row) => ({ ...row, pending_operation_id: openClaims.get(row.id) ?? null }))
+
+    return paginated(withClaims, {
       requestId: ctx.requestId,
       nextCursor: nextCursor ?? undefined,
     })

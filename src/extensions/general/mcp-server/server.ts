@@ -513,6 +513,7 @@ import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-
 import { pendingOperationTaskState, type TaskStateSource } from '@/lib/pending-operations/task-state'
 import {
   checkTransactionClaims,
+  openTransactionClaims,
   supersedeTransactionClaims,
   transactionAlreadyStagedRefusal,
 } from '@/lib/pending-operations/transaction-claims'
@@ -757,6 +758,7 @@ import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-clie
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { fetchVatDeclarationStatus } from '@/extensions/general/skatteverket/lib/declaration-status'
+import { resolveUserReadAuth } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import type { SkvVatDeclarationState } from '@/lib/skatteverket/declaration-status'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
 import { getSkvConnectionHealth, getSkvFilingReadiness, skvReadSessionMessage, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
@@ -2877,13 +2879,13 @@ async function skvReadRefusal(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  opts: { ownOnly?: boolean; meanwhile?: string } = {},
+  opts: { meanwhile?: string } = {},
 ): Promise<Error> {
   // `meanwhile`: what answers the same question without Skatteverket. Only a
   // person can connect, so without it the refusal left the agent nothing to
   // call next (281 gnubok_vat_declaration_status refusals in 14 days, 113
   // companies; 36 in 100 went on to anything that answered the question).
-  const message = await skvReadSessionMessage(supabase, companyId, userId, opts)
+  const message = await skvReadSessionMessage(supabase, companyId, userId)
   return codedRefusal('SKATTEVERKET_NOT_CONNECTED', opts.meanwhile ? `${message} Meanwhile: ${opts.meanwhile}` : message, {
     description:
       'A person signs in to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user. Do not retry until they confirm.',
@@ -8976,6 +8978,14 @@ export const tools: McpTool[] = [
       // rest (payload-size.bench).
       const suggestedMatches = await loadSuggestedMatches(supabase, companyId, pageRows as unknown as SuggestionPointerRow[])
 
+      // crm#1264: the open proposal that already holds a row (a staged
+      // categorize_transaction or bulk_book_transactions awaiting approval),
+      // so an agent sees it here instead of staging a second one and meeting
+      // TRANSACTION_ALREADY_STAGED. The staging check's own definition; one
+      // read per page. On the row only when there is one, and undeclared
+      // like the rest (payload-size.bench).
+      const openClaims = await openTransactionClaims(supabase, companyId, pageRows.map((t) => t.id))
+
       const rows = pageRows.map((t) => {
         const parts = partsByTransaction.get(t.id) ?? []
         const allocations =
@@ -8993,10 +9003,12 @@ export const tools: McpTool[] = [
           ...row
         } = t as typeof t & { original_description?: string | null } & Omit<SuggestionPointerRow, 'id'>
         const suggested = suggestedMatches.get(t.id)
+        const pendingOperationId = openClaims.get(t.id)
         return {
           ...row,
           ...(giro ? { giro_counterparty: giroCounterpartyForWire(giro) } : {}),
           ...(suggested ? { suggested_match: suggested } : {}),
+          ...(pendingOperationId ? { pending_operation_id: pendingOperationId } : {}),
           transaction_id: t.id,
           cash_account_id: t.cash_account_id ?? null,
           cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
@@ -21273,11 +21285,23 @@ export const tools: McpTool[] = [
         // to send the user off to fix a behörighet that is not the problem,
         // and hid the local filing state it had already resolved.
         let kvittensRead: 'ok' | 'unavailable' = 'ok'
-        try {
-          // The transport audits the call, the gateway refusal included.
-          const res = await agiGetKvittenser(
-            { mode: 'user', supabase, userId, companyId }, arbetsgivare, period, { companyId, userId },
+        // The receipts belong to the company, so any member's live BankID
+        // login serves the read, the caller's own first (crm#1263): the pick
+        // the kvittens reconciler makes (resolveUserReadAuth, #1673). Reading
+        // on the caller's own token only answered NOT_CONNECTED for a company
+        // another member had connected. Never the ombud credentials: no
+        // ombud role Accounted holds covers the AGI API.
+        const resolved = await resolveUserReadAuth(supabase, companyId, { userId })
+        if (!resolved.ok) {
+          throw new SkatteverketAuthError(
+            'No live Skatteverket session serves this company.',
+            resolved.reason === 'needs_reconsent' ? 'SESSION_EXPIRED' : 'NOT_CONNECTED',
           )
+        }
+        try {
+          // The transport audits the call (as the caller who asked), the
+          // gateway refusal included.
+          const res = await agiGetKvittenser(resolved.auth, arbetsgivare, period, { companyId, userId })
           if (res.ok) kvittenser = res.data.kvittenser
         } catch (err) {
           if (!isApigwClientRefusal(err)) throw err
@@ -21296,10 +21320,9 @@ export const tools: McpTool[] = [
         }
       } catch (err) {
         const mapped = mapSkatteverketError(err) as Error & { code?: string }
-        // The receipts are read on the caller's own login only.
+        // Names the session the read used: the caller's own or another member's.
         if (mapped.code === 'SKATTEVERKET_NOT_CONNECTED') {
           throw await skvReadRefusal(supabase, companyId, userId, {
-            ownOnly: true,
             meanwhile: `gnubok_get_salary_run with salary_run_id ${salaryRunId} needs no connection and shows what Accounted has on record for the run (status, agi_generated_at, agi_submitted_at). Only the Skatteverket receipts need the login.`,
           })
         }

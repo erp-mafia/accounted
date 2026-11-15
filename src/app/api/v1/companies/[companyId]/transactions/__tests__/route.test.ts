@@ -185,6 +185,57 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
     expect(filters).not.toContainEqual(['not', 'journal_entry_id', 'is', null])
   })
 
+  it('names the open proposal that already holds a row as pending_operation_id, null on a free row (crm#1264)', async () => {
+    const FREE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const OPERATION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const row = (id: string) => ({ id, date: '2026-05-12', amount: -100, currency: 'SEK', description: 'ICA', created_at: '2026-05-12T08:00:00.000Z' })
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      open_bank_rows: { data: [row(TX_ID), row(FREE_ID)], error: null },
+      pending_operations: {
+        data: [{ id: OPERATION_ID, operation_type: 'categorize_transaction', params: { transaction_id: TX_ID } }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=unbooked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((t: { id: string; pending_operation_id: string | null }) => [t.id, t.pending_operation_id])).toEqual([
+      [TX_ID, OPERATION_ID],
+      [FREE_ID, null],
+    ])
+    // One read for the page, scoped to the company.
+    const claimReads = calls.filter((c) => c.table === 'pending_operations')
+    expect(claimReads.filter((c) => c.method === 'select')).toHaveLength(1)
+    expect(claimReads.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([['company_id', COMPANY_ID]])
+  })
+
+  it('status=booked reads no proposals: every row answers pending_operation_id null', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: [{ id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK', description: 'ICA', created_at: '2026-05-12T08:00:00.000Z' }],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=booked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data[0].pending_operation_id).toBeNull()
+    expect(calls.filter((c) => c.table === 'pending_operations')).toEqual([])
+  })
+
   it('rejects keys without transactions:read scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,
