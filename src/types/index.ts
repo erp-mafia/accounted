@@ -2996,8 +2996,16 @@ export interface DimensionCrossLinesPage {
 export interface BalansrapportRow {
   account_number: string
   account_name: string
+  /** Ingående balans: the balance on the fiscal year's first day (the year's IB). */
+  year_ib: number
+  /**
+   * Ingående saldo: the balance when the chosen range starts, the year's IB
+   * plus everything before the range. Equals year_ib for a range that starts
+   * on the year's first day.
+   */
   ib: number
   ub: number
+  /** ub - ib: the movement within the range. */
   period_change: number
 }
 
@@ -3016,6 +3024,7 @@ export interface BalansrapportSection {
   note?: string
   rows: BalansrapportRow[]
   sections: BalansrapportSection[]
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_change: number
   subtotal_ub: number
@@ -3026,6 +3035,7 @@ export interface BalansrapportGroup {
   class_label: string
   /** Every account of the class, under its ÅRL heading. */
   sections: BalansrapportSection[]
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_change: number
   subtotal_ub: number

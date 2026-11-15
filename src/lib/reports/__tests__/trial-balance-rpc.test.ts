@@ -39,7 +39,7 @@ function makeClient() {
   } as any
 }
 
-import { generateTrialBalance } from '../trial-balance'
+import { generateTrialBalance, generateTrialBalanceWithYearOpening } from '../trial-balance'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -274,6 +274,54 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
       closing_debit: 1250,
       closing_credit: 50,
     })
+  })
+
+  it('keeps the year\'s IB apart from the ingående saldo the rollforward builds', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 1000, credit: 0 }], error: null },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            { bucket: 'rollforward', account_number: '1930', debit: 250, credit: 0 },
+            // Arose after the year started: in the ingående saldo, not the IB.
+            { bucket: 'rollforward', account_number: '1510', debit: 300, credit: 0 },
+            { bucket: 'period', account_number: '1930', debit: 0, credit: 50 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalanceWithYearOpening(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2024-07-01',
+    })
+
+    expect(result.yearOpening).toEqual(new Map([['1930', { debit: 1000, credit: 0 }]]))
+    expect(result.rows.find((r) => r.account_number === '1930')).toMatchObject({ opening_debit: 1250, closing_debit: 1250 })
+    expect(result.rows.find((r) => r.account_number === '1510')).toMatchObject({ opening_debit: 300, closing_debit: 300 })
+  })
+
+  it('leaves yearOpening off generateTrialBalance: the Saldobalans route, the v1 API and MCP serialize it whole', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 1000, credit: 0 }], error: null },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    expect(Object.keys(result).sort()).toEqual(['isBalanced', 'rows', 'totalCredit', 'totalDebit'])
   })
 
   it('sends the dimension filter to both RPCs: the filtered view opens at the object\'s IB (#3313)', async () => {

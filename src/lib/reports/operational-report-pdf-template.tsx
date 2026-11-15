@@ -263,6 +263,13 @@ const styles = StyleSheet.create({
     fontSize: 8,
     color: '#888',
   },
+  // The Balansrapport's four amount columns: narrower and a point smaller
+  // than the other reports' three, so an account name keeps room on A4
+  // portrait and a 15-character amount (-123 456 789,00) still fits.
+  balansrapportAmount: {
+    width: 84,
+    fontSize: 9,
+  },
 })
 
 /** A deviation in percent, one decimal: "12,5 %"; blank without a budget. */
@@ -548,9 +555,10 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ingående</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Förändring</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmount]}>Utgående</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Ing. balans</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Ing. saldo</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Förändring</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmount, styles.balansrapportAmount]}>Utg. balans</Text>
         </View>
 
         {report.groups.map((group) => (
@@ -563,9 +571,10 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
             ))}
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.classTotalLabel}>Summa {group.class_label}</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_change)}</Text>
-              <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_ub)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_year_ib)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_change)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount]}>{formatAmount(group.subtotal_ub)}</Text>
             </View>
           </View>
         ))}
@@ -637,16 +646,18 @@ function BalansrapportSectionPDF({ section, depth }: { section: BalansrapportSec
         <View key={row.account_number} style={styles.row} wrap={false}>
           <Text style={styles.colAccount}>{row.account_number}</Text>
           <Text style={styles.colName}>{row.account_name}</Text>
-          <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
-          <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
-          <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.year_ib)}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.ib)}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.period_change)}</Text>
+          <Text style={[styles.colAmount, styles.balansrapportAmount]}>{formatAmount(row.ub)}</Text>
         </View>
       ))}
       <View style={depth === 0 && section.sections.length > 0 ? styles.subtotalRow : styles.sectionTotalRow} wrap={false}>
         <Text style={styles.subtotalLabel}>{section.total_label}</Text>
-        <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(section.subtotal_ib)}</Text>
-        <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(section.subtotal_change)}</Text>
-        <Text style={styles.subtotalAmount}>{formatAmount(section.subtotal_ub)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_year_ib)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_ib)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_change)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount]}>{formatAmount(section.subtotal_ub)}</Text>
       </View>
     </View>
   )

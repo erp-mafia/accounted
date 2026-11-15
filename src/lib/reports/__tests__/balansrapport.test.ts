@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../trial-balance', () => ({
-  generateTrialBalance: vi.fn(),
+  generateTrialBalanceWithYearOpening: vi.fn(),
 }))
 
 vi.mock('../imbalance-diagnosis', () => ({
@@ -16,7 +16,7 @@ vi.mock('../latest-vouchers', () => ({
 }))
 
 import { generateBalansrapport } from '../balansrapport'
-import { generateTrialBalance } from '../trial-balance'
+import { generateTrialBalanceWithYearOpening, type AccountSums } from '../trial-balance'
 import { buildImbalanceDiagnosis } from '../imbalance-diagnosis'
 import { getLatestPostedVouchers } from '../latest-vouchers'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -29,7 +29,7 @@ import type {
   TrialBalanceRow,
 } from '@/types'
 
-const mockTrialBalance = vi.mocked(generateTrialBalance)
+const mockTrialBalance = vi.mocked(generateTrialBalanceWithYearOpening)
 const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
 const mockLatestVouchers = vi.mocked(getLatestPostedVouchers)
 
@@ -53,14 +53,21 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
   }
 }
 
-function tb(rows: TrialBalanceRow[]) {
+/**
+ * The trial balance the engine returns. Without yearOpening the range starts
+ * on the year's first day, so the year's IB is the rows' opening columns.
+ */
+function tb(rows: TrialBalanceRow[], yearOpening?: AccountSums) {
   const totalDebit = rows.reduce((s, r) => s + r.closing_debit, 0)
   const totalCredit = rows.reduce((s, r) => s + r.closing_credit, 0)
   return {
     rows,
-    totalDebit: Math.round(totalDebit * 100) / 100,
-    totalCredit: Math.round(totalCredit * 100) / 100,
+    totalDebit: roundOre(totalDebit),
+    totalCredit: roundOre(totalCredit),
     isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+    yearOpening: yearOpening ?? new Map(
+      rows.map((r) => [r.account_number, { debit: r.opening_debit, credit: r.opening_credit }]),
+    ),
   }
 }
 
@@ -140,6 +147,7 @@ describe('generateBalansrapport', () => {
     expect(accountRows(assets)[1]).toEqual({
       account_number: '1930',
       account_name: 'Bank',
+      year_ib: 50000,
       ib: 50000,
       ub: 75000,
       period_change: 25000,
@@ -152,6 +160,7 @@ describe('generateBalansrapport', () => {
     expect(accountRows(equity)[0]).toEqual({
       account_number: '2099',
       account_name: 'Årets resultat',
+      year_ib: -52000,
       ib: -52000,
       ub: -72500,
       period_change: -20500,
@@ -288,6 +297,7 @@ describe('generateBalansrapport', () => {
       totalDebit: 80000,
       totalCredit: 70000,
       isBalanced: false,
+      yearOpening: new Map(),
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -308,6 +318,7 @@ describe('generateBalansrapport', () => {
       totalDebit: 1097,
       totalCredit: 1000,
       isBalanced: false,
+      yearOpening: new Map(),
     })
 
     const diagnosis = { differens: 97, message: 'Balansrapporten balanserar inte (differens 97,00 kr).' }
@@ -401,6 +412,7 @@ describe('generateBalansrapport', () => {
     expect(accountRows(report.groups[0])[0]).toEqual({
       account_number: '1510',
       account_name: 'Kundfordran (betald)',
+      year_ib: 10000,
       ib: 10000,
       ub: 0,
       period_change: -10000,
@@ -614,15 +626,17 @@ describe('generateBalansrapport sections (ÅRL bilaga 1 headings)', () => {
     expect(accountRows(r.groups[1])).toHaveLength(10)
     for (const group of r.groups) {
       const rows = accountRows(group)
+      expect(group.subtotal_year_ib).toBe(roundOre(rows.reduce((s, x) => s + x.year_ib, 0)))
       expect(group.subtotal_ib).toBe(roundOre(rows.reduce((s, x) => s + x.ib, 0)))
       expect(group.subtotal_ub).toBe(roundOre(rows.reduce((s, x) => s + x.ub, 0)))
       expect(group.subtotal_change).toBe(roundOre(group.subtotal_ub - group.subtotal_ib))
       expect(group.subtotal_ub).toBe(roundOre(group.sections.reduce((s, x) => s + x.subtotal_ub, 0)))
       for (const s of allSections(group)) {
         const parts = s.sections.length > 0
-          ? s.sections.map((c) => ({ ib: c.subtotal_ib, ub: c.subtotal_ub, change: c.subtotal_change }))
-          : s.rows.map((x) => ({ ib: x.ib, ub: x.ub, change: x.period_change }))
+          ? s.sections.map((c) => ({ yearIb: c.subtotal_year_ib, ib: c.subtotal_ib, ub: c.subtotal_ub, change: c.subtotal_change }))
+          : s.rows.map((x) => ({ yearIb: x.year_ib, ib: x.ib, ub: x.ub, change: x.period_change }))
         expect(s.rows.length === 0 || s.sections.length === 0, s.key).toBe(true)
+        expect(s.subtotal_year_ib, s.key).toBe(roundOre(parts.reduce((t, p) => t + p.yearIb, 0)))
         expect(s.subtotal_ib, s.key).toBe(roundOre(parts.reduce((t, p) => t + p.ib, 0)))
         expect(s.subtotal_ub, s.key).toBe(roundOre(parts.reduce((t, p) => t + p.ub, 0)))
         expect(s.subtotal_change, s.key).toBe(roundOre(parts.reduce((t, p) => t + p.change, 0)))
@@ -712,5 +726,81 @@ describe('generateBalansrapport sections (ÅRL bilaga 1 headings)', () => {
 
     expect(q.findCall('companies', 'select')).toEqual(['entity_type'])
     expect(q.findCall('companies', 'eq')).toEqual(['id', 'company-1'])
+  })
+})
+
+describe('generateBalansrapport on a range that starts after the year\'s first day', () => {
+  // April to June 2026. The year opened with 1 000 in the bank and a 400
+  // supplier debt; in the first quarter the debt was paid, 250 came in and a
+  // 300 receivable arose. The year's ingående balans and the ingående saldo
+  // on 1 April are different numbers, and both are shown.
+  async function aprilToJune() {
+    const q = createQueuedMockSupabase()
+    enqueuePeriod(q)
+    mockTrialBalance.mockResolvedValueOnce(
+      tb(
+        [
+          makeRow({ account_number: '1510', account_name: 'Kundfordringar', account_class: 1, opening_debit: 300, closing_debit: 300 }),
+          makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, opening_debit: 1250, period_credit: 50, closing_debit: 1250, closing_credit: 50 }),
+          makeRow({ account_number: '2440', account_name: 'Lev.skulder', account_class: 2, opening_debit: 400, opening_credit: 400, closing_debit: 400, closing_credit: 400 }),
+        ],
+        new Map([
+          ['1930', { debit: 1000, credit: 0 }],
+          ['2440', { debit: 0, credit: 400 }],
+        ]),
+      ),
+    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return generateBalansrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-04-01',
+      toDate: '2026-06-30',
+    })
+  }
+
+  it('reads the year\'s IB and the range from the same trial balance', async () => {
+    await aprilToJune()
+
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+    expect(mockTrialBalance).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2026-04-01',
+      toDate: '2026-06-30',
+    })
+  })
+
+  it('shows the ingående balans at the year\'s start beside the ingående saldo on 1 April', async () => {
+    const r = await aprilToJune()
+
+    const bank = accountRows(r.groups[0]).find((row) => row.account_number === '1930')
+    expect(bank).toEqual({
+      account_number: '1930',
+      account_name: 'Bank',
+      year_ib: 1000,
+      ib: 1250,
+      ub: 1200,
+      period_change: -50,
+    })
+  })
+
+  it('opens an account that arose after the year started at 0', async () => {
+    const r = await aprilToJune()
+
+    const receivable = accountRows(r.groups[0]).find((row) => row.account_number === '1510')
+    expect(receivable).toMatchObject({ year_ib: 0, ib: 300, ub: 300, period_change: 0 })
+  })
+
+  it('keeps an account emptied before the range: its ingående balans is not 0', async () => {
+    const r = await aprilToJune()
+
+    expect(accountRows(r.groups[1])).toEqual([
+      { account_number: '2440', account_name: 'Lev.skulder', year_ib: -400, ib: 0, ub: 0, period_change: 0 },
+    ])
+  })
+
+  it('sums each opening column on its own', async () => {
+    const r = await aprilToJune()
+
+    expect(r.groups[0]).toMatchObject({ subtotal_year_ib: 1000, subtotal_ib: 1550, subtotal_change: -50, subtotal_ub: 1500 })
+    expect(r.groups[1]).toMatchObject({ subtotal_year_ib: -400, subtotal_ib: 0, subtotal_change: 0, subtotal_ub: 0 })
   })
 })
