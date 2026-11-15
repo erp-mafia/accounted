@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { getClient } from './setup'
+import { getClient, getPool } from './setup'
 
 /**
  * The indexes of 2026-11-12 (migrations 20261112214701 to 20261112214705)
- * serve the statements they were built for.
+ * serve the statements they were built for; the read cron's backfill since
+ * 20261115130917 dropped the older index its function's plan preferred.
  *
  * Each of those statements read a whole table on production because no index
  * matched it: a lookup by a column with no index, a foreign-key check on a
@@ -118,12 +119,15 @@ describe('document_attachments: lookups and cron scans', () => {
   })
 
   it('hands the read cron its unread documents without the structured archives', async () => {
-    // idx_document_attachments_pages_unread also orders unread rows by created_at, archives included
-    // (92 579 of its 109 395 entries on prod). With it out of the way the function's own predicate
-    // must be enough for the planner to take the narrower index.
-    const indexes = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`, [
-      'DROP INDEX public.idx_document_attachments_pages_unread',
-    ])
+    // The function is planned with its limit as an unknown parameter. While idx_document_attachments_pages_unread
+    // (unread rows by created_at, archives included: 92 579 of its 109 395 entries on prod)
+    // existed, production's plan was a parallel scan of it. 20261115130917 dropped it, so the
+    // function's own predicate must be enough for the planner to take the narrower index.
+    const { rows } = await getPool().query<{ dropped: boolean }>(
+      `SELECT to_regclass('public.idx_document_attachments_pages_unread') IS NULL AS dropped`,
+    )
+    expect(rows[0].dropped).toBe(true)
+    const indexes = await functionIndexes(`SELECT * FROM public.document_backfill_candidates(200)`)
     expect(indexes).toContain('idx_document_attachments_backfill_unread')
   })
 })
