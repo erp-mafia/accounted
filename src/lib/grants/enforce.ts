@@ -149,6 +149,12 @@ export async function applyCompanyGrant(
     log.info('grant did not apply: a booking review rule matches', { operationId })
     return { applied: false, reason: 'booking_review_rule' }
   }
+  // A reverse charge staged on the caller's word that the seller's VAT is
+  // foreign (crm#1765) waits for a person, who reads the note on the proposal.
+  if (staged?.operation_type === 'categorize_transaction' && (staged.params as Record<string, unknown> | null)?.confirm_foreign_seller_vat === true) {
+    log.info('grant did not apply: the booking confirms a foreign seller VAT', { operationId })
+    return { applied: false, reason: 'foreign_seller_vat' }
+  }
 
   let claim: ClaimResult
   try {

@@ -785,6 +785,8 @@ async function commitCategorizeTransaction(
     vatAmount,
     notes,
     allowDuplicate: params.allow_duplicate === true,
+    // The approver saw the foreign-VAT note the staging put on the proposal.
+    confirmForeignSellerVat: params.confirm_foreign_seller_vat === true,
     ...(duplicateReview?.expectedJournalEntryId
       ? { expectedDuplicateJournalEntryId: duplicateReview.expectedJournalEntryId }
       : {}),

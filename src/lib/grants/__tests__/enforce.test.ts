@@ -80,6 +80,16 @@ describe('applyCompanyGrant', () => {
     expect(mock.findCall('rpc:claim_company_grant', 'rpc')).toBeUndefined()
   })
 
+  it('never asks the gate for a reverse charge staged on a confirmed foreign seller VAT (crm#1765): a person reads its note', async () => {
+    const mock = db({ data: MATCH }, {
+      pending_operations: { data: { ...ROW, params: { vat_treatment: 'reverse_charge', confirm_foreign_seller_vat: true }, preview_data: {} } },
+    })
+    const outcome = await applyCompanyGrant(mock.supabase as never, { companyId: COMPANY, userId: USER, operationId: OP, credential, log })
+    expect(outcome).toEqual({ applied: false, reason: 'foreign_seller_vat' })
+    expect(mock.findCall('rpc:claim_company_grant', 'rpc')).toBeUndefined()
+    expect(commitMock).not.toHaveBeenCalled()
+  })
+
   it('treats a database without the grant functions as no grant (deploy order)', async () => {
     for (const code of ['42883', 'PGRST202']) {
       const mock = db({ error: { code, message: 'function claim_company_grant does not exist' } })

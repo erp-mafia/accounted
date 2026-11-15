@@ -29,7 +29,7 @@
  */
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory } from '@/types'
-import { sellerCountry, type SellerIdentity, type SellerRegion } from './seller-country'
+import { sellerCountry, type SellerCountrySource, type SellerIdentity, type SellerRegion } from './seller-country'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -164,4 +164,93 @@ export function sellerChargedVat(reading: ChargedVatReading | null | undefined):
   if (charged.length > 0) return roundOre(charged.reduce((sum, amount) => sum + amount, 0))
   const total = Number(reading?.totals?.vatAmount)
   return Number.isFinite(total) && total > 0 ? roundOre(total) : 0
+}
+
+/**
+ * The caller's explicit word, on a categorize door, that the VAT the underlag
+ * shows is another country's VAT the seller charged in error (crm#1765). The
+ * purchase is then still the buyer's to tax in Sweden (ML 2023:200 16 kap.
+ * 9 §), on everything the seller was paid, the foreign VAT included (8 kap.
+ * 2, 3 and 13 §§), and that VAT is never ingående moms (13 kap. 4 §, 2 kap.
+ * 12 §). Sources: docs/decisions/2026-11/2026-11-12-reverse-charge-with-foreign-seller-vat.md.
+ */
+export const FOREIGN_SELLER_VAT_FLAG = 'confirm_foreign_seller_vat'
+
+/** What the approver and the agent are told on a booking made under the flag. */
+export const FOREIGN_SELLER_VAT_NOTE = {
+  sv: 'Säljarens utländska moms är inte avdragsgill i Sverige: den ingår i kostnaden och i underlaget för den omvända momsen. Be säljaren om en kreditfaktura på momsen och ge dem ert momsregistreringsnummer (VAT-nummer).',
+  en: "The seller's foreign VAT is not deductible in Sweden: it is part of the cost and of the reverse-charge basis. Ask the seller for a credit note for the VAT and give them your VAT number.",
+} as const
+
+/** Added when the charge is 25 % of the price, the Swedish rate: the document cannot tell whose VAT it is. */
+export const FOREIGN_SELLER_VAT_RATE_WARNING = {
+  sv: 'Momsen på underlaget är 25 % av priset, samma sats som svensk moms. Kontrollera att det är utländsk moms: svensk moms bokförs med momssatsen som ingående moms, inte med omvänd skattskyldighet.',
+  en: 'The VAT on the underlag is 25 % of the price, the Swedish rate. Check that it is foreign VAT: Swedish VAT is booked at its rate as input VAT, not as reverse charge.',
+} as const
+
+export type SellerVatOnReverseCharge =
+  /** The underlag shows no charge: a plain reverse charge. */
+  | { verdict: 'no_seller_vat' }
+  /** The document names a Swedish seller, so the charge is Swedish VAT: refused whatever the caller states. */
+  | { verdict: 'refused'; reason: 'seller_vat_swedish'; source: SellerCountrySource | null }
+  /** A charge nobody has stated to be foreign: refused, and the refusal names the flag. */
+  | { verdict: 'refused'; reason: 'not_confirmed' }
+  /** Stated foreign and nothing on the document says otherwise. */
+  | { verdict: 'confirmed'; couldBeSwedishVat: boolean }
+
+/** Whether a charge is the Swedish standard rate of the price before it (half a percentage point either way). */
+function isSwedishStandardRate(sellerVat: number, total: number | null | undefined): boolean {
+  const net = typeof total === 'number' && Number.isFinite(total) ? total - sellerVat : 0
+  // No total to measure against: the rate cannot be told, so it is not ruled out.
+  if (!(net > 0)) return true
+  return Math.abs(sellerVat / net - 0.25) <= 0.005
+}
+
+/**
+ * A reverse charge asked for on an underlag whose reading shows the seller's
+ * VAT. Refused by default; allowed when the caller confirms the VAT is
+ * foreign (FOREIGN_SELLER_VAT_FLAG), unless the document itself names a
+ * Swedish seller (a VAT number that starts with SE first, then the other
+ * sources of ./seller-country.ts): Swedish VAT on an invoice is ordinary
+ * ingående moms and never turns into a reverse charge on a caller's word.
+ */
+export function sellerVatOnReverseCharge(reading: {
+  sellerVat: number | null | undefined
+  total?: number | null
+  seller?: SellerIdentity | null
+  confirmedForeign: boolean
+}): SellerVatOnReverseCharge {
+  const sellerVat = reading.sellerVat ?? 0
+  if (!(sellerVat > 0)) return { verdict: 'no_seller_vat' }
+  const seller = sellerCountry(reading.seller)
+  if (seller.region === 'se') return { verdict: 'refused', reason: 'seller_vat_swedish', source: seller.source }
+  if (!reading.confirmedForeign) return { verdict: 'refused', reason: 'not_confirmed' }
+  return { verdict: 'confirmed', couldBeSwedishVat: isSwedishStandardRate(sellerVat, reading.total) }
+}
+
+/** The refusal's own words, in both locales, for the two reasons. */
+export function sellerVatRefusalMessage(
+  reason: 'seller_vat_swedish' | 'not_confirmed',
+  charged: string,
+): { sv: string; en: string } {
+  if (reason === 'seller_vat_swedish') {
+    return {
+      sv:
+        `Omvänd skattskyldighet avvisas: underlaget visar en svensk säljare som har debiterat moms (${charged}). Det är svensk moms: ` +
+        `bokför med momssatsen (till exempel standard_25), då dras den av som ingående moms. ${FOREIGN_SELLER_VAT_FLAG} gäller bara utländsk moms.`,
+      en:
+        `Reverse charge refused: the underlag shows a Swedish seller that charged VAT (${charged}). That is Swedish VAT: ` +
+        `book it at its rate (for example standard_25) and it is deducted as input VAT. ${FOREIGN_SELLER_VAT_FLAG} only covers foreign VAT.`,
+    }
+  }
+  return {
+    sv:
+      `Omvänd skattskyldighet avvisas: underlaget visar att säljaren har debiterat moms (${charged}). Är det utländsk moms som säljaren ` +
+      `debiterat felaktigt, skicka igen med ${FOREIGN_SELLER_VAT_FLAG}=true: köpet bokförs då med omvänd skattskyldighet på hela det betalda ` +
+      'beloppet, den utländska momsen inräknad, och den momsen dras inte av. Är det svensk moms, bokför med momssatsen (standard_25) i stället.',
+    en:
+      `Reverse charge refused: the underlag shows the seller charged VAT (${charged}). If it is foreign VAT the seller charged in error, ` +
+      `resend with ${FOREIGN_SELLER_VAT_FLAG}=true: the purchase is then booked as reverse charge on the whole amount paid, the foreign VAT ` +
+      'included, and that VAT is not deducted. If it is Swedish VAT, book it at its rate (standard_25) instead.',
+  }
 }

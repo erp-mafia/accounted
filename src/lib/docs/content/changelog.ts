@@ -101,6 +101,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 ### Transactions: revenue accounts of a bank row (2026-11)
 
+- **New: \`confirm_foreign_seller_vat\` on categorize** (crm#1765, 2026-11-12). \`POST /transactions/{id}/categorize\` and \`/batch-categorize\` refuse \`vat_treatment: "reverse_charge"\` with \`400 TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT\` when the row's underlag shows VAT from the seller. \`confirm_foreign_seller_vat: true\` states that the VAT is another country's VAT the seller charged in error: the purchase is then booked as reverse charge on the whole amount paid (the foreign VAT is part of the cost and of the basis in ruta 20, 21 or 22, and is never deducted). An underlag that names a Swedish seller is refused all the same (\`details.reason: "seller_vat_swedish"\`); without the flag \`details.reason\` is \`not_confirmed\` and \`details.confirm_with\` names it. Additive: a request without the flag is refused as before.
 - **Behaviour change: a sale on a category books the revenue account an invoice books** (2026-11-01). \`POST /transactions/{id}/categorize\` and \`/batch-categorize\`: \`income_products\` at \`export\` or \`reverse_charge\` books 3105 or 3108, the goods accounts in ruta 36 and 35, where it booked the services accounts 3305 and 3308. An exempt sale of an enskild firma or ideell förening books 3100, where it booked 3004: same ruta and NE line. \`income_other\` stays on 3999.
 
 ### Transactions: hard blocks (2026-10)

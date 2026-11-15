@@ -58,6 +58,7 @@ export async function stageBlockedCategorization(
         notes: booking.notes?.trim() ? booking.notes.trim() : null,
         ...(booking.dimensions && Object.keys(booking.dimensions).length > 0 ? { dimensions: booking.dimensions } : {}),
         allow_duplicate: booking.allow_duplicate === true,
+        ...(booking.confirm_foreign_seller_vat === true ? { confirm_foreign_seller_vat: true } : {}),
         ...(booking.proposal_id ? { proposal_id: booking.proposal_id.slice(0, 200) } : {}),
       },
       previewData: {

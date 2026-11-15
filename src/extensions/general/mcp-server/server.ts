@@ -456,6 +456,7 @@ import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFo
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
+import { FOREIGN_SELLER_VAT_NOTE, FOREIGN_SELLER_VAT_RATE_WARNING } from '@/lib/vat/reverse-charge-box'
 import { runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
@@ -9313,16 +9314,17 @@ export const tools: McpTool[] = [
       properties: {
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
-        vat_treatment: { type: 'string', description: 'Default standard_25. reverse_charge ONLY when the underlag shows the seller charged NO VAT (foreign VAT debited is not). Books the basis: _eu_services ruta 21, _non_eu_services 22, _eu_goods 20; plain: seller on underlag.', enum: [...CATEGORIZE_VAT_TREATMENTS] },
+        vat_treatment: { type: 'string', description: 'Default standard_25. reverse_charge: seller charged no VAT (else confirm_foreign_seller_vat). Basis: _eu_services ruta 21, _non_eu_services 22, _eu_goods 20; plain: seller on underlag.', enum: [...CATEGORIZE_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. In the transaction\'s currency, like belopp; booked in SEK at its exchange rate. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). category is still required: it decides direction and VAT; the override only replaces its default account. Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
-        notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
+        notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars.' },
         dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
           description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher: never the bank or VAT lines. Unknown values rejected, never auto-created.',
         },
-        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard (default false). Set true ONLY after the user confirms this bank line is a genuinely separate event: the guard blocks a second verifikat for an event already booked (e.g. a paid invoice or a salary payout).' },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard. Set true ONLY after the user confirms this bank line is a separate event: the guard blocks a second verifikat for an event already booked.' },
+        confirm_foreign_seller_vat: { type: 'boolean', description: 'reverse_charge on an underlag with VAT: it is FOREIGN VAT charged in error. Never deducted.' },
         proposal_id: { type: 'string', maxLength: 200, description: 'Id of the suggestion booked from (in its categorize_args). Recorded only.' },
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },
@@ -9410,6 +9412,7 @@ export const tools: McpTool[] = [
           vatAmount,
           accountOverride,
           allowDuplicate: args.allow_duplicate === true,
+          confirmForeignSellerVat: args.confirm_foreign_seller_vat === true,
         }),
         { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false, reverseChargeBoxParam: 'vat_treatment', loadChart },
       )
@@ -9462,6 +9465,13 @@ export const tools: McpTool[] = [
       }
 
       const txDesc = `${tx.merchant_name || tx.description || 'Transaktion'} ${tx.amount} ${tx.currency}`
+      // A reverse charge booked on the caller's word that the underlag's VAT
+      // is foreign: the approver reads what that means, and the warning when
+      // the document cannot tell the charge from Swedish VAT.
+      const foreignSellerVat = preview.underlag?.foreign_seller_vat
+      const foreignSellerVatNote = foreignSellerVat
+        ? [FOREIGN_SELLER_VAT_NOTE.sv, ...(foreignSellerVat.could_be_swedish_vat ? [FOREIGN_SELLER_VAT_RATE_WARNING.sv] : [])].join(' ')
+        : undefined
 
       // Resolve-don't-select: codes AND natural-language names resolve against
       // the registry in one pass (zero queries when untagged; free-text
@@ -9494,6 +9504,9 @@ export const tools: McpTool[] = [
             : null,
           ...(hasDimensions ? { dimensions: resolvedDimensions } : {}),
           allow_duplicate: args.allow_duplicate === true,
+          // Staged only when the booking was made under it: the approval
+          // books what the approver was shown (crm#1765).
+          ...(foreignSellerVat ? { confirm_foreign_seller_vat: true } : {}),
           ...(typeof args.proposal_id === 'string' && args.proposal_id.trim().length > 0
             ? { proposal_id: args.proposal_id.trim().slice(0, 200) }
             : {}),
@@ -9530,6 +9543,7 @@ export const tools: McpTool[] = [
           tool: 'gnubok_list_uncategorized_transactions',
         },
         dateForPeriodCheck: tx.date,
+        ...(foreignSellerVatNote ? { complianceNote: foreignSellerVatNote } : {}),
         // Categorize is the tool agents blind-retry after ambiguous
         // client-side failures (approval elicitation drops): the key makes
         // that retry safe instead of double-staging.

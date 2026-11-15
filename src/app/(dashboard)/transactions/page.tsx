@@ -2160,6 +2160,8 @@ export default function TransactionsPage() {
     /** The underlag's moms (transaction currency): sent as vat_amount. */
     vatAmount?: number
     confirmNoMatch: boolean
+    /** The person's word that the VAT on the underlag is foreign VAT charged in error: sent as confirm_foreign_seller_vat (crm#1765). */
+    confirmForeignSellerVat?: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
     // voucher (journal_entry_id), present on both a sibling-transaction and a
@@ -2182,7 +2184,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2203,6 +2205,7 @@ export default function TransactionsPage() {
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
+          ...(confirmForeignSellerVat ? { confirm_foreign_seller_vat: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
             : {}),
@@ -2406,6 +2409,30 @@ export default function TransactionsPage() {
             return { ok: false, journalEntryId: null, deferredDuplicate: true }
           }
           setDuplicateWarning({ transactionId: id, retry, candidate })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
+        if (
+          !silent &&
+          result?.error?.code === 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT' &&
+          result.error.details?.reason === 'not_confirmed'
+        ) {
+          // crm#1765: the underlag shows the seller's VAT. Foreign VAT charged
+          // in error still books as reverse charge, on the whole amount paid,
+          // once the person says that is what it is; a Swedish seller's VAT
+          // (reason seller_vat_swedish) keeps the plain refusal below.
+          toast({
+            title: t('rc_seller_vat_title'),
+            description: t('rc_seller_vat_description'),
+            action: (
+              <ToastAction
+                altText={t('rc_seller_vat_confirm_action')}
+                onClick={() => void runCategorize({ ...args, confirmForeignSellerVat: true })}
+              >
+                {t('rc_seller_vat_confirm_action')}
+              </ToastAction>
+            ),
+          })
           setProcessingId(null)
           return { ok: false, journalEntryId: null }
         }
