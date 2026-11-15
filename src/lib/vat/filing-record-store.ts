@@ -519,7 +519,7 @@ export async function vatPeriodTaxLabel(
  * moved to the next banking day; null when it cannot be placed. A helårsmoms
  * period the nightly job saw EU trade in takes the earlier date, as on the
  * generator's row (vat_eu_trade_fiscal_years); read only for a yearly period
- * with the setting off, the one case it changes.
+ * whose setting is not on, the one case it changes.
  */
 async function generatedDueDate(
   supabase: SupabaseClient,
@@ -530,7 +530,7 @@ async function generatedDueDate(
   const row = settings.row
   const endMonth = settings.fiscalYearEndMonth(input.year)
   const booksShowEuTrade =
-    input.periodType === 'yearly' && row?.vat_has_eu_trade === false
+    input.periodType === 'yearly' && row !== null && row.vat_has_eu_trade !== true
       ? await recordedEuTrade(supabase, companyId, fiscalYearEndKey({ endYear: input.year, endMonth }))
       : false
   const instance = getVatDeadlineForPeriod(input.periodType, input.year, input.period, {

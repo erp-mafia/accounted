@@ -23,9 +23,8 @@ const RUN_BUDGET_MS = 240_000
 /**
  * The most the helårsmoms pass (alignYearlyVatDeadlinesWithBooks) may take,
  * after the repair pass and inside the run budget. It reads one period's
- * declaration per open helårsmoms period and takes the companies in a
- * different order every day, so a short pass still reaches every company in
- * a few nights.
+ * declaration per open helårsmoms period and takes the companies read
+ * longest ago first, so a short pass still reaches every company in turn.
  */
 const EU_TRADE_PASS_BUDGET_MS = 60_000
 

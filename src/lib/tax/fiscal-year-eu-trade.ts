@@ -146,7 +146,9 @@ export async function readEuTradeChecks(supabase: SupabaseClient): Promise<EuTra
  * Write what one read of the books found for each period. A period with EU
  * trade is recorded for good. A period without is written as checked, and
  * never over a yes: the update only touches rows that say no, so a later read
- * that misses the trade cannot undo one that saw it.
+ * that misses the trade cannot undo one that saw it. A no also stands for a
+ * read that failed (alignYearlyVatDeadlinesWithBooks): it only orders the
+ * pass's queue, and the next read decides.
  */
 export async function recordEuTradeChecks(
   supabase: SupabaseClient,

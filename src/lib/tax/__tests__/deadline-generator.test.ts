@@ -5,6 +5,7 @@ import {
   RECURRING_HORIZON_DAYS,
   alignYearlyVatDeadlinesWithBooks,
   backfillMissingTaxDeadlines,
+  helarsmomsSettledByOpenRows,
   generateNewYearDeadlines,
   findSettingsMissingUpcomingDeadlines,
   findSettingsWithStaleUpcomingDeadlines,
@@ -232,17 +233,24 @@ function makeSupabase(
     const chain: Record<string, unknown> = {}
     const filters: Array<[string, unknown]> = []
     let deleting = false
-    for (const method of ['is', 'gte', 'lte', 'or', 'not', 'order', 'in']) {
+    for (const method of ['is', 'gte', 'lte', 'not', 'order', 'in']) {
       chain[method] = vi.fn(() => chain)
     }
+    chain.or = vi.fn((filter: string) => {
+      orFilter = filter
+      return chain
+    })
     chain.eq = vi.fn((column: string, value: unknown) => {
       filters.push([column, value])
       return chain
     })
     chain.select = vi.fn(() => (deleting ? Promise.resolve({ data: [], error: null }) : chain))
     // A page (.range) answers from the table through every eq filter, those
-    // chained after .range too, as PostgREST's builder allows.
+    // chained after .range too, as PostgREST's builder allows. The
+    // generator's own reads of a company's deadlines (no .range) answer its
+    // open rows, or with .or() its completed and dismissed ones.
     let paged = false
+    let orFilter: string | null = null
     chain.range = vi.fn(() => {
       paged = true
       return chain
@@ -263,10 +271,18 @@ function makeSupabase(
       deleting = true
       return chain
     })
+    const ownDeadlines = () => {
+      const rows = (tables.deadlines ?? []).filter((row) =>
+        filters.every(([column, value]) => row[column] === value),
+      )
+      return orFilter
+        ? rows.filter((row) => row.is_completed === true || (row.dismissed_at ?? null) !== null)
+        : rows.filter((row) => (row.dismissed_at ?? null) === null)
+    }
     chain.then = (resolve: (value: unknown) => unknown) =>
       Promise.resolve(
         !paged
-          ? { data: [], error: null }
+          ? { data: table === 'deadlines' && !deleting ? ownDeadlines() : [], error: null }
           : errors[table]
             ? { data: null, error: errors[table] }
             : {
@@ -1564,8 +1580,77 @@ describe('helårsmoms follows the EU trade recorded from the books', () => {
 
         await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
 
+        // The replacement ran and wrote no 2026 row.
+        expect(getInsertPayload()).not.toBeNull()
         expect(yearly(getInsertPayload()).filter((row) => row.startsWith('2026:'))).toEqual([])
       })
+
+      it('keeps a later row when the setting is turned on after the earlier date', async () => {
+        const { supabase, getInsertPayload } = makeRecordingSupabase({
+          supersededRows: [{ tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-05-12' }],
+        })
+
+        await generateTaxDeadlinesForUser(supabase, 'company-1', { ...EF_YEARLY, vat_has_eu_trade: true })
+
+        expect(yearly(getInsertPayload())).toContain('2026:2027-05-12')
+      })
+
+      it('adds no later row when the setting is turned off after the earlier date', async () => {
+        const { supabase, getInsertPayload } = makeRecordingSupabase({
+          supersededRows: [{ tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-02-26', status: 'overdue' }],
+        })
+
+        await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+        // The replacement ran and wrote no 2026 row.
+        expect(getInsertPayload()).not.toBeNull()
+        expect(yearly(getInsertPayload()).filter((row) => row.startsWith('2026:'))).toEqual([])
+      })
+    })
+
+    it('keeps the row ahead of a period that already has one next to an overdue row', async () => {
+      // What turning the setting off after the earlier date left before this rule.
+      vi.setSystemTime(new Date(2027, 2, 5, 12))
+      const { supabase, getInsertPayload } = makeRecordingSupabase({
+        supersededRows: [
+          { tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-02-26', status: 'overdue' },
+          { tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-05-12' },
+        ],
+      })
+
+      await generateTaxDeadlinesForUser(supabase, 'company-1', EF_YEARLY)
+
+      expect(yearly(getInsertPayload())).toContain('2026:2027-05-12')
+    })
+
+    it('settles an enskild firma whose broken years were re-laid to the calendar year', () => {
+      vi.setSystemTime(new Date(2027, 1, 27, 12))
+      const relaidEf: CompanySettingsForDeadlines = {
+        ...EF_YEARLY,
+        fiscal_years: [
+          { start: '2025-09-01', end: '2026-08-31' },
+          { start: '2026-09-01', end: '2026-12-31' },
+        ],
+      }
+      const openRows = [{ tax_deadline_type: 'moms_yearly', tax_period: '2026', due_date: '2027-05-12' }]
+
+      expect(helarsmomsSettledByOpenRows(relaidEf, openRows, '2027-02-27')).toEqual({ '2026-12': false })
+    })
+
+    it('leaves a label two räkenskapsår share to the plain answer', () => {
+      vi.setSystemTime(new Date(2027, 9, 27, 12))
+      const relaid: CompanySettingsForDeadlines = {
+        ...SETTINGS,
+        moms_period: 'yearly',
+        fiscal_year_start_month: 9,
+        fiscal_years: [
+          { start: '2026-03-01', end: '2027-02-28' },
+          { start: '2027-03-01', end: '2027-08-31' },
+        ],
+      }
+      const openRows = [{ tax_deadline_type: 'moms_yearly', tax_period: '2026/2027', due_date: '2027-10-26' }]
+
+      expect(helarsmomsSettledByOpenRows(relaid, openRows, '2027-10-27')).toBeUndefined()
     })
   })
 
@@ -1610,6 +1695,59 @@ describe('helårsmoms follows the EU trade recorded from the books', () => {
       })
       expect(await backfillMissingTaxDeadlines(second.supabase)).toMatchObject({ companiesRepaired: 0 })
       expect(booksRead).not.toHaveBeenCalled()
+    })
+
+    it('leaves the period\'s row alone when the setting changes after the earlier date', () => {
+      vi.setSystemTime(new Date(2027, 2, 5, 12))
+      // Turned off after 26 February: the row stays on that date, overdue.
+      const turnedOff = storedRows('company-1', EF_YEARLY).map((row) =>
+        row.tax_deadline_type === 'moms_yearly' && row.tax_period === '2026' ? { ...row, due_date: '2027-02-26' } : row,
+      )
+      expect(findSettingsMissingUpcomingDeadlines([settingsRow], turnedOff)).toEqual([])
+      expect(findSettingsWithStaleUpcomingDeadlines([settingsRow], turnedOff)).toEqual([])
+
+      // Turned on after 26 February: the row stays on 12 May.
+      const on = { ...settingsRow, vat_has_eu_trade: true }
+      const turnedOn = [
+        ...storedRows('company-1', { ...EF_YEARLY, vat_has_eu_trade: true }),
+        { ...storedRows('company-1', EF_YEARLY).find((row) => row.tax_period === '2026')!, id: 'company-1-later' },
+      ]
+      expect(yearly(turnedOn)).toContain('2026:2027-05-12')
+      expect(findSettingsMissingUpcomingDeadlines([on], turnedOn)).toEqual([])
+      expect(findSettingsWithStaleUpcomingDeadlines([on], turnedOn)).toEqual([])
+    })
+
+    it('leaves a period alone that already has a row ahead next to an overdue one', () => {
+      vi.setSystemTime(new Date(2027, 2, 5, 12))
+      const pair = [
+        ...storedRows('company-1', EF_YEARLY),
+        {
+          ...storedRows('company-1', EF_YEARLY).find((row) => row.tax_period === '2026')!,
+          id: 'company-1-overdue',
+          due_date: '2027-02-26',
+        },
+      ]
+      expect(yearly(pair).filter((row) => row.startsWith('2026:')).sort()).toEqual(['2026:2027-02-26', '2026:2027-05-12'])
+
+      expect(findSettingsMissingUpcomingDeadlines([settingsRow], pair)).toEqual([])
+      expect(findSettingsWithStaleUpcomingDeadlines([settingsRow], pair)).toEqual([])
+    })
+
+    it('keeps that row when the repair regenerates the company for another reason', async () => {
+      vi.setSystemTime(new Date(2027, 2, 5, 12))
+      const on = { ...settingsRow, vat_has_eu_trade: true }
+      const rows = [
+        ...storedRows('company-1', { ...EF_YEARLY, vat_has_eu_trade: true }),
+        { ...storedRows('company-1', EF_YEARLY).find((row) => row.tax_period === '2026')!, id: 'company-1-later' },
+      ]
+      // Another obligation's row is missing: the company is regenerated.
+      const other = rows.find((row) => row.tax_deadline_type !== 'moms_yearly')!
+      expect(other).toBeDefined()
+      const missingOne = rows.filter((row) => row !== other)
+      const { supabase, inserts } = makeSupabase({ company_settings: [on], deadlines: missingOne })
+
+      expect(await backfillMissingTaxDeadlines(supabase)).toMatchObject({ companiesRepaired: 1 })
+      expect(yearly(inserts[0])).toContain('2026:2027-05-12')
     })
 
     it('never deletes the later row of a period recorded too late to move it', async () => {
@@ -1736,6 +1874,25 @@ describe('helårsmoms follows the EU trade recorded from the books', () => {
         ['2027-10:false'],
       ])
       expect(yearly(inserts[0]).filter((row) => row.startsWith('2025/2026:'))).toEqual(['2025/2026:2026-12-28'])
+    })
+
+    it('counts a company whose read fails as read, so it does not go first every night', async () => {
+      booksRead.mockImplementation(async () => {
+        throw Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })
+      })
+      const { supabase, upserts, updates } = makeSupabase({ company_settings: [{ company_id: 'company-1', ...raw }] })
+
+      const result = await alignYearlyVatDeadlinesWithBooks(supabase)
+
+      expect(result).toEqual({ companiesChecked: 1, companiesMoved: 0, companiesNotReached: 0 })
+      expect(upserts).toEqual([
+        {
+          table: 'vat_eu_trade_fiscal_years',
+          rows: [{ company_id: 'company-1', fiscal_year_end: '2026-12', has_eu_trade: false, checked_at: expect.any(String) }],
+          options: { onConflict: 'company_id,fiscal_year_end', ignoreDuplicates: true },
+        },
+      ])
+      expect(updates[0].filters).toEqual(expect.arrayContaining([['has_eu_trade', false]]))
     })
 
     it('does nothing while the table is not in the database yet', async () => {

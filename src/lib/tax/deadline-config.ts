@@ -81,6 +81,16 @@ export interface CompanySettingsForDeadlines {
    * it, lib/tax/fiscal-year-eu-trade.ts).
    */
   eu_trade_fiscal_year_ends?: readonly string[]
+  /**
+   * Derived, NOT a company_settings column: the helårsmoms periods whose
+   * EU-trade date has passed, keyed like eu_trade_fiscal_year_ends, with the
+   * EU-trade answer their open row was placed by. Once the earlier date has
+   * passed, no later answer moves the row (the generator writes no row in the
+   * past): a row on that date stays the period's row, a row still ahead stays
+   * on the later date. Read from the open rows by the generator and the
+   * repair's detection alike (helarsmomsSettledByOpenRows). Undefined: none.
+   */
+  helarsmoms_settled?: Readonly<Record<string, boolean>>
 }
 
 /**
@@ -546,11 +556,13 @@ function generateAnnualVatDates(
   // Helårsmoms is declared per beskattningsår, the räkenskapsår (SFL 26 kap.
   // 10-11 §§): an extended first year is one period, dated by its own end.
   // EU trade the nightly job saw in that period's rutor dates it as the
-  // setting would (eu_trade_fiscal_year_ends).
+  // setting would (eu_trade_fiscal_year_ends), until the earlier date has
+  // passed: then the period's open row stays where it is (helarsmoms_settled).
   for (const fy of fiscalYearsEndingIn([deadlineYear - 1, deadlineYear], settings)) {
-    const booksShowEuTrade =
-      settings.eu_trade_fiscal_year_ends?.includes(fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))) ?? false
-    const instance = helarsmomsDeadline(fy, settings, helarsmomsHasEuTrade(settings.vat_has_eu_trade, booksShowEuTrade))
+    const key = fiscalYearEndKey(helarsmomsPeriodOf(fy, settings))
+    const booksShowEuTrade = settings.eu_trade_fiscal_year_ends?.includes(key) ?? false
+    const euTrade = settings.helarsmoms_settled?.[key] ?? helarsmomsHasEuTrade(settings.vat_has_eu_trade, booksShowEuTrade)
+    const instance = helarsmomsDeadline(fy, settings, euTrade)
     if (instance?.year === deadlineYear) results.push(instance)
   }
 
