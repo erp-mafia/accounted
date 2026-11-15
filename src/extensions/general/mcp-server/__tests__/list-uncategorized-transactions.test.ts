@@ -344,6 +344,43 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(findCalls('company_settings', 'select')).toHaveLength(0)
   })
 
+  it('carries pending_operation_id on a row an open proposal already holds, from one read for the page (crm#1264)', async () => {
+    // An agent listed a row it had already staged, saw nothing on it, and
+    // staged it again: the second card for the same bank row.
+    const base = { date: '2026-10-16', description: 'Avgift', amount: -39, currency: 'SEK', merchant_name: 'Banken', reference: null, is_business: null, category: null, cash_account_id: null }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [{ ...base, id: 't-staged' }, { ...base, id: 't-bulk' }, { ...base, id: 't-free' }])
+    enqueue({ data: [], error: null }) // bank_transaction_parts
+    enqueue({
+      data: [
+        { id: 'op-cat', operation_type: 'categorize_transaction', params: { transaction_id: 't-staged' } },
+        { id: 'op-bulk', operation_type: 'bulk_book_transactions', params: { tx_ids: ['t-bulk', 't-other-page'] } },
+      ],
+      error: null,
+    }) // pending_operations
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<Record<string, unknown>>
+    }
+
+    const byId = new Map(result.transactions.map((t) => [t.transaction_id, t]))
+    expect(byId.get('t-staged')?.pending_operation_id).toBe('op-cat')
+    expect(byId.get('t-bulk')?.pending_operation_id).toBe('op-bulk')
+    expect(byId.get('t-free')).not.toHaveProperty('pending_operation_id')
+    // One read for the page, scoped to the company: never one per row.
+    expect(findCalls('pending_operations', 'select')).toHaveLength(1)
+    expect(findCalls('pending_operations', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
+  it('reads no proposals for an empty page', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [])
+
+    await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCalls('pending_operations', 'select')).toHaveLength(0)
+  })
+
   it('fails instead of listing a booked row when the page read fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'statement timeout' } })

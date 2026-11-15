@@ -44,6 +44,15 @@ vi.mock('@/extensions/general/skatteverket/lib/agi-client', () => ({
   agiGetKvittenser: (...a: unknown[]) => mockKvittenser(...a),
 }))
 
+// The token pick behind gnubok_agi_status runs for real (the tests that pin
+// which member's token serves the read drive it through skatteverket_tokens);
+// only the run-scoping tests, whose queued double holds no token rows, stub it.
+const mockResolveUserReadAuth = vi.fn()
+vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return { ...actual, resolveUserReadAuth: (...a: unknown[]) => mockResolveUserReadAuth(...a) }
+})
+
 // Audit writes are exercised in the extension; mock them out here so the test
 // supabase queue only has to account for staging reads.
 vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
@@ -71,9 +80,14 @@ const agiStatus = tools.find((t) => t.name === 'gnubok_agi_status')!
 
 const ALL = [validate, vatSubmit, vatStatus, agiSubmit, agiStatus]
 
+const realResolveAuth = await vi.importActual<typeof import('@/extensions/general/skatteverket/lib/resolve-auth')>(
+  '@/extensions/general/skatteverket/lib/resolve-auth',
+)
+
 let prevEnv: string | undefined
 beforeEach(() => {
   vi.clearAllMocks()
+  mockResolveUserReadAuth.mockImplementation(realResolveAuth.resolveUserReadAuth as (...a: unknown[]) => unknown)
   prevEnv = process.env.SKATTEVERKET_ENABLED
   process.env.SKATTEVERKET_ENABLED = 'true'
 })
@@ -419,6 +433,12 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
     mockResolveRedovisare.mockResolvedValue('165560000000')
     // Nothing retrievable live: the run-scoping under test is purely local.
     mockKvittenser.mockResolvedValue({ ok: false, status: 404 })
+    mockResolveUserReadAuth.mockResolvedValue({
+      ok: true,
+      auth: { mode: 'user', userId: 'user-1', companyId: 'company-1' },
+      source: 'user',
+      tokenUserId: 'user-1',
+    })
   })
 
   it('a correction run reports generated (unfiled) although the period record is the original run\'s signed receipt', async () => {
@@ -684,18 +704,68 @@ describe('Skatteverket read tools: a session that is gone', () => {
     expect(error.remediation?.tool).toBe('gnubok_connect_skatteverket')
   })
 
-  it('gnubok_agi_status reads on the caller\'s own login, and says so', async () => {
+  // crm#1263: the receipts were read on the caller's own token only, so a
+  // member who never connected was told NOT_CONNECTED for a connected company.
+  const agiStatusRead = (tokens: unknown[]) => {
     mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockKvittenser.mockRejectedValue(new SkatteverketAuthError('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED'))
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } })
-    enqueue({ data: null }) // extension_data
-    const thrown = await agiStatus
-      .execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
-      .then(() => null, (err: unknown) => err)
-    const error = toToolError(thrown, { toolName: 'gnubok_agi_status' }).error
+    const { supabase } = createTableMockSupabase({
+      salary_runs: { data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } },
+      skatteverket_tokens: { data: tokens },
+      profiles: { data: { full_name: 'Anna Admin' } },
+    })
+    return agiStatus.execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+  }
+  const agiStatusRefusal = async (tokens: unknown[]) => {
+    const thrown = await agiStatusRead(tokens).then(() => null, (err: unknown) => err)
+    return toToolError(thrown, { toolName: 'gnubok_agi_status' }).error
+  }
+
+  it('gnubok_agi_status reads the receipts on another member\'s token when the caller has none', async () => {
+    mockKvittenser.mockResolvedValue({ ok: true, data: { kvittenser: [{ uuidKvittens: 'kv-1' }] } })
+
+    const result = (await agiStatusRead([row('user-2')])) as { kvittenser: unknown; kvittens_read: string }
+
+    expect(mockKvittenser).toHaveBeenCalledTimes(1)
+    // The token that serves the read is the connected member's ...
+    expect(mockKvittenser.mock.calls[0][0]).toMatchObject({ mode: 'user', userId: 'user-2', companyId: 'company-1' })
+    // ... and the audit row names the caller who asked.
+    expect(mockKvittenser.mock.calls[0][3]).toEqual({ companyId: 'company-1', userId: 'user-1' })
+    expect(result.kvittenser).toEqual([{ uuidKvittens: 'kv-1' }])
+    expect(result.kvittens_read).toBe('ok')
+  })
+
+  it('gnubok_agi_status prefers the caller\'s own token when they have one', async () => {
+    mockKvittenser.mockResolvedValue({ ok: true, data: { kvittenser: [] } })
+
+    await agiStatusRead([row('user-2'), row('user-1')])
+
+    expect(mockKvittenser.mock.calls[0][0]).toMatchObject({ mode: 'user', userId: 'user-1', companyId: 'company-1' })
+  })
+
+  it('gnubok_agi_status never reads on a session flagged for reconsent, and names whose it is', async () => {
+    const error = await agiStatusRefusal([{ ...row('user-2'), status: 'needs_reconsent' }])
+
+    expect(mockKvittenser).not.toHaveBeenCalled()
     expect(error).toMatchObject({ code: 'SKATTEVERKET_NOT_CONNECTED', retryable: false, remediation: { tool: 'gnubok_connect_skatteverket' } })
-    expect(error.message_en).toMatch(/^This read uses your own Skatteverket BankID login/)
+    expect(error.message_en).toContain('made by Anna Admin, another member of the company')
+  })
+
+  it('gnubok_agi_status makes no Skatteverket call when no member is connected', async () => {
+    const error = await agiStatusRefusal([])
+
+    expect(mockKvittenser).not.toHaveBeenCalled()
+    expect(error).toMatchObject({ code: 'SKATTEVERKET_NOT_CONNECTED', retryable: false, remediation: { tool: 'gnubok_connect_skatteverket' } })
+    expect(error.message_en).toMatch(/^No live Skatteverket session serves this company's reads/)
+  })
+
+  it('gnubok_agi_status names the member whose session expired during the read', async () => {
+    mockKvittenser.mockRejectedValue(new SkatteverketAuthError('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED'))
+
+    const error = await agiStatusRefusal([row('user-2')])
+
+    expect(error).toMatchObject({ code: 'SKATTEVERKET_NOT_CONNECTED', retryable: false, remediation: { tool: 'gnubok_connect_skatteverket' } })
+    expect(error.message_en).toContain('made by Anna Admin, another member of the company')
+    expect(error.message_en).not.toMatch(/your own/i)
     // Only a person can connect: the refusal also names the read that works
     // without the login, with the run it was asked about.
     expect(error.message_en).toContain('Meanwhile: gnubok_get_salary_run with salary_run_id sr-1 needs no connection')
