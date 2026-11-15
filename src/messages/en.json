@@ -2628,6 +2628,7 @@
     "journey_search_nomatch": "No company matched. A newly registered business can take a few days to appear in the search. Type the organisation number (for an enskild firma, your personal identity number) and you can continue manually.",
     "journey_search_nomatch_joint": "Do you own something together, such as a property? An enskild firma has only one owner, so two personal identity numbers cannot share one. If your share belongs to your business, book it in your own firm, ideally as its own project.",
     "journey_search_pick": "Which company do you mean?",
+    "journey_search_pick_one": "Do you mean this company?",
     "journey_search_pick_missing": "Not listed? A newly registered business can take a few days to appear here. Type the organisation number (for an enskild firma, your personal identity number) and you can continue manually.",
     "journey_ceased_title": "The company is deregistered.",
     "journey_ceased_sub": "According to Bolagsverket the company is deregistered.",

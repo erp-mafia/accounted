@@ -328,14 +328,10 @@ function wipeDownstream(settings: Partial<CompanySettings>): Partial<CompanySett
   return next
 }
 
-function withOrgNumber(state: JourneyState, orgNumber: string): JourneyState {
-  return stay(state, { settings: { ...state.settings, org_number: orgNumber } })
-}
-
 /**
- * The single "TIC answered with data" transition, shared by a typed orgnr,
- * a one-hit name search and a picked hit: facts become settings, the step
- * advances past whatever the lookup already answered.
+ * The single "TIC answered with data" transition, shared by a typed orgnr
+ * and a picked name-search hit: facts become settings, the step advances
+ * past whatever the lookup already answered.
  */
 function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): JourneyState {
   // Only forms this deployment can create are prefilled; a flagged-off or
@@ -423,6 +419,8 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     case 'SEARCH_SUBMITTED': {
       if (state.submitting) return state
       // A name search has no orgnr yet: it arrives with the picked hit.
+      // Sent here by a VAT yes, the user still owes the number until a pick
+      // or a typed one gives it, so that reason outlives the search.
       return stay(state, {
         settings: { ...state.settings, org_number: undefined },
         ticLookup: null,
@@ -430,7 +428,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupNote: 'none',
         lookupPending: true,
         searchHits: [],
-        serverError: null,
+        serverError: state.serverError === 'vat_needs_org_number' ? state.serverError : null,
         plannedForm: null,
       })
     }
@@ -468,10 +466,9 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       if (outcome.status === 'aborted') return cleared
 
       if (outcome.status === 'found') {
-        // One hit resolves exactly like a typed orgnr; several wait for a pick.
-        if (outcome.hits.length === 1) {
-          return applyLookupFound(withOrgNumber(cleared, outcome.hits[0].orgNumber), outcome.hits[0].result)
-        }
+        // Every hit waits for a pick, a lone one included: name ranking is
+        // fuzzy, so a made-up or new company's name can match one unrelated
+        // registered company (crm#1909). Only a typed orgnr resolves directly.
         return stay(cleared, { searchHits: outcome.hits })
       }
 
@@ -485,7 +482,10 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
     case 'SEARCH_HIT_PICKED': {
       if (state.submitting || state.step !== 'orgnr') return state
-      return applyLookupFound(withOrgNumber(state, action.hit.orgNumber), action.hit.result)
+      return applyLookupFound(
+        stay(state, { settings: { ...state.settings, org_number: action.hit.orgNumber } }),
+        action.hit.result,
+      )
     }
 
     case 'SUGGESTION_PICKED': {

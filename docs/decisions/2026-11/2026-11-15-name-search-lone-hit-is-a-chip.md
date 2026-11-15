@@ -1,0 +1,1 @@
+[2026-11-15] Onboarding name search never applies a hit by itself, a lone hit included: it shows as one chip to confirm, beside "Fortsätt utan"; only a typed org number resolves directly, because fuzzy ranking matched a made-up test name to an unrelated real company (crm#1909).
