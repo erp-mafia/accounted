@@ -400,7 +400,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'foundation',
     uses: ['parties'],
     libFolders: ['vat'],
-    operationPrefixes: ['vat', 'vat-filings', 'vat-check-reviews'],
+    operationPrefixes: ['vat', 'vat-filings', 'vat-check-reviews', 'vat-momsredovisning-marks'],
     v1Segments: ['vat'],
     jurisdictions: SE,
   },

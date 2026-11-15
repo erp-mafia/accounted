@@ -216,6 +216,7 @@ import {
   vatFilingsUnmark,
 } from './vat-filings'
 import { vatCheckReviewsMark } from './vat-check-reviews'
+import { vatMomsredovisningMarksMark, vatMomsredovisningMarksWithdraw } from './vat-momsredovisning-marks'
 import { agiFilingsMark } from './agi-filings'
 import { deadlinesComplete, deadlinesList } from './deadlines'
 import {
@@ -488,6 +489,10 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   vatFilingsUnmark,
   // vat-check-reviews (MCP only: the web view has its own check-reviews route)
   vatCheckReviewsMark,
+  // vat-momsredovisning-marks (MCP only, staged: the Moms page has its own
+  // not-momsredovisning route)
+  vatMomsredovisningMarksMark,
+  vatMomsredovisningMarksWithdraw,
   // agi-filings (MCP only: the dashboard completes a deadline by id)
   agiFilingsMark,
   // deadlines (MCP only: the dashboard ticks a deadline through the same service)

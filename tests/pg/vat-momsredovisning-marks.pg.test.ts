@@ -24,6 +24,7 @@ import {
 import { getClient, getPool, runAsServiceRole, withUserContext } from './setup'
 import { stornoEntry, type CashCompany } from './kontantmetod-carry-fixtures'
 import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
+import { roundOre } from '@/lib/money'
 
 const ALL_ACCOUNTS = [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS, '3011']
 const START = '2026-07-01'
@@ -100,6 +101,45 @@ describe('vat_momsredovisning_marks.pg: a correction the shapes catch, marked by
     expect(withdrawn.shaped.has(q.correction)).toBe(true)
     expect(withdrawn.totals.get('2611')).toEqual({ debit: 0, credit: 10000 })
     expect((await drilled(q.companyId, ['2611'])).has(q.correction)).toBe(false)
+  })
+
+  it('withdrawn after the quarter\'s momsredovisning was booked, the correction settles what that one left: the declared VAT is what the momsredovisningar moved', async () => {
+    const q = await seedQuarter()
+    await getPool().query(INSERT, [q.companyId, q.correction, 'not_momsredovisning', q.userId])
+    // Booked while the mark holds: the momsredovisning clears what the
+    // declaration then reads on 2611.
+    const owed = (await figure(q.companyId)).totals.get('2611')!
+    const cleared = roundOre(owed.credit - owed.debit)
+    const settlement = await insertPostedJournalEntry({
+      userId: q.userId,
+      companyId: q.companyId,
+      fiscalPeriodId: q.fiscalPeriodId,
+      voucherNumber: 3,
+      entryDate: END,
+      description: 'Momsredovisning Kvartal 3 2026',
+      sourceType: 'vat_settlement',
+      lines: [
+        { accountNumber: '2611', debitAmount: cleared, creditAmount: 0 },
+        { accountNumber: '2650', debitAmount: 0, creditAmount: cleared },
+      ],
+    })
+
+    await getPool().query(INSERT, [q.companyId, q.correction, 'withdrawn', q.userId])
+    const withdrawn = await figure(q.companyId)
+    // The correction is a momsredovisning again, so the rutor read the sale
+    // alone...
+    expect(withdrawn.shaped.has(q.correction)).toBe(true)
+    expect(withdrawn.totals.get('2611')).toEqual({ debit: 0, credit: 10000 })
+    // ...and what the declaration says is owed on 2611 is exactly what the
+    // quarter's momsredovisningar (the booked one and every shaped one) moved
+    // off it: nothing is left to settle and nothing is settled twice.
+    const declared = withdrawn.totals.get('2611')!
+    const { rows } = await getPool().query<{ moved: string }>(
+      `SELECT sum(debit_amount - credit_amount) AS moved FROM public.journal_entry_lines
+        WHERE journal_entry_id = ANY ($1::uuid[]) AND account_number = '2611'`,
+      [[settlement, ...withdrawn.shaped]],
+    )
+    expect(roundOre(declared.credit - declared.debit)).toBe(roundOre(Number(rows[0]!.moved)))
   })
 
   it('reads the storno of a marked correction with it, so the annulled pair nets to nothing', async () => {

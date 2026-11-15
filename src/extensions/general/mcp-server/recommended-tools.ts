@@ -151,6 +151,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_get_general_ledger',
       'gnubok_mark_vat_check_reviewed',
       'gnubok_get_vat_settlement_proposal',
+      'gnubok_mark_not_momsredovisning',
       'gnubok_book_vat_settlement',
       'gnubok_vat_declaration_validate',
       'gnubok_vat_declaration_submit',

@@ -153,6 +153,11 @@ const RISK_TIERS = {
   // verifikat, nothing sent; never applies to an ERROR, lapses when the
   // figures change.
   mark_vat_check_reviewed: 'low',
+  // "Rättelse, inte momsredovisning" and its withdrawal (crm#1849): no
+  // verifikat and reversible, but it changes the rutor and whether the
+  // period counts as settled, so never low.
+  mark_not_momsredovisning: 'medium',
+  withdraw_not_momsredovisning: 'medium',
   mark_agi_period_filed: 'low',
   // A tick on a deadline, or its undo (crm#1848): a reminder, no verifikat,
   // period or filing.
