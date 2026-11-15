@@ -740,6 +740,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/reports/vat-declaration/rc-basis-gaps/fix': gap('P3', 'add the missing reverse-charge basbelopp pair'),
   'POST /api/reports/vat-declaration/check-reviews': covered(['gnubok_mark_vat_check_reviewed'], 'staged; a person approves the agent\'s review'),
   'DELETE /api/reports/vat-declaration/check-reviews': uiOnly('taking back a VAT warning review is the reviewer\'s own act in the momsdeklaration view'),
+  'POST /api/reports/vat-declaration/not-momsredovisning': gap('P3', 'mark a verifikat the momsredovisning shapes catch as a correction (crm#1849)'),
+  'DELETE /api/reports/vat-declaration/not-momsredovisning': uiOnly('taking back the correction mark is the marker\'s own act in the momsdeklaration view'),
   'PUT /api/reports/ink3/inputs': gap(
     'P2',
     'INK3 account treatments, the allmännyttig statement and ruta overrides; v1 and MCP read the underlag only in this step (founder decision on #47)',
@@ -1139,5 +1141,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 167 -> 168 (2026-11-12): unlink a supplier invoice from a linked verifikat
  * (POST /api/supplier-invoices/:id/unlink-voucher), dashboard first; the v1
  * route and the MCP tool are a follow-up.
+ * 168 -> 169 (2026-11-14, crm#1849): mark a verifikat the momsredovisning
+ * shapes catch as a correction (POST /api/reports/vat-declaration/
+ * not-momsredovisning), dashboard first; a staged MCP tool is a follow-up.
  */
-export const GAP_CEILING = 168
+export const GAP_CEILING = 169

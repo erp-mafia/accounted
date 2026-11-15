@@ -4777,6 +4777,43 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Varningen är inte markerad som granskad för perioden.',
     message_en: 'The warning is not marked as reviewed for the period.',
   },
+  VAT_MARK_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bara ett bokfört verifikat kan markeras som rättelse.',
+    message_en: 'Only a posted journal entry can be marked as a correction.',
+  },
+  VAT_MARK_TAGGED_SETTLEMENT: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikatet är periodens momsredovisning från momssidan. Annullera det i stället om perioden behöver bokföras om.',
+    message_en:
+      'This journal entry is the VAT settlement booked from the VAT page. Reverse it instead if the period needs to be booked again.',
+  },
+  VAT_MARK_STORNO: {
+    httpStatus: 409,
+    message_sv: 'En makulering följer sitt originalverifikat. Markera originalet i stället.',
+    message_en: 'A reversal follows its original journal entry. Mark the original instead.',
+  },
+  VAT_MARK_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Perioden är stängd eller låst, så verifikatet kan inte markeras om.',
+    message_en: 'The period is closed or locked, so the journal entry cannot be marked again.',
+  },
+  VAT_MARK_PERIOD_FILED: {
+    httpStatus: 409,
+    message_sv: 'Momsdeklarationen för perioden är redan inlämnad, så verifikatet kan inte markeras om här.',
+    message_en: 'The VAT return for the period is already filed, so the journal entry cannot be marked again here.',
+  },
+  VAT_MARK_NOT_READY: {
+    httpStatus: 503,
+    message_sv: 'Markeringen håller på att slås på. Försök igen om några minuter.',
+    message_en: 'Marking is being switched on. Try again in a few minutes.',
+  },
+  VAT_MARK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet är inte markerat som rättelse.',
+    message_en: 'The journal entry is not marked as a correction.',
+  },
 }
 
 const PS_REPORT: Record<string, StructuredErrorEntry> = {

@@ -15,6 +15,9 @@ import {
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ToastAction } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/use-toast'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
@@ -63,6 +66,7 @@ import {
   type RcBasisGapScan,
 } from '@/lib/reports/vat-filing-gate'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
+import type { MarkedMomsredovisningEntry } from '@/lib/vat/momsredovisning-marks'
 import {
   applyVatCheckReviews,
   type VatCheckReview,
@@ -202,6 +206,8 @@ function VatBookingCard({
   booked,
   draft,
   onRetry,
+  onMarkChanged,
+  periodQuery,
   fiscalPeriodId,
 }: {
   /**
@@ -217,11 +223,106 @@ function VatBookingCard({
   booked?: VatSettlementExistingEntry
   draft?: VatSettlementExistingEntry
   onRetry: () => void
+  /**
+   * A verifikat was marked as a correction, or the mark undone (crm#1849):
+   * the declaration and the proposal both read it differently now.
+   */
+  onMarkChanged: () => void
+  /** The period as a query string (period_type, year, period[, fiscal_period_id]); '' while unknown. */
+  periodQuery: string
   /** Helårsmoms: the räkenskapsår the proposal was built for. */
   fiscalPeriodId?: string
 }) {
   const { canWrite } = useCanWrite()
+  const t = useTranslations('reports')
+  const errorLocale = useLocale() as ErrorLocale
+  const { toast } = useToast()
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [markOpen, setMarkOpen] = useState(false)
+  // Only a verifikat the shapes caught in the period can be a correction: the
+  // app's own momsredovisning (source_type vat_settlement) is annulled
+  // instead, and one dated later that clears exactly this period's balances
+  // (late_settlement) is the momsredovisning by its amounts.
+  const markable =
+    booked && booked.source_type !== 'vat_settlement' && !booked.late_settlement ? booked : undefined
+  // The period's verifikat marked as no momsredovisning, so the mark stays
+  // visible and can be undone after the toast has gone.
+  const [marked, setMarked] = useState<MarkedMomsredovisningEntry[]>([])
+  const [marksKey, setMarksKey] = useState(0)
+  useEffect(() => {
+    if (!periodQuery) return
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/not-momsredovisning?${periodQuery}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (!cancelled && res.ok && Array.isArray(json?.data)) setMarked(json.data as MarkedMomsredovisningEntry[])
+      })
+      .catch(() => {
+        // Safe to ignore: the list only offers Ångra for marks already made.
+        // A failed read leaves it as it was; the figure above still reads
+        // every mark, and the next mark or period change reads it again.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [periodQuery, marksKey])
+
+  const undoMark = async (entryId: string) => {
+    try {
+      const res = await fetch(
+        `/api/reports/vat-declaration/not-momsredovisning?journal_entry_id=${encodeURIComponent(entryId)}`,
+        { method: 'DELETE' },
+      )
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) {
+        toast({
+          title: t('vat_not_settlement_undo_failed'),
+          description: getErrorMessage(json, { locale: errorLocale, fallback: t('vat_not_settlement_undo_failed') }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: t('vat_not_settlement_undone') })
+      setMarksKey((k) => k + 1)
+      onMarkChanged()
+    } catch {
+      toast({ title: t('vat_not_settlement_undo_failed'), variant: 'destructive' })
+    }
+  }
+
+  const markNotSettlement = async () => {
+    if (!markable) return
+    const voucher = formatVoucher(markable)
+    try {
+      const res = await fetch('/api/reports/vat-declaration/not-momsredovisning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ journal_entry_id: markable.id }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || json?.error) {
+        toast({
+          title: t('vat_not_settlement_failed'),
+          description: getErrorMessage(json, { locale: errorLocale, fallback: t('vat_not_settlement_failed') }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setMarkOpen(false)
+      toast({
+        title: t('vat_not_settlement_done', { voucher }),
+        action: (
+          <ToastAction altText={t('vat_not_settlement_undo')} onClick={() => void undoMark(markable.id)}>
+            {t('vat_not_settlement_undo')}
+          </ToastAction>
+        ),
+      })
+      setMarksKey((k) => k + 1)
+      onMarkChanged()
+    } catch {
+      toast({ title: t('vat_not_settlement_failed'), variant: 'destructive' })
+    }
+  }
   const { edited, editProps } = useEditedSinceOpen()
 
   // FormLine amounts are input strings; the proposal's numbers are already
@@ -254,6 +355,44 @@ function VatBookingCard({
               </Link>
               . Annullera det verifikatet först om perioden behöver bokföras om.
             </p>
+          </div>
+        )}
+        {markable && canWrite && (
+          <div className="pl-6">
+            <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setMarkOpen(true)}>
+              {t('vat_not_settlement_action', { voucher: formatVoucher(markable) })}
+            </Button>
+            <ConfirmDialog
+              open={markOpen}
+              onOpenChange={setMarkOpen}
+              title={t('vat_not_settlement_title', { voucher: formatVoucher(markable) })}
+              description={t('vat_not_settlement_body', { voucher: formatVoucher(markable) })}
+              confirmLabel={t('vat_not_settlement_confirm')}
+              cancelLabel={t('vat_not_settlement_cancel')}
+              onConfirm={markNotSettlement}
+            />
+          </div>
+        )}
+        {marked.length > 0 && (
+          <div className="space-y-1">
+            {marked.map((entry) => (
+              <div
+                key={entry.journal_entry_id}
+                className="flex flex-wrap items-center gap-x-2 text-[13px] leading-6 text-muted-foreground"
+              >
+                <span>{t('vat_not_settlement_marked', { voucher: formatVoucher(entry) })}</span>
+                {canWrite && (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0"
+                    onClick={() => void undoMark(entry.journal_entry_id)}
+                  >
+                    {t('vat_not_settlement_undo')}
+                  </Button>
+                )}
+              </div>
+            ))}
           </div>
         )}
         {draft && (
@@ -1557,6 +1696,20 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               booked={settlement.booked}
               draft={settlement.draft}
               onRetry={() => setSettlementRefreshKey((k) => k + 1)}
+              onMarkChanged={() => {
+                setRetryKey((k) => k + 1)
+                setSettlementRefreshKey((k) => k + 1)
+              }}
+              periodQuery={
+                periodType === null
+                  ? ''
+                  : new URLSearchParams({
+                      period_type: periodType,
+                      year: String(year),
+                      period: String(period),
+                      ...(periodType === 'yearly' ? { fiscal_period_id: fiscalPeriodId } : {}),
+                    }).toString()
+              }
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
             />
               <div className="flex justify-end">
