@@ -1,0 +1,1 @@
+[2026-11-14] When the books open on the file's own #UB -1 on every account, the import says the file's #IB is the side that is off and what each possible cause means for the books, not only "Stäm av mot källsystemet"; still an action, as only the customer knows the cause.

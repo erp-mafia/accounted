@@ -327,7 +327,9 @@ export default function SIEPreviewStep({
             trailing={
               ibDiffers ? (
                 <HelpPopover className="ml-2 inline-flex align-middle">
-                  {t(continuity.bookedOpeningBalance ? 'ib_continuity_booked_advice' : 'ib_continuity_advice')}
+                  {t(continuity.fileOpeningOff
+                    ? 'ib_file_off_advice'
+                    : continuity.bookedOpeningBalance ? 'ib_continuity_booked_advice' : 'ib_continuity_advice')}
                 </HelpPopover>
               ) : undefined
             }
@@ -351,6 +353,7 @@ export default function SIEPreviewStep({
                     })
                   : t('ib_continuity_carried', { count: continuity.differences.length })}
               </p>
+              {continuity.fileOpeningOff && <p>{t('ib_continuity_file_off')}</p>}
               <OpeningBalanceDifferencesTable
                 rows={continuity.differences.map((row) => ({
                   account: row.account,

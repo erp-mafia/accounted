@@ -7,15 +7,17 @@ vi.mock('@/lib/import/opening-balance/unlinked', () => ({
   findUnlinkedOpeningBalance: vi.fn(async () => null),
 }))
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { parseSIEFile } from '@/lib/import/sie-parser'
+import { getEffectiveOpeningBalances, parseSIEFile } from '@/lib/import/sie-parser'
 import type { AccountMapping } from '@/lib/import/types'
 import {
+  booksMatchFilePreviousYear,
   compareOpeningBalances,
   continuityNotices,
   continuityWarnings,
   diagnoseCarriedForwardDifferences,
   diagnoseOpeningBalanceContinuity,
   fileOpeningBalanceByAccount,
+  filePreviousClosingByAccount,
   findSourceOpeningBalanceEdits,
 } from '../sie-continuity'
 
@@ -94,6 +96,87 @@ describe('findSourceOpeningBalanceEdits', () => {
   })
 })
 
+describe('filePreviousClosingByAccount', () => {
+  it('maps the file\'s #UB -1 to the company accounts, summing two sources on one target', () => {
+    const balances = [
+      { yearIndex: -1, account: '1910', amount: 300 },
+      { yearIndex: -1, account: '1930', amount: 5000 },
+      { yearIndex: 0, account: '1930', amount: 9999 },
+    ]
+    const mappings = [...identity(['1930']), ...identity(['1910']).map((m) => ({ ...m, targetAccount: '1930' }))]
+    expect(filePreviousClosingByAccount(balances, mappings)).toEqual(new Map([['1930', 5300]]))
+  })
+
+  it('is null for a file without a previous year', () => {
+    expect(filePreviousClosingByAccount([{ yearIndex: 0, account: '1930', amount: 1 }], identity(['1930']))).toBeNull()
+  })
+
+  // Books without earlier years open on zero everywhere and would match it.
+  it('is null when the file writes its previous year as zeros only', () => {
+    const zeros = [{ yearIndex: -1, account: '1930', amount: 0 }, { yearIndex: -1, account: '2081', amount: 0 }]
+    expect(filePreviousClosingByAccount(zeros, identity(['1930', '2081']))).toBeNull()
+  })
+})
+
+describe('booksMatchFilePreviousYear', () => {
+  const parsed = parseSIEFile(SECOND_YEAR)
+  const file = { opening: getEffectiveOpeningBalances(parsed).balances, closing: parsed.closingBalances }
+  // What BOOKS_AFTER_FIRST_YEAR opens the year on, against the file's #IB.
+  const differences = [
+    { account: '1730', file: 700, books: 200, difference: -500 },
+    { account: '2990', file: -1500, books: -1000, difference: 500 },
+  ]
+
+  it('is true when the books open on the file\'s #UB -1 on every account', () => {
+    expect(booksMatchFilePreviousYear(differences, file, MAPPINGS)).toBe(true)
+  })
+
+  it('is false when the books differ from the #UB -1 on a differing account', () => {
+    expect(booksMatchFilePreviousYear([differences[0], { ...differences[1], books: -900, difference: 600 }], file, MAPPINGS))
+      .toBe(false)
+  })
+
+  // The books open on the file's #IB on 2990 (no row), and that #IB is not the
+  // file's #UB -1: on 2990 the books do not follow the previous year either.
+  it('counts the accounts where the books equal the file\'s #IB too', () => {
+    expect(booksMatchFilePreviousYear([differences[0]], file, MAPPINGS)).toBe(false)
+  })
+
+  it('is false without a #UB -1 to compare with, or without a difference', () => {
+    expect(booksMatchFilePreviousYear(differences, { ...file, closing: [] }, MAPPINGS)).toBe(false)
+    expect(booksMatchFilePreviousYear([], file, MAPPINGS)).toBe(false)
+  })
+
+  // A program that moves 2019 into 2010 in the new year's #IB (enskild firma)
+  // differs only within equity: neither cause the text names describes it.
+  it('is false when the file\'s #IB differs only within equity', () => {
+    const lines = ['#RAR 0 20190101 20191231', '#RAR -1 20180101 20181231', '#KONTO 1930 "Bank"', '#KONTO 2010 "Eget kapital"',
+      '#KONTO 2019 "Årets resultat"', '#UB -1 1930 5000.00', '#UB -1 2010 -3000.00', '#UB -1 2019 -2000.00',
+      '#IB 0 1930 5000.00', '#IB 0 2010 -5000.00']
+    const equityOnly = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', ...lines].join('\n'))
+    const equityFile = { opening: getEffectiveOpeningBalances(equityOnly).balances, closing: equityOnly.closingBalances }
+    const moved = [
+      { account: '2010', file: -5000, books: -3000, difference: 2000 },
+      { account: '2019', file: 0, books: -2000, difference: -2000 },
+    ]
+    expect(booksMatchFilePreviousYear(moved, equityFile, identity(['1930', '2010', '2019']))).toBe(false)
+  })
+
+  // 1931 is a bank sub-account the BAS reference does not list: outside
+  // equity all the same, so a hand edit there is named like one on 1930.
+  it('counts a sub-account outside the BAS reference by its kontogrupp', () => {
+    const lines = ['#RAR 0 20190101 20191231', '#RAR -1 20180101 20181231', '#KONTO 1931 "Bank 2"', '#KONTO 2081 "Aktiekapital"',
+      '#UB -1 1931 5000.00', '#UB -1 2081 -5000.00', '#IB 0 1931 5500.00', '#IB 0 2081 -5500.00']
+    const subAccount = parseSIEFile(['#FLAGGA 0', '#SIETYP 4', ...lines].join('\n'))
+    const subFile = { opening: getEffectiveOpeningBalances(subAccount).balances, closing: subAccount.closingBalances }
+    const edited = [
+      { account: '1931', file: 5500, books: 5000, difference: -500 },
+      { account: '2081', file: -5500, books: -5000, difference: 500 },
+    ]
+    expect(booksMatchFilePreviousYear(edited, subFile, identity(['1931', '2081']))).toBe(true)
+  })
+})
+
 describe('compareOpeningBalances', () => {
   it('reports balance-sheet accounts that differ, books minus file', () => {
     const file = fileOpeningBalanceByAccount(
@@ -161,6 +244,8 @@ describe('diagnoseOpeningBalanceContinuity', () => {
         { account: '1730', file: 700, books: 200, difference: -500 },
         { account: '2990', file: -1500, books: -1000, difference: 500 },
       ],
+      // The books carry the file's own #UB -1 forward: the file's #IB is off.
+      fileOpeningOff: true,
       sourceEdits: [
         { account: '1730', previousClosing: 200, opening: 700, difference: 500 },
         { account: '2990', previousClosing: -1000, opening: -1500, difference: -500 },
@@ -357,6 +442,44 @@ describe('continuity texts', () => {
 
   it('says nothing when the file and the books agree', () => {
     expect(continuityNotices({ differences: [], noVouchers: null })).toEqual({ warnings: [], notices: [] })
+  })
+
+  // SECOND_YEAR's #IB moved 500 onto 1730 and 2990 that its own #UB -1 does
+  // not have, and the books carry the #UB -1 forward: the file is the side
+  // that is off. Whether the books' opening is the right one depends on why,
+  // which only the customer can tell, so it stays an action.
+  it('says the file is the side that is off, and what each cause means, when the books match its previous year', () => {
+    const { notices, warnings } = continuityNotices({ differences, noVouchers: null, fileOpeningOff: true })
+    expect(notices).toEqual([
+      { code: 'sie_ib_file_differs_from_previous_year', severity: 'action', params: { count: 2, amount: expect.stringContaining('1') } },
+    ])
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('skiljer sig från filens egen utgående balans för föregående år på 2 konton')
+    expect(warnings[0]).toContain('Bokföringens ingående balans stämmer med föregående års utgående balans i filen.')
+    expect(warnings[0]).toContain('Om föregående år ändrades efter att det gamla programmet skapade årets ingående balans')
+    expect(warnings[0]).toContain('Om den ingående balansen ändrades för hand i det gamla programmet finns den ändringen inte i ' +
+      'bokföringen; ska den med behöver den bokföras som en verifikation.')
+    expect(warnings[0]).not.toContain('Stäm av')
+  })
+
+  it('keeps the reconcile advice otherwise', () => {
+    const { notices, warnings } = continuityNotices({ differences, noVouchers: null, fileOpeningOff: false })
+    expect(notices.map((n) => n.code)).toEqual(['sie_ib_differs_from_file'])
+    expect(warnings[0]).toContain('Stäm av mot källsystemet')
+  })
+
+  it('names the side before import too, for a carried-forward year and for a booked IB', () => {
+    const year = { start: '2019-01-01', end: '2019-12-31' }
+    const base = { carriedForward: true, differences, fileOpeningOff: true, sourceEdits: [], missingYears: [], noVouchers: false }
+    const [carried] = continuityWarnings(base, year)
+    expect(carried).toContain('året öppnar på föregående års utgående balans')
+    // The file's IB is the subject: 1730 is 500 higher in the file than in the books.
+    expect(carried).toMatch(/det är filens ingående balans som avviker från den, på 1730 \(500,00\s?kr\), 2990 \(−500,00\s?kr\)/)
+    expect(carried).toContain('finns den ändringen inte i bokföringen; ska den med behöver den bokföras som en verifikation.')
+    expect(carried).not.toContain('Stäm av')
+    const [booked] = continuityWarnings({ ...base, bookedOpeningBalance: { entryId: 'je-ib', voucher: 'A1' } }, year)
+    expect(booked).toContain('verifikation A1')
+    expect(booked).toContain('det är filens ingående balans som avviker')
   })
 
   it('says the year opens on its booked IB when it has one (crm#1272)', () => {

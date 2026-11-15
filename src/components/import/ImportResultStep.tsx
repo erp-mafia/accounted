@@ -70,6 +70,9 @@ export default function ImportResultStep({
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
   const ibDifferences = result.details?.openingBalanceDifferences ?? []
+  // The books open on the file's own previous year on every account: the
+  // file's #IB is the side that is off (booksMatchFilePreviousYear).
+  const ibFileOff = (result.notices ?? []).some((n) => n.code === 'sie_ib_file_differs_from_previous_year')
   // Outcome rows that show beside the reveal too (the reveal carries the counts).
   const hasOutcomeRows =
     !!result.nextPeriodIBResync || !!result.dimensionsImported || (!!skipped && skipped.total > 0)
@@ -81,6 +84,7 @@ export default function ImportResultStep({
     'sie_vouchers_skipped',
     'sie_untransferred_result',
     'sie_ib_differs_from_file',
+    'sie_ib_file_differs_from_previous_year',
     'sie_next_ib_resynced',
     'sie_next_period_locked',
   ])
@@ -303,13 +307,13 @@ export default function ImportResultStep({
             trailing={
               <HelpPopover className="ml-2 inline-flex align-middle">
                 <div className="space-y-2">
-                  <p>{t('ib_differs_result_body', { count: ibDifferences.length })}</p>
-                  <p>{t('ib_continuity_advice')}</p>
+                  <p>{t(ibFileOff ? 'ib_file_off_result_body' : 'ib_differs_result_body', { count: ibDifferences.length })}</p>
+                  <p>{t(ibFileOff ? 'ib_file_off_advice' : 'ib_continuity_advice')}</p>
                 </div>
               </HelpPopover>
             }
           >
-            {t('ib_differs_result_title')}
+            {t(ibFileOff ? 'ib_file_off_result_title' : 'ib_differs_result_title')}
           </AttnLine>
           <OpeningBalanceDifferencesTable
             rows={ibDifferences.map((row) => ({
