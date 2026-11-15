@@ -1456,6 +1456,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // VAT period, with the fingerprint of the figures and the note. Part of the
   // record of how the declaration was checked, so it is kept (crm#1171).
   { name: 'vat_check_reviews', file: 'vat_check_reviews.json', orderBy: 'created_at' },
+  // Marks that a verifikat the momsredovisning shapes catch is a correction,
+  // not a momsredovisning: who said so for which verifikat, and when it was
+  // withdrawn. They decide what the momsdeklaration read, so they are kept
+  // (crm#1849).
+  { name: 'vat_momsredovisning_marks', file: 'vat_momsredovisning_marks.json', orderBy: 'created_at' },
   // Verifikat settled against each other in a reconciliation (a wrong
   // verifikat and the rättelse booked by hand): which, by whom, when, and the
   // undo stamps. The reason those verifikat are not open items; kept with the
