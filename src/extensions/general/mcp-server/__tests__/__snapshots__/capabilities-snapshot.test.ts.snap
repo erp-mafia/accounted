@@ -274,6 +274,11 @@ exports[`the agent briefing for each representative company > aktiebolag missing
         },
         {
           "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
           "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
@@ -637,6 +642,11 @@ exports[`the agent briefing for each representative company > aktiebolag, every 
         },
         {
           "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
           "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
@@ -997,6 +1007,11 @@ exports[`the agent briefing for each representative company > archived ekonomisk
           "callable": true,
           "name": "gnubok_get_vat_settlement_proposal",
           "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1368,6 +1383,11 @@ exports[`the agent briefing for each representative company > enskild firma that
           "callable": true,
           "name": "gnubok_get_vat_settlement_proposal",
           "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,
@@ -1770,6 +1790,11 @@ exports[`the agent briefing for each representative company > enskild firma with
         },
         {
           "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
+        },
+        {
+          "callable": true,
           "name": "gnubok_book_vat_settlement",
           "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
@@ -2138,6 +2163,11 @@ exports[`the agent briefing for each representative company > ideell förening o
           "callable": true,
           "name": "gnubok_get_vat_settlement_proposal",
           "note": "not in tools/list: invoke it through gnubok_call_tool",
+        },
+        {
+          "callable": true,
+          "name": "gnubok_mark_not_momsredovisning",
+          "note": "not in tools/list: stage it through gnubok_stage_tool (gnubok_call_tool if your client lacks it), then approve with gnubok_approve_pending_operation",
         },
         {
           "callable": true,

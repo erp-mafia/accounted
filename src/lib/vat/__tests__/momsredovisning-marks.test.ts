@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { VAT_ACCOUNTS, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 
 const periodStatus = vi.hoisted(() => ({ resolvePeriodStatusForDate: vi.fn() }))
 vi.mock('@/lib/core/bookkeeping/period-status', () => periodStatus)
@@ -8,25 +9,58 @@ vi.mock('@/lib/core/bookkeeping/period-status', () => periodStatus)
 const filings = vi.hoisted(() => ({ listVatFilings: vi.fn() }))
 vi.mock('../filing-record-store', () => filings)
 
-import { listMarkedInPeriod, markNotMomsredovisning, withdrawNotMomsredovisning } from '../momsredovisning-marks'
+import {
+  listMarkedInPeriod,
+  markNotMomsredovisning,
+  previewMomsredovisningMark,
+  withdrawNotMomsredovisning,
+} from '../momsredovisning-marks'
 
-const ENTRY = { id: 'entry-1', status: 'posted', source_type: 'manual', entry_date: '2026-09-30', reverses_id: null }
+const ENTRY = {
+  id: 'entry-1',
+  status: 'posted',
+  source_type: 'manual',
+  entry_date: '2026-09-30',
+  reverses_id: null,
+  voucher_series: 'A',
+  voucher_number: 158,
+  description: 'Rättelse: Offentliga bidrag för personal',
+}
 const Q3_FILED = { period_start: '2026-07-01', period_end: '2026-09-30' }
 
-/** The session reads (entry, latest mark); the service-role writer records the mark. */
+/** The declaration's totals for one day, listing these entries as settlement-shaped. */
+function totalsListing(shaped: string[]) {
+  return {
+    totals: [],
+    settlement_shaped_entries: shaped.map((id) => ({
+      id, status: 'posted', entry_date: '2026-09-30', source_type: 'manual', voucher_series: 'A', voucher_number: 158,
+    })),
+    source_type_counts: {},
+  }
+}
+
+/**
+ * The session reads (entry, latest mark, whether the shapes catch it); the
+ * service-role writer records the mark. `shaped` is the settlement-shaped
+ * entries the declaration's totals list for the verifikat's day: by default
+ * the shapes catch it, the customer's case.
+ */
 function setup(options: {
   entry?: Record<string, unknown> | null
   latestMark?: 'not_momsredovisning' | 'withdrawn' | null
+  shaped?: string[]
 } = {}) {
   const session = createTableMockSupabase()
   session.setTable('journal_entries', { data: options.entry === undefined ? ENTRY : options.entry })
   session.setTable('vat_momsredovisning_marks', { data: options.latestMark ? [{ action: options.latestMark }] : [] })
+  session.setTable('rpc:get_vat_declaration_totals', { data: totalsListing(options.shaped ?? ['entry-1']) })
   const writer = createTableMockSupabase()
   writer.setTable('vat_momsredovisning_marks', { data: null })
   return {
     supabase: session.supabase as unknown as SupabaseClient,
     writer: writer.supabase as unknown as SupabaseClient,
     sessionInserts: () => session.payloads('vat_momsredovisning_marks', 'insert'),
+    shapeAsked: () => session.findCall('rpc:get_vat_declaration_totals', 'rpc'),
     inserts: () => writer.payloads('vat_momsredovisning_marks', 'insert'),
   }
 }
@@ -47,6 +81,29 @@ describe('markNotMomsredovisning (crm#1849)', () => {
     ])
     // The person's session never writes the mark itself.
     expect(s.sessionInserts()).toEqual([])
+  })
+
+  it('asks the declaration\'s own shapes about the verifikat\'s day, with the declaration\'s account lists', async () => {
+    const s = setup()
+    await markNotMomsredovisning(s.supabase, s.writer, 'company-1', 'user-1', 'entry-1')
+    expect(s.shapeAsked()).toEqual([
+      expect.objectContaining({
+        p_company_id: 'company-1',
+        p_start: '2026-09-30',
+        p_end: '2026-09-30',
+        p_ruta_accounts: VAT_ACCOUNTS,
+        p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
+      }),
+    ])
+  })
+
+  it('refuses a verifikat the shapes do not catch: the mark would change nothing', async () => {
+    for (const shaped of [[], ['other-entry']]) {
+      const s = setup({ shaped })
+      expect(await markNotMomsredovisning(s.supabase, s.writer, 'company-1', 'user-1', 'entry-1'))
+        .toEqual({ ok: false, code: 'VAT_MARK_NOT_SHAPE' })
+      expect(s.inserts()).toEqual([])
+    }
   })
 
   it('writes nothing when the verifikat is already marked', async () => {
@@ -114,6 +171,8 @@ describe('before the migration is applied (code ships first)', () => {
     const session = createTableMockSupabase()
     session.setTable('journal_entries', { data: ENTRY })
     session.setTable('vat_momsredovisning_marks', { data: null, error: missing })
+    // The shapes answer before the migration too (its earlier definition).
+    session.setTable('rpc:get_vat_declaration_totals', { data: totalsListing(['entry-1']) })
     const writer = createTableMockSupabase()
     writer.setTable('vat_momsredovisning_marks', { data: null, error: { code: '42P01', message: 'relation does not exist' } })
     const supabase = session.supabase as unknown as SupabaseClient
@@ -177,5 +236,60 @@ describe('listMarkedInPeriod (crm#1849)', () => {
     const result = await listMarkedInPeriod(mock.supabase as unknown as SupabaseClient, 'company-1', { start: '2026-07-01', end: '2026-09-30' })
     expect(result).toEqual([])
     expect(mock.findCall('journal_entries', 'in')).toBeUndefined()
+  })
+})
+
+describe('previewMomsredovisningMark (crm#1849): what the approver sees, nothing written', () => {
+  it('names the verifikat and whether it is marked now, for a mark and a withdrawal', async () => {
+    const s = setup()
+    expect(await previewMomsredovisningMark(s.supabase, 'company-1', 'entry-1', 'mark')).toEqual({
+      ok: true,
+      preview: {
+        journal_entry_id: 'entry-1',
+        verifikat: 'A158',
+        entry_date: '2026-09-30',
+        description: 'Rättelse: Offentliga bidrag för personal',
+        marked_now: false,
+      },
+    })
+    const marked = setup({ latestMark: 'not_momsredovisning' })
+    const withdraw = await previewMomsredovisningMark(marked.supabase, 'company-1', 'entry-1', 'withdraw')
+    expect(withdraw).toMatchObject({ ok: true, preview: { verifikat: 'A158', marked_now: true } })
+    expect(s.inserts()).toEqual([])
+    expect(marked.inserts()).toEqual([])
+  })
+
+  it('refuses what the commit refuses, so nothing unapprovable is staged', async () => {
+    const draft = setup({ entry: { ...ENTRY, status: 'draft' } })
+    expect(await previewMomsredovisningMark(draft.supabase, 'company-1', 'entry-1', 'mark'))
+      .toEqual({ ok: false, code: 'VAT_MARK_NOT_POSTED' })
+    const missing = setup({ entry: null })
+    expect(await previewMomsredovisningMark(missing.supabase, 'company-1', 'entry-1', 'mark'))
+      .toEqual({ ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' })
+    filings.listVatFilings.mockResolvedValue([Q3_FILED])
+    const filed = setup()
+    expect(await previewMomsredovisningMark(filed.supabase, 'company-1', 'entry-1', 'mark'))
+      .toEqual({ ok: false, code: 'VAT_MARK_PERIOD_FILED' })
+  })
+
+  it('refuses to stage a mark the shapes would not need', async () => {
+    const s = setup({ shaped: [] })
+    expect(await previewMomsredovisningMark(s.supabase, 'company-1', 'entry-1', 'mark'))
+      .toEqual({ ok: false, code: 'VAT_MARK_NOT_SHAPE' })
+  })
+
+  it('stages a withdrawal without asking the shapes: a marked verifikat is read, never a shape', async () => {
+    const s = setup({ latestMark: 'not_momsredovisning', shaped: [] })
+    expect(await previewMomsredovisningMark(s.supabase, 'company-1', 'entry-1', 'withdraw'))
+      .toMatchObject({ ok: true, preview: { marked_now: true } })
+    expect(s.shapeAsked()).toBeUndefined()
+  })
+
+  it('refuses to stage a withdrawal of a verifikat that carries no mark', async () => {
+    for (const latestMark of [null, 'withdrawn'] as const) {
+      const s = setup({ latestMark })
+      expect(await previewMomsredovisningMark(s.supabase, 'company-1', 'entry-1', 'withdraw'))
+        .toEqual({ ok: false, code: 'VAT_MARK_NOT_FOUND' })
+    }
   })
 })

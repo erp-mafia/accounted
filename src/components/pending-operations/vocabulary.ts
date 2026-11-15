@@ -169,6 +169,8 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   redate_entry: 'warning_redate_entry',
   mark_no_document_required: 'warning_mark_no_document_required',
   book_vat_settlement: 'warning_book_vat_settlement',
+  mark_not_momsredovisning: 'warning_mark_not_momsredovisning',
+  withdraw_not_momsredovisning: 'warning_withdraw_not_momsredovisning',
   send_invoice_peppol: 'warning_send_invoice_peppol',
   register_peppol_participant: 'warning_register_peppol_participant',
   request_peppol_access: 'warning_request_peppol_access',

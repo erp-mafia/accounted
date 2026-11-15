@@ -4794,6 +4794,13 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
     message_sv: 'En makulering följer sitt originalverifikat. Markera originalet i stället.',
     message_en: 'A reversal follows its original journal entry. Mark the original instead.',
   },
+  VAT_MARK_NOT_SHAPE: {
+    httpStatus: 409,
+    message_sv:
+      'Momsdeklarationen räknar inte verifikatet som momsredovisning, så en markering skulle inte ändra något.',
+    message_en:
+      'The VAT return does not take this journal entry for a VAT settlement, so a mark would change nothing.',
+  },
   VAT_MARK_PERIOD_LOCKED: {
     httpStatus: 409,
     message_sv: 'Perioden är stängd eller låst, så verifikatet kan inte markeras om.',

@@ -73,6 +73,22 @@ vi.mock('@/lib/reports/vat-declaration', async (importOriginal) => {
   )
   return {
     ...actual,
+    // The mark preview (gnubok_mark_not_momsredovisning, crm#1849) asks the
+    // same jsonb RPC over the verifikat's own day whether the shapes catch
+    // it: a one-day window lists the fixture's verifikat as settlement-shaped.
+    // Every other window answers as generic data does.
+    fetchVatAccountTotals: async (...args: Parameters<typeof actual.fetchVatAccountTotals>) => {
+      const totals = await actual.fetchVatAccountTotals(...args)
+      const [, , start, end] = args
+      if (start !== end) return totals
+      return {
+        ...totals,
+        settlementShapedEntries: [{
+          id: '33333333-3333-4333-8333-333333333333', status: 'posted', entry_date: start,
+          source_type: 'manual', voucher_series: 'A', voucher_number: 158,
+        }],
+      }
+    },
     calculateVatDeclaration: async () => ({
       period: { type: 'quarterly', year: 2026, period: 1, start: '2026-01-01', end: '2026-03-31' },
       rutor: { ...rutor, ruta21: 1000, ruta30: 250, ruta48: 100, ruta49: 150 },
@@ -251,6 +267,10 @@ const READ_ONLY_RPCS = new Set([
   // plus 2012 for an enskild firma): STABLE SQL, the create_voucher preview
   // reads it to say whether the declaration would read the voucher, crm#1447.
   'skattekonto_shape_accounts',
+  // The momsdeklaration's account totals and settlement-shaped verifikat in
+  // one jsonb row: STABLE SQL, the gnubok_mark_not_momsredovisning preview
+  // asks it whether the shapes catch the verifikat, crm#1849.
+  'get_vat_declaration_totals',
   // Whether an empty first räkenskapsår can be removed (crm#1450): STABLE,
   // the gnubok_delete_fiscal_period preview reads it; the delete itself runs
   // at approval.
@@ -1107,6 +1127,23 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // A reviewed VAT warning (crm#1171): the mocked quarter's RC_INPUT_VAT_MISMATCH.
   gnubok_mark_vat_check_reviewed: {
     args: { period_type: 'quarterly', year: 2026, period: 1, check_code: 'RC_INPUT_VAT_MISMATCH', note: 'Begränsad avdragsrätt' },
+  },
+  // A correction the momsredovisning shapes catch (crm#1849): a posted
+  // manual verifikat in an open period, marked as a correction and back.
+  gnubok_mark_not_momsredovisning: {
+    args: { journal_entry_id: SOME_UUID },
+    rows: {
+      fiscal_periods: FISCAL_YEAR_2026,
+      journal_entries: { status: 'posted', description: 'Rättelse moms', entry_date: '2026-09-30', source_type: 'manual', voucher_series: 'A', voucher_number: 158 },
+    },
+  },
+  gnubok_withdraw_not_momsredovisning: {
+    args: { journal_entry_id: SOME_UUID },
+    rows: {
+      fiscal_periods: FISCAL_YEAR_2026,
+      journal_entries: { status: 'posted', description: 'Rättelse moms', entry_date: '2026-09-30', source_type: 'manual', voucher_series: 'A', voucher_number: 158 },
+      vat_momsredovisning_marks: { action: 'not_momsredovisning', journal_entry_id: SOME_UUID },
+    },
   },
   gnubok_unmark_vat_period_filed: {
     args: { period_type: 'yearly', year: 2025, period: 1 },

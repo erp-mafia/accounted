@@ -3980,6 +3980,7 @@ Builds the settlement entry for a momsperiod from the same ledger totals as the 
 - is_empty true means the period has no VAT to clear.
 - lines clear the WHOLE period, also when booking_status is booked and the period is settled in full. Only with partly_settled true are they what is left after the settlements already posted: booking is still refused then (booking_status booked), so the rest is posted as an ordinary verifikat or the earlier settlement is reversed and the period booked whole.
 - An ordinary verifikat stays out of the declaration rutor as a momsredovisning only when it has a 2650 or 1650 line (or is a pure 26xx movement against 1630): two 26xx accounts against each other count as VAT of the period.
+- An existing_entries row recognised by shape can be a correction, not a momsredovisning (e.g. output VAT moved to 1650 next to a sales correction): once the user confirms, it is marked as one on the Moms page or with gnubok_mark_not_momsredovisning; the rutor then read it and it no longer counts as a momsredovisning.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -4443,7 +4444,7 @@ Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposa
 **Do not use for:** Filing the momsdeklaration with Skatteverket (the eSKD file or the Skatteverket connection), booking the payment to the skattekonto, or custom settlement lines (post an ordinary verifikat with POST /journal-entries).
 
 **Pitfalls:**
-- A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked.
+- A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked. When that verifikat is a correction the shapes caught, not a momsredovisning, and the user confirms it, mark it as one instead (the Moms page, or gnubok_mark_not_momsredovisning).
 - Pass expected_fingerprint from the proposal you reviewed: if the ledger changed since, 409 VAT_SETTLEMENT_PROPOSAL_CHANGED instead of booking different lines.
 - A locked or closed period, or a date on or before the company lock date, answers 400 PERIOD_LOCKED; no voucher number is spent.
 - A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.

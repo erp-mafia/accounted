@@ -306,6 +306,9 @@ export const OPERATION_DOORS: Readonly<Record<string, DoorSpec>> = Object.freeze
   'vat-filings.mark': TAX,
   'vat-filings.unmark': TAX,
   'vat-check-reviews.mark': TAX_RECORD,
+  // Changes what the momsdeklaration reads, so the same door as filing it.
+  'vat-momsredovisning-marks.mark': TAX,
+  'vat-momsredovisning-marks.withdraw': TAX,
   'vat.book-settlement': TAX,
   // Money out of the company's bank: prepared, approved, signed elsewhere.
   'payment-orders.prepare': PAYMENTS,
