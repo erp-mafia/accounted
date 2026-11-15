@@ -36,8 +36,8 @@ function authed() {
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
 }
 
-function account(account_number: string, account_name: string, ib: number, ub: number) {
-  return { account_number, account_name, ib, ub, period_change: ub - ib }
+function account(account_number: string, account_name: string, ib: number, ub: number, year_ib = ib) {
+  return { account_number, account_name, year_ib, ib, ub, period_change: ub - ib }
 }
 
 function report(): BalansrapportReport {
@@ -57,13 +57,17 @@ function report(): BalansrapportReport {
                 key: 'materiellaAnlaggningstillgangar',
                 label: 'Materiella anläggningstillgångar',
                 total_label: 'Summa materiella anläggningstillgångar',
-                rows: [account('1220', 'Inventarier', 80_000, 80_000), account('1229', 'Ack avskr', -16_000, -20_000)],
+                // A range from 1 April: the year opened with 12 000 in
+                // depreciation, 16 000 by the range start.
+                rows: [account('1220', 'Inventarier', 80_000, 80_000), account('1229', 'Ack avskr', -16_000, -20_000, -12_000)],
                 sections: [],
+                subtotal_year_ib: 68_000,
                 subtotal_ib: 64_000,
                 subtotal_change: -4_000,
                 subtotal_ub: 60_000,
               },
             ],
+            subtotal_year_ib: 68_000,
             subtotal_ib: 64_000,
             subtotal_change: -4_000,
             subtotal_ub: 60_000,
@@ -74,11 +78,13 @@ function report(): BalansrapportReport {
             total_label: 'Summa ej klassificerade konton',
             rows: [account('1200', 'Maskiner', 0, 500)],
             sections: [],
+            subtotal_year_ib: 0,
             subtotal_ib: 0,
             subtotal_change: 500,
             subtotal_ub: 500,
           },
         ],
+        subtotal_year_ib: 68_000,
         subtotal_ib: 64_000,
         subtotal_change: -3_500,
         subtotal_ub: 60_500,
@@ -89,7 +95,7 @@ function report(): BalansrapportReport {
     beraknat_resultat: 60_500,
     differens: 0,
     is_balanced: true,
-    period: { start: '2026-01-01', end: '2026-12-31' },
+    period: { start: '2026-04-01', end: '2026-12-31' },
   }
 }
 
@@ -146,8 +152,10 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
     expect(res.status).toBe(200)
 
     const rows = await sheetRows(res)
-    expect(rows[0]).toEqual(['Grupp', 'Avsnitt', 'Konto', 'Kontonamn', 'IB', 'Periodförändring', 'UB'])
-    expect(rows.slice(1).map((r) => [r[1], r[2], r[3], r[6]])).toEqual([
+    expect(rows[0]).toEqual([
+      'Grupp', 'Avsnitt', 'Konto', 'Kontonamn', 'Ingående balans', 'Ingående saldo', 'Förändring', 'Utgående balans',
+    ])
+    expect(rows.slice(1).map((r) => [r[1], r[2], r[3], r[7]])).toEqual([
       ['Materiella anläggningstillgångar', '1220', 'Inventarier', 80_000],
       ['Materiella anläggningstillgångar', '1229', 'Ack avskr', -20_000],
       ['Materiella anläggningstillgångar', '', 'Summa materiella anläggningstillgångar', 60_000],
@@ -157,6 +165,22 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
       ['', '', 'Summa 1 Tillgångar', 60_500],
       ['', '', 'Beräknat resultat', 60_500],
     ])
+  })
+
+  it('writes the year\'s ingående balans beside the ingående saldo at the range start', async () => {
+    enqueue({ data: { company_name: 'Test AB' } }) // company_settings
+    enqueue({ data: PERIOD }) // fiscal_periods
+    mockGenerate.mockResolvedValue(report())
+
+    const res = await GET(
+      createMockRequest('/api/reports/balansrapport/xlsx', { searchParams: { period_id: 'period-1' } }),
+      noParams,
+    )
+    const rows = await sheetRows(res)
+    const byName = (name: string) => rows.find((r) => r[3] === name)
+    expect(byName('Ack avskr')?.slice(4)).toEqual([-12_000, -16_000, -4_000, -20_000])
+    expect(byName('Summa materiella anläggningstillgångar')?.slice(4)).toEqual([68_000, 64_000, -4_000, 60_000])
+    expect(byName('Summa 1 Tillgångar')?.slice(4)).toEqual([68_000, 64_000, -3_500, 60_500])
   })
 
   it('adds a Differens row when the balansrapport does not balance, so the rows add up', async () => {
@@ -171,7 +195,7 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
     expect(res.status).toBe(200)
 
     const rows = await sheetRows(res)
-    expect(rows.slice(-2).map((r) => [r[3], r[6]])).toEqual([
+    expect(rows.slice(-2).map((r) => [r[3], r[7]])).toEqual([
       ['Beräknat resultat', 50_000],
       ['Differens (balanserar ej)', 10_500],
     ])

@@ -3,6 +3,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { BalansrapportPDF, ResultatrapportPDF } from '../operational-report-pdf-template'
 import type { BalansrapportReport, CompanySettings, ResultatrapportReport } from '@/types'
 import { pdfTextStrings } from '@/tests/pdf-text'
+import { formatAmount } from '@/lib/utils'
 
 // Real @react-pdf/renderer layout is CPU-heavy; under a fully parallel
 // test run these can exceed the 5s default on a saturated machine.
@@ -34,20 +35,25 @@ function balansrapport(overrides: Partial<BalansrapportReport> = {}): Balansrapp
                 key: 'kassaBank',
                 label: 'Kassa och bank',
                 total_label: 'Summa kassa och bank',
+                // A range that starts after the year's first day: the year
+                // opened at 40 000, the range at 50 000.
                 rows: [
-                  { account_number: '1930', account_name: 'Företagskonto', ib: 50000, ub: 75000, period_change: 25000 },
+                  { account_number: '1930', account_name: 'Företagskonto', year_ib: 40000, ib: 50000, ub: 75000, period_change: 25000 },
                 ],
                 sections: [],
+                subtotal_year_ib: 40000,
                 subtotal_ib: 50000,
                 subtotal_change: 25000,
                 subtotal_ub: 75000,
               },
             ],
+            subtotal_year_ib: 40000,
             subtotal_ib: 50000,
             subtotal_change: 25000,
             subtotal_ub: 75000,
           },
         ],
+        subtotal_year_ib: 40000,
         subtotal_ib: 50000,
         subtotal_change: 25000,
         subtotal_ub: 75000,
@@ -147,6 +153,26 @@ describe('operational report PDFs', () => {
       ].map((label) => text.indexOf(label))
       expect(order.every((index) => index >= 0)).toBe(true)
       expect([...order].sort((a, b) => a - b)).toEqual(order)
+    },
+    RENDER_TIMEOUT
+  )
+
+  it(
+    'prints the year\'s ingående balans, the ingående saldo, the change and UB, in that order',
+    async () => {
+      const text = pdfTextStrings(await renderToBuffer(
+        BalansrapportPDF({
+          report: balansrapport(),
+          company: fakeCompany(),
+          generatedAt: '2026-07-28T10:00:00.000Z',
+        })
+      )).join('\n')
+
+      expect(text.toUpperCase()).toContain('ING. BALANSING. SALDOFÖRÄNDRINGUTG. BALANS')
+      // The PDF writes formatAmount's no-break space as a plain one.
+      const amounts = [40000, 50000, 25000, 75000].map(formatAmount).join('').replace(/\s/g, ' ')
+      expect(text).toContain(`Företagskonto${amounts}`)
+      expect(text).toContain(`Summa kassa och bank${amounts}`)
     },
     RENDER_TIMEOUT
   )

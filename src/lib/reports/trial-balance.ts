@@ -208,28 +208,53 @@ export function fetchTrialBalanceChart(
   )
 }
 
-export async function generateTrialBalance(
-  supabase: SupabaseClient,
-  companyId: string,
-  fiscalPeriodId: string,
-  options: {
-    closingEntry: ClosingEntryMode
-    fromDate?: string
-    toDate?: string
-    dimensions?: Record<string, string>
-    /**
-     * The company's chart, already read (fetchTrialBalanceChart). Omitted,
-     * the balance reads it itself. Only labels the rows: the amounts never
-     * depend on it.
-     */
-    chart?: ReadonlyArray<TrialBalanceChartAccount> | Promise<ReadonlyArray<TrialBalanceChartAccount>>
-  }
-): Promise<{
+export interface TrialBalanceOptions {
+  closingEntry: ClosingEntryMode
+  fromDate?: string
+  toDate?: string
+  dimensions?: Record<string, string>
+  /**
+   * The company's chart, already read (fetchTrialBalanceChart). Omitted,
+   * the balance reads it itself. Only labels the rows: the amounts never
+   * depend on it.
+   */
+  chart?: ReadonlyArray<TrialBalanceChartAccount> | Promise<ReadonlyArray<TrialBalanceChartAccount>>
+}
+
+export interface TrialBalance {
   rows: TrialBalanceRow[]
   totalDebit: number
   totalCredit: number
   isBalanced: boolean
-}> {
+}
+
+export async function generateTrialBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options: TrialBalanceOptions,
+): Promise<TrialBalance> {
+  // yearOpening stays off this result: the Saldobalans route, the v1 API and
+  // the MCP tool serialize it whole.
+  const { rows, totalDebit, totalCredit, isBalanced } =
+    await generateTrialBalanceWithYearOpening(supabase, companyId, fiscalPeriodId, options)
+  return { rows, totalDebit, totalCredit, isBalanced }
+}
+
+/**
+ * The trial balance plus the fiscal year's ingående balans per account,
+ * `yearOpening`: the balance on period_start, before the activity between
+ * period_start and fromDate rolls into the rows' opening columns. With a
+ * fromDate the rows open at the ingående saldo on that date; without one,
+ * the two are the same. Under a dimension filter, yearOpening is scoped as
+ * the rows are.
+ */
+export async function generateTrialBalanceWithYearOpening(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options: TrialBalanceOptions,
+): Promise<TrialBalance & { yearOpening: AccountSums }> {
 
   const dimensionFilter =
     options.dimensions && Object.keys(options.dimensions).length > 0
@@ -314,10 +339,14 @@ export async function generateTrialBalance(
   // opens at zero (getOpeningBalances reads the registry flag). Result accounts never carry IB, so the P&L
   // reports built on this are unchanged. obEntryId still excludes the IB
   // entry from the activity lines.
-  const openingBalances = obResult.balances
+  const yearOpening = obResult.balances
 
-  // Additively fold the roll-forward activity into openingBalances so the
-  // downstream IB/period split stays correct without changing call sites.
+  // The rows open at fromDate: a copy of the year's IB with the roll-forward
+  // activity folded in, so yearOpening itself stays the year's IB.
+  const openingBalances: AccountSums = new Map()
+  for (const [accountNumber, sums] of yearOpening) {
+    addActivity(openingBalances, accountNumber, sums.debit, sums.credit)
+  }
   for (const [accountNumber, sums] of activity.rollforward) {
     addActivity(openingBalances, accountNumber, sums.debit, sums.credit)
   }
@@ -325,7 +354,7 @@ export async function generateTrialBalance(
   const periodBalances = activity.period
 
   if (periodBalances.size === 0 && openingBalances.size === 0) {
-    return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true }
+    return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true, yearOpening }
   }
 
   const accountMap = new Map<string, { name: string; class: number }>()
@@ -346,6 +375,7 @@ export async function generateTrialBalance(
     totalDebit,
     totalCredit,
     isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+    yearOpening,
   }
 }
 

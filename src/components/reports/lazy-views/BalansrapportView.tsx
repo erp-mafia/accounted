@@ -20,6 +20,9 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { BalansrapportReport, BalansrapportSection } from '@/types'
 
+/** Konto, Kontonamn, Ingående balans, Ingående saldo, Förändring, Utgående balans. */
+const COLUMNS = 6
+
 export default function BalansrapportView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const t = useTranslations('reports')
   const reportQs = reportQuery(periodId, dateRange)
@@ -71,16 +74,21 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Ingående balans</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Förändring</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Utgående balans</th>
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={t('balansrapport_col_year_ib_hint')}>
+                    {t('balansrapport_col_year_ib')}
+                  </th>
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={t('balansrapport_col_ib_hint')}>
+                    {t('balansrapport_col_ib')}
+                  </th>
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">{t('balansrapport_col_change')}</th>
+                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">{t('balansrapport_col_ub')}</th>
                 </tr>
               </thead>
               <tbody>
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={5} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+                      <td colSpan={COLUMNS} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -94,6 +102,7 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
                     ))}
                     <BalansrapportTotalRow
                       label={`Summa ${group.class_label}`}
+                      yearIb={group.subtotal_year_ib}
                       ib={group.subtotal_ib}
                       change={group.subtotal_change}
                       ub={group.subtotal_ub}
@@ -165,7 +174,7 @@ function BalansrapportSectionRows({
     <>
       <tr>
         <td
-          colSpan={5}
+          colSpan={COLUMNS}
           className={cn(
             'pt-3 pb-1 text-[13px] font-medium',
             depth === 0 ? 'px-4' : 'pl-8 pr-4 text-muted-foreground',
@@ -176,7 +185,7 @@ function BalansrapportSectionRows({
       </tr>
       {section.note && (
         <tr>
-          <td colSpan={5} className="px-4 pb-1.5 text-[12.5px] text-muted-foreground">
+          <td colSpan={COLUMNS} className="px-4 pb-1.5 text-[12.5px] text-muted-foreground">
             {section.note}
           </td>
         </tr>
@@ -199,6 +208,7 @@ function BalansrapportSectionRows({
             <AccountNumber number={row.account_number} name={row.account_name} />
           </td>
           <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
+          <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.year_ib)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ib)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.period_change)}</td>
           <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.ub)}</td>
@@ -206,6 +216,7 @@ function BalansrapportSectionRows({
       ))}
       <BalansrapportTotalRow
         label={section.total_label}
+        yearIb={section.subtotal_year_ib}
         ib={section.subtotal_ib}
         change={section.subtotal_change}
         ub={section.subtotal_ub}
@@ -217,12 +228,14 @@ function BalansrapportSectionRows({
 
 function BalansrapportTotalRow({
   label,
+  yearIb,
   ib,
   change,
   ub,
   className,
 }: {
   label: string
+  yearIb: number
   ib: number
   change: number
   ub: number
@@ -233,6 +246,7 @@ function BalansrapportTotalRow({
       <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
         {label}
       </td>
+      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(yearIb)}</td>
       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(ib)}</td>
       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(change)}</td>
       <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(ub)}</td>
