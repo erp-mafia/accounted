@@ -304,6 +304,35 @@ describe('SIE database execution protocol', () => {
     await client.query('SELECT start_sie_import_job($1,$2,$3,$4,$5,$6)',[company,actor,nextPeriod,'2027.se','b'.repeat(64),JSON.stringify(nextManifest)])
     await rejects(()=>client.query('SELECT request_sie_import_undo($1,$2,$3)',[company,job,actor]),/Another SIE execution/)
   })
+  // The job's IB and migration adjustment follow its vouchers (sieFinalOrdinals).
+  // They sat at 50 000 and 50 001, where a file of more than 50 000 vouchers
+  // has vouchers of its own; such a file seals another pair in its manifest.
+  async function completeWithAdjustment(vouchers: unknown[], adjustmentAt: number, sealed: Record<string, unknown>) {
+    await client.query('SELECT save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)',[company,job,worker,attempt,'vouchers',0,JSON.stringify(vouchers)])
+    await client.query('SELECT save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)',[company,job,worker,attempt,'finalize',0,
+      JSON.stringify([{...voucher(adjustmentAt,7),sourceId:'MIGRATION_ADJUSTMENT',sourceSeries:null,sourceNumber:null}])])
+    await client.query('SELECT seal_sie_import_preparation($1,$2,$3,$4,$5,$6)',[company,job,worker,attempt,JSON.stringify(sealed),1])
+    await chunk(0)
+    await client.query('SELECT import_sie_chunk($1,$2,$3,$4,$5,$6)',[company,job,worker,attempt,'finalize',0])
+    await client.query('SELECT complete_sie_import_job($1,$2,$3,$4,$5,$6)',
+      [company,job,worker,attempt,JSON.stringify({success:true,journalEntriesCreated:vouchers.length+1}),'{}'])
+    const entries=(await client.query('SELECT id,source_ordinal FROM journal_entries WHERE import_batch_id=$1 ORDER BY source_ordinal',[job])).rows
+    const completed=(await client.query('SELECT job_state,manifest FROM sie_imports WHERE id=$1',[job])).rows[0]
+    return {entries,completed}
+  }
+  it('records the adjustment at the ordinal the job sealed, past its own vouchers at 50 000 and 50 001', async () => {
+    const at=(ordinal:number,number:number)=>({...voucher(ordinal),sourceId:`A${number}`,sourceNumber:number})
+    const {entries,completed}=await completeWithAdjustment([at(50_000,1),at(50_001,2)],1_000_001,
+      {...manifest,finalOrdinals:{openingBalance:1_000_000,adjustment:1_000_001}})
+    expect(completed.job_state).toBe('completed')
+    expect(entries.map(e=>e.source_ordinal)).toEqual([50_000,50_001,1_000_001])
+    expect(completed.manifest.adjustmentEntryId).toBe(entries[2].id)
+  })
+  it('records the adjustment at 50 001 for a job sealed before its manifest named the ordinals', async () => {
+    const {entries,completed}=await completeWithAdjustment([voucher(0)],50_001,manifest)
+    expect(entries.map(e=>e.source_ordinal)).toEqual([0,50_001])
+    expect(completed.manifest.adjustmentEntryId).toBe(entries[1].id)
+  })
   it('prepares repeated identical account definitions, resumes, and finalizes through the real engine', async () => {
     const content = '#FLAGGA 0\n#PROGRAM "Synthetic" 1\n#SIETYP 4\n#FNAMN "Synthetic AB"\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 1930 "Bank"\n#KONTO 3001 "Sales"\n'+
       Array.from({length:205},(_,i)=>`#VER A ${i+1} 20260201 "Test"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}`).join('\n')
@@ -326,6 +355,8 @@ describe('SIE database execution protocol', () => {
     expect(finished.job_state).toBe('completed')
     expect(finished.transactions_count).toBe(205)
     expect(finished.job_result.journalEntriesCreated).toBe(205)
+    // At most 50 000 vouchers: the IB and adjustment keep the ordinals every earlier job used.
+    expect(finished.manifest.finalOrdinals).toEqual({openingBalance:50_000,adjustment:50_001})
     expect((await client.query('SELECT count(*)::int n FROM journal_entry_no_doc_required WHERE company_id=$1',[company])).rows[0].n).toBe(205)
     expect((await client.query("SELECT count(*)::int n FROM sie_import_chunks WHERE import_id=$1 AND phase='vouchers' AND payload IS NOT NULL",[job])).rows[0].n).toBe(0)
     // Issue #2835: the worker follows a completed import with the bank sweep and

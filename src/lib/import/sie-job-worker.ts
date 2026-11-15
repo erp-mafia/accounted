@@ -7,7 +7,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIESourceVouchers, SIE_CHECKPOINTS, sieJobRPC,
   type SIEAppendCounts } from './sie-job-preparation'
 import { getSIEJob, runsSIEJobs, SIEJobValidationError } from './sie-jobs'
-import { isSIEJobUnresolved, type SIEChunkResult, type SIEJob } from './sie-job-contract'
+import { isSIEJobUnresolved, sealedSIEFinalOrdinals, type SIEChunkResult, type SIEJob } from './sie-job-contract'
 import { getMappingStats } from './account-mapper'
 import { computeVoucherNumberRanges } from './sie-import'
 import type { ImportResult, MigrationDocumentation, ParsedSIEFile, SIEVoucher } from './types'
@@ -89,7 +89,8 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     .reduce((sum,r) => sum+Number((r.result as Record<string,unknown>).created ?? 0),0)
   const opening = entries.filter(e => e.sourceType === 'opening_balance')
   if (opening.length > 1) throw new SIEJobValidationError('Importen innehåller flera ingående balansverifikationer. Granska och ångra importen.')
-  const adjustment = entries.find(e => e.sourceOrdinal === 50_001)
+  const adjustmentOrdinal = sealedSIEFinalOrdinals(job.manifest).adjustment
+  const adjustment = entries.find(e => e.sourceOrdinal === adjustmentOrdinal)
   const warnings = [...(job.manifest.preparationWarnings as string[] ?? [])]
   if (skipped.total) warnings.push(`${skipped.total} verifikationer hoppades över. Behandlingshistoriken anger varje verifikation och orsak.`)
   const rounding = Number(job.manifest.openingBalanceRounding ?? 0)
@@ -215,6 +216,19 @@ function sieJobCommitActor(job: SIEJob): CommitActor | null {
 export const SIE_RECLAIM_ALERT_ATTEMPTS = 20
 
 /**
+ * The claims a job may take before it counts as looping. A large year needs
+ * more than 20 to finish: the 4-claim import posted 195 voucher chunks, about
+ * 50 a claim, so a 150 000-voucher year (about 750 chunks) needs about 15 for
+ * its vouchers alone. One more claim per 25 voucher chunks is twice that rate.
+ * Only an import's chunks are voucher chunks: a duplicate repair counts its
+ * items in chunks_total (up to 5 000) and keeps the flat 20.
+ */
+export function sieReclaimAlertAttempts(job: Pick<SIEJob, 'chunks_total' | 'job_kind'>): number {
+  if ((job.job_kind ?? 'import') !== 'import') return SIE_RECLAIM_ALERT_ATTEMPTS
+  return SIE_RECLAIM_ALERT_ATTEMPTS + Math.floor(Math.max(Number(job.chunks_total) || 0, 0) / 25)
+}
+
+/**
  * Least budget left for claiming a further job in one invocation. A job
  * claimed with no time to run yields without progress, and the stall sweep
  * counts that as a failure of the job, though the worker caused it.
@@ -291,7 +305,7 @@ export async function sweepStalledSIEJobs(supabase: SupabaseClient, logger: Pick
 
 /** Logs a claimed job that keeps being claimed without finishing, as an error. */
 export function reportRepeatedReclaim(job: SIEJob, logger: Pick<typeof log, 'error'> = log): void {
-  if (!(job.job_attempt >= SIE_RECLAIM_ALERT_ATTEMPTS)) return
+  if (!(job.job_attempt >= sieReclaimAlertAttempts(job))) return
   logger.error('SIE job reclaimed repeatedly without finishing', {
     alert: true,
     companyId: job.company_id,

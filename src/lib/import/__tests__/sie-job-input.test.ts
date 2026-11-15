@@ -94,6 +94,22 @@ describe('SIE durable input boundaries', () => {
     expect(database.storage.from).not.toHaveBeenCalled()
   })
 
+  // 2026-11-10: a provider migration was refused for years of about 50 000 to
+  // 113 000 vouchers (estimated from the archived file sizes) at a limit of
+  // 50 000, while the job works in 200-voucher chunks either way.
+  it('takes a year of more than 50 000 vouchers, and names the count past the limit', () => {
+    const source = '#RAR 0 20260101 20261231\n' + content
+    const year = (count: number) => {
+      const parsed = parseSIEFile(source)
+      const voucher = parsed.vouchers[0]
+      parsed.vouchers = Array.from({ length: count }, () => voucher)
+      return parsed
+    }
+    expect(() => validateSIEJobInput(source, year(113_000), mappings, options)).not.toThrow()
+    expect(() => validateSIEJobInput(source, year(150_001), mappings, options))
+      .toThrow(/^SIE-filen har 150\s001 verifikationer, fler än de 150\s000 som en import tar emot\. Hör av dig till supporten/)
+  })
+
   it('lets a line-less voucher dated outside the fiscal year through: it is skipped as empty, never posted', () => {
     // One #BTRANS-only voucher dated in the previous year refused the same
     // file three times (Easy Online Stores, 2026-09-16).

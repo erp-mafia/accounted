@@ -37,8 +37,14 @@ so an application-only rollback cannot restore the old writer.
   and flags it for owner/admin review. Acknowledgment checks the current review
   token; undo renews it. This advisory is distinct from an unfinished-import hold.
 
-Limits: 50 MiB per file, 50,000 vouchers, 2,000 lines per voucher, 200 vouchers
+Limits: 50 MiB per file, 150,000 vouchers, 2,000 lines per voucher, 200 vouchers
 and 1 MiB per chunk. Claims are capped at two globally and one per company.
+Vouchers take source ordinals 0 to 149,999. The IB and the migration adjustment
+follow at 50,000 and 50,001, or at 1,000,000 and 1,000,001 for a file of more
+than 50,000 vouchers; the manifest's `finalOrdinals` records the pair
+(`sieFinalOrdinals`). The vouchers stay below 150,000 because an undo receipt is
+numbered by the lowest ordinal it reverses and the name and VAT restore receipts
+start there.
 The global notice polls every five seconds during a visible active import,
 once a minute while idle, and refreshes on navigation/focus. Hidden tabs do not poll.
 

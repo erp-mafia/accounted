@@ -1,0 +1,1 @@
+[2026-11-14] An SIE file may hold up to 150 000 vouchers (was 50 000). A file over 50 000 puts its IB and migration adjustment at ordinals 1 000 000/1 000 001, past its vouchers; smaller files keep 50 000/50 001. 50 000 refused one company's years of 50 000 to 113 000 vouchers.

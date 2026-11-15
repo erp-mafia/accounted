@@ -334,7 +334,12 @@ export function validateSIEJobInput(content: string, parsed: ParsedSIEFile, mapp
   }
   validateSIEAccountingAmounts(parsed, new Map(mappings.map(mapping => [mapping.sourceAccount, mapping.targetAccount])), options)
   validateSIEReportingMappings(parsed, new Map(mappings.map(mapping => [mapping.sourceAccount, mapping.targetAccount])), options)
-  if (parsed.vouchers.length > SIE_LIMITS.fileVouchers) throw new SIEJobValidationError('SIE-filen har fler än 50 000 verifikationer.')
+  if (parsed.vouchers.length > SIE_LIMITS.fileVouchers) {
+    throw new SIEJobValidationError(
+      `SIE-filen har ${parsed.vouchers.length.toLocaleString('sv-SE')} verifikationer, fler än de ${SIE_LIMITS.fileVouchers.toLocaleString('sv-SE')} som en import tar emot. ` +
+      'Hör av dig till supporten, så hjälper vi dig att få in räkenskapsåret.',
+    )
+  }
   if (!parsed.stats.fiscalYearStart || !parsed.stats.fiscalYearEnd) throw new SIEJobValidationError('SIE-filen saknar räkenskapsår.')
   if (!options.importOpeningBalances && !options.importTransactions) throw new SIEJobValidationError('Välj vad som ska importeras.')
   const mapped = new Set(mappings.filter(m => isAccountNumber(m.targetAccount)).map(m => m.sourceAccount))
