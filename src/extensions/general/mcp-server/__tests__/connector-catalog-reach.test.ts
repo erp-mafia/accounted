@@ -93,6 +93,7 @@ import {
   isDefaultCatalogTool,
   callableViaFor,
   STAGE_BRIDGE_TARGETS,
+  WITHDRAW_TOOL_NAME,
   type CatalogViewer,
   type McpTool,
 } from '../server'
@@ -270,7 +271,9 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
   })
 
   it('STAGE_BRIDGE_TARGETS and callable_via agree for every tool in the registry', () => {
-    const carried = new Set(STAGE_BRIDGE_TARGETS.map((t) => t.name))
+    // Plus the one carried write that does not stage: the stager's own
+    // withdrawal (ridesStageBridge in server.ts).
+    const carried = new Set([...STAGE_BRIDGE_TARGETS.map((t) => t.name), WITHDRAW_TOOL_NAME])
     for (const tool of tools) {
       expect(reach(tool) === 'stage_tool', tool.name).toBe(
         carried.has(tool.name),
@@ -314,7 +317,15 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
       off()
       // A view-only tool does not exist to a bridge (view-approval.ts): the
       // model learns nothing about it, not even advice to call it directly.
-      const expected = isViewOnlyTool(tool) ? 'unknown_tool' : carried.has(tool.name) ? 'scope_denied' : 'bridge_refused'
+      // The withdrawal has no scope (ownership is its gate), so the bridge
+      // carries it into its own argument check: no operation_id was sent.
+      const expected = isViewOnlyTool(tool)
+        ? 'unknown_tool'
+        : tool.name === WITHDRAW_TOOL_NAME
+          ? 'execution'
+          : carried.has(tool.name)
+            ? 'scope_denied'
+            : 'bridge_refused'
       if (kinds[0] !== expected) disagreements.push(`${tool.name}: expected ${expected}, got ${kinds[0]}`)
     }
     expect(disagreements).toEqual([])
@@ -337,6 +348,12 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
     const carried = STAGE_BRIDGE_TARGETS.map((t) => t.name)
     expect(carried).not.toContain('gnubok_approve_pending_operation')
     expect(carried).not.toContain('gnubok_reject_pending_operation')
+    // The withdrawal the bridge does carry is not one of them: it is not a
+    // staging target, it cannot approve, and it settles only the caller's own.
+    expect(carried).not.toContain(WITHDRAW_TOOL_NAME)
+    const withdrawal = tools.find((t) => t.name === WITHDRAW_TOOL_NAME)!
+    expect(isDefaultCatalogTool(withdrawal)).toBe(false)
+    expect(reach(withdrawal)).toBe('stage_tool')
     // And the approve step is LISTED, so the human-visible approval keeps its
     // own name, its own destructive annotation and its own client permission.
     const approve = tools.find((t) => t.name === 'gnubok_approve_pending_operation')!

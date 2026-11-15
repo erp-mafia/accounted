@@ -409,3 +409,112 @@ Example response `200`:
   }
 }
 ```
+
+---
+
+### `POST /api/v1/companies/{companyId}/pending-operations/{id}/withdraw`
+
+**Withdraw a pending operation this key staged itself.**
+`risk:low · idempotent`
+
+Takes back a pending operation the calling key staged (`?stage=true`, or an MCP staging tool on the same key) while it still waits for approval: it leaves the approval queue and nothing is booked, sent or created. Answers the operation with `status` rejected, `task_state` cancelled, `rejection_category` superseded and `result.withdrawn` true. Needs no particular scope, and never pending_operations:approve: the key must be the one that staged the operation. An operation staged by another key or by a person answers 403; one that is no longer pending (approved, rejected, expired, or being committed right now) answers 409 PENDING_OPERATION_NOT_PENDING and is left as it is. Repeating the call on an operation this key already withdrew answers 200 with the same operation.
+
+**Use when:** Your integration staged a proposal by mistake (a duplicate, a wrong amount) and will stage a corrected one.
+**Do not use for:** Saying no to somebody else's proposal: that is POST /pending-operations/{id}/reject, which needs pending_operations:approve. Undoing a committed operation: reverse or correct what it posted.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- Only operations staged by the calling key, with that key (a new key for the same integration does not own the old key's proposals).
+- reason is 1-300 characters.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ reason?: string }
+```
+
+Example request:
+```json
+{
+  "reason": "Dubblett av ett tidigare förslag."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    pending_operation_id: string,
+    handle?: string,
+    company_id: string,
+    operation_type: string,
+    title: string,
+    status: "pending" | "committing" | "committed" | "rejected" | "failed_partial" | "unknown",
+    task_state: "working" | "completed" | "failed" | "cancelled",
+    risk_level: "low" | "medium" | "high",
+    preview: Record<string, unknown>,
+    result: Record<string, unknown> | null,
+    agent_reason: string | null,
+    rejection_category: string | null,
+    rejection_reason: string | null,
+    actor_type: string,
+    actor_id: string | null,
+    actor_label: string | null,
+    batch_id: string | null,
+    created_at: string,
+    resolved_at: string | null,
+    links: { self: string, approve: string, reject: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "pending_operation_id": "9a44c0de-1f2b-4c3d-8e4f-5a6b7c8d9e0f",
+    "company_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "operation_type": "create_supplier",
+    "title": "Skapa leverantör Clas Ohlson AB",
+    "status": "rejected",
+    "task_state": "cancelled",
+    "risk_level": "medium",
+    "preview": {
+      "name": "Clas Ohlson AB",
+      "supplier_type": "swedish_business"
+    },
+    "result": null,
+    "agent_reason": "Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.",
+    "rejection_category": "superseded",
+    "rejection_reason": "Återtaget av agenten som lade förslaget: Dubblett av ett tidigare förslag.",
+    "actor_type": "api_key",
+    "actor_id": "b1f04c2e-7d3a-4e5b-9c6d-0e1f2a3b4c5d",
+    "actor_label": "Attestflöde",
+    "batch_id": null,
+    "created_at": "2026-10-15T09:12:00.000Z",
+    "resolved_at": "2026-10-15T09:14:03.000Z",
+    "links": {
+      "self": "/api/v1/companies/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pending-operations/9a44c0de-1f2b-4c3d-8e4f-5a6b7c8d9e0f",
+      "approve": "/api/v1/companies/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pending-operations/9a44c0de-1f2b-4c3d-8e4f-5a6b7c8d9e0f/approve",
+      "reject": "/api/v1/companies/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pending-operations/9a44c0de-1f2b-4c3d-8e4f-5a6b7c8d9e0f/reject"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```

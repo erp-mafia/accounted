@@ -32,6 +32,7 @@ import '@/app/api/v1/companies/[companyId]/pending-operations/route'
 import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/route'
 import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/approve/route'
 import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/reject/route'
+import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/withdraw/route'
 
 // Phase 4 PR-2: journal-entries primitives + voucher-gap-explanations.
 import '@/app/api/v1/companies/[companyId]/journal-entries/route'

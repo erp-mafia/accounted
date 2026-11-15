@@ -8,6 +8,8 @@ import { TOOL_SCOPE_MAP, UNSCOPED_TOOLS, scopeKind } from '@/lib/auth/scope-cata
  */
 export function isReadOnlyTool(name: string): boolean {
   if (name === 'gnubok_call_tool' || name === 'gnubok_stage_tool') return false
+  // Unscoped because ownership is its gate, and a write all the same.
+  if (name === 'gnubok_withdraw_pending_operation') return false
   if (UNSCOPED_TOOLS.has(name)) return true
   const scope = TOOL_SCOPE_MAP[name]
   return scope !== undefined && scopeKind(scope) === 'read'

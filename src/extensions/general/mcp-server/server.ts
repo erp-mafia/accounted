@@ -194,6 +194,7 @@ import {
 } from '@/lib/pending-operations/rejection-categories'
 import { oldestStagedFirst } from '@/lib/pending-operations/commit-order'
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
+import { withdrawPendingOperation, WITHDRAW_REASON_MAX_LENGTH } from '@/lib/pending-operations/withdraw'
 import {
   canApproveSupplierInvoice,
   companyAttestsSupplierInvoices,
@@ -309,6 +310,7 @@ import {
 } from './recommended-tools'
 import {
   SEARCH_ONLY_STAGED_NOTE,
+  SEARCH_ONLY_WITHDRAW_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
   STALE_BRIDGE_NOTE,
   STALE_TOOLS_LIST_NOTE,
@@ -3810,6 +3812,24 @@ export function isStagingTool(t: { outputSchema?: Record<string, unknown> }): bo
   return t.outputSchema === STAGED_OPERATION_SCHEMA
 }
 
+/** The stager's own take-back of a staged operation (lib/pending-operations/withdraw.ts). */
+export const WITHDRAW_TOOL_NAME = 'gnubok_withdraw_pending_operation'
+
+/**
+ * What the stage bridge carries: every staging tool, and the one write that
+ * is staging's inverse. gnubok_withdraw_pending_operation commits directly,
+ * but all it can do is close a pending operation the calling connection
+ * staged itself, so it stays inside the bridge's promise that nothing reaches
+ * the books through it. It is search-only (tools/list has no room), and a
+ * client that only knows tools/list has no other way to name it; without the
+ * bridge the tool would exist for no connector. Approve and reject are not
+ * carried, as before: they settle other people's proposals and keep their own
+ * listed name and client permission.
+ */
+export function ridesStageBridge(t: { name: string; outputSchema?: Record<string, unknown> }): boolean {
+  return isStagingTool(t) || t.name === WITHDRAW_TOOL_NAME
+}
+
 /**
  * The door a tool call goes through (src/lib/permissions/doors.ts): a
  * generated tool's operation door, else the hand-written tool's
@@ -3928,7 +3948,7 @@ function bridgeRefusalReason(
       ? null
       : `${requestedToolName} is read-only: invoke it through gnubok_call_tool, not gnubok_stage_tool.`
   }
-  if (!isStagingTool(target)) {
+  if (!ridesStageBridge(target)) {
     return directCall(
       `${requestedToolName} commits directly instead of staging a pending operation, so ${bridgeName} will not invoke it.`,
     )
@@ -3962,7 +3982,7 @@ function directCallAdvice(requestedToolName: string, target: McpTool, keyScopes:
   }
   const lacks = `This API key lacks the ${required} scope, so ${requestedToolName} is not in your tools/list and a direct call is refused too.`
   return required === 'pending_operations:approve'
-    ? `${lacks} Do not retry: the user approves or rejects pending operations in the web app at /pending (Att göra > Agentförslag).`
+    ? `${lacks} Do not retry: the user approves or rejects pending operations in the web app at /pending (Att göra > Agentförslag). To take back a proposal you staged yourself, use ${WITHDRAW_TOOL_NAME} through gnubok_stage_tool.`
     : `${lacks} Do not retry: ask the user to do this in the web app, or to connect again with a key that carries ${required}.`
 }
 
@@ -5815,7 +5835,7 @@ export const tools: McpTool[] = [
         const reach = {
           callable_via: callableVia,
           ...(callableVia === 'none' ? { note: SEARCH_ONLY_WRITE_NOTE } : {}),
-          ...(callableVia === 'stage_tool' ? { note: SEARCH_ONLY_STAGED_NOTE } : {}),
+          ...(callableVia === 'stage_tool' ? { note: isStagingTool(t) ? SEARCH_ONLY_STAGED_NOTE : SEARCH_ONLY_WITHDRAW_NOTE } : {}),
         }
         if (detail === 'full') {
           const meta = projectMcpPayload(
@@ -28721,6 +28741,93 @@ export const tools: McpTool[] = [
     },
   },
 
+  // Search-only: tools/list has no room (payload-size.bench.test.ts), and the
+  // stage bridge carries it (ridesStageBridge), so a client that only knows
+  // tools/list reaches it. No scope of its own (UNSCOPED_TOOLS): the gate is
+  // that the caller staged the operation itself (lib/pending-operations/
+  // withdraw.ts), which a key without pending_operations:approve can pass.
+  {
+    name: WITHDRAW_TOOL_NAME,
+    keywords: ['återta', 'ångra', 'dra tillbaka', 'withdraw', 'cancel', 'retract', 'reject own', 'duplicate', 'dubblett'],
+    title: 'Withdraw Own Pending Operation',
+    description: 'Take back a pending_operation this connection staged itself (a duplicate, a wrong amount): it leaves the approval queue, nothing is booked. Only your own, only while pending; needs no approve scope. Then stage the corrected proposal.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row you staged' },
+        reason: {
+          type: 'string',
+          description: 'Optional, shown to the user in the history',
+          maxLength: WITHDRAW_REASON_MAX_LENGTH,
+        },
+      },
+      required: ['operation_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['withdrawn'] },
+        operation_id: { type: 'string' },
+        already_withdrawn: { type: 'boolean', description: 'true when an earlier call had already withdrawn it' },
+      },
+      required: ['status', 'operation_id'],
+    },
+    annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const operationId = args.operation_id as string
+      if (!operationId) throw badArgument('operation_id', 'operation_id is required')
+      const notYours = () =>
+        codedRefusal(
+          'FORBIDDEN',
+          `Operation ${operationId} was not staged by this connection, so it cannot withdraw it. Only the user can settle it, in the web app at /pending (Att göra > Agentförslag).`,
+        )
+      // Ownership is the credential: a caller without one staged nothing here.
+      if (actor?.type !== 'api_key' || !actor.id) throw notYours()
+
+      const outcome = await withdrawPendingOperation(supabase, {
+        companyId,
+        id: operationId,
+        reason: typeof args.reason === 'string' ? args.reason : undefined,
+        actor: {
+          userId,
+          type: mcpCommitActorType(actor),
+          id: actor.id,
+          ...(actor.label ? { label: actor.label } : {}),
+        },
+        channel: 'mcp',
+      })
+      if (!outcome.ok) {
+        // 22P02: a malformed operation_id names no operation.
+        if (outcome.stage === 'fetch' && isLookupMiss(outcome.error)) throw pendingOperationNotFound(operationId)
+        if (outcome.stage === 'fetch') throw dbError(outcome.error)
+        throw new Error(`Failed to withdraw operation: ${outcome.error.message}`)
+      }
+      const result = outcome.result
+      if (result.outcome === 'not_found') throw pendingOperationNotFound(operationId)
+      if (result.outcome === 'not_own') throw notYours()
+      if (result.outcome === 'not_pending') {
+        throw codedRefusal(
+          'CONFLICT',
+          result.status === 'committing'
+            ? 'Operation is being approved right now, so it can no longer be withdrawn. Read its outcome with gnubok_list_pending_operations.'
+            : result.status === 'committed'
+              ? 'Operation already committed: it was approved, so there is nothing to withdraw. Reverse or correct what it posted instead.'
+              : `Operation already resolved as ${result.status}: there is nothing to withdraw.`,
+        )
+      }
+      if (result.outcome === 'lost_race') {
+        throw codedRefusal('CONFLICT', 'Operation no longer pending: it was approved or rejected while this call ran.')
+      }
+      return {
+        status: 'withdrawn' as const,
+        operation_id: operationId,
+        ...(result.outcome === 'already_withdrawn' ? { already_withdrawn: true } : {}),
+      }
+    },
+  },
+
   // ── Bring-your-own-extraction for inbox items ────────────────
   {
     name: 'gnubok_set_inbox_extracted_data',
@@ -29769,7 +29876,7 @@ const BRIDGE_TOOL_BY_VIA: Readonly<Record<'call_tool' | 'stage_tool', McpTool>> 
  * A bridge counts only when the caller's list carries the bridge itself.
  */
 export function callableViaFor(t: McpTool, viewer: CatalogViewer): ToolCallableVia {
-  const via = toolCallableVia(t, { listed: isListedFor(t, viewer), stages: isStagingTool(t) })
+  const via = toolCallableVia(t, { listed: isListedFor(t, viewer), stages: ridesStageBridge(t) })
   if (via === 'call_tool' || via === 'stage_tool') {
     return isListedFor(BRIDGE_TOOL_BY_VIA[via], viewer) ? via : 'none'
   }

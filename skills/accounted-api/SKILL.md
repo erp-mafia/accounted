@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 470 endpoints.
+  pagination, scopes), and all 471 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 470 operations. Paths are shown without
+API version `2026-05-12`, 471 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -786,7 +786,7 @@ PUT /companies/{companyId}/assets/{id}/transition-split : Split an asset on sign
 POST /companies/{companyId}/assets/{id}/value-adjustments : Write an asset down to its recoverable amount (nedskrivning), or reverse an earlier write-down, on a balansdag [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 ```
 
-### Pending operations (approvals) (4)
+### Pending operations (approvals) (5)
 
 Full detail: [references/pending-operations.md](references/pending-operations.md)
 
@@ -795,6 +795,7 @@ GET /companies/{companyId}/pending-operations : List pending operations (staged 
 GET /companies/{companyId}/pending-operations/{id} : Read one pending operation and its outcome [scope:pending_operations:read risk:low idempotent]
 POST /companies/{companyId}/pending-operations/{id}/approve : Approve a pending operation: commit it and answer the outcome [scope:pending_operations:approve risk:high idempotent]
 POST /companies/{companyId}/pending-operations/{id}/reject : Reject a pending operation without committing it [scope:pending_operations:approve risk:low idempotent]
+POST /companies/{companyId}/pending-operations/{id}/withdraw : Withdraw a pending operation this key staged itself [risk:low idempotent]
 ```
 
 ### Webhooks (10)

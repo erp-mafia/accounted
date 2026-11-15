@@ -109,7 +109,7 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
           'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
         ]
       : [
-          '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal).',
+          '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal). A proposal you staged by mistake (a duplicate, a wrong amount) you take back yourself, before staging the corrected one: gnubok_stage_tool({tool: "gnubok_withdraw_pending_operation", arguments: {operation_id, reason}}). Only your own, only while pending.',
         ]),
     'A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
     toolNamespace === 'gnubok'

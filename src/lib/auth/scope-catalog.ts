@@ -840,6 +840,11 @@ export const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
   'gnubok_feedback',
   'gnubok_call_tool',
   'gnubok_stage_tool',
+  // The stager takes its own staged operation back. Ownership is the gate
+  // (lib/pending-operations/withdraw.ts): the operation must carry the
+  // calling key as its stager, which proves the write scope it staged with.
+  // No single scope fits, and pending_operations:approve must not be needed.
+  'gnubok_withdraw_pending_operation',
 ])
 
 /**
