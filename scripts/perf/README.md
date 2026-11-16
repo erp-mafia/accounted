@@ -156,7 +156,9 @@ The list RPC took about 150 ms more than its new body did when run as a plain qu
 |---|---|---|
 | `/bookkeeping`: the list RPC finds corrections in one pass (!1507) | 415 ms in a read-only production test with the reused plan forced; nightly benchmark under load p50 330 ms | 258 ms in the same test; benchmark under load p50 249 ms (2026-11-15) and 299 ms (2026-11-16), idle unchanged. The deployed function has not been re-timed in production yet |
 | `/supplier-invoices`: the list draws its first 100 rows, more on request (!1509) | every row drawn at once: 8 500 for the company with the most supplier invoices | 100 rows drawn. The read still fetches every row with every column (13 MB for that company): the list works out which invoices wait for attest from those columns, so narrowing them is left |
-| `/login` first-load JavaScript, gzip as served (!1517) | 590 kB in 26 files, the PostHog SDK 74 kB (227 kB raw) of it | 518 kB in 25 files; the SDK loads once analytics starts. Signed-in pages keep it in their first load until the Discord invite card stops importing `posthog-js` directly |
+| `/login` first-load JavaScript, gzip as served (!1517) | 590 kB in 26 files, the PostHog SDK 74 kB (227 kB raw) of it | 518 kB in 25 files; the SDK loads once analytics starts. Signed-in pages followed with !1525, below |
+
+!1525 (2026-11-16) took the SDK out of the signed-in pages too: the Discord invite card was the last module importing `posthog-js` directly. In the CI build every signed-in page ships 60 to 61 kB brotli (about 220 kB raw) less, 550 to 763 kB instead of 611 to 824 kB. `page-budgets.json` was re-based on those numbers and on `/login`'s 428 kB, so the room the SDK left cannot quietly fill with another library.
 
 ### The checks
 

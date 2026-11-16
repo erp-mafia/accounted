@@ -1,12 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import posthog from 'posthog-js'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { XMarkIcon } from '@/components/icons'
 import { DISCORD_INVITE_URL, DiscordLogo } from '@/components/community/discord'
-import { isAnalyticsActive } from '@/lib/analytics/client'
+import { captureAnalyticsEvent } from '@/lib/analytics/client'
 import { persistUiState } from '@/lib/ui-state/client'
 
 // The card's height plus its bottom gap (measured 148px with the Swedish copy
@@ -19,12 +18,7 @@ const REQUIRED_FREE_PX = 170
 type DiscordInviteEvent = 'discord_invite_shown' | 'discord_invite_joined' | 'discord_invite_dismissed'
 
 function track(event: DiscordInviteEvent): void {
-  if (!isAnalyticsActive()) return
-  try {
-    posthog.capture(event)
-  } catch {
-    // Telemetry must never affect the page.
-  }
+  captureAnalyticsEvent(event)
 }
 
 // Empty space between the sidebar menu's last row and the menu's bottom edge
