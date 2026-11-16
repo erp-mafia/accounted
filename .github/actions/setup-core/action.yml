@@ -1,0 +1,59 @@
+name: Set up core toolchain
+description: >-
+  Node 20, npm dependencies through the shared npm cache and, by default, a
+  zero-extension registry: the prologue the CI jobs share (the .setup-core and
+  .npm templates in .gitlab-ci.yml). Check the repository out first: a local
+  action resolves from the workspace.
+
+inputs:
+  zero-extensions:
+    description: >-
+      Reset extensions.config.json to no extensions and regenerate the
+      registry, because CI builds and tests core with no extensions enabled.
+    default: 'true'
+  save-cache:
+    description: >-
+      Save the npm cache after the install. Takes effect on pushes to main
+      only; one job per workflow passes 'true' so the jobs do not race to
+      write the same key.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      with:
+        node-version: 20
+        # The cache is handled below, restore-only outside main.
+        package-manager-cache: false
+
+    # Restore everywhere, save on main only. A cache entry written by a
+    # pull_request run is scoped to that pull request's merge ref and no other
+    # run can read it; entries written on main are readable from every branch
+    # and pull request, forks included.
+    - name: Restore npm cache
+      id: npm-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
+        restore-keys: |
+          npm-${{ runner.os }}-node20-
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci --prefer-offline --no-audit --fund=false
+
+    - name: Save npm cache
+      if: inputs.save-cache == 'true' && github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: ${{ steps.npm-cache.outputs.cache-primary-key }}
+
+    - name: Use no extensions
+      if: inputs.zero-extensions == 'true'
+      shell: bash
+      run: |
+        echo '{"extensions":[]}' > extensions.config.json
+        npm run setup:extensions

@@ -1,0 +1,57 @@
+name: Postgres and PostgREST with every migration
+description: >-
+  Waits for the job's Postgres service on localhost:5432, replays the bootstrap
+  and every migration, then starts PostgREST on the host network: the
+  .tool-pg-stack template of .gitlab-ci.yml. The job declares the Postgres
+  service and the DATABASE_URL, TOOL_PG_REST_URL and PGPASSWORD variables.
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for Postgres
+      shell: bash
+      run: |
+        command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
+        for _ in $(seq 1 90); do
+          if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+            sleep 3
+            psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+          fi
+          sleep 2
+        done
+        psql "$DATABASE_URL" -tAc 'select version()'
+    - name: Bootstrap
+      # Same replay as pg-real, and no bulk GRANT after it: the database then
+      # carries the grants production has, so a tool that needs a grant
+      # production lacks fails here with 42501.
+      shell: bash
+      run: |
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+        psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+    - name: Apply every migration
+      shell: bash
+      run: |
+        set -euo pipefail
+        for f in supabase/migrations/*.sql; do
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
+        done
+    - name: Start PostgREST
+      # On the host network rather than as a service: the job runs on the
+      # runner host and reaches Postgres through its mapped port, and
+      # PostgREST reaches it the same way. Started after the migrations, so
+      # its schema cache already holds them.
+      shell: bash
+      run: |
+        docker run -d --name postgrest --network host \
+          -e PGRST_DB_URI="postgres://postgres:postgres@127.0.0.1:5432/postgres" \
+          -e PGRST_DB_SCHEMAS=public \
+          -e PGRST_DB_ANON_ROLE=anon \
+          -e PGRST_JWT_SECRET="super-secret-jwt-token-with-at-least-32-characters-long" \
+          -e PGRST_DB_MAX_ROWS=100000 \
+          -e PGRST_SERVER_PORT=3000 \
+          postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
+        for _ in $(seq 1 60); do
+          curl -sf -o /dev/null "$TOOL_PG_REST_URL/" && break
+          sleep 1
+        done
+        curl -sf -o /dev/null "$TOOL_PG_REST_URL/" || { docker logs postgrest; exit 1; }
