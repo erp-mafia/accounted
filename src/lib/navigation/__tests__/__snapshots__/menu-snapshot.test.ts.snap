@@ -12,7 +12,7 @@ exports[`the menu of each representative company > aktiebolag missing ai and ban
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "payroll [+ /salary/employees?new]: /salary /salary/employees",
     "company: /parties",
-    "agents: /rules /settings/assistant /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
   ],
   "assistantMap": [
     "/: /pending",
@@ -44,7 +44,7 @@ exports[`the menu of each representative company > aktiebolag, every plan capabi
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "payroll [+ /salary/employees?new]: /salary /salary/employees",
     "company: /parties",
-    "agents: /rules /skills /settings/assistant /wiki /wiki?view=map /wiki?view=memory /chat",
+    "agents: /rules /skills /wiki /wiki?view=map /wiki?view=memory /chat",
   ],
   "assistantMap": [
     "/: /pending",
@@ -78,7 +78,7 @@ exports[`the menu of each representative company > archived ekonomisk förening,
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "payroll [+ /salary/employees?new]: /salary /salary/employees",
     "company: /parties",
-    "agents: /rules /settings/assistant /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
   ],
   "assistantMap": [
     "/: /pending",
@@ -109,7 +109,7 @@ exports[`the menu of each representative company > enskild firma that pays salar
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "payroll [+ /salary/employees?new]: /salary /salary/employees",
     "company: /parties",
-    "agents: /rules /settings/assistant /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
   ],
   "assistantMap": [
     "/: /pending",
@@ -139,7 +139,7 @@ exports[`the menu of each representative company > enskild firma without salarie
     "tax: /reports/vat-declaration /skattekonto /deadlines",
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "company: /parties",
-    "agents: /rules /settings/assistant /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
   ],
   "assistantMap": [
     "/: /pending",
@@ -170,7 +170,7 @@ exports[`the menu of each representative company > ideell förening on an active
     "reports: /reports/resultatrapport /reports/balansrapport /reports/huvudbok /kpi /budget /reports",
     "payroll [+ /salary/employees?new]: /salary /salary/employees",
     "company: /parties",
-    "agents: /rules /settings/assistant /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
+    "agents: /rules /wiki /wiki?view=map /wiki?view=memory /wiki?view=skills /chat",
   ],
   "assistantMap": [
     "/: /pending",

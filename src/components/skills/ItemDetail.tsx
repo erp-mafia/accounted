@@ -81,7 +81,7 @@ export function ItemDetail({ segment, backHref }: { segment: string; backHref: s
 
 function Detail({ companyId, companyName, segment, backHref }: { companyId: string; companyName: string; segment: string; backHref: string }) {
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const locale = useLocale()
   const { canWrite } = useCanWrite()

@@ -29,7 +29,7 @@ describe('palettePages: the shell tree is the page list', () => {
       for (const item of areaItems(area)) {
         // One inbox row at a time (the new page only in its rollout).
         if (item.requiresInkorgV2) continue
-        // Fakta follows the Arkiv reading rollout; the wiki's Kompetens view yields to the Agenter page.
+        // Fakta follows the Arkiv reading rollout; the wiki's Arbetssätt view yields to the Agenter page.
         if (item.requiresArkivBrain || item.hiddenWithAgents) continue
         const page = pages.find((p) => p.href === item.href && p.id.startsWith('nav:'))
         expect(page, item.href).toBeDefined()
@@ -47,6 +47,28 @@ describe('palettePages: the shell tree is the page list', () => {
     expect(pages.some((p) => p.href === '/salary/employees')).toBe(false)
     expect(pages.some((p) => p.href === '/skills')).toBe(false)
     expect(pages.some((p) => p.href === '/invoices')).toBe(true)
+  })
+
+  it('offers Koppla en agent under Agenter although the page has no row, gated like the button', () => {
+    const page = pagesFor().find((p) => p.href === '/settings/api')
+    expect(page).toMatchObject({ id: 'nav:agents:/settings/api', label: nav.v3_connect_agent, group: nav.v3_agents })
+    expect(pagesFor().filter((p) => p.href === '/settings/api')).toHaveLength(1)
+    const ctx = { ...gateContext(), mcpExtensionEnabled: false }
+    const without = palettePages({ passes: (item) => passesNavGates(item, ctx), hasCompany: true, isByraMember: false, navLabel, aliases: PAGE_ALIASES })
+    expect(without.some((p) => p.href === '/settings/api')).toBe(false)
+  })
+
+  it('finds the Agenter pages by their menu names (founder decision 2026-11-16)', () => {
+    const pages = pagesFor()
+    const first = (query: string) => pages.find((p) => matches(p, query))?.href
+    expect(first('koppla en agent')).toBe('/settings/api')
+    expect(first('bokföringsregler')).toBe('/rules')
+    expect(first('arbetssätt')).toBe('/skills')
+    // The names the page had before still lead there.
+    expect(first('kompetens')).toBe('/skills')
+    expect(first('instruktioner')).toBe('/skills')
+    expect(first('regler')).toBe('/rules')
+    expect(pages.some((p) => p.href === '/settings/assistant')).toBe(false)
   })
 
   it('lists Byrå only for a byrå team member', () => {

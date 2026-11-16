@@ -1,6 +1,7 @@
 import type { Icon as AppIcon } from '@/components/icons'
 import {
   NAV_V3_AREAS,
+  areaCreatePage,
   areaItems,
   gateAreas,
   hrefPath,
@@ -14,8 +15,9 @@ import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
 
 /**
  * The command palette's pages, derived from the shell's tree (nav-v3.ts):
- * every row of every area the user's rail shows, under the area's name, with
- * the same gates as the sidebar. A page that moves in the menu moves here
+ * every row of every area the user's rail shows (and the page an area's
+ * create button opens, where it has no row), under the area's name, with the
+ * same gates as the sidebar. A page that moves in the menu moves here
  * with it, and a page the company does not have is not offered.
  *
  * The aliases (PAGE_ALIASES in CommandPalette.tsx) are what the tree cannot say: the words people type for a page
@@ -96,6 +98,20 @@ export function palettePages(input: PalettePagesInput): PalettePage[] {
         keywords: [navLabel(area.labelKey), ...words].filter(Boolean).join(' '),
         group: navLabel(area.labelKey),
         extension: PAGE_EXTENSION[item.href],
+      })
+    }
+    // A page the area reaches only through its create button (Koppla en
+    // agent) has no row to list: it is offered under the area by that name.
+    const createPage = areaCreatePage(area)
+    if (createPage) {
+      rowHrefs.add(createPage.href)
+      pages.push({
+        id: `nav:${area.id}:${createPage.href}`,
+        label: navLabel(createPage.labelKey),
+        icon: area.icon,
+        href: createPage.href,
+        keywords: navLabel(area.labelKey),
+        group: navLabel(area.labelKey),
       })
     }
   }

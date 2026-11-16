@@ -134,6 +134,8 @@ export const PAGE_ALIASES: PageAlias[] = [
   { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: InboxIcon, href: LEGACY_INBOX_HREF, keywords: INBOX_SEARCH_KEYWORDS },
   { id: 'inkorg', label: 'Inkorg', icon: InboxIcon, href: INKORG_HREF, keywords: INBOX_SEARCH_KEYWORDS },
   { id: 'nyckeltal', label: 'Nyckeltal', icon: ArrowTrendingUpIcon, href: '/kpi' },
+  // Arbetssätt answers to the names the page had before (founder decision 2026-11-16).
+  { id: 'kompetens', label: 'Kompetens', icon: SparklesIcon, href: '/skills', keywords: 'instruktioner skills' },
   { id: 'inställningar', label: 'Inställningar', icon: Cog6ToothIcon, href: '/settings' },
   { id: 'help', label: 'Hjälp', icon: QuestionMarkCircleIcon, href: '/help' },
 ]

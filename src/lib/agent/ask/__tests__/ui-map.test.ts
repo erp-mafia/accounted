@@ -62,9 +62,21 @@ describe('renderUiGrounding: the page line', () => {
     )
   })
 
-  it('names the settings pages that are rows of Agenter there, as the shell lights them', () => {
-    expect(svMenuPath('/settings/assistant')).toBe(`${nav.v3_agents} → ${nav.v3_instructions}`)
+  it('names the settings page Agenter opens from its create button there, as the shell lights it', () => {
     expect(svMenuPath('/settings/api')).toBe(`${nav.v3_agents} → ${nav.v3_connect_agent}`)
+  })
+
+  it('names the Agenter rows as the menu does (founder decision 2026-11-16)', () => {
+    expect(svMenuPath('/rules')).toBe('Agenter → Bokföringsregler')
+    expect(svMenuPath('/skills')).toBe('Agenter → Arbetssätt')
+    expect(svMenuPath('/wiki?view=skills', gateContext({ agentsEnabled: false }))).toBe('Agenter → Arbetssätt')
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS, hasMcpExtension: true })
+    expect(out).toContain(
+      '- Agenter: Styr: Bokföringsregler (/rules), Arbetssätt (/skills); Vad agenten vet: Kontext (/wiki), Bokföringsprofil (/wiki?view=map), Minne (/wiki?view=memory); Chatt (/chat). Knappen överst i sidomenyn: Koppla en agent (/settings/api)',
+    )
+    expect(out).toContain('- Agenter → Koppla en agent (/settings/api): ')
+    expect(out).not.toContain('/settings/assistant')
+    expect(out).not.toContain('Instruktioner (')
   })
 
   it('names settings pages by rail group and section, and hub children under their hub', () => {
@@ -104,7 +116,7 @@ describe('renderUiGrounding: the menu', () => {
         for (const item of group.items) {
           // The new Inkorg page shows only in its rollout (its own test below).
           if (item.requiresInkorgV2) continue
-          // Fakta follows the Arkiv reading rollout; the wiki's Kompetens view yields to the Agenter page.
+          // Fakta follows the Arkiv reading rollout; the wiki's Arbetssätt view yields to the Agenter page.
           if (item.requiresArkivBrain || item.hiddenWithAgents) continue
           expect(out).toContain(`${nav[item.labelKey]} (${item.href})`)
         }

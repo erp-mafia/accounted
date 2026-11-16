@@ -3814,7 +3814,7 @@ Resolves the BAS account mapping for the transaction (via category, booking temp
 - account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.
 - vat_amount replaces the rate-based VAT line with the underlag's actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.
 - vat_treatment reverse_charge without reverse_charge_kind takes the box (20, 21 or 22) from the seller country on the row's underlag and the category; when they cannot tell it, 400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN (details.reason): send reverse_charge_kind. Never ruta 21 by default.
-- A booking one of the company's blocks (booking review rules, Regler > Spärrar in the app) matches is never booked from a key: it is staged for a person and answered 202 with the pending operation (staged_because BOOKING_REVIEW_REQUIRED). Approving it is web-only. With template_id or counterparty_template_id it cannot be staged and is refused with 409 BOOKING_REVIEW_REQUIRED.
+- A booking one of the company's blocks (booking review rules, Bokföringsregler > Spärrar in the app) matches is never booked from a key: it is staged for a person and answered 202 with the pending operation (staged_because BOOKING_REVIEW_REQUIRED). Approving it is web-only. With template_id or counterparty_template_id it cannot be staged and is refused with 409 BOOKING_REVIEW_REQUIRED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

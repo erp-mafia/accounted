@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import sv from '@/messages/sv.json'
-import { NAV_V3_AREAS, areaCreate, areaItems, gateAreas, hrefPath } from '@/components/dashboard/nav-v3'
+import { NAV_V3_AREAS, areaCreate, areaCreatePage, areaItems, gateAreas, hrefPath } from '@/components/dashboard/nav-v3'
 import { PAGE_ALIASES } from '@/components/common/CommandPalette'
 import { palettePages } from '@/components/common/palette-pages'
 import { passesNavGates, type NavGateContext } from '../nav-gates'
@@ -80,6 +80,8 @@ describe.each(COMPANIES)('outside every rollout: %s', (_name, ctx) => {
       for (const group of area.groups) expect(group.items.length, `${area.id} group`).toBeGreaterThan(0)
       const create = areaCreate(area)
       if (!create || create.action) continue
+      // Koppla en agent opens a page Agenter owns without a row (nav-v3.ts areaCreatePage).
+      if (areaCreatePage(area)) continue
       const createPath = hrefPath(create.href)
       const rows = areaItems(area).map((item) => hrefPath(item.href))
       expect(rows.some((row) => createPath === row || createPath.startsWith(`${row}/`)), `${area.id}: ${create.href}`).toBe(true)

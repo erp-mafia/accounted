@@ -28,8 +28,8 @@ import { useByraSettingsScope } from './useSettingsNavItems'
  * The title comes from the URL and the sections' own map, so it is on the
  * server render and can never differ from the sidebar's label. A page reached
  * from a hub (the bank under Kopplingar) names its hub as a link before it. A
- * section the shell files under Agenter (Koppla en agent, Instruktioner)
- * carries that area's label, without a group.
+ * section the shell files under Agenter (Koppla en agent) carries that
+ * area's label, without a group.
  */
 
 interface TopBarSlots {
@@ -50,8 +50,8 @@ export function SettingsTopBarPortal({ slot, children }: { slot: keyof TopBarSlo
   return target ? createPortal(children, target) : null
 }
 
-/** Settings sections that are rows of the Agenter area: the nav label they carry there. */
-const AGENTS_ROW_LABEL: Record<string, string> = { api: 'v3_connect_agent', assistant: 'v3_instructions' }
+/** Settings sections the Agenter area opens (its create button): the nav label they carry there. */
+const AGENTS_LABEL: Record<string, string> = { api: 'v3_connect_agent' }
 
 const GROUP_MESSAGE_KEY: Record<SettingsGroupKey, string> = {
   account: 'group_account',
@@ -83,12 +83,11 @@ export function SettingsTopBarProvider({ children }: { children: React.ReactNode
   // Inside a company the shell lists these under Agenter; in byrå scope the
   // cockpit has no Agenter area and the section keeps its settings name.
   const inAgents =
-    !!id && !byraScope && id in AGENTS_ROW_LABEL && (id !== 'api' || ENABLED_EXTENSION_IDS.has('mcp-server')) &&
-    (SETTINGS_SECTIONS_IN_AGENTS.has(id) || id === 'assistant')
+    !!id && !byraScope && id in AGENTS_LABEL && ENABLED_EXTENSION_IDS.has('mcp-server') && SETTINGS_SECTIONS_IN_AGENTS.has(id)
   // A segment without a section name (a redirecting route such as /settings/backup) falls back to "Inställningar".
   const sectionKey = id ? settingsMessageKey(id) : null
   const title = inAgents && id
-    ? tNav(AGENTS_ROW_LABEL[id] as never)
+    ? tNav(AGENTS_LABEL[id] as never)
     : sectionKey && t.has(sectionKey as never)
       ? t(sectionKey as never)
       : t('aria_label')

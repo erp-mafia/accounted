@@ -33,7 +33,6 @@ import {
   HashtagIcon,
   HomeIcon,
   InboxIcon,
-  LinkIcon,
   ListBulletIcon,
   PencilSquareIcon,
   PercentBadgeIcon,
@@ -96,7 +95,7 @@ export interface NavV3Item extends NavGateFlags {
 }
 
 export interface NavV3Group {
-  /** A labelled group ("Register", "Kunskap"); absent for the area's plain rows. */
+  /** A labelled group ("Register", "Styr"); absent for the area's plain rows. */
   labelKey?: string
   items: NavV3Item[]
 }
@@ -135,7 +134,7 @@ export interface NavV3Area {
    */
   create?: NavV3Create[]
   settings?: NavV3SettingsLink[]
-  /** Route prefixes that belong to the area without lighting a row (help and extensions under Inställningar). */
+  /** Route prefixes that belong to the area without lighting a row (help and extensions under Inställningar, Koppla en agent under Agenter). */
   owns?: readonly string[]
 }
 
@@ -403,14 +402,18 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     labelKey: 'v3_agents',
     icon: SparklesIcon,
     rail: 'foot',
+    // Koppla en agent opens /settings/api. The page has no row (the button is
+    // its one place in the sidebar, founder decision 2026-11-16): `owns` keeps
+    // it lighting Agenter, and areaCreatePage lists it where there is no
+    // button (the phone menu, the command palette, the assistant's UI map).
     create: [{ href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', requiresMcpExtension: true }],
+    owns: ['/settings/api'],
     groups: [
       {
+        labelKey: 'v3_group_steer',
         items: [
           { href: '/rules', module: 'transactions', labelKey: 'v2_rules', icon: AdjustmentsHorizontalIcon },
           { href: '/skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, newBadge: true, requiresAgents: true },
-          { href: '/settings/assistant', module: 'agent', labelKey: 'v3_instructions', icon: DocumentTextIcon },
-          { href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', icon: LinkIcon, requiresMcpExtension: true },
         ],
       },
       {
@@ -422,7 +425,7 @@ export const NAV_V3_AREAS: NavV3Area[] = [
           { href: '/wiki?view=map', module: 'agent', labelKey: 'v3_rules_profile', icon: BookOpenIcon },
           { href: '/wiki?view=facts', module: 'agent', labelKey: 'v3_facts', icon: ListBulletIcon, requiresArkivBrain: true },
           { href: '/wiki?view=memory', module: 'agent', labelKey: 'v3_memory', icon: BookmarkIcon },
-          // Where the Agenter page is open, Kompetens above is that page.
+          // Where the Agenter page is open, Arbetssätt above is that page.
           { href: '/wiki?view=skills', module: 'agent', labelKey: 'v3_skills', icon: SparklesIcon, hiddenWithAgents: true },
         ],
       },
@@ -470,10 +473,23 @@ export function areaCreate(area: NavV3Area): NavV3Create | undefined {
 }
 
 /**
+ * The area's create action when it opens a page of the area that has no row
+ * (Koppla en agent, /settings/api): the page is then a destination like any
+ * other, so the lists without a create button name it under the area (the
+ * phone menu, the command palette, the assistant's UI map). Undefined for a
+ * create that opens a dialog, a form or a file picker.
+ */
+export function areaCreatePage(area: NavV3Area): NavV3Create | undefined {
+  const create = areaCreate(area)
+  return create && !create.action && (area.owns ?? []).includes(create.href) ? create : undefined
+}
+
+/**
  * Whether the shell offers an area's create action to this role. A viewer
  * reads everything and writes nothing (lib/hooks/use-can-write.ts), so the
  * sidebar's create button and the rail's plus are left out for it; Koppla en
- * agent stays reachable as its own row of Agenter. The byrå's "Lägg till
+ * agent stays reachable from the command palette, the phone menu and the
+ * settings search. The byrå's "Lägg till
  * klient" follows the person's role in the byrå team, not in the company.
  */
 export function createOpenForRole(create: NavV3Create, role: string | null | undefined): boolean {

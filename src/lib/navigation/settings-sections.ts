@@ -10,8 +10,8 @@ export type SettingsGroupKey = 'company' | 'accounting' | 'sales' | 'tools' | 'a
 export const SETTINGS_GROUP_ORDER: SettingsGroupKey[] = ['company', 'accounting', 'sales', 'tools', 'account', 'byra']
 
 /**
- * Sections that the shell lists under another area as well: Koppla en agent
- * in Agenter opens /settings/api. Inside a company the Inställningar sidebar
+ * Sections that the shell lists under another area as well: Koppla en agent,
+ * the create button of Agenter, opens /settings/api. Inside a company the Inställningar sidebar
  * leaves such a section to that area (its search still finds it); in byrå
  * scope, where the cockpit has no Agenter area, it stays in the list.
  */
@@ -24,8 +24,6 @@ export const SETTINGS_SECTIONS_IN_AGENTS: ReadonlySet<string> = new Set(['api'])
  * pages, which stay at their own URLs because OAuth callbacks and deep links
  * (bank consent renewal, ?select_accounts=, ?skv_connected=, ?mail=) land
  * there.
- * The assistant section is off the rail for now (founder 2026-09-24) but its
- * page stays reachable from the assistant's own "manage memory" links.
  */
 export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   banking: 'connections',
@@ -34,7 +32,6 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   peppol: 'connections',
   'bank-payments': 'connections',
   mail: 'connections',
-  assistant: 'connections',
   pos: 'connections',
 }
 

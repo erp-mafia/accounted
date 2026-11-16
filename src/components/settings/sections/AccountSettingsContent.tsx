@@ -17,6 +17,7 @@ import { fetchSessionUser } from '@/lib/auth/session-client'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import { AnalyticsConsentRow } from '@/components/settings/AnalyticsConsentRow'
+import { FabVisibilityRow } from '@/components/settings/FabVisibilityRow'
 import {
   SettingsGroup,
   SettingsInput,
@@ -189,7 +190,7 @@ export function AccountSettingsContent() {
     <div>
       <SettingsSectionHeader title={tNav('account')} intro={tIntro('account')} />
 
-      {/* Profile: name, appearance, language, install-as-app */}
+      {/* Profile: name, appearance, language, assistant button, install-as-app */}
       <SettingsGroup label={tSettings('group_profile')}>
         <SettingsRow
           label={tSettings('name_label')}
@@ -323,6 +324,9 @@ export function AccountSettingsContent() {
             }))}
           />
         </SettingsRow>
+
+        {/* The floating assistant button: shown or hidden for this person */}
+        <FabVisibilityRow />
 
         {/* Install as app: renders nothing when already running installed */}
         <InstallAppSection />

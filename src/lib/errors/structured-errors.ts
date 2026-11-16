@@ -239,7 +239,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool and gnubok_create_supplier_invoice_from_inbox stage already) and tell the user it waits for their review in Accounted, under Att godkänna, or, for a supplier invoice or a document, in the Inkorg, where a person registers it. Blocks hold bank rows, supplier invoices (registered, or paid under kontantmetoden) and Inkorg documents; they are listed under Regler, Spärrar.',
+        'Nothing was posted. Do not retry and do not change the booking to get around the block. Stage it instead (on the v1 API resend with ?stage=true where the endpoint stages; over MCP the categorize tool and gnubok_create_supplier_invoice_from_inbox stage already) and tell the user it waits for their review in Accounted, under Att godkänna, or, for a supplier invoice or a document, in the Inkorg, where a person registers it. Blocks hold bank rows, supplier invoices (registered, or paid under kontantmetoden) and Inkorg documents; they are listed under Bokföringsregler, Spärrar.',
     },
   },
   // A periodisering's own verifikat (source_type 'accrual') is posted only by
