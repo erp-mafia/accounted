@@ -2803,8 +2803,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   // one. Nothing is removed when any of them is answered.
   CASH_ACCOUNT_REMOVE_BANK_CONNECTED: {
     httpStatus: 409,
-    message_sv: 'Kontot hämtas fortfarande via en bankkoppling och kan inte tas bort. Koppla från banken först (kontona och deras transaktioner finns kvar), ta bort kontot och koppla sedan banken igen med bara rätt konton.',
-    message_en: 'The account is still fetched through a bank connection and cannot be removed. Disconnect the bank first (the accounts and their transactions stay), remove the account, then connect the bank again with only the right accounts.',
+    message_sv: 'Kontot hämtas fortfarande via en bankkoppling och kan inte tas bort. Koppla från banken först under Inställningar > Kopplingar > Bank, tre punkter vid banken, Koppla från (kontona och deras transaktioner finns kvar), ta bort kontot och koppla sedan banken igen med bara rätt konton.',
+    message_en: 'The account is still fetched through a bank connection and cannot be removed. Disconnect the bank first under Settings > Connections > Bank, three dots at the bank, Disconnect (the accounts and their transactions stay), remove the account, then connect the bank again with only the right accounts.',
   },
   CASH_ACCOUNT_REMOVE_PRIMARY: {
     httpStatus: 409,
