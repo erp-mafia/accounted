@@ -36,8 +36,6 @@ import { equalOre, roundOre } from '@/lib/money'
 
 /** IL 40 kap. 15 §: 300 % of the utgift. */
 export const AMOUNT_BLOCK_MULTIPLIER = 3
-/** IL 40 kap. 16 §: tillskott from at most two beskattningsår before the year of the change. */
-export const CAPITAL_CONTRIBUTION_WINDOW_YEARS = 2
 /** IL 40 kap. 18 §: the koncernbidragsspärr lasts through the fifth beskattningsår after the year it entered. */
 export const GROUP_BLOCK_YEARS_AFTER_CHANGE = 5
 

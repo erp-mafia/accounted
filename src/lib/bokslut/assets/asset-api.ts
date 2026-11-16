@@ -610,8 +610,6 @@ export function componentsView(asset: Asset) {
   })
 }
 
-export type ComponentView = ReturnType<typeof componentsView>[number]
-
 // ── Component register contracts ─────────────────────────────────
 
 const ComponentFieldsSchema = K3ComponentSchema.omit({ component_id: true })
@@ -622,19 +620,13 @@ export const AddComponentSchema = ComponentFieldsSchema.superRefine((value, ctx)
   }
 })
 
-export type AddComponentBody = z.infer<typeof AddComponentSchema>
-
 export const UpdateComponentSchema = ComponentFieldsSchema.partial()
-
-export type UpdateComponentBody = z.infer<typeof UpdateComponentSchema>
 
 export const ReplaceComponentSchema = z.object({
   replaced_at: z.string().regex(ISO_DATE).describe('yyyy-MM-dd: the derecognition date, the voucher date.'),
   fiscal_period_id: z.string().uuid().describe('The open fiscal period containing replaced_at.'),
   new_component: ComponentFieldsSchema.nullable().optional().describe('The replacing component (K3 17.5), registered with no voucher: the expenditure is already on the asset account. Omit to derecognise only.'),
 })
-
-export type ReplaceComponentBody = z.infer<typeof ReplaceComponentSchema>
 
 /** The replacement plan as an approver sees it, shared by every preview door. */
 export function replacementPreviewView(preview: ComponentReplacementPreview) {
@@ -683,8 +675,6 @@ export const ValueAdjustmentSchema = z.object({
     .max(2000)
     .describe('The indication and how the recoverable amount was assessed (K3 27.3-27.4); kept with the voucher.'),
 })
-
-export type ValueAdjustmentBody = z.infer<typeof ValueAdjustmentSchema>
 
 /** The write-down or reversal as an approver sees it, shared by every preview door. */
 export function valueAdjustmentPreviewView(preview: ValueAdjustmentPreview) {
@@ -777,30 +767,6 @@ export const AssetViewSchema = z.object({
   deletable: z.boolean().describe('True while the row never reached the books (no posted depreciation, not disposed): DELETE /assets/{id} removes it. False means the row is räkenskapsinformation and leaves only through disposal or storno (409 ASSET_DELETE_BLOCKED).'),
   created_at: z.string(),
   updated_at: z.string(),
-})
-
-export const DisposalPreviewSchema = z.object({
-  asset_name: z.string(),
-  disposal_type: z.enum(ASSET_DISPOSAL_TYPES),
-  disposed_at: z.string(),
-  fiscal_period_id: z.string(),
-  proceeds_gross: z.number(),
-  proceeds_vat: z.number(),
-  vat_treatment: z.string().nullable(),
-  current_depreciation: z.number().describe('Depreciation for the disposal year up to disposed_at, posted as part of the disposal voucher.'),
-  accumulated_depreciation: z.number(),
-  book_value: z.number(),
-  gain_or_loss: z.number().describe('Positive = gain (3973/3972), negative = loss (7973/7972).'),
-  jamkning: z.object({ amount: z.number(), direction: z.string() }),
-  lines: z.array(
-    z.object({
-      account_number: z.string(),
-      debit: z.number(),
-      credit: z.number(),
-      description: z.string().nullable(),
-    }),
-  ),
-  posts_journal_entry: z.boolean(),
 })
 
 /**

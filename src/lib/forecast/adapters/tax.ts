@@ -203,11 +203,6 @@ interface TaxSettings {
   preliminary_tax_monthly: number | string | null
 }
 
-export interface SkattekontoSnapshot {
-  saldo: number | null
-  fetchedAtMs: number | null
-}
-
 export interface LoadedTaxInputs {
   synced: boolean
   saldo: number

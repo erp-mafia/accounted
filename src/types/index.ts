@@ -61,18 +61,6 @@ export interface Company {
   pays_salaries?: boolean
 }
 
-// Company membership
-export interface CompanyMember {
-  id: string
-  company_id: string
-  user_id: string
-  role: CompanyRole
-  invited_by: string | null
-  joined_at: string
-  created_at: string
-  updated_at: string
-}
-
 export const COMPANY_MIGRATION_RESET_COUNT_KEYS = [
   'journal_entries',
   'journal_entry_lines',

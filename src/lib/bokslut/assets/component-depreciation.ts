@@ -336,21 +336,3 @@ export interface ComponentBalance {
   revalued: number
   carryingAmount: number
 }
-
-export function componentBalance(
-  component: ComponentPlan,
-  history: { posted: number; writtenDown?: number; revalued?: number },
-): ComponentBalance {
-  const accumulatedDepreciation = roundOre((component.opening?.amount ?? 0) + history.posted)
-  const writtenDown = roundOre(history.writtenDown ?? 0)
-  const revalued = roundOre(history.revalued ?? 0)
-  return {
-    componentId: component.id,
-    name: component.name,
-    cost: component.cost,
-    accumulatedDepreciation,
-    writtenDown,
-    revalued,
-    carryingAmount: roundOre(component.cost + revalued - accumulatedDepreciation - writtenDown),
-  }
-}

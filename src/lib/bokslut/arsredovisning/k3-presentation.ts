@@ -22,7 +22,7 @@
  * so the K3 iXBRL (P3) tags them as they stand, including the taxonomy's own
  * spelling AktuellSkattefodran.
  */
-import { isZeroOre, roundOre, sumOre } from '@/lib/money'
+import { roundOre, sumOre } from '@/lib/money'
 import type { ConceptAmount, ConceptAmounts } from '@/lib/bokslut/ixbrl/types'
 import type { K2LegalForm, K2MappingResult, TrialBalanceRowLike } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { SIGN_RECLASSIFICATION_RULES, selectReclassifiedAccounts } from '@/lib/reports/sign-reclassification'
@@ -208,15 +208,4 @@ export function k3EquityPosts(legalForm: K2LegalForm): EquityPostDefinition[] {
     posts.push(post)
   }
   return posts
-}
-
-/** True when the mapping carries K3's own posts. */
-export function isK3Presentation(mapping: object): mapping is K3MappingResult {
-  return (mapping as { presentation?: unknown }).presentation === 'k3'
-}
-
-/** Whether a K3-only post holds anything (either year). */
-export function hasK3Value(br: ConceptAmounts, concept: string): boolean {
-  const amount = br[concept]
-  return Boolean(amount) && (!isZeroOre(amount!.current) || !isZeroOre(amount!.previous ?? 0))
 }

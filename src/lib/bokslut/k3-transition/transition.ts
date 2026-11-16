@@ -56,9 +56,6 @@ export type K3ReliefRule = (typeof K3_RELIEF_RULES)[number]['code']
 
 export const K3_RELIEF_RULE_CODES = K3_RELIEF_RULES.map((rule) => rule.code) as [K3ReliefRule, ...K3ReliefRule[]]
 
-export const K3_DEFERRED_TAX_RELIEF_LABEL =
-  'Uppskjuten skatt hänförlig till temporära skillnader har inte redovisats i ingångsbalansräkningen (punkt 35.27).'
-
 /** An adjustment of the opening balance: a balance sheet account, + debit / - credit. */
 export interface TransitionAdjustment {
   account_number: string
