@@ -19,7 +19,8 @@ import {
  * below. Pure presentation: everything derives from the existing KPIReport.
  */
 
-const SAGE = 'hsl(155 25% 40%)'
+// The income tone of the active palette (Stil v3 green), never a literal.
+const SAGE = 'hsl(var(--success))'
 
 type TFn = (key: string, values?: Record<string, string | number>) => string
 
@@ -38,7 +39,7 @@ function Pane({
   children: React.ReactNode
 }) {
   const label = (
-    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <p className="text-xs font-medium text-muted-foreground">
       {title}
     </p>
   )
@@ -53,7 +54,7 @@ function Pane({
           label
         )}
         {annotation && (
-          <span className="text-[11px] text-muted-foreground">{annotation}</span>
+          <span className="text-xs text-muted-foreground">{annotation}</span>
         )}
       </div>
       {children}
@@ -124,8 +125,8 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
           const fill =
             m.net < 0
               ? isLast
-                ? 'hsl(11 45% 52%)'
-                : 'hsl(11 45% 52% / 0.35)'
+                ? 'hsl(var(--destructive))'
+                : 'color-mix(in srgb, hsl(var(--destructive)) 35%, transparent)'
               : isLast
                 ? SAGE
                 : 'hsl(var(--foreground) / 0.14)'
@@ -151,12 +152,12 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
           )
         })}
       </svg>
-      <div className="mt-1 flex justify-between px-1 text-[11px] text-muted-foreground">
+      <div className="mt-1 flex justify-between px-1 text-xs text-muted-foreground">
         {months.map((m) => (
           <span key={m.label}>{m.label}</span>
         ))}
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-6 border-t border-border pt-3 text-xs">
+      <div className="mt-4 grid grid-cols-2 gap-x-6 border-t-hairline pt-3 text-xs">
         {columns.map((column, c) => (
           <dl key={c} className="space-y-1">
             {column.map((m, j) => {
@@ -167,7 +168,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
                     className={cn(
                       'tabular-nums',
                       m.net < 0 && 'text-destructive',
-                      inactive(m) && 'text-muted-foreground/60',
+                      inactive(m) && 'text-muted-foreground',
                     )}
                   >
                     {formatCurrency(m.net)}
@@ -346,11 +347,11 @@ export function KPIPanes({
               })}
             >
               <span
-                className="rounded-full bg-[hsl(155_25%_40%_/_0.45)]"
+                className="rounded-full bg-success/45"
                 style={{ width: `${(pane.aging.ok / total(pane)) * 100}%` }}
               />
               <span
-                className="rounded-full bg-[hsl(38_65%_52%_/_0.75)]"
+                className="rounded-full bg-warning/75"
                 style={{ width: `${(pane.aging.overdue / total(pane)) * 100}%` }}
               />
             </div>
@@ -365,7 +366,7 @@ export function KPIPanes({
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap gap-x-12 gap-y-5 border-b border-border pb-6">
+      <div className="flex flex-wrap gap-x-12 gap-y-5 border-b-hairline pb-6">
         {panes.map((pane) => (
           <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip} className="min-w-[180px]">
             {body(pane)}
@@ -391,9 +392,9 @@ function BreakdownRow({
 }) {
   const width = max > 0 ? Math.max(3, Math.round((amount / max) * 96)) : 3
   return (
-    <div className="flex items-center gap-3 border-b border-border py-3 text-[13px] last:border-b-0">
+    <div className="flex items-center gap-3 border-b-hairline py-3 text-[13px] last:border-b-0">
       {prefix && (
-        <span className="w-8 shrink-0 font-mono text-[11px] text-muted-foreground">{prefix}</span>
+        <span className="w-8 shrink-0 font-mono text-xs text-muted-foreground">{prefix}</span>
       )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span
@@ -417,7 +418,7 @@ export function KPIBreakdown({ report }: { report: KPIReport }) {
   return (
     <div>
       <div className="mb-1 flex items-center gap-3 px-1">
-        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-xs text-muted-foreground">
           {t('costs_title')}
         </h2>
         <div className="h-px flex-1 bg-border/60" />

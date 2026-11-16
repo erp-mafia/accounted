@@ -121,7 +121,7 @@ export default function RefundCreditNoteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px]">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>
             {/* data-ph-mask: the credit note number is user data */}
@@ -167,7 +167,7 @@ export default function RefundCreditNoteDialog({
               </Select>
             </div>
             {account && (
-              <div className="rounded-lg border border-border bg-secondary/40 px-4 py-3 text-sm">
+              <div className="rounded-lg bg-secondary/40 px-4 py-3 text-sm bg-control shadow-raised">
                 <div className="flex justify-between gap-4">
                   <span>{t('line_debit', { account: RECEIVABLE_ACCOUNT })}</span>
                   <span className="tabular-nums">{formatCurrency(owed, 'SEK')}</span>

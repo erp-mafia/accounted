@@ -15,9 +15,11 @@ import {
   SettingsRow,
   SettingsRowEnd,
   SettingsSectionHeader,
+  SettingsViewerScope,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useBranding } from '@/lib/branding/brand-context'
 import { plannedLegalFormOfSnapshot } from '@/lib/company-lookup/entity-type-map'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
@@ -29,6 +31,7 @@ export function TaxSettingsContent() {
   const { company } = useCompany()
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
   const router = useRouter()
 
@@ -181,9 +184,9 @@ export function TaxSettingsContent() {
           here to (re)connect find the way on from this first row. */}
       {showSkatteverket && (
         <SettingsGroup label={tNav('skatteverket')}>
-          <SettingsRow label={tNav('skatteverket_row')} help={tIntro('skatteverket')}>
+          <SettingsRow label={tNav('skatteverket_row')} help={tIntro('skatteverket', { appName })}>
             <SettingsRowEnd>
-              <Button variant="outline" size="sm" asChild>
+              <Button variant="outline" asChild>
                 <Link href="/settings/skatteverket">{tNav('manage_connection')}</Link>
               </Button>
             </SettingsRowEnd>
@@ -202,7 +205,9 @@ export function TaxSettingsContent() {
         />
       </SettingsFormWrapper>
 
-      <TaxAssessmentNoticesPanel />
+      <SettingsViewerScope>
+        <TaxAssessmentNoticesPanel />
+      </SettingsViewerScope>
     </div>
   )
 }

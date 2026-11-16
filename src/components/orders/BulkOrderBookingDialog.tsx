@@ -335,7 +335,7 @@ export default function BulkOrderBookingDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] sm:max-w-[560px] overflow-y-auto">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('bulk_title', { count: bookableOrders.length })}</DialogTitle>
           <DialogDescription>{t('bulk_description')}</DialogDescription>
@@ -370,7 +370,7 @@ export default function BulkOrderBookingDialog({
           <div className="space-y-4">
             {bookableOrders.length > 0 && (
             <>
-            <div className="rounded-lg border border-border bg-card p-3">
+            <div className="rounded-lg p-3 bg-control shadow-raised">
               <p className="text-xs font-medium text-muted-foreground">
                 {t('bulk_totals_label')}
               </p>
@@ -434,7 +434,7 @@ export default function BulkOrderBookingDialog({
             )}
 
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={overrideEnabled}
                   onCheckedChange={(v) => setOverrideEnabled(v === true)}
@@ -477,7 +477,7 @@ export default function BulkOrderBookingDialog({
                 prefilled with the same defaults. VAT accounts are derived
                 from the rate and deliberately not editable here. */}
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={revenueEnabled}
                   onCheckedChange={(v) => setRevenueEnabled(v === true)}
@@ -537,35 +537,35 @@ export default function BulkOrderBookingDialog({
                 sweep (mirrored server-side); the escape hatch is the
                 single-order dialog where the lines are reviewable. */}
             {skippedMissingBreakdown.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_skipped_missing_breakdown', {
                   numbers: skippedMissingBreakdown.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}
             {skippedCountryNotRouted.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_skipped_country_not_routed', {
                   numbers: skippedCountryNotRouted.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}
             {skippedCountryUnknown.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_skipped_country_unknown', {
                   numbers: skippedCountryUnknown.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}
             {skippedUnsupportedRate.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_skipped_unsupported_rate', {
                   numbers: skippedUnsupportedRate.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}
             {skippedInvoiceMode.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_skipped_invoice_mode', {
                   numbers: skippedInvoiceMode.map((o) => o.order_number).join(', '),
                 })}
@@ -574,7 +574,7 @@ export default function BulkOrderBookingDialog({
             {/* Advisory only (soft-guard rule): the sweep still books these;
                 the named orders are better reviewed one by one. */}
             {warningOrderNumbers.length > 0 && (
-              <p className="attn text-[12.5px]" data-ph-mask="">
+              <p className="attn text-xs" data-ph-mask="">
                 {t('bulk_warning_orders', { numbers: warningOrderNumbers.join(', ') })}
               </p>
             )}

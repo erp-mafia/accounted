@@ -28,6 +28,27 @@ import { uploadToInbox, type UploadDuplicate, type UploadOutcome } from './attac
  */
 export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }) {
   const t = useTranslations('inkorg')
+  const { input, pick, progress, label } = useInboxUpload(onUploaded)
+  return (
+    <>
+      {input}
+      <Button onClick={pick} loading={progress !== null}>
+        {progress === null && <ArrowUpTrayIcon aria-hidden="true" className="h-3.5 w-3.5" />}
+        {label ?? t('action_upload')}
+      </Button>
+    </>
+  )
+}
+
+/**
+ * The upload behind the button, without the button: the hidden file input to
+ * render, `pick` to open it (from a click, so the browser allows the file
+ * dialog), and what a button says while files go up (`label`, null at rest).
+ * The shell's "Ladda upp underlag" (the Att göra and Dokument areas, the
+ * rail's plus) uses it from any page, so an upload there is this same upload.
+ */
+export function useInboxUpload(onUploaded: () => Promise<void>) {
+  const t = useTranslations('inkorg')
   // The waiting and stopped wording is the Underlag workspace's, so both uploads say it alike.
   const tUpload = useTranslations('inbox_workspace')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
@@ -104,31 +125,28 @@ export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }
     }
   }
 
-  return (
-    <>
-      {/* The inbox route's own list (lib/documents/upload-types), as the workspace's upload uses. */}
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={INBOX_UPLOAD_ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          const files = Array.from(e.target.files ?? [])
-          e.target.value = ''
-          void upload(files)
-        }}
-      />
-      <Button size="sm" onClick={() => inputRef.current?.click()} loading={progress !== null}>
-        {progress === null && <ArrowUpTrayIcon aria-hidden="true" className="mr-1.5 h-3.5 w-3.5" />}
-        {waitSec !== null
-          ? tUpload('upload_waiting', { seconds: waitSec })
-          : progress && progress.total > 1
-          ? t('upload_progress', { index: Math.min(progress.done + 1, progress.total), total: progress.total })
-          : progress
-            ? t('uploading')
-            : t('action_upload')}
-      </Button>
-    </>
+  const input = (
+    // The inbox route's own list (lib/documents/upload-types), as the workspace's upload uses.
+    <input
+      ref={inputRef}
+      type="file"
+      multiple
+      accept={INBOX_UPLOAD_ACCEPT}
+      className="hidden"
+      onChange={(e) => {
+        const files = Array.from(e.target.files ?? [])
+        e.target.value = ''
+        void upload(files)
+      }}
+    />
   )
+  const label =
+    waitSec !== null
+      ? tUpload('upload_waiting', { seconds: waitSec })
+      : progress && progress.total > 1
+        ? t('upload_progress', { index: Math.min(progress.done + 1, progress.total), total: progress.total })
+        : progress
+          ? t('uploading')
+          : null
+  return { input, pick: () => inputRef.current?.click(), progress, label }
 }

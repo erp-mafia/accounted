@@ -108,18 +108,18 @@ export function HourlyTotalHours({
           aria-describedby={fromCalendar ? 'payslip-total-hours-note' : undefined}
         />
         {canEdit && (
-          <Button type="submit" size="sm" variant="outline" disabled={!dirty} loading={saving}>
+          <Button type="submit" variant="outline" disabled={!dirty} loading={saving}>
             {t('total_hours_save')}
           </Button>
         )}
       </div>
       {fromCalendar && (
-        <p id="payslip-total-hours-note" className="text-[12.5px] text-muted-foreground">
+        <p id="payslip-total-hours-note" className="text-xs text-muted-foreground">
           {t('total_hours_from_calendar')}
         </p>
       )}
       {error && (
-        <p className="text-[12.5px] text-destructive" role="alert">
+        <p className="text-xs text-destructive" role="alert">
           {error}
         </p>
       )}

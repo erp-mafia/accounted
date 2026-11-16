@@ -115,7 +115,7 @@ export function CompanyProfileSection() {
             autoComplete="off"
             className="max-w-xs tabular-nums"
           />
-          <Button type="submit" size="sm" disabled={!orgInput.trim()} loading={submitting}>
+          <Button type="submit" disabled={!orgInput.trim()} loading={submitting}>
             {submitting ? 'Hämtar…' : 'Hämta'}
           </Button>
           {fetchedAt && (

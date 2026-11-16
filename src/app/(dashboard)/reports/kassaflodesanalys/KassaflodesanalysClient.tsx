@@ -4,12 +4,12 @@ import { useEffect, useState, useCallback } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowDownTrayIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatAmount } from '@/lib/utils'
@@ -42,11 +42,13 @@ function CashRow({ label, amount }: CashRowProps) {
 
 export function KassaflodesanalysClient() {
   const t = useTranslations('reports')
+  const tNav = useTranslations('nav')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
+  // The fiscal year is app-wide context (the sidebar); a report needs one started year.
+  const { periodId: selectedPeriod, ready: periodsReady } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [report, setReport] = useState<KassaflodesanalysFullReport | null>(null)
-  const [isLoadingPeriods, setIsLoadingPeriods] = useState(true)
+  const isLoadingPeriods = !periodsReady
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -142,26 +144,21 @@ export function KassaflodesanalysClient() {
     <div className="space-y-8">
       <PageHeader
         title={t('name_kassaflodesanalys')}
+        // Reached from Fler rapporter: the quiet way back sits before the title.
+        parent={{ label: tNav('v3_more_reports'), href: '/reports' }}
         help={<HelpPopover>{t('cash_flow_help')}</HelpPopover>}
         action={
           <div className="flex items-center gap-2">
             <Button
-              size="sm"
+              size="toolbar"
               variant="outline"
               onClick={handleDownloadPdf}
               disabled={!report || isLoadingReport}
               loading={isDownloadingPdf}
             >
-              {!isDownloadingPdf && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
+              {!isDownloadingPdf && <ArrowDownTrayIcon className="h-4 w-4" />}
               {t('download_pdf')}
             </Button>
-            <FyPicker
-              value={selectedPeriod}
-              onChange={(id) => setSelectedPeriod(id)}
-              includeAllOption={false}
-              hideFuturePeriods
-              onReady={() => setIsLoadingPeriods(false)}
-            />
           </div>
         }
       />
@@ -170,26 +167,24 @@ export function KassaflodesanalysClient() {
       />
 
       {isLoadingPeriods ? (
-        <div className="space-y-4">
+        <LateReveal className="space-y-4">
           <Skeleton className="h-48" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
-        </div>
+        </LateReveal>
       ) : !selectedPeriod ? (
         <EmptyState
           title={t('cash_flow_choose_year_title')}
           description={t('cash_flow_choose_year_description')}
         />
       ) : isLoadingReport ? (
-        <div className="space-y-4">
+        <LateReveal className="space-y-4">
           <Skeleton className="h-48" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
-        </div>
+        </LateReveal>
       ) : error ? (
-        <Card className="border-destructive">
-          <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
-        </Card>
+        <LoadError title={error} onRetry={() => void loadReport(selectedPeriod)} />
       ) : report ? (
         <KassaflodesanalysStatementView report={report} />
       ) : null}
@@ -244,7 +239,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
       key={key}
       className={
         emphasis
-          ? 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3 mt-2 text-sm font-medium'
+          ? 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t-hairline pt-3 mt-2 text-sm font-medium'
           : 'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-1 text-sm'
       }
     >
@@ -258,7 +253,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
     </div>
   )
   const yearHeader = (
-    <div className="ml-auto flex justify-end gap-6 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="ml-auto flex justify-end gap-6 text-xs font-medium text-muted-foreground">
       <span className="w-28 text-right">{yearLabel(current)}</span>
       {previous && <span className="w-28 text-right">{yearLabel(previous)}</span>}
     </div>
@@ -299,7 +294,7 @@ function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysF
       </Card>
 
       <Card className={recon.is_reconciled ? 'border-border bg-muted/30' : 'border-destructive'}>
-        <CardContent className="p-6 space-y-3">
+        <CardContent className="space-y-3">
           <div className="flex items-center gap-2">
             {recon.is_reconciled ? (
               <CheckCircleIcon className="h-5 w-5 text-success" />

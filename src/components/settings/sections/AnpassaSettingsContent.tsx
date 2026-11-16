@@ -249,7 +249,7 @@ function PackageLabel({ name, note }: { name: string; note: string }) {
   return (
     <span className="flex flex-col gap-1">
       <span>{name}</span>
-      <span className="text-[12.5px] text-muted-foreground">{note}</span>
+      <span className="text-xs text-muted-foreground">{note}</span>
     </span>
   )
 }

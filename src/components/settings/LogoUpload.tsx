@@ -5,6 +5,7 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FileDropzone } from '@/components/ui/file-dropzone'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import {
   SettingsGroup,
@@ -25,6 +26,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   const t = useTranslations('settings_company')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [preview, setPreview] = useState<string | null>(logoUrl)
@@ -105,7 +107,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             <FileDropzone
               onFile={validateAndUpload}
               accept={LOGO_ACCEPT}
-              disabled={isUploading}
+              disabled={!canWrite || isUploading}
               label={t('logo_change')}
               className="inline-flex items-center gap-2 border p-2 text-sm text-muted-foreground"
             >
@@ -121,12 +123,13 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             </FileDropzone>
             <Button
               variant="outline"
-              size="sm"
               onClick={handleDelete}
               loading={isDeleting}
+              disabled={!canWrite}
+              title={lockedTitle}
               className="text-muted-foreground hover:text-destructive"
             >
-              {!isDeleting && <TrashIcon className="mr-2 h-3.5 w-3.5" />}
+              {!isDeleting && <TrashIcon className="h-3.5 w-3.5" />}
               {t('logo_remove')}
             </Button>
           </>
@@ -134,14 +137,14 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
           <FileDropzone
             onFile={validateAndUpload}
             accept={LOGO_ACCEPT}
-            disabled={isUploading}
+            disabled={!canWrite || isUploading}
             label={t('logo_pick_or_drop')}
             className="inline-flex min-h-10 items-center gap-2 border px-4 py-2 text-sm text-muted-foreground"
           >
             {isUploading ? (
               <SpinnerIcon className="h-4 w-4 animate-spin" />
             ) : (
-              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground/60" />
+              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
           </FileDropzone>

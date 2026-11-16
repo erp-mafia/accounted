@@ -118,7 +118,7 @@ export function PartyFactsSection({
 
   const body = empty ? (
     canFetch || canFind ? (
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         <button
           type="button"
           className={QUIET_LINK_CLASS}
@@ -134,11 +134,11 @@ export function PartyFactsSection({
           kicker={t('facts_section_title')}
           aside={
             canFetch ? (
-              <Button type="button" size="sm" variant="outline" onClick={() => void fetchRegistry()} disabled={busy}>
+              <Button type="button" variant="outline" onClick={() => void fetchRegistry()} disabled={busy}>
                 {busy ? t('fetching_registry') : registry ? t('facts_refresh') : t('fetch_registry')}
               </Button>
             ) : canFind ? (
-              <Button type="button" size="sm" variant="outline" onClick={() => setPicker(true)} disabled={busy}>
+              <Button type="button" variant="outline" onClick={() => setPicker(true)} disabled={busy}>
                 {t('pick_registry')}
               </Button>
             ) : undefined

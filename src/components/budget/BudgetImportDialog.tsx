@@ -119,7 +119,7 @@ export function BudgetImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('import_title')}</DialogTitle>
           <DialogDescription>{t('import_description', { budget: budgetName })}</DialogDescription>
@@ -127,7 +127,7 @@ export function BudgetImportDialog({
 
         <FileDropzone onFile={setFile} label={t('import_pick')} invalid={error !== null && !preview} disabled={busy}>
           <p className="text-[13px]">{file ? file.name : t('import_pick')}</p>
-          <p className="text-[12.5px] text-muted-foreground">{t('import_formats')}</p>
+          <p className="text-xs text-muted-foreground">{t('import_formats')}</p>
         </FileDropzone>
 
         {loading && <Skeleton className="h-24 w-full" />}
@@ -167,14 +167,14 @@ export function BudgetImportDialog({
                   </tr>
                 ))}
                 <tr className="font-medium">
-                  <td className="py-1 border-t border-border">{t('result')}</td>
-                  <td className="py-1 border-t border-border text-right tabular-nums">{formatWholeKr(preview.result)}</td>
+                  <td className="py-1 border-t-hairline">{t('result')}</td>
+                  <td className="py-1 border-t-hairline text-right tabular-nums">{formatWholeKr(preview.result)}</td>
                 </tr>
               </tbody>
             </table>
 
             {skippedLines.length > 0 && (
-              <ul className="space-y-1 text-[12.5px] text-muted-foreground">
+              <ul className="space-y-1 text-xs text-muted-foreground">
                 {skippedLines.map((line) => (
                   <li key={line}>{line}</li>
                 ))}

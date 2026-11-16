@@ -69,7 +69,7 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
     : job.job_state === 'preparing' ? t('preparingProgress',{count:job.prepared_through})
     : job.chunks_total > 0 ? t('progress',{done:job.chunks_done,total:job.chunks_total,count:job.transactions_count})
     : t('savedProgress',{count:job.transactions_count})
-  return <section className="space-y-4 rounded-lg border border-border p-6" aria-label={t('title')}>
+  return <section className="space-y-4 rounded-lg p-6 bg-control shadow-raised" aria-label={t('title')}>
     <div role="status" aria-live="polite" className="space-y-2">
       <p className="text-sm font-medium">{job?.job_result?.repairOutcome === 'stopped' ? t('repairStopped') : job ? t(`states.${job.job_state}`) : t('loading')}</p>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">

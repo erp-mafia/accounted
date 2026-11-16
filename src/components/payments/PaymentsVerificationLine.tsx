@@ -97,7 +97,7 @@ export function PaymentsVerificationLine({ verification, compact = false, onChan
 
   if (readiness === 'verification_pending') {
     return (
-      <p role="status" className="text-[12.5px] leading-5 text-muted-foreground">
+      <p role="status" className="text-xs leading-5 text-muted-foreground">
         {compact ? t('verification_pending_short') : <VerificationStateText verification={current} />}
         {step === 'open_form' && (
           <>

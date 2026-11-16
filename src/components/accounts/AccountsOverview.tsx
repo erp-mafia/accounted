@@ -8,12 +8,15 @@ import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DefEmpty } from '@/components/ui/detail-section'
 import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EllipsisHorizontalIcon } from '@/components/icons'
 import { RemoveCashAccountDialog } from '@/components/settings/RemoveCashAccountDialog'
 import { AccountLogo } from '@/components/reconciliation/ReconciliationRail'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { reconciliationHref } from '@/lib/reconciliation/account-links'
 import { parseAccountKey, type ReconciliationAccount } from '@/lib/reconciliation/schemas'
 
@@ -46,6 +49,8 @@ const COLUMNS = 7
  */
 export default function AccountsOverview({ autorun = false }: { autorun?: boolean }) {
   const t = useTranslations('accounts_v2')
+  const { canWrite } = useViewerLock()
+  const tCommon = useTranslations('common')
   const tRec = useTranslations('reconciliation')
   const tParm = useTranslations('bokslutsbilagor')
   const tRemove = useTranslations('settings_voucher_series')
@@ -93,7 +98,7 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
       >
         <td className={cn(TD_CLASS, '!pl-0')}>
           <Link href={href} onClick={(e) => e.stopPropagation()} className="flex items-center gap-3">
-            <AccountLogo account={a} className="h-7 w-7 text-[11px]" />
+            <AccountLogo account={a} className="h-7 w-7 text-xs" />
             {/* One line (convention 4): number, currency and the superseded
                 marker ride muted beside the name; the source stays in the tooltip. */}
             <span className="flex min-w-0 items-baseline gap-2" title={t(`source_${a.source.type}`)}>
@@ -108,27 +113,27 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
             </span>
           </Link>
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
           {lastRead ? formatDate(lastRead) : <DefEmpty />}
         </td>
         {/* Normal states are muted text (convention 5): a date, or never. */}
-        <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
           {a.signed_off_through ? formatDate(a.signed_off_through) : tRec('v2_never')}
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')} data-ph-mask>
           {review > 0 ? tRec('v2_rows_open', { count: review }) : <DefEmpty />}
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums', tone)} data-ph-mask>
-          {unexplained == null ? <DefEmpty /> : formatCurrency(unexplained, a.currency)}
+          {unexplained == null ? <DefEmpty /> : formatRowAmount(unexplained, a.currency)}
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-          {a.balance != null ? formatCurrency(a.balance, a.currency) : <DefEmpty />}
+          {a.balance != null ? formatRowAmount(a.balance, a.currency) : <DefEmpty />}
         </td>
         <td className={cn(TD_CLASS, 'w-0 !pr-0')} onClick={(e) => e.stopPropagation()}>
-          {cashAccountId && (
+          {cashAccountId && canWrite && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label={t('row_more', { account: a.name })}>
+                <Button variant="ghost" size="icon" aria-label={t('row_more', { account: a.name })}>
                   <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                 </Button>
               </DropdownMenuTrigger>
@@ -146,9 +151,16 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
 
   return (
     <div className="stagger-enter">
-      {/* Bleeds exactly the panel padding (MainContainer px-4 md:px-6):
-          -mx-5 overshot a phone's 16px gutter and scrolled the page sideways. */}
-      <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
+      {/* A failed refresh keeps the rows under one line (Stil v3 states). */}
+      {error && data && (
+        <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void mutate() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      {/* Bleeds exactly the panel padding (MainContainer px-4 md:px-6) less the
+          8px list bleed: a wider bleed overshot a phone's 16px gutter and
+          scrolled the page sideways. */}
+      <div className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -163,8 +175,10 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
           </thead>
           <tbody>
             {isLoading ? (
+              // animate-late: LateReveal's hold-back on the row itself, so a
+              // fast load never flashes the skeleton rows.
               [1, 2].map((i) => (
-                <tr key={i} aria-busy>
+                <tr key={i} aria-busy className="animate-late">
                   <td colSpan={COLUMNS} className={cn(TD_CLASS, '!pl-0')}>
                     <span className="flex items-center gap-3">
                       <Skeleton className="h-7 w-7 shrink-0" />
@@ -173,9 +187,11 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
                   </td>
                 </tr>
               ))
-            ) : error ? (
+            ) : error && !data ? (
               <tr>
-                <td colSpan={COLUMNS} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('load_failed')}</td>
+                <td colSpan={COLUMNS} className="!pl-0">
+                  <LoadError title={t('load_failed')} onRetry={() => void mutate()} />
+                </td>
               </tr>
             ) : (
               <>
@@ -194,11 +210,11 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
                 {manual.length > 0 && (
                   <Fragment>
                     <tr className="bg-muted/30">
-                      <td colSpan={COLUMNS} className="px-0 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                      <td colSpan={COLUMNS} className="px-0 py-2 text-xs font-semibold text-muted-foreground">
                         <span className="flex items-center gap-3">
                           <span>
                             {tRec('rail_group_manual')}
-                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70" data-ph-mask>
+                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground" data-ph-mask>
                               {manual.length}
                             </span>
                           </span>
@@ -206,7 +222,7 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
                             type="button"
                             onClick={() => setManualOpen((v) => !v)}
                             aria-expanded={manualOpen}
-                            className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                            className="normal-case tracking-normal text-xs font-normal text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
                           >
                             {manualOpen ? tRec('v2_hide_manual') : tRec('v2_show_manual', { count: manual.length })}
                           </button>

@@ -1,5 +1,8 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
+import { Button } from '@/components/ui/button'
+import { StandaloneMessage } from '@/components/standalone/StandalonePage'
 import { AttestBatchPage } from '@/components/supplier-invoices/AttestBatchPage'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
@@ -21,6 +24,7 @@ const log = createLogger('attest-batch-page')
 export default async function AttestBatchRoute({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
   const t = await getTranslations('attest_batch_page')
+  const tAuth = await getTranslations('auth')
   const service = createServiceClientNoCookies()
   const resolved = await resolveAttestBatch(service, token).catch((error) => {
     // A failed read shows the same "no longer valid" page; the log keeps the cause (never the token).
@@ -31,12 +35,11 @@ export default async function AttestBatchRoute({ params }: { params: Promise<{ t
   // Unknown, expired and used read the same: the link no longer opens
   // anything, and the invoices can still be attested in the app.
   const gone = (
-    <main className="min-h-dvh bg-background flex items-center justify-center px-4 md:px-6">
-      <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-2">
-        <h1 className="font-display text-2xl tracking-tight">{t('gone_title')}</h1>
-        <p className="text-[13px] text-muted-foreground">{t('gone_body')}</p>
-      </div>
-    </main>
+    <StandaloneMessage title={t('gone_title')} body={t('gone_body')}>
+      <Button asChild size="lg" variant="outline">
+        <Link href="/login">{tAuth('login_button')}</Link>
+      </Button>
+    </StandaloneMessage>
   )
   if (!resolved?.ok) return gone
   if (!(await attesterCanStillDecide(service, resolved.batch))) return gone

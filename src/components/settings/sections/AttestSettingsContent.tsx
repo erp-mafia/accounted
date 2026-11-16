@@ -483,9 +483,9 @@ export function AttestSettingsContent() {
                 label={
                   <span className="min-w-0">
                     <span data-ph-mask="">{nameOf(c)}</span>
-                    {c.role === 'viewer' ? <span className="ml-1.5 text-[12.5px] text-muted-foreground">{t('candidate_viewer')}</span> : null}
+                    {c.role === 'viewer' ? <span className="ml-1.5 text-xs text-muted-foreground">{t('candidate_viewer')}</span> : null}
                     {c.name && c.email ? (
-                      <span className="block truncate text-[12.5px] text-muted-foreground" data-ph-mask="">
+                      <span className="block truncate text-xs text-muted-foreground" data-ph-mask="">
                         {c.email}
                       </span>
                     ) : null}
@@ -547,7 +547,7 @@ export function AttestSettingsContent() {
             />
             <Button
               type="button"
-              size="icon-sm"
+              size="icon"
               variant="ghost"
               onClick={() => removeProjectRow(row.project)}
               disabled={!editable || !draft.enabled}
@@ -600,7 +600,6 @@ export function AttestSettingsContent() {
                 {mayRemoveSubstitute(row) ? (
                   <Button
                     type="button"
-                    size="sm"
                     variant="outline"
                     onClick={() => void changeSubstitute({ remove: row.id })}
                     loading={substituteBusy === row.id}
@@ -669,7 +668,6 @@ export function AttestSettingsContent() {
           <SettingsRow label="" borderless>
             <Button
               type="button"
-              size="sm"
               variant="outline"
               className="ml-auto"
               onClick={() => void changeSubstitute({ add: { ...substitute, user_id: substituteFor } })}
@@ -695,7 +693,7 @@ export function AttestSettingsContent() {
         </SettingsGroup>
       )}
 
-      {!data.can_edit && !cash && <p className="mt-4 text-[12.5px] text-muted-foreground">{t('read_only_note')}</p>}
+      {!data.can_edit && !cash && <p className="mt-4 text-xs text-muted-foreground">{t('read_only_note')}</p>}
 
       {/* Sticky save bar, the Fönster convention: invisible until something changed. */}
       <div
@@ -707,7 +705,6 @@ export function AttestSettingsContent() {
       >
         <Button
           type="button"
-          size="sm"
           onClick={() => void save()}
           loading={saving}
           disabled={

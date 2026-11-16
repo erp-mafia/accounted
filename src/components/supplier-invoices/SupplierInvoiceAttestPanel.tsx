@@ -189,8 +189,8 @@ export function SupplierInvoiceAttestPanel({
       kicker={t('kicker')}
       aside={
         showReject ? (
-          <Button size="sm" variant="outline" onClick={() => setRejectOpen(true)} disabled={busy !== null}>
-            <XCircleIcon className="mr-2 h-4 w-4" />
+          <Button variant="outline" onClick={() => setRejectOpen(true)} disabled={busy !== null}>
+            <XCircleIcon className="h-4 w-4" />
             {t('reject')}
           </Button>
         ) : null
@@ -198,7 +198,7 @@ export function SupplierInvoiceAttestPanel({
     >
       <div className="space-y-3 text-[13px]">
         {state.stage && !state.satisfied ? (
-          <p className="text-[12.5px] text-muted-foreground">{t(state.stage === 'pre' ? 'stage_pre' : 'stage_final')}</p>
+          <p className="text-xs text-muted-foreground">{t(state.stage === 'pre' ? 'stage_pre' : 'stage_final')}</p>
         ) : null}
         {preGroups.length > 0 && !state.satisfied ? (
           <ul className="space-y-1" data-ph-mask="">
@@ -215,22 +215,22 @@ export function SupplierInvoiceAttestPanel({
         ) : null}
         {state.blocked ? <AttnLine>{t('blocked')}</AttnLine> : status && state.stage !== 'pre' ? <p data-ph-mask="">{status}</p> : null}
         {!state.satisfied && actsForName && state.viewer.may_approve ? (
-          <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">{t('acts_for', { name: actsForName })}</p>
+          <p className="text-xs text-muted-foreground" data-ph-mask="">{t('acts_for', { name: actsForName })}</p>
         ) : null}
         {!state.satisfied && state.viewer.reason === 'other_step' && (
-          <p className="text-[12.5px] text-muted-foreground">{t('reason_other_step')}</p>
+          <p className="text-xs text-muted-foreground">{t('reason_other_step')}</p>
         )}
         {!state.satisfied && state.viewer.reason === 'registrant' && (
-          <p className="text-[12.5px] text-muted-foreground">{t('reason_registrant')}</p>
+          <p className="text-xs text-muted-foreground">{t('reason_registrant')}</p>
         )}
         {!state.satisfied && state.viewer.reason === 'already_given' && (
-          <p className="text-[12.5px] text-muted-foreground">{t('reason_already_given')}</p>
+          <p className="text-xs text-muted-foreground">{t('reason_already_given')}</p>
         )}
         {!state.satisfied && (state.viewer.reason === 'limit' || state.viewer.reason === 'key_limit') && (
-          <p className="text-[12.5px] text-muted-foreground">{t(state.viewer.reason === 'limit' ? 'reason_limit' : 'reason_key_limit')}</p>
+          <p className="text-xs text-muted-foreground">{t(state.viewer.reason === 'limit' ? 'reason_limit' : 'reason_key_limit')}</p>
         )}
         {state.latest_rejection && !state.satisfied && (
-          <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">
+          <p className="text-xs text-muted-foreground" data-ph-mask="">
             {state.latest_rejection.comment
               ? t('rejected_by_with_comment', {
                   name: nameOf(state.latest_rejection.user, someone),
@@ -243,14 +243,14 @@ export function SupplierInvoiceAttestPanel({
         {state.attestations.length > 0 && (
           <ul className="stagger-enter" data-ph-mask="">
             {state.attestations.map((a) => (
-              <li key={a.attestation_id} className="flex items-baseline justify-between gap-4 border-b border-border py-2">
+              <li key={a.attestation_id} className="flex items-baseline justify-between gap-4 border-b-hairline py-2">
                 <span className="min-w-0 truncate">
                   {t(a.decision === 'approved' ? 'decision_approved' : 'decision_rejected', {
                     name: a.on_behalf_of ? t('trail_on_behalf', { name: nameOf(a.user, someone), for: nameOf(a.on_behalf_of, someone) }) : nameOf(a.user, someone),
                   })}
                   {a.comment ? <span className="text-muted-foreground">{` · ${a.comment}`}</span> : null}
                 </span>
-                <span className="shrink-0 text-[12.5px] tabular-nums text-muted-foreground">
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {formatDate(a.decided_at)} · {sourceLabel(a.source)}
                   {a.decision === 'approved' && a.stage === 'pre' ? ` · ${t('trail_stage_pre')}` : null}
                   {a.decision === 'approved' && a.stage !== 'pre' && a.step !== null && a.step !== undefined && state.steps === 2 && preGroups.length === 0

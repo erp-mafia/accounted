@@ -262,7 +262,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
       <p className="text-[13px]">{t('destination')}</p>
       {/* Paid from another account than the inbetalning is booked against, the bank and the books part ways: said, not refused. */}
       {primaryAccount && accountId && accountId !== primaryAccount.id && (
-        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+        <p data-ph-mask="" className="text-xs text-muted-foreground">
           {t('account_not_booked', { account: payingAccountName(primaryAccount) })}
         </p>
       )}
@@ -313,9 +313,9 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         </div>
       </dl>
 
-      {amountInvalid && <p className="text-[12.5px] text-destructive">{t('amount_invalid')}</p>}
+      {amountInvalid && <p className="text-xs text-destructive">{t('amount_invalid')}</p>}
       {declared && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t(declared.kind === 'agi' ? 'source_agi' : 'source_vat', {
             period: declaredPeriod,
             amount: formatCurrency(declared.declared),
@@ -324,7 +324,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         </p>
       )}
       {sameDay?.due && (
-        <div className="space-y-2 text-[12.5px] text-muted-foreground">
+        <div className="space-y-2 text-xs text-muted-foreground">
           <p>{t('same_due_date_parts', { date: formatDate(sameDay.due) })}</p>
           <ul className="space-y-1">
             {(sameDay.parts ?? []).map((part) => (
@@ -334,13 +334,13 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
               </li>
             ))}
           </ul>
-          <Button variant="outline" size="sm" onClick={() => payAllDueOn(sameDay.due ?? null)}>
+          <Button variant="outline" onClick={() => payAllDueOn(sameDay.due ?? null)}>
             {t('pay_all_due', { date: formatDate(sameDay.due), amount: formatCurrency(sameDay.total ?? 0) })}
           </Button>
         </div>
       )}
       {combined && (
-        <div className="space-y-2 text-[12.5px] text-muted-foreground">
+        <div className="space-y-2 text-xs text-muted-foreground">
           <p>{t('combined_title', { date: formatDate(combined.due_date) })}</p>
           {combined.components.length > 0 && (
             <ul className="space-y-1">
@@ -365,10 +365,10 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         </div>
       )}
       {preview?.balance && (
-        <p className="text-[12.5px] text-muted-foreground">{t('balance_info', { saldo: formatCurrency(preview.balance.saldo) })}</p>
+        <p className="text-xs text-muted-foreground">{t('balance_info', { saldo: formatCurrency(preview.balance.saldo) })}</p>
       )}
       {preview?.due && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t('due_hint', {
             date: formatDate(preview.due.date),
             charge: formatCurrency(preview.due.charge),
@@ -377,7 +377,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         </p>
       )}
       {preview?.date_moved_from && (
-        <p className="text-[12.5px] text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
+        <p className="text-xs text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
       )}
       {late && <AttnLine>{t('late', { date: formatDate(late.due ?? preview?.due?.date ?? '') })}</AttnLine>}
       {!late && duplicate && (
@@ -393,7 +393,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
       {!late &&
         !duplicate &&
         notFiled.map((w) => (
-          <p key={`${w.source ?? 'source'}-${w.period ?? ''}`} className="text-[12.5px] text-muted-foreground">
+          <p key={`${w.source ?? 'source'}-${w.period ?? ''}`} className="text-xs text-muted-foreground">
             {w.period ? t('not_filed_part', { name: partName(w) }) : t('not_filed')}
           </p>
         ))}
@@ -402,7 +402,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
         <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('already_in_payment')}</AttnLine>
       )}
       {refusal === 'SKATTEKONTO_PAYMENT_NOTHING_DUE' && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {nothingDueReason ? t(`nothing_due_${nothingDueReason}`) : t('nothing_due')}
         </p>
       )}
@@ -411,7 +411,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
       {preview && (
         <>
           {preview.merges_into && (
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t('merges_into', {
                 amount: formatCurrency(preview.merges_into.amount),
                 date: formatDate(preview.requested_execution_date),
@@ -419,7 +419,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
               })}
             </p>
           )}
-          <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
+          <p className="text-xs text-muted-foreground">{t('sign_hint')}</p>
           <BankPaymentsAllowanceLine usage={usage} count={1} canRequest onIncluded={bank.raiseIncluded} />
         </>
       )}

@@ -6,8 +6,9 @@ import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   Dialog,
@@ -30,7 +31,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { collectPages } from '@/lib/lists/collect-pages'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
@@ -64,6 +65,7 @@ function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | '
 
 export default function PaymentFilesPage() {
   const t = useTranslations('supplier_payment_files')
+  const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -71,6 +73,9 @@ export default function PaymentFilesPage() {
 
   const [batches, setBatches] = useState<BatchListRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no files on screen the list says so in place
+  // of them; files already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [detail, setDetail] = useState<BatchDetail | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -103,13 +108,14 @@ export default function PaymentFilesPage() {
       )
       setBatches(data)
       setHasMore(count !== null && count > data.length)
+      setLoadFailed(false)
     } catch {
-      toast({ title: tCommon('load_error'), variant: 'destructive' })
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
       setIsLoadingMore(false)
     }
-  }, [windowSize, tCommon, toast])
+  }, [windowSize])
 
   useEffect(() => {
     fetchBatches()
@@ -243,18 +249,27 @@ export default function PaymentFilesPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('history_title')} />
+      <PageHeader parent={{ label: tNav('supplier_invoices'), href: '/supplier-invoices' }} title={t('history_title')} />
+
+      {loadFailed && batches.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchBatches() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-4 w-20 flex-1" />
-              <Skeleton className="h-4 w-24" />
+        <LateReveal>
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-8" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-32" />
             </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed && batches.length === 0 ? (
+        <LoadError onRetry={() => void fetchBatches()} />
       ) : batches.length === 0 ? (
         <EmptyState
           icon={DocumentTextIcon}
@@ -264,7 +279,7 @@ export default function PaymentFilesPage() {
           actionHref="/supplier-invoices"
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -282,14 +297,14 @@ export default function PaymentFilesPage() {
                   className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                   onClick={() => openDetail(batch.id)}
                 >
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                     {formatDate(batch.created_at)}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
                     {batch.item_count}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                    {formatCurrency(batch.total_amount)}
+                    {formatRowAmount(batch.total_amount)}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                     {batch.status === 'cancelled' ? (
@@ -384,7 +399,7 @@ export default function PaymentFilesPage() {
                     return (
                       <div
                         key={item.id}
-                        className="flex items-center gap-3 border-b border-border py-2.5 text-[13px]"
+                        className="flex items-center gap-3 border-b-hairline py-2.5 text-[13px]"
                       >
                         <div className="min-w-0 flex-1">
                           <Link
@@ -393,14 +408,14 @@ export default function PaymentFilesPage() {
                           >
                             {item.payee_name}
                           </Link>
-                          <span className="block text-[11px] text-muted-foreground tabular-nums">
+                          <span className="block text-xs text-muted-foreground tabular-nums">
                             {item.invoice?.supplier_invoice_number ?? item.reference}
                             {' · '}
                             {formatDate(item.payment_date)}
                           </span>
                         </div>
                         {settled ? (
-                          <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                          <span className="whitespace-nowrap text-xs text-muted-foreground">
                             {t('item_settled')}
                           </span>
                         ) : (
@@ -445,10 +460,12 @@ export default function PaymentFilesPage() {
               </SlideOverFooter>
             </>
           ) : (
-            <SlideOverBody className="space-y-3 pt-6">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-5 w-full" />
-              ))}
+            <SlideOverBody className="pt-6">
+              <LateReveal className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-5 w-full" />
+                ))}
+              </LateReveal>
             </SlideOverBody>
           )}
         </SlideOverContent>
@@ -461,7 +478,7 @@ export default function PaymentFilesPage() {
           if (!open && !cancelling) setConfirmCancelId(null)
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('cancel_confirm_title')}</DialogTitle>
             <DialogDescription>{t('cancel_confirm_body')}</DialogDescription>

@@ -53,7 +53,7 @@ export default function SkattekontoTaxDoubleDialog({
               taxAccount,
             })}
           </p>
-          <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
+          <div className="space-y-1 rounded-lg p-3 bg-control shadow-raised">
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="font-medium">
                 {candidate.voucher_label
@@ -68,7 +68,7 @@ export default function SkattekontoTaxDoubleDialog({
             )}
           </div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <Button asChild variant="ghost" size="sm" className="text-muted-foreground sm:mr-auto">
+            <Button asChild variant="ghost" className="text-muted-foreground sm:mr-auto">
               <a href={`/bookkeeping/${candidate.journal_entry_id}`} target="_blank" rel="noopener noreferrer">
                 {t('dialog_duplicate_view_voucher')}
               </a>

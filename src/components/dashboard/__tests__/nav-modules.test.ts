@@ -4,13 +4,15 @@
  * page is a module mapped to a package, switched by the package, never a
  * menu entry no capability can reach. TypeScript requires the field
  * (NavGateFlags.module); this test refuses an item that slips through
- * without a module the manifest knows, in every menu: the desktop sidebar
- * and its sub-items, the phone menu and the byrå cockpit.
+ * without a module the manifest knows, in every menu: the shell's areas
+ * (nav-v3.ts: every row and create action, the byrå cockpit's area among
+ * them; the phone menu is drawn from the same tree) and the v2 tree the
+ * assistant's UI map still reads (nav-v2.ts).
  */
 import { describe, expect, it } from 'vitest'
 import { MODULE_IDS } from '@/lib/modules/manifest'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '../nav-v2'
-import { cockpitNavItems, navItems } from '../nav-phone'
+import { NAV_V3_AREAS, areaItems } from '../nav-v3'
 
 type Declared = { href: string; module?: unknown }
 
@@ -19,9 +21,8 @@ function flatten(items: NavV2Item[]): Declared[] {
 }
 
 const MENUS: Array<[string, Declared[]]> = [
-  ['sidebar', flatten([...NAV_V2_TOP, ...NAV_V2_COMPANY])],
-  ['phone', navItems],
-  ['cockpit', cockpitNavItems],
+  ['areas', NAV_V3_AREAS.flatMap((area) => [...areaItems(area), ...(area.create ?? [])])],
+  ['assistant map (v2 tree)', flatten([...NAV_V2_TOP, ...NAV_V2_COMPANY])],
 ]
 
 const KNOWN = new Set<unknown>(MODULE_IDS)

@@ -42,7 +42,7 @@ interface TaxSettingsFormProps {
  */
 function SignalLine({ text, help }: { text: string; help: React.ReactNode }) {
   return (
-    <p className="flex items-center gap-2 border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+    <p className="flex items-center gap-2 border-b-hairline px-1 py-3 text-xs leading-relaxed text-attn">
       <span>{text}</span>
       <HelpPopover className="shrink-0">{help}</HelpPopover>
     </p>

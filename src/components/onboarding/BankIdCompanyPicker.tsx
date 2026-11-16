@@ -97,14 +97,14 @@ export default function BankIdCompanyPicker({
   return (
     <div className="stagger-enter">
       <header className="mb-8 text-center">
-        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
+        <h1 className="text-2xl md:text-3xl">
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">{t('subtitle')}</p>
       </header>
 
       {hasPendingInvite && (
-        <div className="mb-6 rounded-lg border bg-muted/30 p-3">
+        <div className="mb-6 rounded-lg p-3 bg-control shadow-raised">
           <p className="text-sm text-muted-foreground text-center">
             {t('pending_invite_note')}
           </p>
@@ -159,7 +159,7 @@ export default function BankIdCompanyPicker({
       </div>
 
       <div className="mt-6 text-center">
-        <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
+        <Button asChild variant="ghost" className="text-muted-foreground">
           <Link href="/onboarding">
             {t('add_company_manually')} &hellip;
           </Link>

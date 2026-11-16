@@ -44,13 +44,13 @@ export default function OpeningBalanceResultStep({
           <>
             {/* Stats */}
             <div className="grid grid-cols-3 gap-4">
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.lines_created}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">Kontorader</p>
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.total_debit.toLocaleString('sv-SE', {
                     minimumFractionDigits: 0,
@@ -59,7 +59,7 @@ export default function OpeningBalanceResultStep({
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">Debet (SEK)</p>
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4 text-center">
+              <div className="rounded-lg p-4 text-center bg-control shadow-raised">
                 <p className="text-2xl font-semibold tabular-nums">
                   {result.total_credit.toLocaleString('sv-SE', {
                     minimumFractionDigits: 0,
@@ -90,7 +90,7 @@ export default function OpeningBalanceResultStep({
               {onResumeSieImport && (
                 <Button onClick={onResumeSieImport}>
                   {t('ob_result_resume_sie')}
-                  <ArrowRightIcon className="h-4 w-4 ml-2" />
+                  <ArrowRightIcon className="h-4 w-4" />
                 </Button>
               )}
               {result.journal_entry_id && (
@@ -113,7 +113,7 @@ export default function OpeningBalanceResultStep({
           </>
         ) : (
           <>
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+            <div className="bg-destructive/8 rounded-lg px-4 py-3">
               <p className="text-sm text-destructive">
                 {result.error || 'Ett okänt fel uppstod vid importen.'}
               </p>

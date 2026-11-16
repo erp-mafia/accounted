@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { BuildingLibraryIcon, ChevronRightIcon, MagnifyingGlassIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
@@ -20,7 +20,7 @@ export function OpenPaymentsBankMark({ bank, size = 28 }: { bank: Pick<OpenPayme
   const src = bankLogoUrl(bank.name) ?? bank.logo_url
   return (
     <span
-      className={cn('grid shrink-0 place-items-center overflow-hidden rounded-lg border border-border', src ? 'bg-white' : 'bg-secondary')}
+      className={cn('grid shrink-0 place-items-center overflow-hidden', src ? 'bg-white' : 'bg-secondary')}
       style={{ width: size, height: size }}
     >
       {src ? (
@@ -71,7 +71,7 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
       </div>
 
       {banks === null ? (
-        <div role="status" className="space-y-1 py-1">
+        <LateReveal role="status" className="space-y-1 py-1">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="flex items-center gap-3 py-2" aria-hidden="true">
               <Skeleton className="h-7 w-7 shrink-0" />
@@ -79,7 +79,7 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
             </div>
           ))}
           <span className="sr-only">{t('bank_loading')}</span>
-        </div>
+        </LateReveal>
       ) : shown.length === 0 ? (
         <p className="px-1 py-6 text-center text-[13px] text-muted-foreground">{t('bank_no_matches')}</p>
       ) : (
@@ -109,8 +109,8 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
                 <OpenPaymentsBankMark bank={bank} />
                 <span className="min-w-0 flex-1">
                   <span className={cn('block truncate text-[13px]', selectable ? 'text-foreground' : 'text-muted-foreground')}>{bank.name}</span>
-                  {approach === 'redirect' && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_redirect_only')}</span>}
-                  {!selectable && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_not_connectable')}</span>}
+                  {approach === 'redirect' && <span className="block truncate text-xs text-muted-foreground">{t('bank_redirect_only')}</span>}
+                  {!selectable && <span className="block truncate text-xs text-muted-foreground">{t('bank_not_connectable')}</span>}
                 </span>
                 {selectable && <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               </button>
@@ -119,7 +119,7 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
         </div>
       )}
 
-      {aliasHint && <p className="px-1 text-[12.5px] leading-relaxed text-muted-foreground">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p>}
+      {aliasHint && <p className="px-1 text-xs leading-relaxed text-muted-foreground">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p>}
     </div>
   )
 }

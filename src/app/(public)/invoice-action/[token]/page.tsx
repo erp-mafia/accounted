@@ -1,13 +1,21 @@
 import { createTranslator } from 'next-intl'
 import { getTranslations } from 'next-intl/server'
-import { DocumentTextIcon, ExclamationCircleIcon } from '@/components/icons'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  StandaloneFacts,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneMessage,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
+import { getBranding } from '@/lib/branding/service'
+import { firstSentence } from '@/lib/settings/first-sentence'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveBrandForCompany } from '@/lib/branding/resolve'
 import { formatCurrencyForCustomer } from '@/lib/email/invoice-templates'
 import { createLogger } from '@/lib/logger'
 import { loadReminderAnswer, REMINDER_ANSWER_NOTE_MAX } from '@/lib/reminders/answer'
-import { cn, formatDate } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
 import { AnsweredCard, InvoiceActionForm, type InvoiceActionTexts } from './InvoiceActionForm'
 
 /**
@@ -27,33 +35,7 @@ export const dynamic = 'force-dynamic'
 
 const log = createLogger('invoice-action/page')
 
-type Brand = { appName: string; logoUrl: string | null; brandColor: string }
-
-// Discreet brand mark shown when the invoice's company has a white-label
-// brand (WL-13): logo when one exists, else the brand name in the brand color.
-function BrandMark({ brand }: { brand: Brand }) {
-  return (
-    <div className="flex justify-center mb-6">
-      {brand.logoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={brand.logoUrl} alt={brand.appName} className="h-8 w-auto" />
-      ) : (
-        <span className="text-sm font-semibold tracking-wide" style={{ color: brand.brandColor }}>
-          {brand.appName}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function AmountRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <span className={strong ? 'font-medium' : 'text-muted-foreground'}>{label}</span>
-      <span className={cn('tabular-nums', strong && 'text-lg font-semibold')}>{value}</span>
-    </div>
-  )
-}
+type Brand = { appName: string; logoUrl: string | null }
 
 async function messagesFor(lang: 'sv' | 'en') {
   return lang === 'en' ? (await import('@/messages/en.json')).default : (await import('@/messages/sv.json')).default
@@ -73,23 +55,18 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
 
   if (!answer) {
     const t = await getTranslations('invoice_action')
-    return (
-      <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
-        <Card className="max-w-md w-full">
-          <CardContent className="pt-6 text-center">
-            <ExclamationCircleIcon className="h-12 w-12 text-destructive mx-auto mb-4" />
-            <p className="text-muted-foreground">{failed ? t('error_default') : t('error_link_invalid')}</p>
-          </CardContent>
-        </Card>
-      </div>
-    )
+    const { first, rest } = firstSentence(failed ? t('error_default') : t('error_link_invalid'))
+    // A heading carries no full stop; the rest of the sentence pair is the line under it.
+    return <StandaloneMessage title={first.replace(/\.$/, '')} body={rest ?? undefined} />
   }
 
   const { view } = answer
   const lang = view.language
-  const t = createTranslator({ locale: lang, messages: await messagesFor(lang), namespace: 'invoice_action' })
+  const messages = await messagesFor(lang)
+  const t = createTranslator({ locale: lang, messages, namespace: 'invoice_action' })
+  const tSigning = createTranslator({ locale: lang, messages, namespace: 'signing_page' })
   const resolved = await resolveBrandForCompany(answer.companyId)
-  const brand: Brand | null = resolved ? { appName: resolved.appName, logoUrl: resolved.logoUrl, brandColor: resolved.brandColor } : null
+  const brand: Brand | null = resolved ? { appName: resolved.appName, logoUrl: resolved.logoUrl } : null
   const company = view.companyName || t('sender_fallback')
   const money = (amount: number, currency: string) => formatCurrencyForCustomer(amount, currency, lang)
 
@@ -126,6 +103,9 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
         ? t('settled_closed', { company })
         : t('settled', { company })
   const toPay = hasLegacyCharges ? view.totalDue : view.remaining
+  const toPayText =
+    money(toPay, view.currency) +
+    (view.feeDueSeparately > 0 ? ` + ${money(view.feeDueSeparately, view.reminderFeeCurrency)}` : '')
   const interestLabel =
     view.interestRate > 0 && view.interestDays != null
       ? t('interest_detail', {
@@ -134,82 +114,63 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
         })
       : t('interest')
 
-  const invoiceCard = (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <DocumentTextIcon className="h-5 w-5" />
-          {t('details')}
-        </CardTitle>
-        {view.customerName && (
-          <CardDescription>
-            {/* data-ph-mask: the customer name is user data */}
-            {t('to')} <span data-ph-mask="">{view.customerName}</span>
-          </CardDescription>
-        )}
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">{t('invoice_date')}</p>
-            <p className="font-medium">{formatDate(view.invoiceDate)}</p>
-          </div>
-          <div>
-            <p className="text-sm text-muted-foreground">{t('due_date')}</p>
-            <p className="font-medium">{formatDate(view.dueDate)}</p>
-          </div>
-        </div>
+  const via = brand?.logoUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={brand.logoUrl} alt={brand.appName} className="h-5 w-auto" />
+  ) : (
+    tSigning('via', { platform: brand?.appName ?? getBranding().appName })
+  )
 
-        {settled ? (
-          <p className="rounded-lg bg-muted p-4 text-sm">{settledText}</p>
-        ) : (
-          <div className="rounded-lg border border-border p-4 space-y-1 text-sm">
-            {view.paid > 0 && (
-              <>
-                <AmountRow label={t('amount')} value={money(view.amount, view.currency)} />
-                <AmountRow label={t('paid')} value={money(view.paid, view.currency)} />
-              </>
-            )}
-            {view.interestAmount > 0 && <AmountRow label={interestLabel} value={money(view.interestAmount, view.currency)} />}
-            {view.reminderFee > 0 && <AmountRow label={t('fee')} value={money(view.reminderFee, view.reminderFeeCurrency)} />}
-            <div className={cn((view.paid > 0 || hasLegacyCharges) && 'border-t border-border pt-2 mt-2')}>
-              <AmountRow
-                strong
-                label={t('to_pay')}
-                value={
-                  money(toPay, view.currency) +
-                  (view.feeDueSeparately > 0 ? ` + ${money(view.feeDueSeparately, view.reminderFeeCurrency)}` : '')
-                }
-              />
-            </div>
-            {view.feeDueSeparately > 0 && <p className="pt-2 text-xs text-muted-foreground">{t('fee_separately')}</p>}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+  const facts = (
+    <>
+      <StandaloneFacts
+        className="mt-5"
+        rows={[
+          view.customerName ? { label: t('to').replace(/:$/, ''), value: view.customerName } : null,
+          { label: t('invoice_date'), value: formatDate(view.invoiceDate) },
+          { label: t('due_date'), value: formatDate(view.dueDate) },
+          !settled && view.paid > 0 ? { label: t('amount'), value: money(view.amount, view.currency) } : null,
+          !settled && view.paid > 0 ? { label: t('paid'), value: money(view.paid, view.currency) } : null,
+          !settled && view.interestAmount > 0 ? { label: interestLabel, value: money(view.interestAmount, view.currency) } : null,
+          !settled && view.reminderFee > 0 ? { label: t('fee'), value: money(view.reminderFee, view.reminderFeeCurrency) } : null,
+          !settled && (view.paid > 0 || hasLegacyCharges)
+            ? { label: <span className="font-medium text-strong">{t('to_pay')}</span>, value: <span className="font-medium text-strong">{toPayText}</span> }
+            : null,
+        ]}
+      />
+      {settled && <p className="mt-4 text-sm text-foreground">{settledText}</p>}
+      {!settled && view.feeDueSeparately > 0 && <p className="mt-2 text-xs text-muted-foreground">{t('fee_separately')}</p>}
+    </>
   )
 
   return (
-    <div className="min-h-dvh bg-frame py-12 px-4">
-      <div className="max-w-lg mx-auto">
-        {brand && <BrandMark brand={brand} />}
-        <div className="text-center mb-8">
-          <h1 className="text-2xl text-foreground mb-2">{t('heading_company', { company })}</h1>
-          <p className="text-muted-foreground">{t('invoice', { number: view.invoiceNumber ?? '' })}</p>
-        </div>
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={company} via={via} />
+      <StandaloneHeading
+        className="mt-5"
+        eyebrow={t('heading_company', { company })}
+        title={t('invoice', { number: view.invoiceNumber ?? '' })}
+      />
+      {!settled && (
+        <>
+          <p className="mt-2 font-display text-2xl tabular-nums text-strong" data-ph-mask="">
+            {toPayText}
+          </p>
+          <p className="text-xs text-muted-foreground">{t('to_pay')}</p>
+        </>
+      )}
 
-        {view.alreadyResponded ? (
-          <AnsweredCard texts={texts} response={view.previousResponse} invoiceNumber={view.invoiceNumber} />
-        ) : settled ? (
-          invoiceCard
-        ) : (
-          <InvoiceActionForm token={token} texts={texts} invoiceNumber={view.invoiceNumber}>
-            {invoiceCard}
-          </InvoiceActionForm>
-        )}
+      {view.alreadyResponded ? (
+        <AnsweredCard texts={texts} response={view.previousResponse} invoiceNumber={view.invoiceNumber} />
+      ) : settled ? (
+        facts
+      ) : (
+        <InvoiceActionForm token={token} texts={texts} invoiceNumber={view.invoiceNumber}>
+          {facts}
+        </InvoiceActionForm>
+      )}
 
-        {!view.closedAs && <p className="text-center text-sm text-muted-foreground mt-6">{t('payment_delay', { company })}</p>}
-      </div>
-    </div>
+      {!view.closedAs && <StandaloneSmall>{t('payment_delay', { company })}</StandaloneSmall>}
+    </StandalonePage>
   )
 }

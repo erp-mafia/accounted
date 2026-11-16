@@ -25,7 +25,7 @@ export interface RegistrationEntryPreview {
 export function RegistrationFirstCard({ entry }: { entry: RegistrationEntryPreview }) {
   const t = useTranslations('tx_invoice_match')
   return (
-    <div className="rounded-lg border p-4 space-y-3">
+    <div className="space-y-3">
       <div className="space-y-1">
         <p className="text-sm font-medium">{t('registration_first_title')}</p>
         <p className="text-xs text-muted-foreground">

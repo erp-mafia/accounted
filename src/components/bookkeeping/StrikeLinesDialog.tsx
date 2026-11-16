@@ -217,7 +217,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -247,7 +247,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
         {/* Original lines with strike checkboxes */}
         <div className="space-y-1">
           <p className="text-sm font-medium">Markera rader som ska strykas</p>
-          <div className="rounded-lg border divide-y">
+          <div className="divide-y">
             {originalLines.map((line) => {
               const struck = strikeIds.has(line.id)
               // FX lines carry conversion data replacements cannot reproduce;
@@ -291,13 +291,13 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           </div>
 
           {accountsStatus !== 'ready' && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
+            <div className="flex items-center justify-between gap-3 rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
               <span className="flex items-center gap-2">
                 {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (
-                <Button variant="outline" size="sm" onClick={() => void refreshAccounts()}>
+                <Button variant="outline" onClick={() => void refreshAccounts()}>
                   {t('accounts_retry')}
                 </Button>
               )}

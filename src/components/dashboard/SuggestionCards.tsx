@@ -106,7 +106,7 @@ export function SuggestionCards({
             key={s.suggestion_id}
             role="group"
             aria-labelledby={titleId}
-            className="flex items-center gap-3 border-b border-border px-1 py-3.5"
+            className="flex items-center gap-3 border-b-hairline px-1 py-3.5"
           >
             <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
               <LightBulbIcon className="h-[15px] w-[15px]" />
@@ -134,7 +134,6 @@ export function SuggestionCards({
               )}
             </p>
             <Button
-              size="sm"
               className="shrink-0"
               loading={working && busy?.answer === 'yes'}
               disabled={working}
@@ -146,7 +145,7 @@ export function SuggestionCards({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className="shrink-0 text-muted-foreground hover:text-foreground"
                   disabled={working}
                   aria-label={tCommon('more_options')}

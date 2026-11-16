@@ -89,7 +89,6 @@ export function TaxTableStatus({ year, compact = false }: Props) {
       <Button
         type="button"
         variant="outline"
-        size="sm"
         onClick={check}
         loading={loading}
         aria-label={t('recheck')}

@@ -393,13 +393,13 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
 
   const downloadButtons = (
     <>
-      <Button asChild variant="secondary" size="sm" className="hidden gap-2 sm:inline-flex">
+      <Button asChild variant="outline" className="hidden gap-2 sm:inline-flex">
         <a href={client.documentUrl} download={request.file_name}>
           <ArrowDownTrayIcon className="h-4 w-4" />
           {t('download')}
         </a>
       </Button>
-      <Button asChild variant="ghost" size="icon-sm" className="sm:hidden">
+      <Button asChild variant="ghost" size="icon" className="sm:hidden">
         <a href={client.documentUrl} download={request.file_name} aria-label={t('download_label')}>
           <ArrowDownTrayIcon className="h-4 w-4" />
         </a>
@@ -410,7 +410,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
   const lead = (
     <div className="space-y-3">
       {isPublic && (
-        <h1 className="font-display text-2xl leading-tight tracking-tight sm:text-3xl" data-ph-mask="">
+        <h1 className="text-2xl leading-tight sm:text-3xl" data-ph-mask="">
           {request.title}
         </h1>
       )}
@@ -470,7 +470,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
         </ul>
         {signer.locked && <p className="text-xs text-muted-foreground">{t('locked_note')}</p>}
       </section>
-      <dl className="space-y-3 border-t border-border pt-6 text-[13px]">
+      <dl className="space-y-3 border-t-hairline pt-6 text-[13px]">
         <DetailRow label={t('detail_sent')}>
           <span data-ph-mask="">{t('detail_sent_value', { date: format.dateTime(new Date(request.sent_at), { day: 'numeric', month: 'long' }), requester })}</span>
         </DetailRow>
@@ -506,7 +506,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
   const signButton = (
     <Button
       size="lg"
-      variant={unlocked ? 'default' : 'secondary'}
+      variant={unlocked ? 'default' : 'outline'}
       onClick={() => begin(method)}
       loading={busy === 'start'}
       disabled={!unlocked || busy !== null}
@@ -544,12 +544,12 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
           if (!next) void cancelSigning()
         }}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent size="confirm">
           {stage.kind === 'signing' && (
             <div className="flex flex-col items-center gap-4 text-center">
               <div className="flex items-center gap-2">
                 <BankIdMark />
-                <DialogTitle className="font-display text-xl tracking-tight">{t('signing_title')}</DialogTitle>
+                <DialogTitle className="text-xl">{t('signing_title')}</DialogTitle>
               </div>
               <DialogDescription className="text-[13px]" data-ph-mask="">
                 {signer.role_label ? t('sign_intro_role', { name: signer.name, role: signer.role_label }) : t('sign_intro', { name: signer.name })}
@@ -563,7 +563,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
                   <a href={bankIdAutostartHref(stage.session.autoStartToken)}>{t('open_bankid')}</a>
                 </Button>
               )}
-              <Button variant="secondary" onClick={cancelSigning} loading={busy === 'cancel'} disabled={busy !== null}>
+              <Button variant="outline" onClick={cancelSigning} loading={busy === 'cancel'} disabled={busy !== null}>
                 {t('cancel_signing')}
               </Button>
               {!scanned && (
@@ -583,7 +583,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="font-display text-xl tracking-tight">{t('decline_title')}</DialogTitle>
+            <DialogTitle className="text-xl">{t('decline_title')}</DialogTitle>
             <DialogDescription className="text-[13px]">{t('decline_body', { requester })}</DialogDescription>
           </DialogHeader>
           <label className="block space-y-2 text-[13px]">
@@ -592,7 +592,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
           </label>
           {declineError && <AttnLine>{getErrorMessage(declineError.body, { locale, fallback: t('error_generic') })}</AttnLine>}
           <DialogFooter>
-            <Button variant="secondary" onClick={leaveDecline} disabled={busy !== null}>
+            <Button variant="outline" onClick={leaveDecline} disabled={busy !== null}>
               {t('decline_back')}
             </Button>
             <Button variant="destructive" onClick={decline} loading={busy === 'decline'} disabled={busy !== null}>
@@ -641,7 +641,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
       <div className="flex flex-1 flex-col">
         <div className="space-y-4">
           {end.check && <CheckCircleIcon className="h-11 w-11 text-foreground" aria-hidden="true" />}
-          <Heading className="font-display text-3xl leading-tight tracking-tight">{end.title}</Heading>
+          <Heading className="text-xl font-medium text-strong">{end.title}</Heading>
           {end.lines.map((line) => (
             <p key={line} className="text-[15px] text-foreground/80" data-ph-mask="">
               {line}
@@ -649,9 +649,9 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
           ))}
         </div>
         {showList && (
-          <ul className="mt-8 border-t border-border text-sm" data-ph-mask="">
+          <ul className="mt-8 border-t-hairline text-sm" data-ph-mask="">
             {data.signers.map((s) => (
-              <li key={s.position} className="flex items-baseline justify-between gap-4 border-b border-border py-3">
+              <li key={s.position} className="flex items-baseline justify-between gap-4 border-b-hairline py-3">
                 <span className="min-w-0 truncate">
                   {s.name}
                   {s.role_label ? `, ${s.role_label}` : null}
@@ -672,7 +672,7 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
           </p>
         )}
         {nextStep && signer.status === 'signed' && (
-          <div className="mt-8 space-y-3 border-t border-border pt-6">
+          <div className="mt-8 space-y-3 border-t-hairline pt-6">
             <p className="text-[13px]">{nextStep.body}</p>
             <Button asChild>
               <Link href={nextStep.href}>{nextStep.label}</Link>
@@ -682,7 +682,10 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
         <div className="mt-auto space-y-4 pt-10 sm:mt-0">
           {offerCopy ? (
             <Button asChild size="lg" className="w-full">
-              <a href={client.signedCopyUrl}>{t('download_signed_copy')}</a>
+              <a href={client.signedCopyUrl}>
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {t('download_signed_copy')}
+              </a>
             </Button>
           ) : (
             showList && (
@@ -765,13 +768,13 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
         </main>
       </div>
       <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
-        <aside className="flex flex-col gap-6 rounded-lg border border-border bg-background p-6 lg:fixed lg:bottom-0 lg:right-0 lg:top-16 lg:w-80 lg:gap-8 lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-l lg:px-6 lg:py-8">
+        <aside className="flex flex-col gap-6 rounded-lg p-6 lg:fixed lg:bottom-0 lg:right-0 lg:top-16 lg:w-80 lg:gap-8 lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-l lg:px-6 lg:py-8 bg-control shadow-raised">
           {details}
         </aside>
       </div>
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 lg:right-80">
         {arrow}
-        <div className="pointer-events-auto border-t border-border bg-background">
+        <div className="pointer-events-auto border-t-hairline bg-background">
           <div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:h-20 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:py-0 md:px-6 lg:max-w-none lg:px-10">
             {gate}
             {signButton}
@@ -833,7 +836,7 @@ function SenderMark({ name, logoUrl }: { name: string; logoUrl: string | null })
 /** The public page's header: who sends the document (logo, name, the platform it went through), and the reading tools. */
 function SigningHeader({ company, logoUrl, via, children }: { company: string; logoUrl: string | null; via: string; children?: React.ReactNode }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-background px-4 sm:h-16 md:px-8">
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b-hairline bg-background px-4 sm:h-16 md:px-8">
       <div className="flex min-w-0 items-center gap-3">
         <SenderMark name={company} logoUrl={logoUrl} />
         <div className="min-w-0">

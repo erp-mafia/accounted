@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ArrowDownTrayIcon } from '@/components/icons'
@@ -86,6 +87,8 @@ export default function PaymentFileDialog({
 
   const [preview, setPreview] = useState<Preview | null>(null)
   const [loading, setLoading] = useState(false)
+  // Why the preview could not be read: said in the dialog, with "Försök igen".
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [confirmAlreadyBatched, setConfirmAlreadyBatched] = useState(false)
   // Per-line editable overrides, keyed by invoice id. Values stay as input
@@ -96,6 +99,7 @@ export default function PaymentFileDialog({
   const loadPreview = useCallback(async () => {
     setLoading(true)
     setPreview(null)
+    setPreviewError(null)
     setAmounts({})
     setDates({})
     setConfirmAlreadyBatched(false)
@@ -107,26 +111,16 @@ export default function PaymentFileDialog({
       })
       const body = await res.json()
       if (!res.ok) {
-        toast({
-          title: t('preview_failed_title'),
-          description: getErrorMessage(body, { locale }),
-          variant: 'destructive',
-        })
-        onOpenChange(false)
+        setPreviewError(getErrorMessage(body, { locale }))
         return
       }
       setPreview(body.data as Preview)
     } catch {
-      toast({
-        title: t('preview_failed_title'),
-        description: getErrorMessage(null, { locale }),
-        variant: 'destructive',
-      })
-      onOpenChange(false)
+      setPreviewError(getErrorMessage(null, { locale }))
     } finally {
       setLoading(false)
     }
-  }, [invoiceIds, locale, onOpenChange, t, toast])
+  }, [invoiceIds, locale])
 
   useEffect(() => {
     if (open) loadPreview()
@@ -222,21 +216,23 @@ export default function PaymentFileDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !creating && onOpenChange(next)}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
         </DialogHeader>
 
-        {loading || !preview ? (
-          <div className="space-y-3 py-2">
+        {previewError !== null && !loading ? (
+          <LoadError title={t('preview_failed_title')} description={previewError} onRetry={() => void loadPreview()} />
+        ) : loading || !preview ? (
+          <LateReveal>
             {[1, 2, 3].map((i) => (
-              <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-4 w-24 flex-1" />
-                <Skeleton className="h-4 w-20" />
+              <div key={i} className="flex h-9 items-center gap-4 border-b-hairline">
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3.5 w-24 flex-1" />
+                <Skeleton className="h-3.5 w-20" />
               </div>
             ))}
-          </div>
+          </LateReveal>
         ) : (
           <div className="space-y-4">
             {!preview.debtor_ok && (
@@ -259,7 +255,7 @@ export default function PaymentFileDialog({
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
-                    <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <tr className="border-b-hairline text-left text-xs text-muted-foreground">
                       <th className="py-2 pr-3 font-medium">{t('th_supplier')}</th>
                       <th className="py-2 pr-3 font-medium">{t('th_payee')}</th>
                       <th className="py-2 pr-3 font-medium">{t('th_reference')}</th>
@@ -269,16 +265,16 @@ export default function PaymentFileDialog({
                   </thead>
                   <tbody>
                     {preview.eligible.map((line) => (
-                      <tr key={line.id} className="border-b border-border align-middle">
+                      <tr key={line.id} className="border-b-hairline align-middle">
                         <td className="max-w-0 w-1/3 py-2 pr-3">
                           <span className="block truncate">{line.supplier_name}</span>
-                          <span className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                          <span className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                             <span className="tabular-nums">{line.invoice_number ?? tInvoices('number_missing')}</span>
                             {line.warnings.map((warning) => (
                               <Badge
                                 key={warning}
                                 variant={warning === 'already_batched' ? 'warning' : 'outline'}
-                                className="px-1.5 py-0 text-[11px] font-normal"
+                                className="px-1.5 py-0 text-xs font-normal"
                               >
                                 {t(`warning_${warning}`)}
                               </Badge>
@@ -373,7 +369,7 @@ export default function PaymentFileDialog({
                 {t('cancel')}
               </Button>
               <Button onClick={handleCreate} disabled={!canCreate} loading={creating}>
-                {!creating && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
+                {!creating && <ArrowDownTrayIcon className="h-4 w-4" />}
                 {t('create_and_download')}
               </Button>
               {/* The file downloads fine and only fails at the bank if the

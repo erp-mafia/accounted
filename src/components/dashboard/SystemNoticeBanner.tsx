@@ -73,7 +73,7 @@ export function SystemNoticeBanner({ until }: { until: number }) {
   return (
     <div
       role="status"
-      className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-border bg-secondary py-2 pl-4 pr-12 text-sm text-secondary-foreground"
+      className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b-hairline bg-secondary py-2 pl-4 pr-12 text-sm text-secondary-foreground"
     >
       <span className="text-center text-xs font-medium sm:text-sm">{t('high_load')}</span>
       <Button

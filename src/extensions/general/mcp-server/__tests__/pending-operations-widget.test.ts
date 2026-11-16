@@ -200,10 +200,10 @@ describe('Pending operations widget', () => {
       expect(html).toContain('Att g\\u00f6ra \\u203a Agentf\\u00f6rslag')
     })
 
-    it('the instructions send the user to Att göra › Agentförslag instead of promising chat approval', async () => {
+    it('the instructions send the user to Att göra › Rutin instead of promising chat approval', async () => {
       const text = await instructions()
       expect(text).toContain('APPROVAL ON THIS CONNECTION')
-      expect(text).toContain('Att göra › Agentförslag')
+      expect(text).toContain('Att göra › Rutin')
       expect(text).toContain('connect again with Godkänn ticked')
       expect(text).not.toContain('APPROVAL IS A FIRST-CLASS AGENT ACTION')
       expect(text).not.toContain('approves/rejects with a click')

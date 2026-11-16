@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ChevronDownIcon, ChevronRightIcon, ExclamationCircleIcon, PlusIcon, XMarkIcon } from '@/components/icons'
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XMarkIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -12,7 +12,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -34,6 +35,7 @@ import { parseAmountInput } from '@/lib/money'
 import type { ForecastRowView } from '@/lib/forecast/rows'
 import type { CashFlow, CashForecast } from '@/lib/forecast/types'
 import { cn, formatAmount, formatCurrency, formatDate, formatWholeKr } from '@/lib/utils'
+import { CHART_TOOLTIP_PROPS } from '@/components/reports/chart-tooltip'
 
 export interface LikviditetsprognosData {
   forecast: CashForecast
@@ -75,6 +77,7 @@ function writeThreshold(companyId: string | undefined, value: number | null): vo
  */
 export function LikviditetsprognosView() {
   const t = useTranslations('cash_forecast')
+  const tNav = useTranslations('nav')
   const locale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
   const [data, setData] = useState<LikviditetsprognosData | null>(null)
@@ -114,6 +117,8 @@ export function LikviditetsprognosView() {
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
+        // Reached from Fler rapporter: the quiet way back sits before the title.
+        parent={{ label: tNav('v3_more_reports'), href: '/reports' }}
         help={
           <HelpPopover>
             <div className="space-y-2 text-[13px]">
@@ -127,7 +132,7 @@ export function LikviditetsprognosView() {
         }
         action={
           canWrite && data ? (
-            <Button size="sm" onClick={() => setAdding(true)}>
+            <Button size="toolbar" onClick={() => setAdding(true)}>
               <PlusIcon className="h-4 w-4" />
               {t('add_row')}
             </Button>
@@ -138,19 +143,9 @@ export function LikviditetsprognosView() {
       {loading && !data ? (
         <ForecastSkeleton />
       ) : error && !data ? (
-        <Card>
-          <CardContent className="space-y-4 p-8 text-center">
-            <div className="text-destructive">
-              <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
-              {error}
-            </div>
-            <Button variant="secondary" onClick={refresh}>
-              {t('retry')}
-            </Button>
-          </CardContent>
-        </Card>
+        <LoadError title={error} onRetry={refresh} />
       ) : data ? (
-        <LikviditetsprognosReport data={data} onChanged={refresh} />
+        <LikviditetsprognosReport data={data} onChanged={refresh} onRefreshFailedRetry={error ? refresh : undefined} />
       ) : null}
 
       {adding && data && <ForecastRowDialog today={data.forecast.today} onOpenChange={setAdding} onAdded={refresh} />}
@@ -160,11 +155,11 @@ export function LikviditetsprognosView() {
 
 function ForecastSkeleton() {
   return (
-    <div className="space-y-8">
+    <LateReveal className="space-y-8">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[1, 2, 3].map((i) => (
           <Card key={i}>
-            <CardContent className="space-y-2 p-4">
+            <CardContent className="space-y-2">
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-6 w-32" />
               <Skeleton className="h-3 w-40" />
@@ -174,13 +169,13 @@ function ForecastSkeleton() {
       </div>
       <Skeleton className="h-72 w-full" />
       <Card>
-        <CardContent className="space-y-2 p-6">
+        <CardContent className="space-y-2">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Skeleton key={i} className="h-4 w-full" />
           ))}
         </CardContent>
       </Card>
-    </div>
+    </LateReveal>
   )
 }
 
@@ -188,8 +183,18 @@ function ForecastSkeleton() {
  * The report body from a loaded forecast. Split from the fetch so a preview
  * renders it from hand-made data.
  */
-export function LikviditetsprognosReport({ data, onChanged }: { data: LikviditetsprognosData; onChanged: () => void }) {
+export function LikviditetsprognosReport({
+  data,
+  onChanged,
+  onRefreshFailedRetry,
+}: {
+  data: LikviditetsprognosData
+  onChanged: () => void
+  /** Set when a refresh failed with the forecast on screen: its line takes the page's one attention line. */
+  onRefreshFailedRetry?: () => void
+}) {
   const t = useTranslations('cash_forecast')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
@@ -266,39 +271,41 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
     <div className="space-y-8 stagger-enter">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card>
-          <CardContent className="space-y-1 p-4">
-            <div className="text-[12.5px] text-muted-foreground">{t('opening_label')}</div>
+          <CardContent className="space-y-1">
+            <div className="text-xs text-muted-foreground">{t('opening_label')}</div>
             <div className={cn('font-display text-xl tabular-nums', opening.amount < 0 && 'text-destructive')}>
               {formatCurrency(opening.amount)}
             </div>
-            <div className="text-[12.5px] text-muted-foreground">{openingNote}</div>
+            <div className="text-xs text-muted-foreground">{openingNote}</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="space-y-1 p-4">
-            <div className="text-[12.5px] text-muted-foreground">{t('lowest_label')}</div>
+          <CardContent className="space-y-1">
+            <div className="text-xs text-muted-foreground">{t('lowest_label')}</div>
             <div className={cn('font-display text-xl tabular-nums', forecast.lowest.closing < 0 && 'text-destructive')}>
               {formatCurrency(forecast.lowest.closing)}
             </div>
-            <div className="text-[12.5px] text-muted-foreground">
+            <div className="text-xs text-muted-foreground">
               {t('lowest_when', { date: formatDate(forecast.lowest.date), week: isoWeekNumber(forecast.lowest.iso_week) })}
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="space-y-1 p-4">
-            <div className="text-[12.5px] text-muted-foreground">{t('closing_label', { weeks: forecast.horizon.weeks })}</div>
+          <CardContent className="space-y-1">
+            <div className="text-xs text-muted-foreground">{t('closing_label', { weeks: forecast.horizon.weeks })}</div>
             <div className={cn('font-display text-xl tabular-nums', forecast.closing < 0 && 'text-destructive')}>
               {formatCurrency(forecast.closing)}
             </div>
-            <div className="text-[12.5px] text-muted-foreground">
+            <div className="text-xs text-muted-foreground">
               {t('closing_flows', { inflow: formatCurrency(totals.inflow), outflow: formatCurrency(totals.outflow) })}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {breach ? (
+      {onRefreshFailedRetry ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: onRefreshFailedRetry }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : breach ? (
         <AttnLine>
           {breach.date
             ? t('attn_breach_day', { threshold: formatCurrency(threshold), date: formatDate(breach.date), week: breach.week })
@@ -309,10 +316,10 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
       ) : null}
 
       <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 pb-2">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle className="text-base">{t('chart_title')}</CardTitle>
           <div className="flex items-center gap-2">
-            <label htmlFor="forecast-threshold" className="text-[12.5px] text-muted-foreground">
+            <label htmlFor="forecast-threshold" className="text-xs text-muted-foreground">
               {t('threshold_label')}
             </label>
             <Input
@@ -342,6 +349,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
                 tickFormatter={(v) => new Intl.NumberFormat('sv-SE', { notation: 'compact' }).format(Number(v))}
               />
               <Tooltip
+                {...CHART_TOOLTIP_PROPS}
                 // The out bar is drawn below zero; its amount is still what goes out.
                 formatter={(value, name, item) => [
                   formatCurrency(item?.dataKey === 'outflow' ? Math.abs(Number(value)) : Number(value)),
@@ -377,7 +385,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
       </Card>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
@@ -419,7 +427,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
                           </Badge>
                         ) : null}
                       </TableCell>
-                      <TableCell className="hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell">
+                      <TableCell className="hidden whitespace-nowrap date-figures text-muted-foreground sm:table-cell">
                         {formatDate(s.start)} - {formatDate(s.end)}
                       </TableCell>
                       <TableCell className={cn(NUM, 'hidden sm:table-cell')}>{formatWholeKr(s.opening)}</TableCell>
@@ -431,7 +439,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
                       <TableRow>
                         <TableCell colSpan={6} className="max-w-0 bg-secondary/20 px-4 py-3">
                           {s.flows.length === 0 ? (
-                            <div className="text-[12.5px] text-muted-foreground">{t('week_empty')}</div>
+                            <div className="text-xs text-muted-foreground">{t('week_empty')}</div>
                           ) : (
                             <ul className="space-y-1">
                               {s.flows.map((f, i) => (
@@ -456,7 +464,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
 
       {(forecast.overdue.receivables.invoices.length > 0 || forecast.overdue.payables.invoices.length > 0) && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('overdue_title')}</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">{t('overdue_title')}</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <OverdueList
               title={t('overdue_receivables')}
@@ -488,8 +496,8 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
 
       {pastRows.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('past_title')}</h2>
-          <div className="text-[12.5px] text-muted-foreground">{t('past_hint')}</div>
+          <h2 className="text-sm font-medium text-muted-foreground">{t('past_title')}</h2>
+          <div className="text-xs text-muted-foreground">{t('past_hint')}</div>
           <ul className="divide-y divide-border border-y border-border text-[13px]">
             {pastRows.map((row) => (
               <li key={row.cash_forecast_row_id} className="flex items-center gap-3 py-2">
@@ -503,7 +511,7 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
                 </span>
                 {canWrite && (
                   <Button
-                    size="icon-sm"
+                    size="icon"
                     variant="ghost"
                     aria-label={t('cancel_row')}
                     onClick={() => cancelRow(row.cash_forecast_row_id, row.amount, row.expected_date)}
@@ -519,8 +527,8 @@ export function LikviditetsprognosReport({ data, onChanged }: { data: Likviditet
 
       {caveats.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('caveats_title')}</h2>
-          <ul className="space-y-1 text-[12.5px] text-muted-foreground">
+          <h2 className="text-sm font-medium text-muted-foreground">{t('caveats_title')}</h2>
+          <ul className="space-y-1 text-xs text-muted-foreground">
             {caveats.map((c, i) => (
               <li key={`${c.code}:${i}`}>{locale === 'en' ? c.message_en : c.message_sv}</li>
             ))}
@@ -545,7 +553,7 @@ function FlowLine({ flow, onCancel }: { flow: CashFlow; onCancel?: () => void })
       <span className="w-20 shrink-0 tabular-nums text-muted-foreground">{formatDate(flow.date)}</span>
       <span className="min-w-0 flex-1 truncate">
         {href ? (
-          <Link href={href} className="underline decoration-border underline-offset-4 hover:decoration-foreground">
+          <Link href={href} className="underline decoration-foreground/25 underline-offset-4 hover:decoration-foreground">
             {title}
           </Link>
         ) : (
@@ -560,7 +568,7 @@ function FlowLine({ flow, onCancel }: { flow: CashFlow; onCancel?: () => void })
       ) : null}
       <span className={cn(NUM, 'w-24', flow.direction === 'out' && 'text-destructive')}>{formatAmount(signed)}</span>
       {onCancel ? (
-        <Button size="icon-sm" variant="ghost" aria-label={t('cancel_row')} onClick={onCancel}>
+        <Button size="icon" variant="ghost" aria-label={t('cancel_row')} onClick={onCancel}>
           <XMarkIcon className="h-4 w-4" />
         </Button>
       ) : (
@@ -585,7 +593,7 @@ function OverdueList({ title, total, items }: { title: string; total: number; it
   const shown = items.slice(0, OVERDUE_SHOWN)
   return (
     <Card>
-      <CardHeader className="flex flex-row items-baseline justify-between gap-3 pb-2">
+      <CardHeader className="flex flex-row items-baseline justify-between gap-3">
         <CardTitle className="text-base">{title}</CardTitle>
         <span className="tabular-nums text-[13px]">{formatCurrency(total)}</span>
       </CardHeader>
@@ -594,18 +602,18 @@ function OverdueList({ title, total, items }: { title: string; total: number; it
           {shown.map((item) => (
             <li key={item.key} className="flex items-center gap-3">
               <span className="min-w-0 flex-1 truncate">
-                <Link href={item.href} className="underline decoration-border underline-offset-4 hover:decoration-foreground">
+                <Link href={item.href} className="underline decoration-foreground/25 underline-offset-4 hover:decoration-foreground">
                   {item.name}
                 </Link>
                 {item.number && <span className="text-muted-foreground"> · {item.number}</span>}
               </span>
-              <span className="whitespace-nowrap text-[12.5px] text-muted-foreground">{t('overdue_days', { days: item.days })}</span>
+              <span className="whitespace-nowrap text-xs text-muted-foreground">{t('overdue_days', { days: item.days })}</span>
               <span className={cn(NUM, 'w-24')}>{formatAmount(item.amount)}</span>
             </li>
           ))}
         </ul>
         {items.length > shown.length && (
-          <div className="text-[12.5px] text-muted-foreground">{t('overdue_more', { count: items.length - shown.length })}</div>
+          <div className="text-xs text-muted-foreground">{t('overdue_more', { count: items.length - shown.length })}</div>
         )}
       </CardContent>
     </Card>

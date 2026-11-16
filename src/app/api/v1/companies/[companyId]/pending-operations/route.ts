@@ -3,7 +3,7 @@
  *
  * The approval queue over REST: the staged writes (pending operations) of
  * one company, newest first, with cursor pagination on (created_at DESC,
- * id DESC). The same rows the app's review list (Att göra > Agentförslag)
+ * id DESC). The same rows the app's review list (Att göra > Rutin)
  * and gnubok_list_pending_operations show; each carries task_state beside
  * its status (lib/pending-operations/task-state.ts), and agent_reason, why
  * its stager proposes it.

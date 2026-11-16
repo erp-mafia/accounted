@@ -514,7 +514,7 @@ export default function SkattekontoBookDialog({
             })}
           </p>
           {directState.holders.length > 0 && (
-            <ul className="divide-y divide-border rounded-lg border border-border">
+            <ul className="divide-y divide-border">
               {directState.holders.slice(0, 5).map((entry) => (
                 <li
                   key={entry.journal_entry_id}
@@ -584,7 +584,7 @@ export default function SkattekontoBookDialog({
               : t('cover_body_plain', { skattekonto: skattekontoAccount })}
           </p>
           {cover && cover.entries.length > 0 && (
-            <ul className="divide-y divide-border rounded-lg border border-border">
+            <ul className="divide-y divide-border">
               {cover.entries.map((entry) => (
                 <li
                   key={entry.journal_entry_id}
@@ -665,7 +665,7 @@ export default function SkattekontoBookDialog({
             })}
           </p>
           {twinState.twins.length > 0 && (
-            <ul className="divide-y divide-border rounded-lg border border-border">
+            <ul className="divide-y divide-border">
               {twinState.twins.slice(0, 5).map((twin) => (
                 <li
                   key={twin.journal_entry_id}

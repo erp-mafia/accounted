@@ -1,0 +1,1 @@
+[2026-11-01] The fiscal year is app-wide context beside the company name (useFiscalScope), not a per-page picker (founder decision 2026-10-29). Kept in-page only where the year is an assertion (underlag import) or a filing choice (helårsmoms).

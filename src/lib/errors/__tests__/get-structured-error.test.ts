@@ -134,7 +134,7 @@ describe('getStructuredError', () => {
     )
     expect(result.code).toBe('INSUFFICIENT_SCOPE')
     expect(result.remediation?.description).toContain('"pending_operations:approve"')
-    expect(result.remediation?.description).toContain('Att göra > Agentförslag')
+    expect(result.remediation?.description).toContain('Att göra > Rutin')
     expect(result.remediation?.description).toContain('connects again with Godkänn ticked')
     // Scopes cannot be added to an existing key, so the generic hint is wrong here.
     expect(result.remediation?.description).not.toContain('add it to the existing key')

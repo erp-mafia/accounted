@@ -104,7 +104,7 @@ export function CustomerAutogiroSection({ customerId, canWrite }: { customerId: 
               </button>
             )}
           </span>
-          {latest.status_text && <span className="mt-1 block text-[12.5px] text-muted-foreground">{latest.status_text}</span>}
+          {latest.status_text && <span className="mt-1 block text-xs text-muted-foreground">{latest.status_text}</span>}
         </DefRow>
       )}
 
@@ -123,7 +123,7 @@ export function CustomerAutogiroSection({ customerId, canWrite }: { customerId: 
               onChange={(event) => setPayerNumber(event.target.value)}
               className="w-44"
             />
-            <Button type="submit" size="sm" variant="outline" loading={adding} disabled={!payerNumber.trim()}>
+            <Button type="submit" variant="outline" loading={adding} disabled={!payerNumber.trim()}>
               {t('customer_add_action')}
             </Button>
           </form>

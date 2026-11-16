@@ -83,7 +83,7 @@ export function RecoveredLossDialog({ invoiceId, invoiceNumber, left, today, ope
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('recovery_title', { number: invoiceNumber ?? '' })}</DialogTitle>
           <DialogDescription>{t('recovery_description')}</DialogDescription>

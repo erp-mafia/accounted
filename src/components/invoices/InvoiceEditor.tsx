@@ -23,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge, badgeVariants } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@/components/ui/button'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
@@ -289,10 +290,6 @@ type ArticleOption = Pick<
   'id' | 'article_number' | 'name' | 'name_en' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
-function RequiredMark() {
-  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
 // Borderless in-table cell input: quiet at rest, beige on hover, ringed on
 // focus. rounded-sm: nested leaf inside the rows surface (radius ladder).
 const CELL_INPUT_CLASS =
@@ -301,7 +298,7 @@ const CELL_INPUT_CLASS =
 // Ghost cell in the entry row: previews the append default in the italic
 // muted tone, hovers like a cell input so it reads as clickable.
 const ENTRY_GHOST_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
 
 // The add-row links under the table. Quiet links on desktop, inflated to a
 // 40px touch target on coarse pointers: on Android they are the only way into
@@ -337,7 +334,7 @@ const ROW_GRID_TWO_EXTRA = 'grid grid-cols-[minmax(6rem,1fr)_6.5rem_4.5rem_4rem_
 
 // The quiet field look of the one-line note and the claim fields.
 const FIELD_LABEL_CLASS = 'text-[13px] font-normal'
-const FIELD_HINT_CLASS = 'text-[12.5px] text-muted-foreground'
+const FIELD_HINT_CLASS = 'text-xs text-muted-foreground'
 
 // The Avdrag cell: a quiet picker in the row, like the Moms cell.
 const DEDUCTION_CELL_CLASS =
@@ -345,7 +342,7 @@ const DEDUCTION_CELL_CLASS =
 
 // Anteckning: one line that grows with the text, in the field look.
 const NOTE_INPUT_CLASS =
-  'w-full rounded-lg border border-input bg-card px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20'
+  'w-full rounded-lg px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 bg-control shadow-raised'
 
 // Sentinel for "the company default" in the payee select: an empty option
 // value renders as the placeholder in Radix Select.
@@ -392,6 +389,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const tVat = useTranslations('vat_treatment_notice')
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
+  const tCommon = useTranslations('common')
   // Owner/admin: extra email copies (as in SendInvoiceDialog) and payment
   // details set up from the status line.
   const isCompanyAdmin = role === 'owner' || role === 'admin'
@@ -690,6 +688,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     customers,
     isLoading: customersLoading,
     error: customersError,
+    refresh: refreshCustomers,
   } = useCustomers({ keepId: keepCustomerId })
   const {
     settings: companySettings,
@@ -1146,15 +1145,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       pendingCustomerRef.current = null
     }
   }, [customers, setValue])
-
-  useEffect(() => {
-    if (!customersError) return
-    toast({
-      title: t('load_customers_failed_title'),
-      description: t('load_customers_failed_description'),
-      variant: 'destructive',
-    })
-  }, [customersError, toast, t])
 
   // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
   // article link (and its account override) but keeps the typed text/price so the
@@ -3861,7 +3851,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             label={
               <>
                 {isSelfBilled ? ts('customer_label') : t('customer_card_title')}
-                <RequiredMark />
               </>
             }
             aside={
@@ -3904,9 +3893,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 />
               )}
             />
+            {/* The customer list could not be read: said under the picker it
+                feeds, muted (the page's one ochre line is the status line). */}
+            {customersError ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground" role="alert">
+                <span>{t('load_customers_failed_title')}</span>
+                <Button variant="link" onClick={() => void refreshCustomers()}>
+                  {tCommon('retry')}
+                </Button>
+              </div>
+            ) : null}
             {selectedCustomer && (
               <div
-                className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-5 text-muted-foreground"
+                className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground"
                 data-ph-mask=""
               >
                 {customerTypeLabel && <Badge variant="secondary">{customerTypeLabel}</Badge>}
@@ -3925,7 +3924,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 onValidated={handleCustomerVatValidated}
               />
             ) : viesLine ? (
-              <p className="mt-2 text-[12.5px] leading-5 text-muted-foreground" data-ph-mask="">
+              <p className="mt-2 text-xs leading-5 text-muted-foreground" data-ph-mask="">
                 {viesLine}
               </p>
             ) : null}
@@ -4052,7 +4051,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     waits behind an add-link like Märkning. */}
                 {deliveryAddressShown && (
                   <div role="group" aria-labelledby="delivery-address-title" className="mt-4" data-ph-mask="">
-                    <p id="delivery-address-title" className="mb-2 text-[12.5px] text-muted-foreground">
+                    <p id="delivery-address-title" className="mb-2 text-xs text-muted-foreground">
                       {tForm('delivery_address_label')}
                     </p>
                     <div className="space-y-4">
@@ -4185,7 +4184,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             {isSelfBilled && (
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>{ts('external_number_label')}<RequiredMark /></Label>
+                  <Label>{ts('external_number_label')}</Label>
                   <Input placeholder={ts('external_number_placeholder')} {...register('external_invoice_number')} />
                   {errors.external_invoice_number && (
                     <p className="text-sm text-destructive">{errors.external_invoice_number.message}</p>
@@ -4201,7 +4200,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     silent today-default registered wrong dates on immutable
                     self-billed invoices (issue #1820). */}
                 <div className="space-y-2">
-                  <Label>{ts('invoice_date_label')}<RequiredMark /></Label>
+                  <Label>{ts('invoice_date_label')}</Label>
                   <Input
                     type="date"
                     {...register('invoice_date')}
@@ -4213,7 +4212,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   )}
                 </div>
                 <div className="space-y-2">
-                  <Label>{ts('received_date_label')}<RequiredMark /></Label>
+                  <Label>{ts('received_date_label')}</Label>
                   <Input
                     type="date"
                     {...register('received_date')}
@@ -4237,7 +4236,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="invoice_date" className={FIELD_LABEL_CLASS}>
                       {isQuoteDoc ? tForm('quote_date_label') : t('invoice_date_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="invoice_date"
@@ -4257,7 +4255,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="valid_until" className={FIELD_LABEL_CLASS}>
                       {t('valid_until_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="valid_until"
@@ -4276,7 +4273,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="due_date" className={FIELD_LABEL_CLASS}>
                       {t('due_date_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="due_date"
@@ -4403,11 +4399,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             aside={productRowCount > 0 ? t('rows_count', { count: productRowCount }) : null}
           >
             <div ref={entryRootRef} className="relative">
-              <div className="overflow-x-auto">
+              {/* relative: the rows' absolutely placed helpers stay inside the
+                  scroller instead of widening the page on a phone. */}
+              <div className="relative overflow-x-auto">
                 <div>
                   {/* Header row: offset by the drag-grip gutter (w-8). */}
                   <div className="pl-8">
-                    <div className={cn(rowGridClass, 'border-b border-border pb-2 text-[11px] uppercase tracking-[0.08em] text-muted-foreground')}>
+                    <div className={cn(rowGridClass, 'border-b-hairline pb-2 text-xs text-muted-foreground')}>
                       <div className="px-2">{t('description_label')}</div>
                       <div className="px-2 text-right">{t('quantity_label')}</div>
                       <div className="px-2 text-right">{t('unit_price_label')}</div>
@@ -4436,7 +4434,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           >
                             <div
                               id={`invoice-editor-row-${index}`}
-                              className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
+                              className={cn('group border-b-hairline', settleIndex === index && 'row-settle')}
                             >
                               <div className="flex items-center gap-1 py-1">
                                 <AutoGrowTextarea
@@ -4542,7 +4540,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         >
                           <div
                             id={`invoice-editor-row-${index}`}
-                            className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
+                            className={cn('group border-b-hairline', settleIndex === index && 'row-settle')}
                           >
                             <div className={cn(rowGridClass, 'py-1')}>
                               <div className="min-w-0">
@@ -4995,7 +4993,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       stay stable). Ghost cells preview the append defaults. */}
                   <div className="flex">
                     <div className="w-8 shrink-0" aria-hidden="true" />
-                    <div className={cn(rowGridClass, 'flex-1 border-b border-border py-1')}>
+                    <div className={cn(rowGridClass, 'flex-1 border-b-hairline py-1')}>
                       <input
                         ref={entryInputRef}
                         value={entryQuery}
@@ -5154,10 +5152,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div
                     id={`${entryListId}-hint`}
                     className={cn(
-                      'px-3 py-2 text-[11px] text-muted-foreground',
+                      'px-3 py-2 text-xs text-muted-foreground',
                       // Border only when a list renders above; alone it reads
                       // as a stray hairline at the top of the popover.
-                      entryMatches.length > 0 && 'border-t border-border',
+                      entryMatches.length > 0 && 'border-t-hairline',
                     )}
                   >
                     {entryMatches.length > 0 ? t('entry_hint_matches') : t('entry_hint_free')}
@@ -5235,7 +5233,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 )}
                 {/* One row spanning both columns, so the rule above the total
                     is one unbroken line instead of two split by the gap. */}
-                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t-hairline pt-2 font-display text-xl">
                   <dt>
                     {isInvoiceDoc || hasAnyDeduction ? t('to_pay_label') : isQuoteDoc ? tForm('sum_label') : t('total_label')}
                   </dt>
@@ -5266,7 +5264,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <div className="space-y-2">
                   <Label htmlFor="deduction_personnummer" className={FIELD_LABEL_CLASS}>
                     {t('deduction_personnummer_label')}
-                    {!(initial?.deduction_personnummer_last4 || customerHasPersonalNumber) && <RequiredMark />}
                   </Label>
                   <Input
                     id="deduction_personnummer"
@@ -5292,7 +5289,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div className="space-y-2">
                     <Label htmlFor="deduction_housing_designation" className={FIELD_LABEL_CLASS}>
                       {t('deduction_housing_label')}
-                      <RequiredMark />
                     </Label>
                     <Input
                       id="deduction_housing_designation"
@@ -5322,10 +5318,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <div
                     key={fields[index]?.id ?? index}
                     id={`invoice-editor-deduction-${index}`}
-                    className="mt-4 border-t border-border pt-4"
+                    className="mt-4 border-t-hairline pt-4"
                   >
                     {deductionRowIndexes.length > 1 && (
-                      <p className="mb-2 truncate text-[12.5px] text-muted-foreground" data-ph-mask="">
+                      <p className="mb-2 truncate text-xs text-muted-foreground" data-ph-mask="">
                         {item?.description?.trim() || t('row_label', { index: index + 1 })}
                       </p>
                     )}
@@ -5333,7 +5329,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       <div className="min-w-0 space-y-2">
                         <Label className={FIELD_LABEL_CLASS}>
                           {isGronTeknik ? tForm('deduction_installation_label') : tForm('deduction_work_label')}
-                          <RequiredMark />
                         </Label>
                         <Controller
                           name={`items.${index}.work_type`}
@@ -5402,7 +5397,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               })}
 
               {capWarnings.length > 0 && (
-                <div className="mt-4 space-y-1 rounded-lg border border-border px-3 py-2 text-[12.5px] text-muted-foreground">
+                <div className="mt-4 space-y-1 rounded-lg px-3 py-2 text-xs text-muted-foreground bg-control shadow-raised">
                   {capWarnings.map((w) => (
                     <p key={w}>{w}</p>
                   ))}
@@ -5580,7 +5575,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
       {/* Create customer dialog */}
       <Dialog open={isCreateCustomerOpen} onOpenChange={setIsCreateCustomerOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('create_customer_dialog_title')}</DialogTitle>
           </DialogHeader>

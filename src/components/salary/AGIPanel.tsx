@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -856,13 +856,12 @@ export function AGIPanel(props: AGIPanelProps) {
   // branch below offers the file, not only the connected one (crm#1345).
   const downloadXmlButton = (
     <Button
-      size="sm"
       variant="outline"
       onClick={handleDownloadXml}
       loading={actionLoading === 'download'}
       title={t('download_xml_title')}
     >
-      {actionLoading !== 'download' && <ArrowDownTrayIcon className="mr-2 h-3.5 w-3.5" />}
+      {actionLoading !== 'download' && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
       {t('download_xml_button')}
     </Button>
   )
@@ -894,10 +893,10 @@ export function AGIPanel(props: AGIPanelProps) {
   if (loading) {
     return (
       <DetailSection kicker={t('title')}>
-        <div role="status" aria-label={t('loading_status')} className="space-y-2">
+        <LateReveal role="status" aria-label={t('loading_status')} className="space-y-2">
           <Skeleton className="h-4 w-64" />
           <Skeleton className="h-4 w-48" />
-        </div>
+        </LateReveal>
       </DetailSection>
     )
   }
@@ -911,7 +910,7 @@ export function AGIPanel(props: AGIPanelProps) {
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             {downloadXmlButton}
             <Button onClick={handleConnect} disabled={connecting}>
-              <LinkIcon className="mr-2 h-4 w-4" />
+              <LinkIcon className="h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_button')}
             </Button>
           </div>
@@ -988,14 +987,14 @@ export function AGIPanel(props: AGIPanelProps) {
       aside={
         // Connected is the normal state: muted text, no chip (convention 5).
         // Disconnect is the quiet action beside it.
-        <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-3 text-xs text-muted-foreground">
           <span>{t('connected')}</span>
           {!readOnly && (
             <button
               type="button"
               onClick={handleDisconnect}
               disabled={actionLoading === 'disconnect' || connecting}
-              className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1 underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
               title={t('disconnect_title')}
             >
               {actionLoading === 'disconnect' && <SpinnerIcon className="h-3 w-3 animate-spin" />}
@@ -1251,8 +1250,8 @@ export function AGIPanel(props: AGIPanelProps) {
               </div>
               {sessionExpired && !readOnly && (
                 <div className="mt-2">
-                  <Button size="sm" variant="outline" onClick={handleConnect} disabled={connecting}>
-                    <LinkIcon className="mr-2 h-3.5 w-3.5" />
+                  <Button variant="outline" onClick={handleConnect} disabled={connecting}>
+                    <LinkIcon className="h-3.5 w-3.5" />
                     {reconnectLabel}
                   </Button>
                 </div>
@@ -1285,7 +1284,7 @@ export function AGIPanel(props: AGIPanelProps) {
                       ) : state === 'failed' ? (
                         <ExclamationCircleIcon className="h-3.5 w-3.5 shrink-0 text-destructive" />
                       ) : (
-                        <CircleIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                        <CircleIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
                       <span className={state === 'upcoming' ? 'text-muted-foreground' : ''}>
                         {t(`chain_step_${step}`)}
@@ -1324,7 +1323,7 @@ export function AGIPanel(props: AGIPanelProps) {
                     disabled={actionLoading !== null || !hasSkatteverket}
                     loading={actionLoading === 'chain'}
                   >
-                    {actionLoading !== 'chain' && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+                    {actionLoading !== 'chain' && <PaperAirplaneIcon className="h-4 w-4" />}
                     {t('chain_button')}
                   </Button>
                 )}
@@ -1338,44 +1337,40 @@ export function AGIPanel(props: AGIPanelProps) {
             {advancedOpen && (
               <div className="flex flex-wrap justify-end gap-2">
                 <Button
-                  size="sm"
                   variant="outline"
                   onClick={handleSubmit}
                   disabled={actionLoading !== null || !hasSkatteverket}
                   loading={actionLoading === 'submit'}
                 >
-                  {actionLoading !== 'submit' && <PaperAirplaneIcon className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'submit' && <PaperAirplaneIcon className="h-3.5 w-3.5" />}
                   {t('submit_button')}
                 </Button>
                 <Button
-                  size="sm"
                   variant="outline"
                   onClick={handleCreateSigningLink}
                   disabled={actionLoading !== null || !underlagSubmitted}
                   loading={actionLoading === 'granskning'}
                 >
-                  {actionLoading !== 'granskning' && <LockClosedIcon className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'granskning' && <LockClosedIcon className="h-3.5 w-3.5" />}
                   {t('signing_link_button')}
                 </Button>
                 <Button
-                  size="sm"
                   variant="ghost"
                   onClick={handleCheckSubmitted}
                   disabled={actionLoading !== null}
                   loading={actionLoading === 'check'}
                 >
-                  {actionLoading !== 'check' && <ArrowDownTrayIcon className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'check' && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
                   {t('check_kvittens_button')}
                 </Button>
                 {awaitingSigning && (
                   <Button
-                    size="sm"
                     variant="ghost"
                     onClick={handleUnlock}
                     disabled={actionLoading !== null}
                     loading={actionLoading === 'unlock'}
                   >
-                    {actionLoading !== 'unlock' && <LockOpenIcon className="mr-2 h-3.5 w-3.5" />}
+                    {actionLoading !== 'unlock' && <LockOpenIcon className="h-3.5 w-3.5" />}
                     {t('unlock_button')}
                   </Button>
                 )}

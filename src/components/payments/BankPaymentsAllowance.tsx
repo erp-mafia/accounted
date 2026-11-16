@@ -63,7 +63,7 @@ export function RequestMorePaymentsDialog({ included, onOpenChange }: { included
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{typeof included === 'number' ? t('description', { included }) : t('description_plain')}</DialogDescription>
@@ -101,7 +101,7 @@ export function RequestMorePaymentsDialog({ included, onOpenChange }: { included
             </label>
             {error && <AttnLine>{error}</AttnLine>}
             <DialogFooter>
-              <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
                 {t('cancel')}
               </Button>
               <Button type="submit" loading={busy} disabled={busy || !valid}>
@@ -217,7 +217,7 @@ export function BuyPaymentPacksDialog({
       <div className="space-y-4">
         <AttnLine>{t('buy_unavailable')}</AttnLine>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t('close')}
           </Button>
         </DialogFooter>
@@ -251,7 +251,7 @@ export function BuyPaymentPacksDialog({
           />
         </label>
         {valid && (
-          <div className="space-y-1 text-[12.5px] tabular-nums text-muted-foreground">
+          <div className="space-y-1 text-xs tabular-nums text-muted-foreground">
             <p>{t('buy_total', { total: view.base_payments + packs * view.pack_size })}</p>
             {direction === 'up' && <p>{t('buy_effect_now', { amount: formatCurrency(packs * price) })}</p>}
             {direction === 'down' && (
@@ -262,7 +262,7 @@ export function BuyPaymentPacksDialog({
         )}
         {error && <AttnLine>{error}</AttnLine>}
         <DialogFooter>
-          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {t('cancel')}
           </Button>
           <Button type="submit" loading={busy} disabled={busy || !direction}>
@@ -275,7 +275,7 @@ export function BuyPaymentPacksDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('buy_title')}</DialogTitle>
           <DialogDescription>
@@ -402,10 +402,10 @@ export function BankPaymentsAllowanceLine({ usage, count, refusal = null, canReq
     const extra = Math.max(0, usage.payments_sent + count - usage.included_payments) - alreadyAbove
     const left = Math.max(0, usage.included_payments - usage.payments_sent)
     return (
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         {extra > 0 ? t('billed_extra', { extra, price, month }) : t('billed_within', { left, included: usage.included_payments, price, month })}
       </p>
     )
   }
-  return <p className="text-[12.5px] text-muted-foreground">{t('remaining', { remaining, included: usage.included_payments, month })}</p>
+  return <p className="text-xs text-muted-foreground">{t('remaining', { remaining, included: usage.included_payments, month })}</p>
 }

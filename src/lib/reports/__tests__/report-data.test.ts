@@ -6,6 +6,7 @@ import {
   startReportRequest,
   viewReportData,
   viewReportPages,
+  withoutFailedPages,
   type SettledReport,
 } from '../report-data'
 
@@ -211,5 +212,28 @@ describe('viewReportPages', () => {
       results: { '/p': ok('one'), '/p?after=1': { data: null, error: 'Kunde inte hämta' } },
     })
     expect(view).toEqual({ pages: ['one'], pending: null, error: 'Kunde inte hämta', loading: false })
+  })
+})
+
+describe('withoutFailedPages (Försök igen on a paged report)', () => {
+  it('drops the failed answers so the view asks for that page again, and keeps the rest', () => {
+    const settled = {
+      base: '/r?p=1',
+      results: {
+        '/r?p=1': { data: { n: 1 }, error: null },
+        '/r?p=2': { data: null, error: 'Kunde inte hämta sidan' },
+      },
+    }
+    const chain = { base: '/r?p=1', urls: ['/r?p=1', '/r?p=2'] }
+    expect(viewReportPages('/r?p=1', chain, settled).error).toBe('Kunde inte hämta sidan')
+
+    const retried = withoutFailedPages(settled)
+    expect(Object.keys(retried.results)).toEqual(['/r?p=1'])
+    expect(viewReportPages('/r?p=1', chain, retried)).toEqual({
+      pages: [{ n: 1 }],
+      pending: '/r?p=2',
+      error: null,
+      loading: true,
+    })
   })
 })

@@ -13,7 +13,7 @@ import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -26,12 +26,11 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog'
-import {
-  STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
-  ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
-} from '@/components/common/FiscalYearSelector'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
+import { effectiveFiscalScope } from '@/lib/reference-data/fiscal-scope'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
+import { LateReveal } from '@/components/ui/skeleton'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import { IntentLink } from '@/components/ui/intent-link'
@@ -54,7 +53,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   LockClosedIcon,
-  MagnifyingGlassIcon,
   NoSymbolIcon,
   PaperClipIcon,
   QueueListIcon,
@@ -62,12 +60,12 @@ import {
   Square2StackIcon,
   XMarkIcon,
 } from '@/components/icons'
-import { cn, formatDate, formatCurrency } from '@/lib/utils'
+import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
 import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
-import { useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
@@ -208,6 +206,7 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  const tCommon = useTranslations('common')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
@@ -278,13 +277,31 @@ export default function JournalEntryList({
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
   const [sortStack, setSortStack] = useState<SortKey[]>(DEFAULT_SORT_STACK)
   const [sortHydrated, setSortHydrated] = useState(false)
-  const [periodId, setPeriodId] = useState<string | null>(null)
-  const [periodHydrated, setPeriodHydrated] = useState(false)
-  // One-shot: a deep-link arrival scopes the first period resolution to all
-  // years (see the period effect below) without touching the saved preference.
-  const deepLinkAllYearsRef = useRef(initialShowMissingOnly)
-  // One-shot as well: the räkenskapsår a bokslut gap blocker pointed at.
-  const deepLinkPeriodRef = useRef<string | null>(initialGapPeriodId)
+  // The year is app-wide context (the sidebar, useFiscalScope). A deep link
+  // can scope this one visit, in memory only, without touching it: the
+  // missing-underlag filter arrives on all years (the set the all-years
+  // dashboard badge counted), a bokslut gap blocker on the year it named
+  // (or the current one if that year is gone). Choosing a year in the
+  // sidebar ends the visit's scope.
+  const fiscalScope = useFiscalScope()
+  const [visitScope, setVisitScope] = useState<{ periodId: string | null } | null>(() =>
+    initialShowMissingOnly ? { periodId: null } : initialGapPeriodId ? { periodId: initialGapPeriodId } : null,
+  )
+  const [seenYear, setSeenYear] = useState<string | null | undefined>(undefined)
+  if (fiscalScope.ready && seenYear !== fiscalScope.periodId) {
+    setSeenYear(fiscalScope.periodId)
+    if (seenYear !== undefined) {
+      setVisitScope(null)
+      setPage(0)
+    }
+  }
+  const periodId = visitScope
+    ? visitScope.periodId === null
+      ? null
+      : effectiveFiscalScope(fiscalScope.periods, visitScope.periodId, { allowAll: false }).periodId
+    : fiscalScope.periodId
+  // Hold the first fetch until the scope is known; an all-years visit knows it at once.
+  const periodHydrated = visitScope?.periodId === null || fiscalScope.ready
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -468,24 +485,6 @@ export default function JournalEntryList({
     }
   }, [company?.id])
 
-  // Resolve the initial fiscal-year scope from the session-cached period list.
-  // The list is period-oriented (BFL): verifikationsnummer run as an unbroken
-  // series *per räkenskapsår*, so the same number (e.g. A42) recurs once per
-  // year. Showing every year at once makes those look like duplicates and makes
-  // a bare "A42" reference ambiguous, so we default to the räkenskapsår the
-  // user is currently in rather than "all years". An explicit "Alla
-  // räkenskapsår" choice (persisted as ALL_YEARS_VALUE) is still honoured.
-  // Resolving the scope here, not in the dialog's FiscalYearSelector, which
-  // only mounts when opened, keeps the first fetch correct. periodHydrated
-  // gates that first fetch so the list loads already scoped to the resolved year.
-  //
-  // The periods come from useFiscalPeriods (seeded by the dashboard layout),
-  // so on a normal visit this resolves in the first effect tick with no
-  // round trip; the saved-scope shortcut below still unblocks the entries
-  // fetch first when the list is not cached yet. Resolution runs once per
-  // company: a background revalidation of the list must not snap the scope
-  // back (the deep-link "all years" visit in particular).
-  const { periods: fiscalPeriods, isLoading: fiscalPeriodsLoading } = useFiscalPeriods()
   // Belopp shows the money that moved when a verifikat records one payment
   // through one money account (crm#1280). A cash account kept outside 19xx
   // (a payment provider's balance on 1686) counts as a money account too;
@@ -495,74 +494,6 @@ export default function JournalEntryList({
     () => new Set(cashAccounts.map((a) => a.ledger_account).filter((a): a is string => !!a)),
     [cashAccounts],
   )
-  const periodScopeResolvedForRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!company?.id) {
-      setPeriodId(null)
-      setPeriodHydrated(true)
-      return
-    }
-    if (periodScopeResolvedForRef.current === company.id) return
-
-    // Deep-link arrival with the missing-underlag filter: scope this visit to
-    // all fiscal years (in memory only) so the list can show the same set the
-    // all-years dashboard badge counted. Consumed once; picking a year in the
-    // FyPicker afterwards works and persists as usual.
-    if (deepLinkAllYearsRef.current) {
-      deepLinkAllYearsRef.current = false
-      periodScopeResolvedForRef.current = company.id
-      setPeriodId(null)
-      setPeriodHydrated(true)
-      return
-    }
-
-    // Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
-    // this visit to the räkenskapsår the blocker named. Waits for the period
-    // list so a stale id falls back to the current year instead of scoping
-    // the list to nothing. In memory only, consumed once.
-    if (deepLinkPeriodRef.current) {
-      if (fiscalPeriodsLoading) return
-      const wanted = deepLinkPeriodRef.current
-      deepLinkPeriodRef.current = null
-      periodScopeResolvedForRef.current = company.id
-      const today = todayIsoStockholm()
-      setPeriodId(
-        fiscalPeriods.some((p) => p.id === wanted)
-          ? wanted
-          : resolveCurrentPeriodId(fiscalPeriods, today),
-      )
-      setPeriodHydrated(true)
-      return
-    }
-
-    const stored =
-      typeof window !== 'undefined'
-        ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
-        : null
-    // Optimistic hydration: a saved scope unblocks the first entries fetch
-    // immediately instead of waiting for the period list (the common
-    // returning-user case without a seed). The validation below still
-    // re-scopes to the current räkenskapsår if the saved id went stale (e.g.
-    // the period was deleted); the entries effect then refires with the
-    // corrected scope.
-    if (stored) {
-      // FISCAL_YEAR_ALL_VALUE = user explicitly chose "all years", respect it.
-      setPeriodId(stored === FISCAL_YEAR_ALL_VALUE ? null : stored)
-      setPeriodHydrated(true)
-    }
-
-    // Not cached yet and no seed: wait for the list, this effect re-runs.
-    if (fiscalPeriodsLoading) return
-    periodScopeResolvedForRef.current = company.id
-
-    if (stored === FISCAL_YEAR_ALL_VALUE) return
-    if (stored && fiscalPeriods.some((p) => p.id === stored)) return
-
-    // No (valid) saved scope → default to the current räkenskapsår.
-    const today = todayIsoStockholm()
-    setPeriodId(resolveCurrentPeriodId(fiscalPeriods, today))
-    setPeriodHydrated(true)
-  }, [company?.id, fiscalPeriods, fiscalPeriodsLoading])
 
   // Debounce the free-text search before it reaches the API. Require ≥2 chars:
   // a single character matches almost every verifikationstext and isn't a useful
@@ -694,14 +625,13 @@ export default function JournalEntryList({
       fetchRattelseMarkers(ids, isCurrent)
     } catch {
       // A non-OK response or a network-level rejection (offline, aborted
-      // response body): stale rows (if any) stay on screen, the empty case
-      // renders the error state below, and the toast covers refetches.
+      // response body): stale rows (if any) stay on screen under the
+      // refresh-failed line, and the empty case renders LoadError below.
       // Without this the list stays dimmed forever.
       if (!isCurrent()) return
       setLoadFailed(true)
       setMissingCount(null)
       setHasLoaded(true)
-      toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {
       if (isCurrent()) setLoading(false)
     }
@@ -1034,21 +964,14 @@ export default function JournalEntryList({
     // hidden, which the list lacked when stornos vanished silently (#3149).
     (correctionView === 'hide' ? 1 : 0)
   // Year scope included: drives empty-state messaging + keeping the bar mounted.
-  const activeFilterCount = (periodId ? 1 : 0) + dialogFilterCount
+  // The year is app-wide context, not a page filter.
+  const activeFilterCount = dialogFilterCount
 
   // When any filter or search is active we keep the filter bar mounted even
   // with zero results, so the user can edit or clear their query. The pristine
   // "no entries yet" state below only applies to an untouched, empty ledger.
   const hasActiveFilters = Boolean(search) || activeFilterCount > 0
 
-  // Apply a fiscal-year selection. The FiscalYearSelector (now an inline control
-  // in the toolbar, not buried in the filter dialog) persists the choice to
-  // localStorage itself; here we only mirror it into local state and reset
-  // pagination.
-  const handlePeriodChange = (next: string | null) => {
-    setPeriodId(next)
-    setPage(0)
-  }
 
   // Change how many verifikat are shown per page. Resets to the first page and
   // persists the choice per company (same convention as the sort order).
@@ -1116,12 +1039,8 @@ export default function JournalEntryList({
   }
 
   const clearAllFilters = () => {
-    setPeriodId(null)
-    // Mirror the selector's "Alla räkenskapsår" write so the cleared scope
-    // survives a remount/reload instead of being restored from a stale value.
-    if (company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id, FISCAL_YEAR_ALL_VALUE)
-    }
+    // A deep link's one-visit year scope goes with the filters it came with.
+    setVisitScope(null)
     setSeriesFilter('all')
     setShowMissingOnly(false)
     setCorrectionView((v) => (v === 'hide' ? 'collapse' : v))
@@ -1188,43 +1107,11 @@ export default function JournalEntryList({
             { value: 'drafts', label: t('mode_drafts'), count: draftCount },
           ]}
         />
-        <div className="relative flex-1 sm:flex-none sm:w-[280px]">
-          <ToolbarSearch
-            type="text"
-            inputMode="search"
-            placeholder={t('search_placeholder')}
-            aria-label={t('search_placeholder')}
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            containerClassName="min-w-0 max-w-none"
-            className={cn('pr-7', loading && search && 'pr-12')}
-          />
-          {loading && search && (
-            // Search is server-side and can take a moment on a large ledger;
-            // without this the only signal was the list dimming.
-            <SpinnerIcon
-              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
-              aria-hidden="true"
-            />
-          )}
-          {searchInput && (
-            <button
-              type="button"
-              onClick={() => setSearchInput('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-secondary/60 text-muted-foreground"
-              title={t('clear_search')}
-              aria-label={t('clear_search')}
-            >
-              <XMarkIcon className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
         <Dialog open={filterOpen} onOpenChange={setFilterOpen}>
           <DialogTrigger asChild>
             <Button
               variant="outline"
-              size="sm"
+              size="toolbar"
               className="gap-2 shrink-0"
               aria-label={
                 dialogFilterCount > 0
@@ -1237,7 +1124,7 @@ export default function JournalEntryList({
               {dialogFilterCount > 0 && (
                 <Badge
                   variant="secondary"
-                  className="h-4 min-w-4 justify-center px-1 text-[11px] tabular-nums"
+                  className="h-4 min-w-4 justify-center px-1 text-xs tabular-nums"
                 >
                   {dialogFilterCount}
                 </Badge>
@@ -1402,18 +1289,50 @@ export default function JournalEntryList({
             <DialogFooter className="sm:justify-between">
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={clearAllFilters}
                 disabled={activeFilterCount === 0}
               >
                 {t('filter_clear_all')}
               </Button>
               <DialogClose asChild>
-                <Button variant="outline" size="sm">{t('filter_done')}</Button>
+                <Button variant="outline">{t('filter_done')}</Button>
               </DialogClose>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {/* Search sits at the right end, after the view and the filter (V7 list
+            toolbars); the density toggle follows it as the last thing. */}
+        <div className={cn('relative', TOOLBAR_SEARCH_END_CLASS)}>
+          <ToolbarSearch
+            type="text"
+            inputMode="search"
+            placeholder={t('search_placeholder')}
+            aria-label={t('search_placeholder')}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            containerClassName="min-w-0 max-w-none"
+            className={cn('pr-7', loading && search && 'pr-12')}
+          />
+          {loading && search && (
+            // Search is server-side and can take a moment on a large ledger;
+            // without this the only signal was the list dimming.
+            <SpinnerIcon
+              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => setSearchInput('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-secondary/60 text-muted-foreground"
+              title={t('clear_search')}
+              aria-label={t('clear_search')}
+            >
+              <XMarkIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
         {/* Row density: comfortable vs compact, persisted per company. A toggle
             (aria-pressed) rather than a mode buried in the filter dialog. It
             carries its name like the Filter button beside it: as a bare icon
@@ -1422,7 +1341,7 @@ export default function JournalEntryList({
             phone keeps the icon only; the toolbar has no room there. */}
         <Button
           variant="outline"
-          size="sm"
+          size="toolbar"
           onClick={toggleDensity}
           aria-pressed={compact}
           aria-label={t('density_compact')}
@@ -1431,24 +1350,6 @@ export default function JournalEntryList({
           {compact ? <CheckIcon className="h-3.5 w-3.5" /> : <QueueListIcon className="h-3.5 w-3.5" />}
           <span className="hidden sm:inline">{t('density_compact')}</span>
         </Button>
-        {/* The page context picker (convention 8): fiscal-year scope as a
-            chip-dropdown far right in the toolbar, one click to change,
-            always visible per BFL. Persists to localStorage (same key as
-            before); first-load scope resolution still happens
-            authoritatively in the period effect. */}
-        {periodHydrated && (
-          <div className="sm:ml-auto">
-            {/* suppressAutoRestore on deep-link visits: the arrival scope is a
-                deliberate in-memory "Alla räkenskapsår" (matches the all-years
-                dashboard badge); FyPicker's on-load restore of the persisted
-                year would otherwise snap the scope back right after load. */}
-            <FyPicker
-              value={periodId}
-              onChange={handlePeriodChange}
-              suppressAutoRestore={initialShowMissingOnly || initialGapPeriodId !== null}
-            />
-          </div>
-        )}
       </div>
 
       {/* Holes in this year's voucher numbering: one attn line with the
@@ -1458,11 +1359,17 @@ export default function JournalEntryList({
           the selected räkenskapsår, or the current one under "Alla
           räkenskapsår"; hidden on the drafts view and when the series is
           unbroken. */}
-      {listMode === 'committed' && periodHydrated && (
+      {/* A failed refresh keeps the rows and takes the page's one attention
+          line, in place of the gap notice. */}
+      {loadFailed && filteredEntries.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchEntries() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      ) : listMode === 'committed' && periodHydrated && (
         <VoucherGapNotice
           periodId={
             periodId ??
-            resolveCurrentPeriodId(fiscalPeriods, todayIsoStockholm())
+            resolveCurrentPeriodId(fiscalScope.periods, todayIsoStockholm())
           }
           series={seriesFilter !== 'all' ? seriesFilter : null}
           refreshToken={refreshToken}
@@ -1471,58 +1378,55 @@ export default function JournalEntryList({
       )}
 
       {loading && !hasLoaded ? (
-        <DataList className="stagger-enter">
-          <DataListLoading />
-        </DataList>
+        <LateReveal>
+          <DataList className="stagger-enter">
+            <DataListLoading />
+          </DataList>
+        </LateReveal>
       ) : loadFailed && filteredEntries.length === 0 ? (
         // Failed load with nothing on screen: an explicit error state with a
         // retry, never the "empty ledger" card. The toolbar above stays
         // mounted so the sort/filter that caused the failure can be changed.
-        <DataList className={cn('stagger-enter', loading && 'opacity-60')} aria-busy={loading || undefined}>
-          <DataListEmpty
-            icon={<NoSymbolIcon className="h-6 w-6" />}
+        <div className={cn(loading && 'opacity-60')} aria-busy={loading || undefined}>
+          <LoadError
             title={t('load_failed_title')}
             description={t('load_failed_description')}
-            action={
-              <Button variant="outline" size="sm" onClick={() => fetchEntries()}>
-                {t('load_failed_retry')}
-              </Button>
-            }
+            onRetry={() => void fetchEntries()}
           />
-        </DataList>
+        </div>
+      ) : filteredEntries.length === 0 && listMode === 'committed' && hasActiveFilters ? (
+        // No hits for the search or filters: one muted line where the rows
+        // would be, with the quiet way back (convention 17).
+        <p
+          className={cn('px-1 py-3 text-[13px] text-muted-foreground', loading && 'opacity-60')}
+          aria-busy={loading || undefined}
+        >
+          {t('no_results_line')}{' '}
+          <button
+            type="button"
+            className={QUIET_LINK_CLASS}
+            onClick={() => {
+              setSearchInput('')
+              setSearch('')
+              clearAllFilters()
+            }}
+          >
+            {t('filter_clear_all')}
+          </button>
+        </p>
       ) : filteredEntries.length === 0 ? (
-        // Empty placeholder, scoped to the situation: an empty drafts view, a
-        // filtered committed view with no matches, or a committed view with no
-        // posted entries yet (but drafts exist, hence we got here, not the
-        // pristine early return above). Carries the same busy treatment as the
-        // table branch: widening a filter from an empty result would otherwise
-        // look identical to "still nothing" for the whole request.
+        // Empty placeholder, scoped to the situation: an empty drafts view, or
+        // a committed view with no posted entries yet (but drafts exist, hence
+        // we got here, not the pristine early return above). Carries the same
+        // busy treatment as the table branch.
         <DataList
           className={cn('stagger-enter', loading && 'opacity-60')}
           aria-busy={loading || undefined}
         >
           <DataListEmpty
-            icon={
-              listMode === 'drafts' || !hasActiveFilters ? (
-                <BookOpenIcon className="h-6 w-6" />
-              ) : (
-                <MagnifyingGlassIcon className="h-6 w-6" />
-              )
-            }
-            title={
-              listMode === 'drafts'
-                ? t('empty_drafts_title')
-                : hasActiveFilters
-                  ? t('no_results_title')
-                  : t('empty_title')
-            }
-            description={
-              listMode === 'drafts'
-                ? t('empty_drafts_description')
-                : hasActiveFilters
-                  ? t('no_results_description')
-                  : t('empty_description')
-            }
+            icon={<BookOpenIcon className="h-6 w-6" />}
+            title={listMode === 'drafts' ? t('empty_drafts_title') : t('empty_title')}
+            description={listMode === 'drafts' ? t('empty_drafts_description') : t('empty_description')}
           />
         </DataList>
       ) : (
@@ -1562,7 +1466,7 @@ export default function JournalEntryList({
             <option value={t('no_doc_required_suggestion_salary')} />
             <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
           </datalist>
-          <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
+          <Button onClick={handleBatchExempt} loading={batchSubmitting}>
             {t('batch_mark_no_doc')}
           </Button>
           {/* Filter-scoped: mark every missing-doc verifikat matching the
@@ -1611,7 +1515,7 @@ export default function JournalEntryList({
           )
         )}
 
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -1722,7 +1626,7 @@ export default function JournalEntryList({
                           <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell, cellPad)}>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap date-figures text-muted-foreground', struckCell, cellPad)}>
                         {formatDate(entry.entry_date)}
                       </td>
                       {/* overflow-hidden: see #2003, the shrink-0 status
@@ -1763,7 +1667,7 @@ export default function JournalEntryList({
                             : undefined
                         }
                       >
-                        {formatCurrency(displayAmount.amount, 'SEK', { minimumFractionDigits: 2 })}
+                        {formatAmount(displayAmount.amount)}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right', controlCellPad)}>
                         <span className="inline-flex items-center justify-end gap-2">
@@ -1812,7 +1716,6 @@ export default function JournalEntryList({
                           )}
                           {entry.status === 'draft' && (
                             <Button
-                              size="sm"
                               variant="outline"
                               disabled={!canWrite}
                               loading={committingId === entry.id}
@@ -1864,7 +1767,7 @@ export default function JournalEntryList({
                     </tr>
                     {isExpanded && (
                       <tr data-no-stagger>
-                        <td colSpan={6} className="border-b border-border p-0">
+                        <td colSpan={6} className="border-b-hairline p-0">
                           <RowFoldout>
                             <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
                               {lines.length === 0 ? (
@@ -1927,13 +1830,12 @@ export default function JournalEntryList({
                               <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
                                 {entry.status === 'draft' && (
                                   <Button
-                                    size="sm"
                                     onClick={() => openCommitConfirm(entry)}
                                     disabled={!canWrite}
                                     loading={canWrite && committingId === entry.id}
                                     title={!canWrite ? t('read_only_tooltip') : undefined}
                                   >
-                                    {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                                    {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                                     {t('post')}
                                   </Button>
                                 )}
@@ -1944,7 +1846,7 @@ export default function JournalEntryList({
                                 >
                                   {t('show_details')}
                                 </IntentLink>
-                                {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                                {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
                                     {t('create_correction')}
                                   </button>
@@ -2025,10 +1927,10 @@ export default function JournalEntryList({
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
+            <Button variant="outline" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
               {t('bulk_cancel')}
             </Button>
-            <Button size="sm" onClick={handleBulkConfirm} disabled={!bulkCount} loading={bulkSubmitting}>
+            <Button onClick={handleBulkConfirm} disabled={!bulkCount} loading={bulkSubmitting}>
               {t('bulk_mark_confirm', { count: bulkCount ?? 0 })}
             </Button>
           </DialogFooter>
@@ -2161,7 +2063,7 @@ export default function JournalEntryList({
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={page === 0}
                 onClick={() => setPage(0)}
                 aria-label={t('first_page')}
@@ -2171,7 +2073,7 @@ export default function JournalEntryList({
               </Button>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={page === 0}
                 onClick={() => setPage(page - 1)}
                 aria-label={t('previous')}
@@ -2184,7 +2086,7 @@ export default function JournalEntryList({
               </span>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(page + 1)}
                 aria-label={t('next')}
@@ -2194,7 +2096,7 @@ export default function JournalEntryList({
               </Button>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(Math.ceil(count / pageSize) - 1)}
                 aria-label={t('last_page')}

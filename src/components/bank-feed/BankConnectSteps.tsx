@@ -84,6 +84,8 @@ interface FlowStepsProps {
   session: BankConnectSession
   banks: OpenPaymentsBank[] | null
   banksFailed: boolean
+  /** Ask for the bank list again after it failed (BankPickStep's "Försök igen"). */
+  onRetryBanks?: () => void
   /** Enskild firma: the private account used in the business is a choice. */
   soleTrader: boolean
   /** The step footers' cancel button; the finished screen shows `onClose` instead. */
@@ -100,7 +102,7 @@ interface FlowStepsProps {
 }
 
 /** The step on screen, from the controller's state. The header (title, "?", step count) is the surface's own. */
-export function FlowSteps({ controller, session, banks, banksFailed, soleTrader, closeButton, onClose, onEarlierConnection, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
+export function FlowSteps({ controller, session, banks, banksFailed, onRetryBanks, soleTrader, closeButton, onClose, onEarlierConnection, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
   const { state, dispatch } = controller
   switch (state.step) {
     case 'intro':
@@ -112,6 +114,7 @@ export function FlowSteps({ controller, session, banks, banksFailed, soleTrader,
           dispatch={dispatch}
           banks={banks}
           banksFailed={banksFailed}
+          onRetryBanks={onRetryBanks}
           soleTrader={soleTrader}
           onContinue={() => dispatch({ type: 'to_bankid' })}
           onEarlierConnection={onEarlierConnection}

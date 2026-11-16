@@ -68,7 +68,7 @@ export function PairsHead({ externalLabel }: { externalLabel: string }) {
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-border px-2 py-px text-[11px] text-muted-foreground">
+    <span className="inline-flex items-center rounded-md border border-border px-2 py-px text-xs text-muted-foreground">
       {children}
     </span>
   )
@@ -162,7 +162,7 @@ export function PairRow({
             </Link>
           </span>
         ))}
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {t('confidence', { percent: Math.round(item.proposal.confidence * 100) })}
         </span>
       </span>
@@ -181,7 +181,7 @@ export function PairRow({
         <Link href={`/bookkeeping/${p.journal_entry_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
           {voucherOf(p) ?? p.journal_entry_id.slice(0, 8)}
         </Link>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {t('confidence', { percent: Math.round(p.confidence * 100) })}
         </span>
       </span>
@@ -216,25 +216,25 @@ export function PairRow({
   let primary: React.ReactNode = null
   if (can('match') && item.proposal) {
     primary = (
-      <Button size="sm" variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
+      <Button variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
         {t('row_match')}
       </Button>
     )
   } else if (covered && onLinkInstead) {
     primary = (
-      <Button size="sm" variant="outline" onClick={onLinkInstead} disabled={anyBusy}>
+      <Button variant="outline" onClick={onLinkInstead} disabled={anyBusy}>
         {t('row_match')}
       </Button>
     )
   } else if (can('book') && isSkv) {
     primary = (
-      <Button size="sm" variant="outline" onClick={onBook} disabled={anyBusy}>
+      <Button variant="outline" onClick={onBook} disabled={anyBusy}>
         {t('row_book')}
       </Button>
     )
   } else if (can('book') && openHref) {
     primary = (
-      <Button size="sm" variant="outline" asChild>
+      <Button variant="outline" asChild>
         <Link href={openHref}>{t('row_book')}</Link>
       </Button>
     )
@@ -268,7 +268,7 @@ export function PairRow({
 
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, '!pl-0', DATE)}>{external ? formatDate(item.date) : ''}</td>
+      <td className={cn(TD_CLASS, '!pl-0 date-figures', DATE)}>{external ? formatDate(item.date) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>
         {external && (
           <span className="block truncate" data-ph-mask title={item.description}>
@@ -279,7 +279,7 @@ export function PairRow({
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {external ? money(item.amount) : ''}
       </td>
-      <td className={cn(TD_CLASS, DATE, 'pl-6')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
+      <td className={cn(TD_CLASS, DATE, 'pl-6 date-figures')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>{ledgerText}</td>
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {ledgerAmount != null ? money(ledgerAmount) : ''}
@@ -292,7 +292,7 @@ export function PairRow({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                   aria-label={t('v2_more')}
                   disabled={anyBusy}

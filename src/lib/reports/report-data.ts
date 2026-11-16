@@ -126,6 +126,17 @@ export interface ReportPagesView<T> {
  * another base URL are ignored: a new base starts over at its first page,
  * so a page of earlier parameters can never be appended under new ones.
  */
+/**
+ * The answers without the failed ones: what "Försök igen" starts from, so
+ * the view asks again for the first page that failed and keeps the rest.
+ */
+export function withoutFailedPages<T>(settled: SettledReportPages<T>): SettledReportPages<T> {
+  const results = Object.fromEntries(
+    Object.entries(settled.results).filter(([, result]) => result.error === null && result.data !== null),
+  )
+  return { base: settled.base, results }
+}
+
 export function viewReportPages<T>(
   url: string | null,
   chain: ReportPageChain,

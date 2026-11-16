@@ -651,7 +651,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     dependsOn: [],
     layer: 'surface',
     uses: ['deadlines', 'inbox', 'transactions'],
-    libFolders: ['agent', 'agent-context', 'agent-panel', 'agent-skills', 'ai-handoff'],
+    libFolders: ['agent', 'agent-context', 'agent-panel', 'agent-skills', 'ai-handoff', 'context-graph'],
     operationPrefixes: [],
     v1Segments: [],
     capability: 'ai',

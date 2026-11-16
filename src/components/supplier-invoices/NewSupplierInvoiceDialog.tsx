@@ -65,7 +65,7 @@ export default function NewSupplierInvoiceDialog({
         // right edge, and the Registrera button, never end up unreachable
         // under the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so
         // with the sheet closed this is exactly the old sm:max-w-2xl.
-        className="sm:max-w-[min(42rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+        className="sm:max-w-[min(42rem,calc(100vw-var(--agent-sheet-w,0px)))]"
         // Non-modal so the docked agent sheet (fixed z-[60], portaled outside
         // this dialog) stays scrollable and typeable while an invoice is being
         // registered: a modal Radix dialog wraps its overlay in RemoveScroll

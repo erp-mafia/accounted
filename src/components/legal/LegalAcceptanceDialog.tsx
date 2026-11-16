@@ -111,7 +111,7 @@ export function LegalAcceptanceDialog({ documents, initialAnalytics, company, ca
           ))}
         </ul>
 
-        <div className="space-y-4 border-t border-border pt-4">
+        <div className="space-y-4 border-t-hairline pt-4">
           <ChoiceRow
             id="legal-analytics"
             label={t('analytics_label')}
@@ -130,11 +130,11 @@ export function LegalAcceptanceDialog({ documents, initialAnalytics, company, ca
               disabled={busy !== null}
             />
           ) : null}
-          {company ? <p className="text-[12.5px] text-muted-foreground">{t('pooling_note', { company: company.name })}</p> : null}
+          {company ? <p className="text-xs text-muted-foreground">{t('pooling_note', { company: company.name })}</p> : null}
         </div>
 
         {company ? (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {t('export_note')}{' '}
             <Link href="/import#full-archive" className="underline underline-offset-4">
               {t('export_link')}
@@ -175,7 +175,7 @@ function ChoiceRow({
     <div className="flex items-start justify-between gap-4">
       <label htmlFor={id} className="flex flex-col gap-1 text-[13px]">
         <span>{label}</span>
-        <span className="text-[12.5px] text-muted-foreground">{help}</span>
+        <span className="text-xs text-muted-foreground">{help}</span>
       </label>
       <Switch id={id} checked={checked} onCheckedChange={onChange} disabled={disabled} className="mt-1" />
     </div>

@@ -8,7 +8,18 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BankMark } from '@/components/banks/BankMark'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { useBranding } from '@/lib/branding/brand-context'
+import { Label } from '@/components/ui/label'
+import { StatusGlyph } from '@/components/ui/status-glyph'
+import {
+  StandaloneFacts,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneLabel,
+  StandaloneOutcome,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
 import { formatSigningLinkExpiry } from '@/lib/payments/orders/signing-link-expiry'
 import { parsePaymentSigningReturn, stripPaymentSigningReturn, type PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -46,6 +57,8 @@ export interface PaymentSigningLinkPageProps {
  */
 export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPageProps) {
   const t = useTranslations('payment_signing_page')
+  const tSigning = useTranslations('signing_page')
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
   const client = useMemo(() => createSigningLinkClient(token), [token])
   const data = initial
@@ -93,44 +106,38 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
   const secondSignatureBatchId = data.state === 'second_signature' && signing && !resume ? signing.batch_id : null
   const resumeNeedsNumber = resume !== null && recalled !== undefined && !recalled && !resumeNumber
 
-  const header = (
-    <header className="space-y-4">
-      <BrandWordmark size="inline" />
-      <div className="space-y-1">
-        <p className="text-[12.5px] uppercase tracking-wider text-muted-foreground">{t('eyebrow')}</p>
-        <h1 className="font-display text-2xl tracking-tight" data-ph-mask="">
-          {data.company_name}
-        </h1>
-        <p className="text-[13px] text-muted-foreground" data-ph-mask="">
-          {t('prepared_by', { requester: data.requester, count: data.order_count, company: data.company_name })}
-        </p>
-      </div>
-    </header>
-  )
+  const signable = data.state !== 'changed' && data.state !== 'done'
 
   const basket = (
-    <section className="space-y-4 rounded-lg border border-border p-6">
-      <div className="flex items-center gap-2 text-[13px]">
-        <span className="text-muted-foreground">{t('from_account')}</span>
-        <BankMark bankName={data.bank_name} size={16} />
-        <span className="tabular-nums" data-ph-mask="">
-          {account || data.bank_name || t('account_fallback')}
-        </span>
-      </div>
+    <>
+      <StandaloneFacts
+        className="mt-5"
+        rows={[
+          {
+            label: t('from_account'),
+            value: (
+              <span className="inline-flex items-center gap-2">
+                <BankMark bankName={data.bank_name} size={16} />
+                {account || data.bank_name || t('account_fallback')}
+              </span>
+            ),
+          },
+        ]}
+      />
       {data.note && (
-        <div className="space-y-1">
-          <p className="text-[12.5px] text-muted-foreground">{t('note_heading', { requester: data.requester })}</p>
-          <p className="whitespace-pre-line border-l-2 border-border pl-3 text-[13px]" data-ph-mask="">
+        <div className="mt-4">
+          <StandaloneLabel>{t('note_heading', { requester: data.requester })}</StandaloneLabel>
+          <p className="mt-0.5 whitespace-pre-line text-sm text-foreground" data-ph-mask="">
             {data.note}
           </p>
         </div>
       )}
-      <ul className="stagger-enter text-[13px]" data-ph-mask="">
+      <ul className="stagger-enter mt-4 border-t-hairline text-sm" data-ph-mask="">
         {data.orders.map((o) => (
-          <li key={o.payment_order_id} className="flex items-start justify-between gap-4 border-b border-border py-2">
+          <li key={o.payment_order_id} className="flex items-start justify-between gap-4 border-b-hairline py-2">
             <span className="min-w-0">
               <span className="block truncate">{o.payee_name}</span>
-              <span className="block truncate text-[12.5px] tabular-nums text-muted-foreground">
+              <span className="block truncate text-xs tabular-nums text-muted-foreground">
                 {[o.payee_label, formatDate(o.requested_execution_date), o.reference_type === 'ocr' ? t('reference_ocr', { value: o.reference }) : o.reference]
                   .filter(Boolean)
                   .join(' · ')}
@@ -140,20 +147,19 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
           </li>
         ))}
       </ul>
-      <div className="flex items-center justify-between text-[13px]">
-        <span className="text-muted-foreground">{t('total')}</span>
-        <span className="font-medium tabular-nums">{formatCurrency(data.total_amount, data.currency)}</span>
+      <div className="flex items-center justify-between py-2 text-sm">
+        <span className="font-medium text-strong">{t('total')}</span>
+        <span className="font-medium tabular-nums text-strong">{formatCurrency(data.total_amount, data.currency)}</span>
       </div>
-    </section>
+    </>
   )
 
   let body: React.ReactNode
   if (data.state === 'changed') {
     body = (
-      <section className="space-y-2 rounded-lg border border-border p-6">
-        <h2 className="font-display text-xl tracking-tight">{t('changed_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">{t('changed_body')}</p>
-      </section>
+      <StandaloneOutcome className="mt-5 border-t-hairline pt-4" title={t('changed_title')}>
+        {t('changed_body')}
+      </StandaloneOutcome>
     )
   } else if (data.state === 'done') {
     const key =
@@ -165,14 +171,17 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
           ? 'done_rejected_body'
           : 'done_body'
     body = (
-      <section className="space-y-2 rounded-lg border border-border p-6">
-        <h2 className="font-display text-xl tracking-tight">{t('done_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">{t(key, { requester: data.requester })}</p>
-      </section>
+      <StandaloneOutcome
+        className="mt-5 border-t-hairline pt-4"
+        mark={key === 'done_body' ? <StatusGlyph tone="ok" size={16} /> : undefined}
+        title={t('done_title')}
+      >
+        {t(key, { requester: data.requester })}
+      </StandaloneOutcome>
     )
   } else if (resume && recalled === undefined) {
     body = (
-      <section className="space-y-3 rounded-lg border border-border p-6">
+      <section className="mt-5 space-y-3" aria-busy="true">
         <Skeleton className="h-4 w-1/3" />
         <Skeleton className="h-8 w-full" />
       </section>
@@ -181,35 +190,30 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
     // Back on the link with a signing at the bank and no number kept: the
     // poll needs the PSU, so the person types it once more.
     body = (
-      <section className="space-y-4 rounded-lg border border-border p-6">
-        <p className="text-[13px]">{t('resume_intro')}</p>
-        <label className="block space-y-2 text-[13px]">
-          <span className="text-muted-foreground">{t('personal_number_label')}</span>
+      <section className="mt-5 flex flex-col gap-3">
+        <p className="text-sm text-foreground">{t('resume_intro')}</p>
+        <div className="space-y-2">
+          <Label htmlFor="resume-personal-number">{t('personal_number_label')}</Label>
           <Input
+            id="resume-personal-number"
             inputMode="numeric"
             autoComplete="off"
             value={typedForResume}
             onChange={(e) => setTypedForResume(e.target.value)}
             placeholder="ÅÅÅÅMMDD-NNNN"
-            className="w-[200px] tabular-nums"
+            className="h-11 tabular-nums"
           />
-        </label>
-        <Button onClick={() => setResumeNumber(typedForResume.trim())} disabled={typedForResume.trim().length < 10}>
+        </div>
+        <Button size="lg" className="w-full" onClick={() => setResumeNumber(typedForResume.trim())} disabled={typedForResume.trim().length < 10}>
           {t('resume_continue')}
         </Button>
       </section>
     )
   } else {
     body = (
-      <section className="space-y-4 rounded-lg border border-border p-6">
-        <div className="flex items-center gap-2">
-          <h2 className="font-display text-xl tracking-tight">{stage === 'done' ? t('signed_title') : t('sign_title')}</h2>
-          {stage !== 'done' && (
-            <HelpPopover className="shrink-0">
-              <p>{t('help_signer')}</p>
-            </HelpPopover>
-          )}
-        </div>
+      // The flow's footer bleeds 20px (a dialog's inset): on a phone the
+      // panel's inset is 16px, so the section adds the missing 4px.
+      <section className="mt-5 border-t-hairline pt-4 max-sm:px-1">
         <BankIdSigningFlow
           orders={orders}
           signerKnown={false}
@@ -228,18 +232,38 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
   }
 
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-xl space-y-6">
-        {header}
-        {data.state !== 'done' && basket}
-        {body}
-        <p className="text-[12.5px] text-muted-foreground">
-          {(data.state === 'ready' || data.state === 'in_signing' || data.state === 'second_signature') && stage !== 'done'
-            ? `${t('expires', { date: formatSigningLinkExpiry(data.expires_at) })} `
-            : ''}
-          {t('footer_provider')}
-        </p>
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={data.company_name} via={tSigning('via', { platform: appName })} />
+      <div className="mt-5 flex items-start gap-2">
+        <StandaloneHeading
+          className="min-w-0 flex-1"
+          eyebrow={t('eyebrow')}
+          title={signable && stage === 'done' ? t('signed_title') : t('sign_title')}
+          sub={
+            <span data-ph-mask="">
+              {t('prepared_by', { requester: data.requester, count: data.order_count, company: data.company_name })}
+            </span>
+          }
+        />
+        {signable && stage !== 'done' && (
+          <HelpPopover className="mt-5 shrink-0">
+            <p>{t('help_signer')}</p>
+          </HelpPopover>
+        )}
       </div>
-    </main>
+      {data.state !== 'done' && (
+        <p className="mt-2 font-display text-2xl tabular-nums text-strong" data-ph-mask="">
+          {formatCurrency(data.total_amount, data.currency)}
+        </p>
+      )}
+      {data.state !== 'done' && basket}
+      {body}
+      <StandaloneSmall>
+        {(data.state === 'ready' || data.state === 'in_signing' || data.state === 'second_signature') && stage !== 'done'
+          ? `${t('expires', { date: formatSigningLinkExpiry(data.expires_at) })} `
+          : ''}
+        {t('footer_provider')}
+      </StandaloneSmall>
+    </StandalonePage>
   )
 }

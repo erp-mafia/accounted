@@ -145,7 +145,7 @@ export function InvoiceReminderSettingsForm({
               : t('send_reminders_off')}
           </SettingsRowNote>
           <SettingsRowEnd>
-            <Button type="button" variant="outline" size="sm" onClick={onOpenReminders}>
+            <Button type="button" variant="outline" onClick={onOpenReminders}>
               {on ? t('send_reminders_manage') : t('send_reminders_turn_on')}
             </Button>
           </SettingsRowEnd>

@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { renderAgentGroundRules } from '@/lib/agent/intents/shared-rules'
-import { NAV_V2_COMPANY, NAV_V2_TOP } from '@/components/dashboard/nav-v2'
+import { NAV_V3_AREAS } from '@/components/dashboard/nav-v3'
 
 const getDashboardNavFlags = vi.fn()
 vi.mock('@/lib/dashboard/nav-flags', () => ({
@@ -32,18 +32,39 @@ describe('renderUiGrounding: the page line', () => {
   it('names the page the user is on by its menu path (the reported Underlag case)', () => {
     const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS, route: '/e/general/invoice-inbox' })
     expect(out.split('\n')[0]).toBe(
-      `Användaren är på sidan: ${nav.v2_purchases} → ${nav.invoice_inbox} (/e/general/invoice-inbox).`,
+      `Användaren är på sidan: ${nav.arkiv} → ${nav.v3_incoming} (/e/general/invoice-inbox).`,
     )
   })
 
-  it('resolves a detail page to its section (a verifikation under Bokföring)', () => {
+  it('resolves a detail page to its area and row (a verifikation under Bokföring)', () => {
     expect(svMenuPath('/bookkeeping/5f0c6d0e-0000-4000-8000-000000000001')).toBe(
-      `${nav.bookkeeping} → ${nav.v2_vouchers}`,
+      `${nav.bookkeeping} → ${nav.v3_vouchers}`,
     )
   })
 
-  it('prefers the longest match (Bokslut, not Bokföring, for the year-end wizard)', () => {
-    expect(svMenuPath('/bookkeeping/year-end')).toBe(`${nav.v2_closing} → ${nav.year_end}`)
+  it('prefers the longest match (Bokslut, not Verifikat, for the year-end wizard)', () => {
+    expect(svMenuPath('/bookkeeping/year-end')).toBe(`${nav.bookkeeping} → ${nav.v2_closing}`)
+  })
+
+  it('names a view of a page by its own row (Minne is a view of the wiki)', () => {
+    expect(svMenuPath('/wiki')).toBe(`${nav.v3_agents} → ${nav.v3_context}`)
+    expect(svMenuPath('/pending')).toBe(`${nav.v2_todo} → ${nav.v3_routine}`)
+  })
+
+  it('names a route without a row under the row it is reached from', () => {
+    expect(svMenuPath('/mileage')).toBe(`${nav.v2_purchases} → ${nav.mileage}`)
+    expect(svMenuPath('/bolaget/moten')).toBe(`${nav.v3_company} → ${nav.v3_meetings}`)
+    expect(svMenuPath('/reports/ink2-declaration')).toBe(
+      `${nav.bookkeeping} → ${nav.v2_closing} → ${nav.income_declaration}`,
+    )
+    expect(svMenuPath('/bookkeeping/year-end/arsredovisning')).toBe(
+      `${nav.bookkeeping} → ${nav.v2_closing} → ${nav.annual_report}`,
+    )
+  })
+
+  it('names the settings pages that are rows of Agenter there, as the shell lights them', () => {
+    expect(svMenuPath('/settings/assistant')).toBe(`${nav.v3_agents} → ${nav.v3_instructions}`)
+    expect(svMenuPath('/settings/api')).toBe(`${nav.v3_agents} → ${nav.v3_connect_agent}`)
   })
 
   it('names settings pages by rail group and section, and hub children under their hub', () => {
@@ -59,7 +80,7 @@ describe('renderUiGrounding: the page line', () => {
   })
 
   it('matches / only exactly', () => {
-    expect(svMenuPath('/')).toBe(nav.v2_todo)
+    expect(svMenuPath('/')).toBe(`${nav.v2_todo} → ${nav.home}`)
     expect(menuTrail('/no-such-page', { ctx: gateContext(), labels: SV_LABELS })).toBeNull()
   })
 
@@ -72,18 +93,47 @@ describe('renderUiGrounding: the page line', () => {
 })
 
 describe('renderUiGrounding: the menu', () => {
-  it('lists every sidebar entry from nav-v2.ts with its sv.json label: one source, no second list', () => {
-    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
-    for (const section of [...NAV_V2_TOP, ...NAV_V2_COMPANY]) {
-      // The new Inkorg page shows only in its rollout (its own test below).
-      if (section.requiresInkorgV2) continue
-      expect(out).toContain(`${nav[section.labelKey]} (${section.href})`)
-      for (const sub of section.sub ?? []) {
-        // Entity-gated twins (INK2 for aktiebolag, NE for enskild firma) show one side only.
-        if (sub.entityOnly && ![sub.entityOnly].flat().includes('aktiebolag')) continue
-        expect(out).toContain(`${nav[sub.labelKey]} (${sub.href})`)
+  it('lists every area and row from nav-v3.ts with its sv.json label: one source, no second list', () => {
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS, hasMcpExtension: true })
+    for (const area of NAV_V3_AREAS) {
+      // Inställningar is listed by its sections; the byrå cockpit is above the company.
+      if (area.id === 'settings' || area.id === 'byra') continue
+      expect(out).toContain(`- ${nav[area.labelKey]}: `)
+      for (const group of area.groups) {
+        if (group.labelKey) expect(out).toContain(`${nav[group.labelKey]}: `)
+        for (const item of group.items) {
+          // The new Inkorg page shows only in its rollout (its own test below).
+          if (item.requiresInkorgV2) continue
+          // Fakta follows the Arkiv reading rollout; the wiki's Kompetens view yields to the Agenter page.
+          if (item.requiresArkivBrain || item.hiddenWithAgents) continue
+          expect(out).toContain(`${nav[item.labelKey]} (${item.href})`)
+        }
       }
+      // The widest menu has the new Inkorg page off, so an upload lands in the Underlag workspace.
+      const create = area.create?.find((c) => !c.requiresInkorgV2)
+      if (create) expect(out).toContain(`${nav[create.labelKey]} (${create.href})`)
     }
+  })
+
+  it('describes the shell as it is: an icon rail of areas, a sidebar per area', () => {
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
+    expect(out).toContain('ikonlist längst till vänster')
+    expect(out).toContain(
+      `- ${nav.v2_todo}: ${nav.home} (/), ${nav.v3_needs_you} (/?vy=behover), ${nav.v3_routine} (/pending), ${nav.v3_done} (/?vy=gjort)`,
+    )
+    // A named group stands before its rows.
+    expect(out).toContain(`${nav.v3_group_registers}: ${nav.v3_agreements} (/bolaget/avtal)`)
+    // The area's quiet settings links, by the settings label.
+    expect(out).toContain(`Områdets inställningar, bakom raden Inställningar under sidomenyns rader: ${settingsNav.banking} (/settings/banking)`)
+    // The old menu's names are gone.
+    expect(out).not.toContain(nav.v2_proposals)
+    expect(out).not.toContain('Sidomenyn (huvudval')
+  })
+
+  it('lists the pages reached inside another page under the row they are reached from', () => {
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
+    expect(out).toContain(`- ${nav.bookkeeping} → ${nav.v2_closing} → ${nav.income_declaration} (/reports/ink2-declaration)`)
+    expect(out).toContain(`- ${nav.bookkeeping} → ${nav.v2_closing} → ${nav.annual_report} (/bookkeeping/year-end/arsredovisning)`)
   })
 
   it('hides what the sidebar hides for this company', () => {
@@ -107,13 +157,13 @@ describe('renderUiGrounding: the menu', () => {
     expect(out).toContain('(/reports/ne-declaration)')
   })
 
-  it('moves the inbox for a company in the new Inkorg rollout: Inkorg at the top, Underlag out of Inköp', () => {
+  it('moves the inbox for a company in the new Inkorg rollout: one Inkommande row, on the new page', () => {
     const before = renderUiGrounding({ ctx: gateContext({ inkorgV2Enabled: false }), labels: SV_LABELS })
     expect(before).not.toContain('(/inkorg)')
-    expect(before).toContain(`${nav.invoice_inbox} (/e/general/invoice-inbox)`)
+    expect(before).toContain(`${nav.v3_incoming} (/e/general/invoice-inbox)`)
 
     const after = renderUiGrounding({ ctx: gateContext({ inkorgV2Enabled: true }), labels: SV_LABELS })
-    expect(after).toContain(`${nav.inkorg} (/inkorg)`)
+    expect(after).toContain(`${nav.v3_incoming} (/inkorg)`)
     expect(after).not.toContain('(/e/general/invoice-inbox)')
   })
 
@@ -141,18 +191,18 @@ describe('renderUiGrounding: the menu', () => {
   it('says what the import page takes, so a customer CSV import is findable', () => {
     const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
     expect(out).toContain(
-      `Sidan ${nav.bookkeeping} → ${nav.import} (/import) innehåller: ${settingsNav.keywords_import}.`,
+      `Sidan ${nav.bookkeeping} → ${nav.v3_import} (/import) innehåller: ${settingsNav.keywords_import}.`,
     )
     expect(settingsNav.keywords_import).toMatch(/Importera kunder/)
     expect(settingsNav.keywords_import).toMatch(/CSV/)
   })
 
   // PH 216, PH 202: the assistant told a new user it did not know where to
-  // add another company: the user menu is not in the sidebar tree.
-  it('says where another company is added: the user menu, and the button on Företag', () => {
+  // add another company: the company row is not in the sidebar tree.
+  it('says where another company is added: the company row, and the button on Företag', () => {
     const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
     const line = out.split('\n').find((l) => l.startsWith('Företag byts och läggs till'))
-    expect(line).toContain('användarmenyn längst ned i sidomenyn (klicka på ditt namn)')
+    expect(line).toContain('företagsraden överst i sidomenyn (klicka på företagsnamnet)')
     expect(line).toContain(`"${sv.company_switcher.add_company}" (/select-company?choose=1)`)
     expect(line).toContain(`${nav.settings} → ${settingsNav.group_company} → ${settingsNav.company} (/settings/company)`)
     // The settings search finds the same section by the words.
@@ -169,7 +219,7 @@ describe('renderUiGrounding: the menu', () => {
     const en = await loadUiLabels('en')
     const trail = menuTrail('/e/general/invoice-inbox', { ctx: gateContext(), labels: en })
     const enNav = (await import('@/messages/en.json')).default.nav as Record<string, string>
-    expect(trail).toEqual([enNav.v2_purchases, enNav.invoice_inbox])
+    expect(trail).toEqual([enNav.arkiv, enNav.v3_incoming])
   })
 })
 
@@ -260,7 +310,7 @@ describe('buildUiGrounding', () => {
       'company-1',
       { route: '/bookkeeping', locale: 'sv' },
     )
-    expect(out).toContain(`Användaren är på sidan: ${nav.bookkeeping} → ${nav.v2_vouchers} (/bookkeeping).`)
+    expect(out).toContain(`Användaren är på sidan: ${nav.bookkeeping} → ${nav.v3_vouchers} (/bookkeeping).`)
     expect(out).toContain('Appens meny')
   })
 
@@ -283,8 +333,10 @@ describe('uiLabelGlossary', () => {
   it('pairs the sidebar labels Swedish = English, from the same messages the menu renders', async () => {
     const glossary = await uiLabelGlossary()
     expect(glossary).toContain(`${nav.v2_purchases} = ${enNav.v2_purchases}`)
-    expect(glossary).toContain(`${nav.invoice_inbox} = ${enNav.invoice_inbox}`)
-    expect(glossary).toContain(`${nav.v2_vouchers} = ${enNav.v2_vouchers}`)
+    expect(glossary).toContain(`${nav.v3_incoming} = ${enNav.v3_incoming}`)
+    expect(glossary).toContain(`${nav.v3_vouchers} = ${enNav.v3_vouchers}`)
+    expect(glossary).toContain(`${nav.v3_agents} = ${enNav.v3_agents}`)
+    expect(glossary).toContain(`${nav.v3_group_registers} = ${enNav.v3_group_registers}`)
     expect(glossary).toContain(`${nav.settings} = ${enNav.settings}`)
   })
 

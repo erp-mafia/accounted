@@ -3,22 +3,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput, sumOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -31,7 +33,6 @@ import {
   stockRowValue,
   type StockCategory,
 } from '@/lib/bokslut/stock-count/valuation'
-import type { FiscalPeriod } from '@/types'
 
 type Status = 'draft' | 'signed' | 'booked'
 
@@ -133,13 +134,18 @@ function rowBody(row: FormRow) {
  */
 export function StockCountRegister() {
   const t = useTranslations('stock_count')
+  // The top bar names Bokslut before the page (the menu row these pages sit under).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
-  const [periodId, setPeriodId] = useState<string | null>(null)
-  const [period, setPeriod] = useState<FiscalPeriod | null>(null)
+  // The fiscal year is app-wide context (the sidebar); the count belongs to one started year.
+  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [loading, setLoading] = useState(true)
+  // A failed load says so in the page with "Försök igen" (Stil v3 states), never a toast.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [counts, setCounts] = useState<CountSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [count, setCount] = useState<CountView | null>(null)
@@ -149,6 +155,13 @@ export function StockCountRegister() {
   const [saving, setSaving] = useState(false)
   const [bankIdAvailable, setBankIdAvailable] = useState(false)
   const [signOpen, setSignOpen] = useState(false)
+  // Another year closes any open count form (adjusting state during render).
+  const [shownPeriodId, setShownPeriodId] = useState(periodId)
+  if (periodId !== shownPeriodId) {
+    setShownPeriodId(periodId)
+    setForm(null)
+    setSelectedId(null)
+  }
   const [signMode, setSignMode] = useState<'bankid' | 'manual'>('manual')
   const [signerName, setSignerName] = useState('')
   const [signerEmail, setSignerEmail] = useState('')
@@ -180,14 +193,20 @@ export function StockCountRegister() {
     try {
       const res = await fetch(`/api/bookkeeping/inventory-counts?fiscal_period_id=${periodId}`)
       const body = await res.json().catch(() => ({}))
-      if (!res.ok) return fail(t('load_failed'), body)
+      if (!res.ok) {
+        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        return
+      }
       const list = (body.data?.counts ?? []) as CountSummary[]
       setCounts(list)
       setSelectedId((current) => (current && list.some((c) => c.id === current) ? current : (list[0]?.id ?? null)))
+      setLoadError(null)
+    } catch {
+      setLoadError(t('load_failed'))
     } finally {
       setLoading(false)
     }
-  }, [periodId, fail, t])
+  }, [periodId, locale, t])
 
   useEffect(() => {
     void loadCounts()
@@ -199,12 +218,20 @@ export function StockCountRegister() {
       setAdjustments(null)
       return
     }
-    const res = await fetch(`/api/bookkeeping/inventory-counts/${selectedId}`)
-    const body = await res.json().catch(() => ({}))
-    if (!res.ok) return fail(t('load_failed'), body)
-    setCount(body.data?.count ?? null)
-    setAdjustments(body.data?.booking?.adjustments ?? null)
-  }, [selectedId, fail, t])
+    try {
+      const res = await fetch(`/api/bookkeeping/inventory-counts/${selectedId}`)
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        return
+      }
+      setCount(body.data?.count ?? null)
+      setAdjustments(body.data?.booking?.adjustments ?? null)
+      setLoadError(null)
+    } catch {
+      setLoadError(t('load_failed'))
+    }
+  }, [selectedId, locale, t])
 
   useEffect(() => {
     void loadCount()
@@ -381,39 +408,30 @@ export function StockCountRegister() {
     c.status === 'draft' && c.signing_request_id ? t('status_signing') : t(`status_${c.status}`)
 
   const headerAction = !canWrite || form ? null : count?.status === 'signed' ? (
-    <Button size="sm" onClick={() => setConfirmBook(true)}>{t('book')}</Button>
+    <Button size="toolbar" onClick={() => setConfirmBook(true)}>{t('book')}</Button>
   ) : count?.status === 'draft' && !pendingSigning ? (
-    <Button size="sm" onClick={() => setSignOpen(true)} disabled={count.rows.length === 0}>{t('sign')}</Button>
+    <Button size="toolbar" onClick={() => setSignOpen(true)} disabled={count.rows.length === 0}>{t('sign')}</Button>
   ) : (
-    <Button size="sm" variant="outline" onClick={startNew} disabled={!period}>{t('new')}</Button>
+    <Button size="toolbar" variant="outline" onClick={startNew} disabled={!period}><PlusIcon className="h-4 w-4" aria-hidden />{t('new')}</Button>
   )
 
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }}
         title={t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        help={<HelpPopover>{t('help')}</HelpPopover>}
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             {headerAction}
-            <FyPicker
-              value={periodId}
-              onChange={(id, p) => {
-                setPeriodId(id)
-                setPeriod(p ?? null)
-                setForm(null)
-                setSelectedId(null)
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-            />
           </div>
         }
       />
 
       {form ? (
         <section className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-3">
+          {/* The count's own fields are a form column (760px); the rows table below fills the panel. */}
+          <div className="grid max-w-[760px] gap-4 sm:grid-cols-3">
             <div className="space-y-1">
               <Label htmlFor="stock-balance-date">{t('field_balance_date')}</Label>
               <Input id="stock-balance-date" value={period?.period_end ?? ''} disabled className="tabular-nums" />
@@ -451,7 +469,7 @@ export function StockCountRegister() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -492,7 +510,7 @@ export function StockCountRegister() {
                       <td className={TD_CLASS}>
                         <Input aria-label={t('col_write_down')} value={row.write_down_percent} inputMode="decimal" className="w-20 text-right tabular-nums" onChange={(e) => setRow(i, { write_down_percent: e.target.value })} />
                       </td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{parsed ? formatCurrency(stockRowValue(parsed)) : ''}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{parsed ? formatRowAmount(stockRowValue(parsed)) : ''}</td>
                       <td className={TD_CLASS}>
                         <button
                           type="button"
@@ -520,7 +538,7 @@ export function StockCountRegister() {
             <Label htmlFor="stock-paste">{t('paste_label')}</Label>
             <p className="text-xs text-muted-foreground">{t('paste_hint')}</p>
             <Textarea id="stock-paste" value={paste} rows={4} onChange={(e) => setPaste(e.target.value)} className="font-mono text-xs" />
-            <Button size="sm" variant="outline" onClick={applyPaste} disabled={!paste.trim()}>
+            <Button variant="outline" onClick={applyPaste} disabled={!paste.trim()}>
               {t('paste_apply')}
             </Button>
           </div>
@@ -533,10 +551,16 @@ export function StockCountRegister() {
           </div>
         </section>
       ) : loading ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadError && !count ? (
+        <LoadError
+          title={t('load_failed')}
+          description={loadError === t('load_failed') ? undefined : loadError}
+          onRetry={() => void reload()}
+        />
       ) : !count ? (
         <EmptyState
           title={t('empty_title')}
@@ -545,7 +569,11 @@ export function StockCountRegister() {
         />
       ) : (
         <section className="space-y-6">
-          {pendingSigning && (
+          {loadError ? (
+            <AttnLine action={{ label: tCommon('retry'), onClick: () => void reload() }}>
+              {tCommon('refresh_failed')}
+            </AttnLine>
+          ) : pendingSigning && (
             <AttnLine
               action={
                 signingUrl
@@ -606,7 +634,7 @@ export function StockCountRegister() {
             )}
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="stagger-enter w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -626,9 +654,9 @@ export function StockCountRegister() {
                     <td className={TD_CLASS}>{categoryLabel(row.category)}</td>
                     <td className={TD_CLASS}>{row.unit ?? ''}</td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.quantity}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.unit_cost)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.unit_cost)}</td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.write_down_percent || ''}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.value)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.value)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -638,9 +666,11 @@ export function StockCountRegister() {
           <TotalsTable totals={count.totals} label={categoryLabel} t={t} />
 
           {adjustments && adjustments.length > 0 && (
-            <div className="space-y-2 overflow-x-auto">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('booking_heading')}</h2>
-              <table className="w-full border-collapse text-[13px]">
+            // overflow-x-auto on a wrapper wide enough for the 8px bleed, so the
+            // bleed is not clipped while a narrow screen scrolls the table.
+            <div className="-mx-2 space-y-2 overflow-x-auto px-2">
+              <h2 className="text-sm font-medium text-muted-foreground">{t('booking_heading')}</h2>
+              <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('col_category')}</th>
@@ -655,9 +685,9 @@ export function StockCountRegister() {
                     <tr key={a.category}>
                       <td className={TD_CLASS}>{categoryLabel(a.category)}</td>
                       <td className={cn(TD_CLASS, 'font-mono')}>{a.stock_account} / {a.change_account}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(a.ledger)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(a.counted)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(a.adjustment)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(a.ledger)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(a.counted)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(a.adjustment)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -666,9 +696,9 @@ export function StockCountRegister() {
           )}
 
           {counts.length > 1 && (
-            <div className="space-y-2 overflow-x-auto">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('earlier_counts')}</h2>
-              <table className="w-full border-collapse text-[13px]">
+            <div className="-mx-2 space-y-2 overflow-x-auto px-2">
+              <h2 className="text-sm font-medium text-muted-foreground">{t('earlier_counts')}</h2>
+              <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('col_count_date')}</th>
@@ -684,10 +714,10 @@ export function StockCountRegister() {
                       className={cn('cursor-pointer hover:bg-secondary/35', c.id === count.id && 'bg-secondary/35')}
                       onClick={() => setSelectedId(c.id)}
                     >
-                      <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(c.count_date)}</td>
+                      <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(c.count_date)}</td>
                       <td className={TD_CLASS}>{statusLabel(c)}</td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{c.row_count}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(c.total_value)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(c.total_value)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -698,7 +728,7 @@ export function StockCountRegister() {
       )}
 
       <Dialog open={signOpen} onOpenChange={setSignOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('sign_title')}</DialogTitle>
           </DialogHeader>
@@ -785,9 +815,9 @@ function TotalsTable({
   if (totals.length === 0) return null
   const total = sumOre(totals.map((row) => row.value))
   return (
-    <div className="space-y-2 overflow-x-auto">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('totals_heading')}</h2>
-      <table className="w-full border-collapse text-[13px]">
+    <div className="-mx-2 space-y-2 overflow-x-auto px-2">
+      <h2 className="text-sm font-medium text-muted-foreground">{t('totals_heading')}</h2>
+      <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
         <thead>
           <tr>
             <th className={TH_CLASS}>{t('col_category')}</th>
@@ -800,9 +830,9 @@ function TotalsTable({
           {totals.map((row) => (
             <tr key={row.category}>
               <td className={TD_CLASS}>{label(row.category)}</td>
-              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.cost)}</td>
-              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.write_down)}</td>
-              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.value)}</td>
+              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.cost)}</td>
+              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.write_down)}</td>
+              <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.value)}</td>
             </tr>
           ))}
           <tr>

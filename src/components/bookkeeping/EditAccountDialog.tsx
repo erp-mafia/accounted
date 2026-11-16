@@ -291,7 +291,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>
             Redigera konto <span data-ph-mask="">{account.account_number}</span>
@@ -378,10 +378,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       </p>
                       <Button
                         variant="ghost"
-                        size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <PlusIcon className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     </div>
@@ -390,7 +389,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                   {rules.map((rule) => (
                     <div
                       key={rule.account_dimension_rule_id}
-                      className="flex items-center gap-3 rounded-lg border p-3"
+                      className="flex items-center gap-3 rounded-lg p-3 bg-control shadow-raised"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium truncate">
@@ -491,14 +490,12 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       <div className="flex justify-end gap-2">
                         <Button
                           variant="ghost"
-                          size="sm"
                           disabled={isAddingRule}
                           onClick={resetAddRuleForm}
                         >
                           Avbryt
                         </Button>
                         <Button
-                          size="sm"
                           disabled={
                             !newRuleDim ||
                             (newRuleNeedsValue && !newRuleValueCode)
@@ -514,10 +511,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                     rules.length > 0 && (
                       <Button
                         variant="ghost"
-                        size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <PlusIcon className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     )
@@ -527,7 +523,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
             </div>
           )}
 
-          <div className="flex items-center justify-between rounded-lg border p-3">
+          <div className="flex items-center justify-between rounded-lg p-3 bg-control shadow-raised">
             <div>
               <p className="text-sm font-medium">Aktivt konto</p>
               <p className="text-xs text-muted-foreground">

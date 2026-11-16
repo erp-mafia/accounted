@@ -15,7 +15,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ArrowDownOnSquareIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   semestertillaggRateFromPercentInput,
@@ -46,7 +45,7 @@ function RequiredMark() {
 
 // Small caps section label; sections are separated by a hairline divider
 // instead of being boxed in their own cards (compact, Linear-style layout).
-const SECTION_HEADER = 'text-xs font-semibold uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADER = 'text-xs font-semibold text-muted-foreground'
 
 /** Compact label + control stack shared by every field in the dialog. */
 function Field({
@@ -91,22 +90,22 @@ export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Pro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // Override the primitive's own padding + whole-dialog scroll: this
-        // dialog is a fixed header + scrolling body + solid footer (flex
-        // column), so the footer never overlaps scrolling content.
-        className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
-        // Escape closes an untouched dialog, like every other overlay, but a
-        // half-typed employee must survive a stray Escape: then closing is
-        // explicit, the header X or Avbryt. The fields are uncontrolled (read
-        // on submit), so "changed since open" decides (useEditedSinceOpen). A
-        // backdrop click never closes it. Same convention as
-        // NewJournalEntryDialog.
-        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
+      <DialogContent size="wide"
+ // Override the primitive's own padding + whole-dialog scroll: this
+ // dialog is a fixed header + scrolling body + solid footer (flex
+ // column), so the footer never overlaps scrolling content.
+ className="flex flex-col p-0 gap-0 overflow-hidden"
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed employee must survive a stray Escape: then closing is
+ // explicit, the header X or Avbryt. The fields are uncontrolled (read
+ // on submit), so "changed since open" decides (useEditedSinceOpen). A
+ // backdrop click never closes it. Same convention as
+ // NewJournalEntryDialog.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
+        <DialogHeader className="border-b-hairline px-6 pb-4 pt-6">
           <DialogTitle>Ny anställd</DialogTitle>
         </DialogHeader>
         <div className="contents" {...editProps}>
@@ -581,7 +580,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
       {/* Solid footer outside the scroll area: always visible, never overlaps
           content (the body above scrolls independently). */}
-      <div className="flex items-center gap-3 border-t border-border bg-background px-6 py-4">
+      <div className="flex items-center gap-3 border-t-hairline bg-background px-6 py-4">
         {submitError && (
           <p role="alert" className="min-w-0 flex-1 text-sm text-destructive">
             {submitError.message}
@@ -595,12 +594,12 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             )}
           </p>
         )}
-        <Button type="button" variant="outline" className="ml-auto" onClick={onCancel}>
+        <Button type="button" variant="ghost" className="ml-auto" onClick={onCancel}>
           Avbryt
         </Button>
-        <Button type="submit" disabled={saving}>
-          <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />
-          {saving ? 'Sparar...' : 'Spara'}
+        {/* The primary names the thing it creates (V7 creation forms). */}
+        <Button type="submit" loading={saving}>
+          Skapa anställd
         </Button>
       </div>
     </form>

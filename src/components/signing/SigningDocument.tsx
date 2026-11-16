@@ -4,7 +4,7 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'unpdf/pdfjs'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 
 /** How far outside the viewport a page is drawn ahead of the reader, and kept; further away its bitmap is let go. */
 const NEAR_MARGIN = '150% 0px'
@@ -170,14 +170,18 @@ export function SigningDocument({ url, fileName, onLoaded, onPage, onReachedEnd,
   }, [reachedEnd])
 
   if (loaded.kind === 'loading') {
-    return <Skeleton className="aspect-[210/297] w-full" />
+    return (
+      <LateReveal className="w-full">
+        <Skeleton className="aspect-[210/297] w-full" />
+      </LateReveal>
+    )
   }
 
   if (loaded.kind === 'failed') {
     return (
       <div className="flex aspect-[210/297] w-full flex-col items-center justify-center gap-4 rounded-sm border border-border bg-background p-6 text-center">
         <p className="text-[13px] text-muted-foreground">{t('document_no_preview')}</p>
-        <Button asChild variant="secondary">
+        <Button asChild variant="outline">
           <a href={url} target="_blank" rel="noopener noreferrer" onClick={onOpened}>
             {t('open_document')}
           </a>

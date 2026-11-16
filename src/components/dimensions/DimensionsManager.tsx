@@ -1,16 +1,19 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { useDimensions } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Skeleton } from '@/components/ui/skeleton'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { TD_CLASS, QUIET_LINK_CLASS, SortableTh } from '@/components/ui/dry-table'
@@ -27,7 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -36,7 +40,6 @@ import {
   ChevronRightIcon,
   HashtagIcon,
   LockClosedIcon,
-  MagnifyingGlassIcon,
   PlusIcon,
   TrashIcon,
 } from '@/components/icons'
@@ -71,6 +74,8 @@ function compareStrings(a: string, b: string): number {
  */
 export default function DimensionsManager() {
   const t = useTranslations('dimensions')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -99,15 +104,6 @@ export default function DimensionsManager() {
   const [editDimDialogOpen, setEditDimDialogOpen] = useState(false)
   const [isUpdatingDim, setIsUpdatingDim] = useState(false)
   const [isCreatingDimension, setIsCreatingDimension] = useState(false)
-
-  useEffect(() => {
-    if (!loadError) return
-    toast({
-      title: t('load_failed_title'),
-      description: getErrorMessage(loadError, { locale: errorLocale }),
-      variant: 'destructive',
-    })
-  }, [loadError, toast, t, errorLocale])
 
   /** After a write: refresh the shared registry (this list and every picker). */
   const loadDimensions = useCallback(() => invalidateReferenceData('ref:dimensions'), [])
@@ -390,33 +386,74 @@ export default function DimensionsManager() {
     )
   }
 
+  // The top bar: the title, the quiet way to the retro-tagging workbench and
+  // the page's one primary (V7: the primary sits in the top bar, never in the
+  // toolbar). Rendered in every state so the chrome stays put.
+  const header = (
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title">{tNav('dimensions')}</h1>
+      <PageHeaderActions className="flex items-center gap-4">
+        <Link href="/dimensions/tagging" className={QUIET_LINK_CLASS}>
+          {t('tag_history')}
+        </Link>
+        {activeDim && (
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setDialog({ mode: 'create' })}
+          >
+            {canWrite ? <PlusIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
+            {t('new_value')}
+          </Button>
+        )}
+      </PageHeaderActions>
+    </div>
+  )
+
   if (isLoading) {
     return (
       <div className="space-y-8">
+      {header}
+      <LateReveal className="space-y-8">
         <Skeleton className="h-9 w-64" />
-        <div className="space-y-3">
+        <div>
           {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-64" />
+              <Skeleton className="ml-auto h-3.5 w-16" />
+            </div>
           ))}
         </div>
+      </LateReveal>
       </div>
     )
   }
 
   if (loadFailed && dimensions.length === 0) {
     return (
-      <EmptyState
-        icon={HashtagIcon}
-        title={t('load_failed_title')}
-        description={t('load_failed_description')}
-        actionLabel={t('retry')}
-        onAction={() => void refreshDimensions()}
-      />
+      <div className="space-y-8">
+        {header}
+        <LoadError
+          title={t('load_failed_title')}
+          description={t('load_failed_description')}
+          onRetry={() => void refreshDimensions()}
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-8">
+      {header}
+      {/* A failed refresh keeps the register on screen (Stil v3 states). */}
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshDimensions() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {/* Toolbar (concept scene 31): seg per registry dimension with a
           muted value count, search, and the actions far right. */}
       <div className="space-y-2">
@@ -446,42 +483,35 @@ export default function DimensionsManager() {
               ),
             }))}
           />
+          {/* The dimension's own actions follow the view as outline buttons;
+              the search ends the row (V7 list toolbars). */}
+          <Button
+            variant="outline"
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setNewDimDialogOpen(true)}
+          >
+            <PlusIcon className="h-4 w-4" />
+            {t('new_dimension')}
+          </Button>
+          {activeDim && (
+            <Button
+              variant="outline"
+              size="toolbar"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => setEditDimDialogOpen(true)}
+            >
+              {t('edit_dimension')}
+            </Button>
+          )}
           <ToolbarSearch
             placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            containerClassName="min-w-[180px] max-w-xs flex-1"
+            containerClassName={TOOLBAR_SEARCH_END_CLASS}
           />
-          <div className="ml-auto flex items-center gap-4">
-            <button
-              type="button"
-              className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              onClick={() => setNewDimDialogOpen(true)}
-            >
-              {t('new_dimension')}
-            </button>
-            {activeDim && (
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                onClick={() => setEditDimDialogOpen(true)}
-              >
-                {t('edit_dimension')}
-              </button>
-            )}
-            <Button
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              onClick={() => setDialog({ mode: 'create' })}
-            >
-              {canWrite ? <PlusIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
-              {t('new_value')}
-            </Button>
-          </div>
         </div>
         {parentDimName && (
           <p className="text-xs text-muted-foreground">
@@ -493,12 +523,14 @@ export default function DimensionsManager() {
       {/* Value list (concept dry-table: Kod, Namn, Start, Slut, Status) */}
       {sortedValues.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={MagnifyingGlassIcon}
-            title={t('no_search_results_title')}
-            /* data-ph-mask: the search term is user data */
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          // No hits: one muted line in the list with the quiet way back.
+          <p className="px-1 py-3 text-[13px] text-muted-foreground">
+            {/* data-ph-mask: the search term is user data */}
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </button>
+          </p>
         ) : (
           <EmptyState
             icon={HashtagIcon}
@@ -510,7 +542,7 @@ export default function DimensionsManager() {
           />
         )
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -540,7 +572,8 @@ export default function DimensionsManager() {
                 <tr
                   key={value.id}
                   className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
-                  onClick={() => setDialog({ mode: 'edit', value })}
+                  // The edit dialog is a write surface: inert for a read-only member.
+                  onClick={canWrite ? () => setDialog({ mode: 'edit', value }) : undefined}
                 >
                   <td className={cn(TD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
                     {value.code}
@@ -550,10 +583,10 @@ export default function DimensionsManager() {
                   </td>
                   {showDates && (
                     <>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                         {value.start_date ? formatDate(value.start_date) : ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                         {value.end_date ? formatDate(value.end_date) : ''}
                       </td>
                     </>
@@ -567,28 +600,32 @@ export default function DimensionsManager() {
       )}
 
       {/* Create/edit dialog */}
-      <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            {/* data-ph-mask: the dimension name is user data */}
-            <DialogTitle data-ph-mask="">
-              {dialog?.mode === 'edit'
-                ? t('edit_value_title')
-                : t('new_value_title', { dimension: activeDim?.name ?? '' })}
-            </DialogTitle>
-          </DialogHeader>
-          {activeDim && dialog && (
-            <DimensionValueForm
-              key={dialog.mode === 'edit' ? dialog.value.id : 'create'}
-              dimension={activeDim}
-              value={dialog.mode === 'edit' ? dialog.value : null}
-              isSaving={isSaving}
-              onSubmit={handleSubmitValue}
-              onDelete={dialog.mode === 'edit' ? handleDeleteValue : undefined}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* A value is a small record: created and edited in a drawer over its
+          list (V7 creation forms). The form, its validation and its submit are
+          the same component as before. */}
+      <CreateDrawer
+        open={dialog !== null}
+        onOpenChange={(open) => !open && setDialog(null)}
+        // data-ph-mask: the dimension name is user data
+        title={
+          <span data-ph-mask="">
+            {dialog?.mode === 'edit'
+              ? t('edit_value_title')
+              : t('new_value_title', { dimension: activeDim?.name ?? '' })}
+          </span>
+        }
+      >
+        {activeDim && dialog && (
+          <DimensionValueForm
+            key={dialog.mode === 'edit' ? dialog.value.id : 'create'}
+            dimension={activeDim}
+            value={dialog.mode === 'edit' ? dialog.value : null}
+            isSaving={isSaving}
+            onSubmit={handleSubmitValue}
+            onDelete={dialog.mode === 'edit' ? handleDeleteValue : undefined}
+          />
+        )}
+      </CreateDrawer>
 
       {/* Edit dimension dialog (name, placement, aktiv, delete) for the
           active tab. The content unmounts on close, so each open starts
@@ -597,7 +634,7 @@ export default function DimensionsManager() {
         open={editDimDialogOpen}
         onOpenChange={(open) => !open && setEditDimDialogOpen(false)}
       >
-        <DialogContent className="sm:max-w-lg max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('edit_dimension_title')}</DialogTitle>
           </DialogHeader>
@@ -620,7 +657,7 @@ export default function DimensionsManager() {
         open={newDimDialogOpen}
         onOpenChange={(open) => !open && setNewDimDialogOpen(false)}
       >
-        <DialogContent className="sm:max-w-lg max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('new_dimension_title')}</DialogTitle>
           </DialogHeader>
@@ -908,7 +945,7 @@ function EditDimensionForm({
             disabled={isSaving}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            <TrashIcon className="mr-2 h-4 w-4" />
+            <TrashIcon className="h-4 w-4" />
             {t('delete_dimension')}
           </Button>
         ) : (

@@ -61,9 +61,9 @@ export function TrialExpiredDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) acknowledge() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
-          <DialogTitle className="font-display text-xl tracking-tight">
+          <DialogTitle className="text-xl">
             {state === 'lapsed_subscription' ? t('title_lapsed') : t('title')}
           </DialogTitle>
           <DialogDescription className="sr-only">{t('body_included')}</DialogDescription>

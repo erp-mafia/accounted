@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import { cardStatementStats } from '@/lib/import/bank-file/card-statement'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
@@ -93,12 +93,12 @@ export default function BankFilePreviewStep({
   return (
     <div className="space-y-6">
       {card && (
-        <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+        <div className="flex items-start justify-between gap-4 border-b-hairline pb-4">
           <div className="min-w-0">
             <label htmlFor="card-sign-switch" className="block text-[13px] font-medium">
               {t('import_card_sign_label')}
             </label>
-            <div className="text-[12.5px] text-muted-foreground">
+            <div className="text-xs text-muted-foreground">
               {t('import_card_sign_hint', { card: card.name, ledger: card.ledger_account })}
             </div>
           </div>
@@ -170,7 +170,7 @@ export default function BankFilePreviewStep({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="rounded-lg border max-h-96 overflow-x-auto overflow-y-auto">
+          <div className="max-h-96 overflow-x-auto overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -200,11 +200,11 @@ export default function BankFilePreviewStep({
                     <TableCell
                       className="text-right font-mono text-sm"
                     >
-                      {formatCurrency(tx.amount, tx.currency || 'SEK')}
+                      {formatRowAmount(tx.amount, tx.currency || 'SEK')}
                     </TableCell>
                     {transactions.some((t) => t.balance != null) && (
                       <TableCell className="text-right font-mono text-sm text-muted-foreground">
-                        {tx.balance != null ? formatCurrency(tx.balance, tx.currency || 'SEK') : '-'}
+                        {tx.balance != null ? formatRowAmount(tx.balance, tx.currency || 'SEK') : '-'}
                       </TableCell>
                     )}
                     {transactions.some((t) => t.reference) && (
@@ -227,8 +227,8 @@ export default function BankFilePreviewStep({
 
       {/* Error blocking continuation */}
       {hasIssues && (
-        <Card className="border-destructive">
-          <CardContent className="pt-6">
+        <Card>
+          <CardContent>
             <div className="flex gap-3">
               <ExclamationTriangleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-2">
@@ -249,12 +249,12 @@ export default function BankFilePreviewStep({
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={onContinue} disabled={hasIssues || transactions.length === 0}>
           Fortsätt
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

@@ -30,6 +30,15 @@ export const LEGACY_INBOX_HREF = '/e/general/invoice-inbox'
 export const INKORG_HREF = '/inkorg'
 
 /**
+ * `/inkorg?fokus=<item id>` opens that document in the focus view, and
+ * `?fokus=forsta` the first one of Behöver dig: the address a Börja step
+ * (Att göra) sends its rows and its primary to. Read once, when the list has
+ * loaded; an id that is not waiting any more opens the list.
+ */
+export const INKORG_FOCUS_QUERY = 'fokus'
+export const INKORG_FOCUS_FIRST = 'forsta'
+
+/**
  * Where the inbox lives for a company, for anything that links to it
  * outside the menu (the command palette): the new page in the rollout,
  * else the workspace under Inköp, the same split the menu makes.

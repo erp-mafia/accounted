@@ -258,7 +258,7 @@ export default function DuplicateBookingDialog({
                 : t('dialog_duplicate_body')}
           </p>
           {candidate && (
-            <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-1 rounded-lg p-3 bg-control shadow-raised">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="font-medium">
                   {candidate.voucher_label
@@ -326,7 +326,7 @@ export default function DuplicateBookingDialog({
           )}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
             {candidate && (
-              <Button asChild variant="ghost" size="sm" className="text-muted-foreground sm:mr-auto">
+              <Button asChild variant="ghost" className="text-muted-foreground sm:mr-auto">
                 <a
                   href={`/bookkeeping/${candidate.journal_entry_id}`}
                   target="_blank"

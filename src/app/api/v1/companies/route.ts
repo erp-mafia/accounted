@@ -101,7 +101,7 @@ registerEndpoint({
     'automatic tax deadlines. A 30-day trial with every paid capability starts immediately. ' +
     'Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.',
   useWhen:
-    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Members (/settings/members).',
+    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Users (/settings/members).',
   doNotUseFor:
     'Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).',
   pitfalls: [

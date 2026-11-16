@@ -97,7 +97,7 @@ export function PortalLinkForm({
         disabled={busy !== null}
         className="h-9 min-w-0 flex-1 basis-56 text-[13px]"
       />
-      <Button type="submit" variant="secondary" loading={busy === 'save'} disabled={busy === 'remove'}>
+      <Button type="submit" variant="outline" loading={busy === 'save'} disabled={busy === 'remove'}>
         {t('portal_save')}
       </Button>
       {onRemove && (

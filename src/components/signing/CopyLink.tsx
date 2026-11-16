@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
+import { ClipboardDocumentIcon } from '@/components/icons'
 
 /**
  * A signer's link as text with Kopiera beside it: for a signer no mail
@@ -25,8 +26,9 @@ export function CopyLink({ url, label }: { url: string; label: string }) {
 
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <Input readOnly value={url} aria-label={label} className="min-w-0 font-mono text-[12.5px]" onFocus={(e) => e.currentTarget.select()} />
-      <Button type="button" variant="secondary" size="sm" onClick={copy}>
+      <Input readOnly value={url} aria-label={label} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+      <Button type="button" variant="outline" onClick={copy}>
+        <ClipboardDocumentIcon className="h-4 w-4" />
         {t('copy_link')}
       </Button>
     </div>

@@ -123,21 +123,21 @@ export function InkorgFocus({
             style={{ maskImage: 'linear-gradient(to bottom, black, transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black, transparent)' }}
           />
         )}
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeftIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" />
+        <Button variant="ghost" onClick={onBack}>
+          <ArrowLeftIcon aria-hidden="true" className="h-3.5 w-3.5" />
           {viewLabel}
         </Button>
         {position && (
-          <span className="text-[12.5px] tabular-nums text-muted-foreground">
+          <span className="text-xs tabular-nums text-muted-foreground">
             {t('position', { index: position.index, total: position.total })}
           </span>
         )}
         <span className="flex-1" />
-        <span className="hidden text-[12.5px] text-muted-foreground lg:inline">{t('keys_hint')}</span>
-        <Button variant="ghost" size="icon-sm" aria-label={t('previous')} disabled={!canPrevious} onClick={() => onStep(-1)}>
+        <span className="hidden text-xs text-muted-foreground lg:inline">{t('keys_hint')}</span>
+        <Button variant="ghost" size="icon" aria-label={t('previous')} disabled={!canPrevious} onClick={() => onStep(-1)}>
           <ChevronLeftIcon className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon-sm" aria-label={t('next')} disabled={!canNext} onClick={() => onStep(1)}>
+        <Button variant="ghost" size="icon" aria-label={t('next')} disabled={!canNext} onClick={() => onStep(1)}>
           <ChevronRightIcon className="h-4 w-4" />
         </Button>
       </div>

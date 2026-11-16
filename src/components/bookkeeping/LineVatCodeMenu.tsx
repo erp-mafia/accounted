@@ -40,7 +40,7 @@ function useVatCodeText() {
 export function LineVatCodeBadge({ rule, code }: { rule: TakesVatCode; code: VoucherLineVatCode }) {
   const text = useVatCodeText()
   return (
-    <Badge variant="outline" className="mt-1 mr-1 text-[11px] font-normal tabular-nums">
+    <Badge variant="outline" className="mt-1 mr-1 text-xs font-normal tabular-nums">
       {text(rule, code)}
     </Badge>
   )
@@ -72,7 +72,7 @@ export function LineVatCodeMenu({ rule, code, onChange }: LineVatCodeMenuProps) 
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           aria-label={label}
           title={label}
           className={code ? 'text-foreground' : 'text-muted-foreground'}
@@ -97,7 +97,7 @@ export function LineVatCodeMenu({ rule, code, onChange }: LineVatCodeMenuProps) 
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <p className="px-2 py-1 text-[11px] text-muted-foreground">{t('vat_code_account_help')}</p>
+            <p className="px-2 py-1 text-xs text-muted-foreground">{t('vat_code_account_help')}</p>
           </>
         ) : (
           <>
@@ -138,7 +138,7 @@ export function LineVatCodeMenu({ rule, code, onChange }: LineVatCodeMenuProps) 
               </>
             )}
             <DropdownMenuSeparator />
-            <p className="px-2 py-1 text-[11px] text-muted-foreground">{t('vat_code_help')}</p>
+            <p className="px-2 py-1 text-xs text-muted-foreground">{t('vat_code_help')}</p>
           </>
         )}
       </DropdownMenuContent>

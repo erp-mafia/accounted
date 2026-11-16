@@ -4,7 +4,9 @@ import { useRef, useState } from 'react'
 import { useFormatter, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { StandaloneHeading, StandalonePage } from '@/components/standalone/StandalonePage'
+import { StatusGlyph } from '@/components/ui/status-glyph'
+import { ArrowUpTrayIcon } from '@/components/icons'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { VerifiedSigning } from '@/lib/signing/verify'
 
@@ -67,17 +69,10 @@ export function VerifyPage() {
   }
 
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-2xl space-y-8">
-        <header className="space-y-4">
-          <BrandWordmark size="inline" />
-          <div className="space-y-1">
-            <h1 className="font-display text-2xl tracking-tight">{t('title')}</h1>
-            <p className="text-[13px] text-muted-foreground">{t('intro', { app: appName })}</p>
-          </div>
-        </header>
+    <StandalonePage width="form">
+        <StandaloneHeading title={t('title')} sub={t('intro', { app: appName })} />
 
-        <section className="space-y-4 rounded-lg border border-border p-6">
+        <section className="mt-5 space-y-4">
           <input
             ref={input}
             type="file"
@@ -90,47 +85,48 @@ export function VerifyPage() {
               if (file) void check(file)
             }}
           />
-          <div className="flex flex-wrap items-center gap-4">
-            <Button onClick={() => input.current?.click()} loading={result.kind === 'checking'}>
-              {t('choose_file')}
-            </Button>
-            <p className="text-[12.5px] text-muted-foreground">{t('privacy')}</p>
-          </div>
+          <Button size="lg" className="w-full" onClick={() => input.current?.click()} loading={result.kind === 'checking'}>
+            <ArrowUpTrayIcon className="h-4 w-4" />
+            {t('choose_file')}
+          </Button>
+          <p className="text-xs text-muted-foreground">{t('privacy')}</p>
 
           {result.kind === 'found' && (
-            <div className="space-y-4 border-t border-border pt-4">
+            <div className="space-y-4 border-t-hairline pt-4">
               <div className="space-y-1">
-                <h2 className="font-display text-xl tracking-tight">{result.signing.match === 'signed_copy' ? t('found_title') : t('found_original_title')}</h2>
-                <p className="text-[13px] text-muted-foreground" data-ph-mask="">
+                <h2 className="flex items-center gap-2 text-[15px] leading-[22px] text-strong">
+                  <StatusGlyph tone="ok" size={16} />
+                  {result.signing.match === 'signed_copy' ? t('found_title') : t('found_original_title')}
+                </h2>
+                <p className="text-sm text-foreground" data-ph-mask="">
                   {t('found_body', { title: result.signing.title, company: result.signing.company_name, moment: moment(result.signing.completed_at) })}
                 </p>
-                {result.signing.match === 'original' && <p className="text-[13px] text-muted-foreground">{t('found_original_body')}</p>}
+                {result.signing.match === 'original' && <p className="text-sm text-foreground">{t('found_original_body')}</p>}
               </div>
-              <ul className="space-y-2" data-ph-mask="">
+              <ul className="border-t-hairline" data-ph-mask="">
                 {result.signing.signers.map((s, i) => (
-                  <li key={`${s.name}-${i}`} className="flex items-baseline justify-between gap-4 text-[13px]">
+                  <li key={`${s.name}-${i}`} className="flex items-baseline justify-between gap-4 border-b-hairline py-2 text-sm">
                     <span className="min-w-0 truncate">{s.role_label ? `${s.name}, ${s.role_label}` : s.name}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">{t('signed_with_bankid', { moment: moment(s.signed_at) })}</span>
                   </li>
                 ))}
               </ul>
-              <p className="break-all font-mono text-[12.5px] text-muted-foreground">{result.sha256}</p>
+              <p className="break-all font-mono text-xs text-muted-foreground">{result.sha256}</p>
             </div>
           )}
 
           {result.kind === 'not_found' && (
-            <div className="space-y-1 border-t border-border pt-4">
-              <h2 className="font-display text-xl tracking-tight">{t('not_found_title')}</h2>
-              <p className="text-[13px] text-muted-foreground" data-ph-mask="">
+            <div className="space-y-1 border-t-hairline pt-4">
+              <h2 className="text-[15px] leading-[22px] text-strong">{t('not_found_title')}</h2>
+              <p className="text-sm text-foreground" data-ph-mask="">
                 {t('not_found_body', { file: result.fileName, app: appName })}
               </p>
-              <p className="break-all font-mono text-[12.5px] text-muted-foreground">{result.sha256}</p>
+              <p className="break-all font-mono text-xs text-muted-foreground">{result.sha256}</p>
             </div>
           )}
 
           {result.kind === 'error' && <AttnLine>{t(`error_${result.message}`)}</AttnLine>}
         </section>
-      </div>
-    </main>
+    </StandalonePage>
   )
 }

@@ -5,8 +5,11 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -69,6 +72,7 @@ export function DispositionsStep({
   onNavigationBlockedChange,
 }: DispositionsStepProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('dispositions_tax_basis')
   const [proposal, setProposal] = useState<DispositionsProposal | null>(null)
   const [loading, setLoading] = useState(true)
@@ -212,24 +216,16 @@ export function DispositionsStep({
   // ---- Render branches ----
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
+      <LateReveal className="space-y-3">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+      </LateReveal>
     )
   }
 
   if (fetchError) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-destructive">{fetchError}</p>
-        </CardContent>
-      </Card>
-    )
+    return <LoadError title={fetchError} onRetry={() => void loadProposals()} />
   }
 
   if (!proposal) return null
@@ -262,7 +258,7 @@ export function DispositionsStep({
           />
         ) : incomeReturn === 'INK3' ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
               Inga bokslutsdispositioner bokförs för den här företagsformen. Skattemässiga
               justeringar och fördelningen mellan skattefri och skattepliktig verksamhet görs i
               underlaget för inkomstdeklaration 3, som också visar vad som ska skrivas in i
@@ -278,7 +274,7 @@ export function DispositionsStep({
           </Card>
         ) : (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
               Inga bokslutsdispositioner eller deklarationsjusteringar förbereds för den här
               företagsformen ännu. Avskrivningarna ovan bokförs som vanligt; gå vidare för att
               förhandsgranska bokslutet.
@@ -290,18 +286,15 @@ export function DispositionsStep({
             Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
           </p>
         )}
-        <div className="flex justify-between">
+        <StepBar>
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
             onClick={onBack}
             disabled={taxDepreciationDirty}
           >
-            ← Tillbaka
+            Tillbaka
           </Button>
           <Button
-            variant="outline"
-            size="sm"
             onClick={onContinue}
             disabled={taxDepreciationDirty}
             title={
@@ -310,9 +303,9 @@ export function DispositionsStep({
                 : undefined
             }
           >
-            Nästa: Förhandsgranska →
+            Nästa: Förhandsgranska
           </Button>
-        </div>
+        </StepBar>
       </div>
     )
   }
@@ -326,7 +319,7 @@ export function DispositionsStep({
       />
       {/* The figure the dispositions start from, as one meta line; the
           instructions live behind the wizard's "?". */}
-      <p className="px-1 text-[12.5px] text-muted-foreground">
+      <p className="px-1 text-xs text-muted-foreground">
         Resultat före dispositioner:{' '}
         <span className="tabular-nums text-foreground">
           {formatCurrency(proposal.netResultBefore)}
@@ -409,7 +402,7 @@ export function DispositionsStep({
       {proposal.proposals.length === 0
         && (proposal.completedDispositions ?? []).length === 0 && (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="text-sm text-muted-foreground">
               Inga bokslutsdispositioner behöver bokföras utifrån det aktuella underlaget.
             </CardContent>
           </Card>
@@ -440,7 +433,7 @@ export function DispositionsStep({
 
       {postError && (
         <Card>
-          <CardContent className="p-4 text-sm text-destructive">{postError}</CardContent>
+          <CardContent className="text-sm text-destructive">{postError}</CardContent>
         </Card>
       )}
 
@@ -450,34 +443,34 @@ export function DispositionsStep({
         </p>
       )}
 
-      <div className="flex justify-between">
+      <StepBar>
         <Button
-          variant="outline"
-          size="sm"
+          variant="ghost"
           onClick={onBack}
           disabled={posting || taxDepreciationDirty}
         >
-          ← Tillbaka
+          Tillbaka
         </Button>
         <Button
           onClick={handleCommit}
-          disabled={hasCorrectionRequired || taxDepreciationDirty}
+          disabled={!canWrite || hasCorrectionRequired || taxDepreciationDirty}
           loading={posting}
           title={
-            taxDepreciationDirty
+            lockedTitle ??
+            (taxDepreciationDirty
               ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
-              : undefined
+              : undefined)
           }
         >
           {posting ? (
             'Bokför…'
           ) : (
             <>
-              Bokför valda dispositioner <ArrowRightIcon className="ml-1 h-4 w-4" />
+              Bokför valda dispositioner <ArrowRightIcon className="h-4 w-4" />
             </>
           )}
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -501,6 +494,7 @@ function TaxAdjustmentsCard({
   onChange: (draft: TaxAdjustmentDraft) => void
   onSave: () => void
 }) {
+  const { canWrite, lockedTitle } = useViewerLock()
   const detected = snapshot.items.filter(
     (item) => item.source === 'detected' && item.accountNumber && item.amount > 0,
   )
@@ -627,7 +621,7 @@ function TaxAdjustmentsCard({
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <Button type="button" variant="outline" onClick={onSave} loading={saving}>
+        <Button type="button" variant="outline" onClick={onSave} loading={saving} disabled={!canWrite} title={lockedTitle}>
           Spara och räkna om
         </Button>
       </CardContent>

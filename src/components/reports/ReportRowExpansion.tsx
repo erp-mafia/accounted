@@ -272,7 +272,7 @@ function ExpansionContent({
   return (
     <div className="px-4 py-2">
       <table className="w-full text-xs">
-        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+        <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
           <tr className="text-left">
             <th className="py-1 w-24">Verifikat</th>
             <th className="py-1 w-24">Datum</th>
@@ -283,7 +283,7 @@ function ExpansionContent({
         </thead>
         <tbody>
           {lines.map((line) => (
-            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border">
+            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t-hairline">
               <td className="py-1.5">
                 {line.journal_entry_id ? (
                   <Link
@@ -296,7 +296,7 @@ function ExpansionContent({
                   <span className="font-mono text-muted-foreground">-</span>
                 )}
               </td>
-              <td className="py-1.5 tabular-nums text-muted-foreground">
+              <td className="py-1.5 date-figures text-muted-foreground">
                 {line.date ? formatDate(line.date) : ''}
               </td>
               <td className="py-1.5 truncate max-w-md" title={line.description}>

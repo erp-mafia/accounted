@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import { Hedvig_Letters_Serif } from "next/font/google";
 import {
   Fraunces,
@@ -40,6 +40,16 @@ import { CSP_NONCE_HEADER } from "@/lib/security/csp";
 // (lib/initialized.ts), never in a page's own graph.
 import "@/lib/server-baseline";
 import "./globals.css";
+import RootErrorBoundary from "./error";
+
+// The root error boundary (./error.tsx) is loaded with every page, but as a
+// sibling of the pages rather than their parent: what it imports (the
+// standalone page frame, the brand mark and its next/image, the support
+// dialog) was bundled once for the boundary and again for the dashboard
+// shell, the sign-in pages and the not-found page. Naming it here puts those
+// modules in this layout's chunk group, which every segment below reuses, so
+// each ships once (scripts/perf/README.md, "Page budgets").
+void RootErrorBoundary;
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
 // middleware) lives in lib/branding/request-brand.ts, shared with every
@@ -47,8 +57,10 @@ import "./globals.css";
 // uniformly. The layout used to carry a private copy of the function, which
 // silently skipped that override.
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Stil v3 (founder decision 2026-10-29): Inter is the one face for text,
+// Geist Mono stays for account numbers and code, Hedvig for headline numbers.
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -187,7 +199,7 @@ export default async function RootLayout({
     <html
       lang={locale}
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable} ${brandFontVariables}`}
+      className={`${inter.variable} ${geistMono.variable} ${hedvigSerif.variable} ${brandFontVariables}`}
       style={
         fontPair
           ? ({

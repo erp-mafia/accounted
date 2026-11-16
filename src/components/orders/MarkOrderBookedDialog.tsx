@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { SpinnerIcon } from '@/components/icons'
 import {
   Dialog,
   DialogContent,
@@ -13,6 +12,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -69,6 +70,9 @@ export default function MarkOrderBookedDialog({
   const { toast } = useToast()
   const [candidates, setCandidates] = useState<EntryCandidate[]>([])
   const [loading, setLoading] = useState(false)
+  // The candidates could not be read: said in place of the list, with
+  // "Försök igen", instead of reading as "none found".
+  const [loadFailed, setLoadFailed] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -95,9 +99,13 @@ export default function MarkOrderBookedDialog({
         const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
         if (!res.ok) throw new Error(`list failed: ${res.status}`)
         const json = (await res.json()) as { data: EntryCandidate[] }
-        if (!signal.cancelled) setCandidates(json.data ?? [])
+        if (signal.cancelled) return
+        setCandidates(json.data ?? [])
+        setLoadFailed(false)
       } catch {
-        if (!signal.cancelled) setCandidates([])
+        if (signal.cancelled) return
+        setCandidates([])
+        setLoadFailed(true)
       } finally {
         if (!signal.cancelled) setLoading(false)
       }
@@ -157,7 +165,7 @@ export default function MarkOrderBookedDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* data-ph-mask: the order number is user data */}
           <DialogTitle data-ph-mask="">
@@ -183,19 +191,20 @@ export default function MarkOrderBookedDialog({
             aria-label={t('mark_link_search_placeholder')}
           />
           {loading ? (
-            <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
-              <SpinnerIcon className="h-4 w-4 animate-spin" />
-              {t('mark_link_loading')}
-            </div>
+            <LateReveal className="space-y-1 p-1" role="status" aria-label={t('mark_link_loading')}>
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </LateReveal>
+          ) : loadFailed ? (
+            <LoadError onRetry={() => void loadCandidates(search.trim(), { cancelled: false })} />
           ) : candidates.length === 0 ? (
-            <p className="rounded-lg border border-border px-3 py-4 text-center text-sm text-muted-foreground">
-              {t('mark_link_empty')}
-            </p>
+            <p className="py-3 text-sm text-muted-foreground">{t('mark_link_empty')}</p>
           ) : (
             <div
               role="radiogroup"
               aria-label={t('mark_link_label')}
-              className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-1"
+              className="max-h-56 space-y-1 overflow-y-auto p-1"
             >
               {candidates.map((entry) => {
                 const active = selected === entry.id

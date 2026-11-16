@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { matchBankByName } from '../lib/bank-match'
 
 export interface Bank {
@@ -45,7 +46,7 @@ interface BankSelectorProps {
  */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <h3 className="px-1 pb-2 text-xs font-medium text-muted-foreground">
       {children}
     </h3>
   )
@@ -91,11 +92,13 @@ function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
   onConnect: (bank: Bank) => void
 }) {
   const connecting = isConnecting && connectingBankName === bank.name
+  const { canWrite, lockedTitle } = useViewerLock()
 
   return (
     <button
       type="button"
-      disabled={isConnecting}
+      disabled={!canWrite || isConnecting}
+      title={lockedTitle}
       onClick={() => onConnect(bank)}
       className={cn(
         // 32px mark + py-2 keeps the row at 48px: comfortably past the 44px
@@ -258,7 +261,7 @@ export function BankSelector({
       {/* Error state: one quiet line, not a tinted panel. role="alert" so the
           failure is announced rather than only redrawn. */}
       {error && (
-        <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">{error}</p>
+        <p role="alert" className="px-1 text-xs leading-relaxed text-destructive">{error}</p>
       )}
 
       {/* Bank list */}
@@ -272,7 +275,7 @@ export function BankSelector({
                   : 'Inga banker tillgängliga'}
               </p>
               {searchQuery && (
-                <p className="mt-1 text-xs text-muted-foreground/70">
+                <p className="mt-1 text-xs text-muted-foreground">
                   Försök med ett annat sökord
                 </p>
               )}
@@ -288,7 +291,7 @@ export function BankSelector({
               {popularBanks.length > 0 && (
                 <section>
                   <SectionLabel>Populära banker</SectionLabel>
-                  <div className="divide-y divide-border border-t border-border">
+                  <div className="divide-y divide-border border-t-hairline">
                     {popularBanks.map((bank) => (
                       <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
                     ))}
@@ -298,7 +301,7 @@ export function BankSelector({
               {otherBanks.length > 0 && (
                 <section>
                   {popularBanks.length > 0 && <SectionLabel>Alla banker</SectionLabel>}
-                  <div className="divide-y divide-border border-t border-border">
+                  <div className="divide-y divide-border border-t-hairline">
                     {otherBanks.map((bank) => (
                       <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
                     ))}
@@ -310,7 +313,7 @@ export function BankSelector({
           {/* A row found through a brand name ("Bokio") is named after the
               bank that holds the account: one muted line says why. */}
           {aliasHint && (
-            <p className="px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+            <p className="px-1 text-xs leading-relaxed text-muted-foreground">
               {t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}
             </p>
           )}
@@ -321,7 +324,7 @@ export function BankSelector({
           than a tinted bordered panel, and it names the bank so the state is
           still readable when the chosen row has scrolled out of view. */}
       {isConnecting && connectingBankName && (
-        <div role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+        <div role="status" className="flex items-center gap-2 px-1 text-xs leading-relaxed text-muted-foreground">
           <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
           Ansluter till {connectingBankName}...
         </div>

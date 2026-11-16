@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import type { DocumentReading } from '@/lib/documents/reading/types'
 import { DocumentFieldsPanel } from './DocumentFieldsPanel'
 
@@ -30,15 +30,15 @@ export function FocusDocumentFields({ itemId, reading, loading, failed, locked =
 
   if (loading) {
     return (
-      <div className="space-y-2" aria-busy="true">
+      <LateReveal className="space-y-2">
         {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-4 w-full rounded-sm" />
         ))}
-      </div>
+      </LateReveal>
     )
   }
-  if (failed) return <p className="text-[12.5px] text-muted-foreground">{t('fields_failed')}</p>
-  if (!reading) return <p className="text-[12.5px] text-muted-foreground">{t('fields_empty')}</p>
+  if (failed) return <p className="text-xs text-muted-foreground">{t('fields_failed')}</p>
+  if (!reading) return <p className="text-xs text-muted-foreground">{t('fields_empty')}</p>
 
   return <DocumentFieldsPanel itemId={itemId} reading={reading} locked={locked} embedded onSaved={() => onChanged?.()} />
 }

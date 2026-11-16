@@ -10,6 +10,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -52,6 +53,7 @@ export function FiscalYearsManager() {
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { role } = useCompany()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps, confirm } = useDestructiveConfirm()
   // Session-cached registry (lib/reference-data): the same list every
   // picker renders, so a lock/unlock/reset here is visible everywhere the
@@ -240,7 +242,7 @@ export function FiscalYearsManager() {
             canManage && status !== 'open' && p.id === earliestId && !p.opening_balance_entry_id
           const canDelete = p.id === earliestCandidateId && earliestPostedCount === 0
           return (
-            <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
+            <div key={p.id} className="flex flex-col items-start gap-3 border-b-hairline px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
                 <span className="text-sm font-medium">{fiscalYearShortName(p.name)}</span>
                 <span className="ml-2 text-sm text-muted-foreground tabular-nums">
@@ -263,96 +265,90 @@ export function FiscalYearsManager() {
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
                     onClick={() => openEdit(p, 'edit')}
                   >
-                    <PencilIcon className="mr-1.5 h-4 w-4" />
+                    <PencilIcon className="h-4 w-4" />
                     {t('fy_action_edit')}
                   </Button>
                 )}
                 {canCorrectStart && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
                     onClick={() => openEdit(p, 'start')}
                   >
-                    <PencilIcon className="mr-1.5 h-4 w-4" />
+                    <PencilIcon className="h-4 w-4" />
                     {t('fy_action_correct_start')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleLock(p)}
                   >
-                    {!isMutating && <LockClosedIcon className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockClosedIcon className="h-4 w-4" />}
                     {t('fy_action_lock')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-destructive hover:text-destructive"
                     disabled={isMutating}
                     onClick={() => setResetTarget(p)}
                   >
-                    <BackspaceIcon className="mr-1.5 h-4 w-4" />
+                    <BackspaceIcon className="h-4 w-4" />
                     {t('fy_action_reset')}
                   </Button>
                 )}
                 {canDelete && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-destructive hover:text-destructive"
                     loading={isMutating}
+                    disabled={!canWrite}
+                    title={lockedTitle}
                     onClick={() => handleDelete(p)}
                   >
-                    {!isMutating && <TrashIcon className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <TrashIcon className="h-4 w-4" />}
                     {t('fy_action_delete')}
                   </Button>
                 )}
                 {canManage && status === 'locked' && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleUnlock(p)}
                   >
-                    {!isMutating && <LockOpenIcon className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="h-4 w-4" />}
                     {t('fy_action_unlock')}
                   </Button>
                 )}
                 {canReopen && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     loading={isMutating}
                     onClick={() => handleReopen(p)}
                   >
-                    {!isMutating && <LockOpenIcon className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="h-4 w-4" />}
                     {t('fy_action_reopen')}
                   </Button>
                 )}
                 {canReopenClosed && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
                     onClick={() => setReopenTarget(p)}
                   >
-                    <LockOpenIcon className="mr-1.5 h-4 w-4" />
+                    <LockOpenIcon className="h-4 w-4" />
                     {t('fy_action_reopen')}
                   </Button>
                 )}
@@ -366,12 +362,12 @@ export function FiscalYearsManager() {
       <div className="px-1 pt-3">
         <Button
           variant="outline"
-          size="sm"
           className="text-muted-foreground hover:text-foreground"
           onClick={() => setDialogOpen(true)}
-          disabled={isLoading}
+          disabled={!canWrite || isLoading}
+          title={lockedTitle}
         >
-          <PlusIcon className="mr-1.5 h-4 w-4" />
+          <PlusIcon className="h-4 w-4" />
           {t('fy_create')}
         </Button>
       </div>

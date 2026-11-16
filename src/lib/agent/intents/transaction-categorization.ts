@@ -390,7 +390,7 @@ export const transactionCategorization = defineAgentIntent<
 
     if (captured.underlag.length === 0) {
       // No underlag yet. The chat sheet no longer accepts file uploads:
-      // documents live in Underlag (Inköp → Underlag). Direct the user there. The
+      // documents live in Inkommande (Dokument → Inkommande). Direct the user there. The
       // user must then match the inbox item to this transaction (or to
       // any transaction) before booking can use the underlag.
       lines.push('UNDERLAG: saknas.')
@@ -398,7 +398,7 @@ export const transactionCategorization = defineAgentIntent<
       lines.push('BFL 7 kap kräver ett underlag för varje affärshändelse. Innan du föreslår bokföring:')
       lines.push('1. Säg till användaren att vi behöver underlaget (kvitto eller faktura).')
       lines.push('2. Beskriv KORT hur de får in det:')
-      lines.push('     • **Gå till Underlag** (sidomenyn: Inköp → Underlag) och dra in PDF:en eller bilden där. AI:n läser dokumentet automatiskt.')
+      lines.push('     • **Gå till Inkommande** (menyn: Dokument → Inkommande) och dra in PDF:en eller bilden där. AI:n läser dokumentet automatiskt.')
       lines.push('     • Alternativt: vidarebefordra fakturan/kvittot via e-post till företagets inkorgsadress: det landar under Underlag.')
       lines.push('     • När underlaget ligger under Underlag klickar de "Matcha mot transaktion" och väljer denna transaktion. Då dyker det upp här som UNDERLAG på nästa fråga.')
       lines.push('3. Om användaren ändå är säker på vad det är (t.ex. en återkommande mjukvaruprenumeration), erbjud att bokföra utan underlag mot en uttrycklig notering, och förklara att underlaget måste bifogas TILL VERIFIKATIONEN i efterhand (öppna verifikationen i Bokföring och ladda upp där). Skicka INTE användaren tillbaka till Underlag efter att en verifikation skapats: Underlag är för dokument som inte ännu är kopplade till en bokföring.')

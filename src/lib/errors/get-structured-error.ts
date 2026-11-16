@@ -444,7 +444,7 @@ export function getStructuredError(
     remediation = {
       ...remediation,
       description: options.attemptedScope === 'pending_operations:approve'
-        ? 'This connection cannot approve or reject agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves or rejects them in Accounted under Att göra > Agentförslag (/pending). To let the agent approve in chat, the user disconnects under Inställningar > API och MCP and connects again with Godkänn ticked.'
+        ? 'This connection cannot approve or reject agent proposals: it was made without the "pending_operations:approve" scope (Godkänn). The user approves or rejects them in Accounted under Att göra > Rutin (/pending). To let the agent approve in chat, the user disconnects under Agenter > Koppla en agent (/settings/api) and connects again with Godkänn ticked.'
         : `The current API key does not have the "${options.attemptedScope}" scope. Mint a new key with that scope or add it to the existing key in API settings.`,
     }
   }

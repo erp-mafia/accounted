@@ -291,7 +291,7 @@ export function ManualAccrualDialog({
               <table className="w-full text-sm">
                 <tbody>
                   {preview.installments.map((installment) => (
-                    <tr key={installment.period_month} className="border-t border-border">
+                    <tr key={installment.period_month} className="border-t-hairline">
                       <td className="py-1.5 tabular-nums">{installment.period_month.slice(0, 7)}</td>
                       <td className="py-1.5 text-right tabular-nums">{formatCurrency(installment.amount)}</td>
                     </tr>
@@ -307,7 +307,7 @@ export function ManualAccrualDialog({
             </p>
           </div>
         ) : (
-          <Button variant="outline" size="sm" disabled={!valid || busy} loading={busy} onClick={previewPlan}>
+          <Button variant="outline" disabled={!valid || busy} loading={busy} onClick={previewPlan}>
             {t('manual_preview')}
           </Button>
         )}

@@ -15,7 +15,7 @@ import { SelfBillingSettings, selfBillingSettingsUpdates } from '@/components/se
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSectionHeader, SettingsViewerScope } from '@/components/settings/SettingsRows'
 import { SwedbankFileIdsSettings, swedbankFileIdUpdates } from '@/components/settings/SwedbankFileIdsSettings'
 import { NordeaSignerIdSettings, nordeaSignerIdUpdates } from '@/components/settings/NordeaSignerIdSettings'
 import { useSettings } from '@/components/settings/useSettings'
@@ -89,10 +89,14 @@ export function InvoicingSettingsContent() {
       </SettingsFormWrapper>
 
       {/* Payment link opt-in: saves individually via toggle switch */}
-      <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
+      <SettingsViewerScope>
+        <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
+      </SettingsViewerScope>
 
       {/* PDF settings: saves individually via toggle switches */}
-      <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      <SettingsViewerScope>
+        <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      </SettingsViewerScope>
 
       {/* Påminnelser och inkasso lives under Kopplingar; linked here only
           where the installation offers it or a connection exists. */}
@@ -100,7 +104,7 @@ export function InvoicingSettingsContent() {
         <SettingsGroup>
           <SettingsRow label={tCollections('title')} help={tConnections('collections_help')}>
             <SettingsRowEnd>
-              <Button variant="outline" size="sm" asChild>
+              <Button variant="outline" asChild>
                 <Link href="/settings/collections">{tConnections('open')}</Link>
               </Button>
             </SettingsRowEnd>

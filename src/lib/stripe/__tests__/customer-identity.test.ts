@@ -318,14 +318,14 @@ describe('checkoutIdentityNotice', () => {
   it('names what the invoice carries and where to change it, in Swedish', () => {
     expect(checkoutIdentityNotice(full, synced, 'sv')).toBe(
       'Fakturan ställs ut på Bolaget AB, org.nr 556677-8899, momsreg.nr SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
-        'Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.',
+        'Stämmer något inte? Ändra under Inställningar > Företaget > Företagsuppgifter och starta betalningen igen.',
     )
   })
 
   it('in English', () => {
     expect(checkoutIdentityNotice(full, synced, 'en')).toBe(
       'The invoice is issued to Bolaget AB, org. no. 556677-8899, VAT no. SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
-        'Anything wrong? Change it under Settings > Company > General and start the payment again.',
+        'Anything wrong? Change it under Settings > Company > Company details and start the payment again.',
     )
   })
 

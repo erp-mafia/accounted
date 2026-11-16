@@ -112,7 +112,7 @@ export function DocumentCheckLine({
   }
   if (parts.length === 0 && !lead) return null
   return (
-    <p className={cn('text-[12.5px] leading-5 text-muted-foreground', className)}>
+    <p className={cn('text-xs leading-5 text-muted-foreground', className)}>
       {lead && <span className="tabular-nums">{lead}</span>}
       {parts.map((part, index) => (
         <span key={part.key}>
@@ -129,7 +129,7 @@ function DocumentFactsLine({ facts }: { facts: InvoiceDocumentFacts | null }) {
   const t = useTranslations('bank_payments_document')
   if (!facts || facts.amount === null || !facts.due_date) return null
   return (
-    <p className="text-[12.5px] text-muted-foreground tabular-nums">
+    <p className="text-xs text-muted-foreground tabular-nums">
       {t('on_document', { amount: formatCurrency(facts.amount, facts.currency ?? 'SEK'), date: formatDate(facts.due_date) })}
     </p>
   )
@@ -144,7 +144,7 @@ export function InvoiceDocumentThumbnail({ facts, className }: { facts: InvoiceD
   const documentId = facts?.document_id ?? null
   if (!documentId) {
     return (
-      <div className={cn('grid place-items-center rounded-lg border border-border p-4 text-center text-[12.5px] text-muted-foreground', className)}>
+      <div className={cn('grid place-items-center rounded-lg p-4 text-center text-xs text-muted-foreground bg-control shadow-raised', className)}>
         <span className="flex items-center gap-2">
           <DocumentTextIcon className="h-4 w-4" aria-hidden />
           {t('no_document')}
@@ -156,7 +156,7 @@ export function InvoiceDocumentThumbnail({ facts, className }: { facts: InvoiceD
   const label = facts?.file_name ?? t('document_label')
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className={cn('overflow-hidden rounded-lg border border-border bg-background', className)}>
+      <div className={cn('overflow-hidden', className)}>
         <DocumentPreview
           src={`/api/documents/${documentId}/inline`}
           kind={kind}
@@ -164,7 +164,7 @@ export function InvoiceDocumentThumbnail({ facts, className }: { facts: InvoiceD
           className="h-full w-full"
           imageClassName="mx-auto h-full max-w-full object-contain object-top"
           fallback={
-            <div className="grid h-full w-full place-items-center p-4 text-center text-[12.5px] text-muted-foreground">
+            <div className="grid h-full w-full place-items-center p-4 text-center text-xs text-muted-foreground">
               {t('not_previewable')}
             </div>
           }
@@ -205,10 +205,10 @@ export function PaymentBesideDocument({
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <InvoiceDocumentThumbnail facts={payment.facts} className="h-[42vh] sm:h-[380px]" />
       <div className="min-w-0 space-y-2">
-        <dl className="divide-y divide-border border-b border-border text-[13px]">
+        <dl className="divide-y divide-border border-b-hairline text-[13px]">
           <DetailRow label={t('label_supplier')}>
             <span className="block">{payment.supplier}</span>
-            {payment.invoiceLabel && <span className="block text-[11px] text-muted-foreground">{payment.invoiceLabel}</span>}
+            {payment.invoiceLabel && <span className="block text-xs text-muted-foreground">{payment.invoiceLabel}</span>}
           </DetailRow>
           <DetailRow label={t('label_payee')}>
             <span className="block">{payment.payee}</span>
@@ -238,7 +238,7 @@ export function InvoiceDocumentButton({ payment, onOpen }: { payment: PaymentAga
     <Button
       type="button"
       variant="ghost"
-      size="icon-sm"
+      size="icon"
       aria-label={t('show_document', { supplier: payment.supplier })}
       title={t('show_document', { supplier: payment.supplier })}
       onClick={() => onOpen(payment.key)}
@@ -272,7 +272,7 @@ export function InvoiceDocumentSheet({ payment, onClose }: { payment: PaymentAga
               ) : (
                 <InvoiceDocumentThumbnail facts={payment.facts} className="h-[120px]" />
               )}
-              <dl className="divide-y divide-border border-b border-border text-[13px]">
+              <dl className="divide-y divide-border border-b-hairline text-[13px]">
                 <DetailRow label={t('label_payee')}>{payment.payee}</DetailRow>
                 <DetailRow label={t('label_reference')}>{paidReferenceLabel(payment.reference)}</DetailRow>
                 <DetailRow label={t('label_amount')}>{formatCurrency(payment.amount, payment.currency)}</DetailRow>

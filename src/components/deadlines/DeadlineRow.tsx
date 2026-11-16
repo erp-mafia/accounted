@@ -5,6 +5,7 @@ import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   BuildingLibraryIcon,
   CalendarDaysIcon,
@@ -67,7 +68,7 @@ export function DeadlineMark({
   const logo = deadlineAuthorityLogo(deadline)
   if (completed) {
     return (
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground/60">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
         <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
     )
@@ -107,6 +108,7 @@ export function deadlineDateLabel(dateStr: string): string {
  */
 export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowProps) {
   const t = useTranslations('deadlines')
+  const { canWrite, lockedTitle } = useViewerLock()
   const overdue = isDeadlineOverdue(deadline)
   const completed = deadline.is_completed
   const diff = daysFromToday(deadline.due_date)
@@ -145,16 +147,16 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           <span className="tabular-nums text-muted-foreground">
             {deadlineDateLabel(deadline.due_date)}
           </span>
-          <span className="text-muted-foreground/50"> · </span>
+          <span className="text-muted-foreground"> · </span>
           <span>{deadline.title}</span>
           {subParts.length > 0 && (
             <span
               className={cn(
-                'text-[12.5px]',
+                'text-xs',
                 overdue && !completed ? 'text-destructive' : 'text-muted-foreground',
               )}
             >
-              <span className="text-muted-foreground/50"> · </span>
+              <span className="text-muted-foreground"> · </span>
               {subParts.join(' · ')}
             </span>
           )}
@@ -180,6 +182,8 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
+            disabled={!canWrite}
+            title={lockedTitle}
             className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('mark_not_done')}
@@ -191,6 +195,8 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
+            disabled={!canWrite}
+            title={lockedTitle}
             className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('group_mark_done')}
@@ -198,7 +204,7 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
         )}
         {onEdit && (
           <PencilIcon
-            className="h-3.5 w-3.5 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
+            className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover:text-muted-foreground"
             aria-hidden="true"
           />
         )}

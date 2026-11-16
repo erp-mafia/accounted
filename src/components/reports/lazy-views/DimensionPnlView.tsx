@@ -30,7 +30,7 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
   const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}${budgetId ? `&budget_id=${budgetId}` : ''}`
   // Race-safe when the pivot or the window changes mid-flight: only the
   // answer for the current query string lands.
-  const { data: raw, loading, error } = useReportData<DimensionPnlReport>(
+  const { data: raw, loading, error, refetch } = useReportData<DimensionPnlReport>(
     `/api/reports/dimension-pnl?${reportQs}`,
     'Kunde inte hämta rapporten',
   )
@@ -55,8 +55,8 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
             onClick={() => setDimNo(String(d.sie_dim_no))}
             className={
               active
-                ? 'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150 bg-secondary border-border text-foreground'
-                : 'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                ? 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-secondary border-border text-foreground'
+                : 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
             }
           >
             {d.name}
@@ -79,7 +79,7 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
     return (
       <div className="space-y-4">
         {pivotPicker}
-        <ReportErrorCard message={error} />
+        <ReportErrorCard message={error} onRetry={refetch} />
       </div>
     )
   }
@@ -135,11 +135,11 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
       </div>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr className="border-b text-xs text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
                   {data.columns.map((c, i) => (
@@ -157,7 +157,7 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={colCount} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+                      <td colSpan={colCount} className="px-4 py-2 text-xs font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -193,7 +193,7 @@ export default function DimensionPnlView({ periodId, dateRange, budgetId = null 
       </Card>
 
       <Card>
-        <CardContent className="p-6">
+        <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <tbody>

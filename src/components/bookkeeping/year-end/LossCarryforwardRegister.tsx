@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatAmountInput, parseAmountInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { TaxAdjustmentLossRegister } from '@/lib/bokslut/types'
@@ -255,23 +256,15 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
+      <LateReveal className="space-y-3">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-20 w-full" />
+      </LateReveal>
     )
   }
 
   if (loadError || !proposal || !form) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-sm text-destructive">{loadError ?? t('load_failed')}</p>
-        </CardContent>
-      </Card>
-    )
+    return <LoadError title={loadError ?? t('load_failed')} onRetry={() => void load()} />
   }
 
   const shown = preview ?? proposal.existing
@@ -305,22 +298,22 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
                 {years.map((y) => (
                   <TableRow key={y.fiscal_period_id}>
                     <TableCell className="tabular-nums">{y.fiscal_period.name}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(y.brought_forward)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(y.brought_forward)}</TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {formatCurrency(y.amount_block_reduction + y.group_block_reduction)}
+                      {formatRowAmount(y.amount_block_reduction + y.group_block_reduction)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {y.result_before_deficit === null ? (
                         <span className="text-muted-foreground">{t('not_entered')}</span>
                       ) : (
-                        formatCurrency(y.result_before_deficit)
+                        formatRowAmount(y.result_before_deficit)
                       )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {y.carried_forward === null ? (
                         <span className="text-muted-foreground">{t('not_entered')}</span>
                       ) : (
-                        formatCurrency(y.carried_forward)
+                        formatRowAmount(y.carried_forward)
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{t(`source_${y.source}`)}</TableCell>
@@ -334,15 +327,15 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
         {yearWarnings.length > 0 && (
           <div role="status" className="space-y-1">
             {yearWarnings.map((w) => (
-              <p key={`${w.year}:${w.text}`} className="text-[12.5px] text-attn">
+              <p key={`${w.year}:${w.text}`} className="text-xs text-attn">
                 {w.year}: {w.text}
               </p>
             ))}
           </div>
         )}
 
-        <div className="space-y-4 border-t border-border pt-6">
-          <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        <div className="space-y-4 border-t-hairline pt-6">
+          <h3 className="text-xs text-muted-foreground">
             {t('year_heading', { name: proposal.fiscal_period.name })}
           </h3>
 
@@ -365,7 +358,6 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
                     key={`${c.source}:${c.tax_assessment_notice_id}`}
                     type="button"
                     variant="link"
-                    size="sm"
                     className="h-auto whitespace-normal p-0 text-left"
                     disabled={!canWrite}
                     onClick={() => update({ source: 'tax_assessment', noticeId: c.tax_assessment_notice_id ?? null })}
@@ -377,7 +369,6 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
                     key={c.source}
                     type="button"
                     variant="link"
-                    size="sm"
                     className="h-auto whitespace-normal p-0 text-left"
                     disabled={!canWrite || c.amount === null}
                     onClick={() => update({ broughtForward: amountText(c.amount), source: c.source, noticeId: null })}
@@ -404,7 +395,6 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
                 <Button
                   type="button"
                   variant="link"
-                  size="sm"
                   className="h-auto p-0"
                   disabled={!canWrite}
                   onClick={() => update({ result: amountText(proposal.result_before_deficit) })}
@@ -570,7 +560,7 @@ export function LossCarryforwardRegister({ periodId, onSaved }: { periodId: stri
               <ResultRow label={t('result_deductible')} amount={shown.deductible} strong />
               <ResultRow label={t('result_carried_forward')} amount={shown.carried_forward} strong />
               {preview?.warnings.map((w) => (
-                <p key={w.code} className="pt-1 text-[12.5px] text-attn">{warningText(w)}</p>
+                <p key={w.code} className="pt-1 text-xs text-attn">{warningText(w)}</p>
               ))}
             </div>
           )}

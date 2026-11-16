@@ -81,13 +81,13 @@ describe('konteringGridColumns', () => {
 })
 
 describe('KONTERING_ICON_WIDTH_CLASS', () => {
-  it('counts the column in icon-sm buttons: 32px, 40px on a touch screen', () => {
+  it('counts the column in icon buttons: 28px, 40px on a touch screen', () => {
     expect(KONTERING_ICON_WIDTH_CLASS.split(' ')).toEqual([
-      '[--kontering-icon:32px]',
+      '[--kontering-icon:28px]',
       'pointer-coarse:[--kontering-icon:40px]',
     ])
-    // The width the shared button gives icon-sm (w-8, min-w-10 on touch).
+    // The width the shared button gives icon (w-7, min-w-10 on touch).
     const button = fs.readFileSync(path.resolve(__dirname, '../../ui/button.tsx'), 'utf8')
-    expect(button).toContain('"icon-sm": "h-8 w-8 pointer-coarse:min-w-10"')
+    expect(button).toContain('icon: "h-7 w-7 pointer-coarse:min-w-10"')
   })
 })

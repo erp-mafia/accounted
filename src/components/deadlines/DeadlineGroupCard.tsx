@@ -5,6 +5,7 @@ import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DeadlineMark, deadlineDateLabel } from './DeadlineRow'
 import { PencilIcon } from '@/components/icons'
 
@@ -47,6 +48,7 @@ interface DeadlineGroupRowProps {
  */
 export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: DeadlineGroupRowProps) {
   const t = useTranslations('deadlines')
+  const { canWrite, lockedTitle } = useViewerLock()
   const first = deadlines[0]
   const overdue = deadlines.some(isDeadlineOverdue)
 
@@ -59,7 +61,7 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
           <span className="tabular-nums text-muted-foreground">
             {deadlineDateLabel(first.due_date)}
           </span>
-          <span className="text-muted-foreground/50"> · </span>
+          <span className="text-muted-foreground"> · </span>
           <span>{t('group_skattekonto_title')}</span>
         </p>
         <p
@@ -88,13 +90,15 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
                   e.stopPropagation()
                   onRequestToggle(deadline)
                 }}
+                disabled={!canWrite}
+                title={lockedTitle}
                 className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, 'shrink-0')}
               >
                 {t('group_mark_done')}
               </button>
               {onEdit && (
                 <PencilIcon
-                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
+                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-muted-foreground"
                   aria-hidden="true"
                 />
               )}

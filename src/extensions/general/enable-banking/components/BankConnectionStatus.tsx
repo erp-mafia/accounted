@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
@@ -60,6 +61,8 @@ export function BankConnectionStatus({
   sunset = null,
   paused = null,
 }: BankConnectionStatusProps) {
+  // Sync stays live for a read-only member; connecting, renewing, account choice and removal do not.
+  const { canWrite, lockedTitle } = useViewerLock()
   const [now] = useState(() => Date.now())
   const [detailsOpen, setDetailsOpen] = useState(false)
 
@@ -100,19 +103,20 @@ export function BankConnectionStatus({
   // badge: one sentence, start over or remove.
   if (uiState === 'abandoned') {
     return (
-      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b-hairline px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
         <span className="text-xs text-muted-foreground">Anslutningen slutfördes inte hos banken</span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {onRetry && (
-            <Button size="sm" onClick={() => onRetry(connection)}>
+            <Button disabled={!canWrite} title={lockedTitle} onClick={() => onRetry(connection)}>
               Försök igen
             </Button>
           )}
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            title={lockedTitle}
             onClick={() => onDisconnect(connection.id)}
           >
             Ta bort
@@ -127,7 +131,7 @@ export function BankConnectionStatus({
   // button lock alone made this state invisible).
   if (uiState === 'pending') {
     return (
-      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b-hairline px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
           <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
@@ -136,8 +140,9 @@ export function BankConnectionStatus({
         <span className="ml-auto shrink-0">
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            title={lockedTitle}
             onClick={() => onDisconnect(connection.id)}
           >
             Avbryt
@@ -189,11 +194,11 @@ export function BankConnectionStatus({
         // in switch mode for exactly this row); where the new provider does
         // not reach the bank, bank statements come in as files.
         return sunset === 'import' ? (
-          <Button size="sm" asChild>
+          <Button asChild>
             <Link href="/import?mode=bank">Importera kontoutdrag</Link>
           </Button>
         ) : (
-          <Button size="sm" asChild>
+          <Button asChild>
             <Link href={switchDeepLink(connection.id)}>Byt till ny koppling</Link>
           </Button>
         )
@@ -201,20 +206,20 @@ export function BankConnectionStatus({
         // Hosted, the subscription brings the feed back; self-hosted, the
         // connector key, which the page's sentence names.
         return paused === 'subscription' ? (
-          <Button size="sm" asChild>
+          <Button asChild>
             <Link href="/settings/billing">Uppgradera</Link>
           </Button>
         ) : null
       case 'pending_selection':
       case 'needs_configuration':
         return onManageAccounts ? (
-          <Button size="sm" onClick={() => onManageAccounts(connection.id)}>
+          <Button disabled={!canWrite} title={lockedTitle} onClick={() => onManageAccounts(connection.id)}>
             Välj konton
           </Button>
         ) : null
       case 'error':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} loading={isSyncing}>
+          <Button onClick={() => onSync(connection.id)} loading={isSyncing}>
             Försök igen
           </Button>
         )
@@ -223,14 +228,14 @@ export function BankConnectionStatus({
         // No psu override: the server reuses the stored psu_type, so renewal
         // is one click. Switching account type lives in the menu.
         return canReconnect ? (
-          <Button size="sm" onClick={() => onReconnect!(connection)}>
+          <Button disabled={!canWrite} title={lockedTitle} onClick={() => onReconnect!(connection)}>
             Förnya samtycke
           </Button>
         ) : null
       case 'stale':
       case 'never_synced':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} loading={isSyncing}>
+          <Button onClick={() => onSync(connection.id)} loading={isSyncing}>
             Synka nu
           </Button>
         )
@@ -240,7 +245,6 @@ export function BankConnectionStatus({
         return (
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => onSync(connection.id)}
             loading={isSyncing}
@@ -255,7 +259,7 @@ export function BankConnectionStatus({
   const primaryIsReconnect = uiState === 'expired' || uiState === 'expiring'
 
   return (
-    <div className="border-b border-border px-1 py-3">
+    <div className="border-b-hairline px-1 py-3">
       {/* Main line: identity + state left, one primary action + menu right */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-sm font-medium">{connection.bank_name}</span>
@@ -306,6 +310,7 @@ export function BankConnectionStatus({
                 // could not finish, so the way out went unfound.
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
+                  disabled={!canWrite}
                   onSelect={() => onDisconnect(connection.id)}
                 >
                   Ta bort anslutningen
@@ -313,7 +318,7 @@ export function BankConnectionStatus({
               ) : (
                 <>
                   {onManageAccounts && uiState !== 'needs_configuration' && !isSunset && (
-                    <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
+                    <DropdownMenuItem disabled={!canWrite} onSelect={() => onManageAccounts(connection.id)}>
                       Välj konton
                     </DropdownMenuItem>
                   )}
@@ -323,7 +328,7 @@ export function BankConnectionStatus({
                     </DropdownMenuItem>
                   )}
                   {canReconnect && !primaryIsReconnect && (
-                    <DropdownMenuItem onSelect={() => onReconnect!(connection)}>
+                    <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection)}>
                       Förnya samtycke
                     </DropdownMenuItem>
                   )}
@@ -336,10 +341,10 @@ export function BankConnectionStatus({
                       <DropdownMenuLabel className="text-xs font-normal normal-case tracking-normal">
                         Förnya och logga in som
                       </DropdownMenuLabel>
-                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'business')}>
+                      <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection, 'business')}>
                         Företagskonto
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'personal')}>
+                      <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection, 'personal')}>
                         Privatkonto
                       </DropdownMenuItem>
                     </>
@@ -350,6 +355,7 @@ export function BankConnectionStatus({
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
+                    disabled={!canWrite}
                     onSelect={() => onDisconnect(connection.id)}
                   >
                     Koppla från
@@ -365,7 +371,7 @@ export function BankConnectionStatus({
           page-level .attn owns the ochre sentence (the worst row only), so
           every other sunset row still says where to go. */}
       {isSunset && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           {sunset === 'import'
             ? 'Den gamla leverantören har stängts och banken nås inte än genom den nya. Importera kontoutdrag som fil (SIE eller CSV) tills vidare; historiken behålls.'
             : 'Den gamla leverantören har stängts. Bytet signeras med BankID och tar cirka två minuter; historiken behålls.'}
@@ -375,7 +381,7 @@ export function BankConnectionStatus({
       {/* Error detail: the page-level .attn owns the ochre sentence; the
           row's own message stays quiet. */}
       {(uiState === 'error' || uiState === 'needs_configuration') && connection.error_message && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           {connection.error_message}
         </p>
       )}
@@ -408,8 +414,9 @@ export function BankConnectionStatus({
             {onManageAccounts && offersAccountChoice(connection, accounts, now) && (
               <Button
                 variant="outline"
-                size="sm"
                 aria-label={`Välj konton för ${connection.bank_name}`}
+                disabled={!canWrite}
+                title={lockedTitle}
                 onClick={() => onManageAccounts(connection.id)}
               >
                 Välj konton
@@ -418,7 +425,7 @@ export function BankConnectionStatus({
           </div>
 
           {detailsOpen && (
-            <div className="ml-3 border-l border-border pl-4">
+            <div className="ml-3 border-l-hairline pl-4">
               {/* Initial backfill summary: what the bank actually returned vs
                   what we asked for. Diagnostics, so it lives in the details. */}
               {!isExpired &&
@@ -468,7 +475,7 @@ export function BankConnectionStatus({
                       {account.name || account.iban || 'Okänt konto'}
                     </span>
                     {isDisabled && (
-                      <Badge variant="outline" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <Badge variant="outline" className="text-xs text-muted-foreground">
                         Synkas ej
                       </Badge>
                     )}
@@ -480,7 +487,7 @@ export function BankConnectionStatus({
                     {!isExpired && account.balance !== undefined && (
                       <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
                         {account.balance_updated_at && (
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
                             {formatBalanceAge(account.balance_updated_at)}
                           </span>
                         )}

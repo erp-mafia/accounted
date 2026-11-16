@@ -20,7 +20,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { useCustomers } from '@/lib/reference-data/hooks'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import type { WebshopOrder } from '@/types'
 
 interface CreateInvoiceFromOrderDialogProps {
@@ -186,7 +186,7 @@ export default function CreateInvoiceFromOrderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* data-ph-mask: order number and customer name are user data */}
           <DialogTitle data-ph-mask="">{t('invoice_title', { number: order.order_number })}</DialogTitle>
@@ -238,7 +238,7 @@ export default function CreateInvoiceFromOrderDialog({
                       {item.quantity} × {item.name}
                     </td>
                     <td className={cn(VTD_CLASS, 'text-right tabular-nums')}>
-                      {formatCurrency(item.total + item.total_tax, order.currency)}
+                      {formatRowAmount(item.total + item.total_tax, order.currency)}
                     </td>
                   </tr>
                 ))}
@@ -320,7 +320,7 @@ function OrderInvoiceCustomerFields({
       {customerId === '' && (
         <div className="space-y-3">
           {fetching && (
-            <p className="text-[12.5px] text-muted-foreground">{t('invoice_customer_fetching')}</p>
+            <p className="text-xs text-muted-foreground">{t('invoice_customer_fetching')}</p>
           )}
           {lookup === 'withheld' && <AttnLine>{t('invoice_customer_withheld')}</AttnLine>}
           {lookup === 'unavailable' && (

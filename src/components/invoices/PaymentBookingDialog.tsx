@@ -360,7 +360,7 @@ export default function PaymentBookingDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[680px]">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>
             {/* data-ph-mask: the invoice number is user data */}
@@ -411,7 +411,7 @@ export default function PaymentBookingDialog({
                 return (
                   <li
                     key={c.id}
-                    className="flex flex-col gap-2 rounded-lg border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-lg p-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised"
                   >
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -449,7 +449,6 @@ export default function PaymentBookingDialog({
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
                       onClick={() =>
                         isAlreadyBooked
                           ? router.push(`/bookkeeping/${c.journal_entry_id}`)

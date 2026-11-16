@@ -113,12 +113,12 @@ export function ReplaceComponentDialog({ assetId, component, open, onOpenChange,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('title', { name: component.name })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-[12.5px] text-muted-foreground">{t('hint')}</p>
+          <p className="text-xs text-muted-foreground">{t('hint')}</p>
           <div className="space-y-1.5">
             <Label htmlFor="replace-date">{t('date')}</Label>
             <Input id="replace-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="tabular-nums" />

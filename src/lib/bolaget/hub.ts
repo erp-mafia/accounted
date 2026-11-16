@@ -1,10 +1,13 @@
 /**
- * The Bolaget pages as one place (founder decision 2026-10-30): one row in
- * the sidebar, and a tab bar every /bolaget page shares. Two halves open per
+ * The Bolaget pages as one place (founder decision 2026-10-30). Since the
+ * V7 shell (2026-11-15) each page is a row in the Företaget sidebar
+ * (components/dashboard/nav-v3.ts) instead of a tab in a shared bar; the
+ * list below stays the one definition of which page needs which half, and
+ * the sidebar rows are tested against it. Two halves open per
  * company: the registers (aktiebok, board, meetings, capital, owner tax) for
  * a form that keeps an aktiebok inside BOLAGET_COMPANY_IDS (gate.ts), and
  * Avtal och åtaganden for every form inside the same rollout
- * (lib/env/commitments-switch.ts). Pure and client-safe: the tab bar reads it.
+ * (lib/env/commitments-switch.ts). Pure and client-safe.
  */
 
 export interface BolagetHubAccess {
@@ -13,8 +16,6 @@ export interface BolagetHubAccess {
   /** Avtal och åtaganden: the rollout, any form. */
   agreements: boolean
 }
-
-export const NO_BOLAGET_ACCESS: BolagetHubAccess = { registers: false, agreements: false }
 
 export type BolagetTabKey = 'overview' | 'owners' | 'board' | 'meetings' | 'capital' | 'owner_tax' | 'agreements'
 
@@ -40,14 +41,8 @@ export function bolagetHubOpen(access: BolagetHubAccess): boolean {
   return access.registers || access.agreements
 }
 
-/** The tabs this company sees; none when the hub is closed. */
+/** The pages this company has; none when the hub is closed. */
 export function bolagetTabs(access: BolagetHubAccess): BolagetTab[] {
   if (!bolagetHubOpen(access)) return []
   return BOLAGET_TABS.filter((tab) => tab.needs === null || access[tab.needs])
-}
-
-/** The tab a path belongs to: the overview only on /bolaget itself, a register on its page and below. */
-export function activeBolagetTab(pathname: string): BolagetTabKey | null {
-  if (pathname === '/bolaget') return 'overview'
-  return BOLAGET_TABS.find((tab) => tab.key !== 'overview' && (pathname === tab.href || pathname.startsWith(`${tab.href}/`)))?.key ?? null
 }

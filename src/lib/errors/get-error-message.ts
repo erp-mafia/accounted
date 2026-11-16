@@ -231,7 +231,7 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     // of an undone SIE import would make the import's verifikationer active
     // again while the import stays undone.
     /undone SIE import cannot be restored/i,
-    'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.',
+    'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
   ],
   [
     /timed out after \d+m?s/i,

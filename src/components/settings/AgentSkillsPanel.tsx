@@ -56,7 +56,7 @@ const TIER_SECTION: Record<Tier, { title: string; blurb: string }> = {
 // trimmed for a wider settings column.
 const PROSE =
   'prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 ' +
-  'prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight ' +
+  'prose-headings:font-sans prose-headings:font-medium prose-headings:tracking-tight ' +
   'prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-p:my-2 prose-p:leading-6 ' +
   'prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 ' +
   'prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 ' +
@@ -64,7 +64,7 @@ const PROSE =
   'prose-code:before:content-none prose-code:after:content-none ' +
   'prose-table:my-2 prose-table:text-xs [&_table]:w-full ' +
   '[&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium ' +
-  '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] ' +
+  '[&_th]:text-muted-foreground [&_th]:tracking-wider [&_th]:text-xs ' +
   '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
 export function AgentSkillsPanel() {
@@ -188,7 +188,7 @@ export function AgentSkillsPanel() {
     <div className="space-y-6">
       {atoms && (
         <div className="flex items-center gap-2">
-          <p className="text-[12.5px] tabular-nums text-muted-foreground">
+          <p className="text-xs tabular-nums text-muted-foreground">
             {counts.total} kunskapsområden · {counts.active} aktiva för ditt företag
           </p>
           <HelpPopover className="shrink-0">
@@ -217,7 +217,7 @@ export function AgentSkillsPanel() {
         <div aria-busy>
           <Skeleton className="mb-3 h-3 w-32" />
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex items-center justify-between border-b border-border py-3.5">
+            <div key={i} className="flex items-center justify-between border-b-hairline py-3.5">
               <Skeleton className="h-3.5 w-72" />
               <Skeleton className="h-3.5 w-12" />
             </div>
@@ -241,9 +241,9 @@ export function AgentSkillsPanel() {
         atoms.length > 0 &&
         TIER_ORDER.filter((tier) => grouped[tier].length > 0).map((tier) => (
           <section key={tier}>
-            <p className="flex items-center gap-2 pb-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+            <p className="flex items-center gap-2 pb-1 text-xs font-medium text-muted-foreground">
               <span>{TIER_SECTION[tier].title}</span>
-              <span className="font-normal tabular-nums text-muted-foreground/70">{grouped[tier].length}</span>
+              <span className="font-normal tabular-nums text-muted-foreground">{grouped[tier].length}</span>
               <HelpPopover className="shrink-0">{TIER_SECTION[tier].blurb}</HelpPopover>
             </p>
             <div>
@@ -253,7 +253,7 @@ export function AgentSkillsPanel() {
                 const body = bodies[atom.id]
                 const dormant = !atom.active
                 return (
-                  <div key={atom.id} className="border-b border-border">
+                  <div key={atom.id} className="border-b-hairline">
                     <button
                       type="button"
                       onClick={() => toggle(atom)}
@@ -264,12 +264,12 @@ export function AgentSkillsPanel() {
                         {atomLabel(atom)}
                       </span>
                       {tier !== 'horizontal' && (
-                        <span className={cn('shrink-0 text-[11px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
+                        <span className={cn('shrink-0 text-xs', dormant ? 'rounded-md border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
                           {dormant ? 'Vilande' : 'Aktiv'}
                         </span>
                       )}
                       <ChevronDownIcon
-                        className={cn('h-3.5 w-3.5 shrink-0 self-center text-muted-foreground/60 transition-transform', !isOpen && '-rotate-90')}
+                        className={cn('h-3.5 w-3.5 shrink-0 self-center text-muted-foreground transition-transform', !isOpen && '-rotate-90')}
                         aria-hidden
                       />
                     </button>

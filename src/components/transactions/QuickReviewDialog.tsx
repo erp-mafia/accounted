@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useAssistantReadsAvailable } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
@@ -10,24 +10,21 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { FIELD_CLASS, FIELD_LINE_CLASS } from '@/components/ui/field-classes'
+import { Dialog, DialogConsequence, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { ToastAction } from '@/components/ui/toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { AttnLine } from '@/components/ui/attn-line'
 import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAfterAccountChange } from '@/lib/transactions/underlag-read'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import {
-  ArrowDownRightIcon,
-  ArrowUpRightIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  InboxIcon,
-  PaperClipIcon,
-} from '@/components/icons'
+import { ChevronDownIcon } from '@/components/icons'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { accountProposal, booksSwedishInputVat, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal, type DisputedVat } from '@/lib/bookkeeping/proposal'
@@ -39,7 +36,6 @@ import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { vatWithinGrossCeiling } from '@/lib/bookkeeping/gross-split'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import JournalEntryPreview from './JournalEntryPreview'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
@@ -58,7 +54,6 @@ import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-sha
 import { isPersonChoice, type ReviewChoice } from '@/lib/transactions/review-choice'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
-import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { VatTreatment, EntityType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -71,6 +66,14 @@ import { useSkattekontoAccount } from '@/components/skattekonto/use-skattekonto-
  * jurisdiction.
  */
 const FOREIGN_REVERSE_CHARGE_INPUT_VAT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat_reverse_charge_foreign')
+
+// Stil v3 dialog anatomy: a section is a 12px/500 label over its content,
+// sections 20px apart, no boxes around them.
+const SECTION_LABEL_CLASS = 'text-[12px] font-medium leading-4 text-muted-foreground'
+// The account number beside the proposal's name: mono on the quiet wash.
+const ACCOUNT_TAG_CLASS = 'rounded-sm bg-secondary/60 px-1.5 font-mono text-[12px] leading-5 tabular-nums text-foreground'
+// Quiet in-sentence actions (Ångra, Ändra rader): the body ink, underlined.
+const INLINE_ACTION_CLASS = cn(QUIET_LINK_CLASS, 'text-[13px] font-medium text-strong disabled:pointer-events-none disabled:opacity-50')
 
 interface QuickReviewDialogProps {
   open: boolean
@@ -140,10 +143,10 @@ export default function QuickReviewDialog({
   activateOnBooking = null,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
+  const tCommon = useTranslations('common')
   // A catalog template's 1630 books the company's skattekonto account
   // (2012 for an enskild firma that runs it there, PH 175): the preview too.
   const skattekontoAccount = useSkattekontoAccount()
-  const tCat = useTranslations('tx_categories')
   const tJournal = useTranslations('journal_form')
   const tUnderlag = useTranslations('tx_booking_underlag')
   const tDetach = useTranslations('tx_detach')
@@ -188,6 +191,9 @@ export default function QuickReviewDialog({
   // other (pickedToActivate below).
   const { catalog: basCatalog, chart: wholeChart } = useBasCatalog({ includeDeactivated: true })
   const { settings: companySettings } = useCompanySettings()
+  // The bank account the row came from, named in the context line. Session
+  // cached and already read by TransactionBookingDialog on the same page.
+  const { cashAccounts } = useCashAccounts()
   const canAskAssistant = useAssistantReadsAvailable()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
@@ -207,8 +213,9 @@ export default function QuickReviewDialog({
   // Carried documents are not read again (see carriedDocumentIds).
   const [carriedDocIds] = useState(() => carriedDocumentIds(carriedUnderlag))
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
+  // Beside the row's own underlag the upload zone is folded until asked
+  // for (or a file is dragged over the dialog); without one it is open.
   const [showUploadZone, setShowUploadZone] = useState(false)
-  const [showVatDropdown, setShowVatDropdown] = useState(false)
   // Mirror of `transaction` so we can patch in a freshly-fetched SEK conversion
   // before the user confirms: the verifikation must always be in SEK and the
   // engine reads these fields straight off the transaction row.
@@ -223,10 +230,11 @@ export default function QuickReviewDialog({
   const [dims, setDims] = useState<Record<string, string>>(
     () => ({ ...(openedProposal.default_dimensions ?? {}) }),
   )
-  // The dimension fields stay folded until one is set or asked for: two
-  // empty pickers on every review was weight without a decision.
-  const [dimsOpen, setDimsOpen] = useState(false)
-  const showDims = dimsOpen || Object.keys(dims).length > 0
+  // "Fler alternativ" (the dimension fields and Ändra rader) stays folded:
+  // two empty pickers on every review was weight without a decision. It
+  // opens on its own when the booking carries a dimension bag, so the person
+  // sees what the booking will carry.
+  const [moreOpen, setMoreOpen] = useState(() => Object.keys(openedProposal.default_dimensions ?? {}).length > 0)
 
   // The transaction's own underlag, from either door (pinned to the row, or
   // matched in the inbox): its moms is offered over the rate. The first
@@ -677,6 +685,26 @@ export default function QuickReviewDialog({
         })()
       : []
 
+  // "Det här bokförs": the Summa row under the preview's lines, and whether
+  // they balance. The server builds them with the code the booking posts
+  // with, so an unbalanced answer is one the engine would refuse: the
+  // primary waits for a preview that balances (only once one has landed).
+  const previewDebit = roundOre(preview.lines.filter((l) => l.side === 'debet').reduce((sum, l) => sum + l.amount, 0))
+  const previewCredit = roundOre(preview.lines.filter((l) => l.side === 'kredit').reduce((sum, l) => sum + l.amount, 0))
+  const previewUnbalanced = !preview.loading && !preview.error && preview.lines.length > 0 && previewDebit !== previewCredit
+
+  // The header's context line: the row, its date and the bank account it came from.
+  const cashAccountName = cashAccounts.find((a) => a.id === tx.cash_account_id)?.name ?? null
+  const contextLine = [tx.description, formatDate(tx.date), cashAccountName].filter(Boolean).join(' · ')
+
+  // "Fler alternativ" holds what most reviews never touch: the dimension
+  // fields (not for a multi-line counterparty pattern, whose per-line bags
+  // are authoritative server-side) and "Ändra rader".
+  const dimsEditable = dimensionsEnabled && !hasCounterpartyPattern
+  const canEditLines = !!onEditLines && proposalLines.length > 0
+  const zoneOpen = showUploadZone || !viewerDocId
+  const accountMissing = !isTemplateBooking && !accountOverride
+
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
     onEditLines(proposalLines, tx)
@@ -847,22 +875,18 @@ export default function QuickReviewDialog({
       onOpenChange(o)
     }}>
       <DialogVeil />
-      {/* Both variants cap at the space left of a docked agent sheet so the
-          right edge never lands unreachable under it (sheet is z-60).
-          --agent-sheet-w is docked-only: sheet closed = the old widths.
-          Header, body and footer, as in ConfirmationDialog: only the body
-          scrolls, so Stäng and Bokför stay in view however far the body grows
-          (an upload, the assistant reading it, the dimension fields), on a
-          phone as on a desktop. The dialog used to scroll as a whole and an
-          attached file pushed the buttons out of sight (crm#1101). */}
+      {/* Stil v3: 560px (form), 720px (wide) with the row's underlag beside
+          the review; the primitive centres it in the space left of a docked
+          agent sheet. Header, body and footer, as in ConfirmationDialog: only
+          the body scrolls, so Stäng and Bokför stay in view however far the
+          body grows (an upload, the assistant reading it, the dimension
+          fields), on a phone as on a desktop. The dialog used to scroll as a
+          whole and an attached file pushed the buttons out of sight
+          (crm#1101). */}
       <DialogContent
         ref={dropSurfaceRef}
-        className={cn(
-          'flex max-h-[95dvh] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90dvh]',
-          viewerDocId
-            ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))]'
-            : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))]',
-        )}
+        size={viewerDocId ? 'wide' : 'form'}
+        className="flex flex-col gap-0 overflow-hidden p-0"
         // A file dragged anywhere over the dialog unfolds the upload zone,
         // which then owns the drop (DocumentUploadZone dropSurfaceRef). The
         // two preventDefaults keep a drop that lands before the zone has
@@ -873,24 +897,24 @@ export default function QuickReviewDialog({
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => e.preventDefault()}
       >
-        <DialogHeader className="shrink-0 px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6">
+        <DialogHeader className="shrink-0 px-5 pb-4 pt-5">
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {isTemplateBooking ? t('description_template') : t('description_default')}
-          </DialogDescription>
+          {/* The row's own text and account: user data in session replays. */}
+          <DialogDescription data-ph-mask="">{contextLine}</DialogDescription>
         </DialogHeader>
 
-        <div className="scrollbar-visible min-h-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6">
-        {/* When the row came with its underlag, show it side-by-side (receipt
-            left, review right). Without one the review column uses
+        <div className="scrollbar-visible min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+        {/* When the row came with its underlag, show it beside the review
+            (receipt left, review right). Without one the review column uses
             display:contents so the body collapses to the single column. */}
-        <div className={viewerDocId ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]' : 'flex flex-col gap-4'}>
+        <div className={viewerDocId ? 'grid grid-cols-1 gap-5 md:grid-cols-[236px_minmax(0,1fr)] md:gap-6' : 'flex flex-col gap-5'}>
           {viewerDocId && (
-            // The column's height leaves room for the header and the pinned
-            // footer (the body scrolls between them), so the file row at its
-            // foot is in view on a short laptop screen too.
-            <div className="flex h-[45vh] flex-col gap-2 lg:sticky lg:top-0 lg:h-[min(72vh,calc(90dvh-9rem))] lg:self-start">
-              <DocumentViewerPane documentId={viewerDocId} className="min-h-0 flex-1" />
+            // The column's height leaves room for the header and the footer
+            // (the body scrolls between them), so the file row at its foot is
+            // in view on a short laptop screen too.
+            <div className="flex h-[45vh] flex-col gap-2 md:sticky md:top-0 md:h-[min(36rem,calc(100dvh-17rem))] md:self-start">
+              {/* The one object in the dialog: the raised surface. */}
+              <DocumentViewerPane documentId={viewerDocId} className="min-h-0 flex-1 rounded-lg bg-control shadow-raised" />
               {/* Its x takes it off the row once confirmed; the file stays in
                   the archive. */}
               <div className="shrink-0">
@@ -903,73 +927,40 @@ export default function QuickReviewDialog({
               </div>
             </div>
           )}
-          <div className={viewerDocId ? 'flex min-w-0 flex-col gap-4' : 'contents'}>
+          <div className={viewerDocId ? 'flex min-w-0 flex-col gap-5' : 'contents'}>
 
-        {bookingWithoutUnderlag && (
-          <AttnLine action={{ label: t('underlag_fetch'), onClick: () => setShowUploadZone(true) }}>
-            {t('underlag_missing_title', { amount: formatCurrency(Math.abs(tx.amount), tx.currency) })} {t('underlag_missing_body')}
-          </AttnLine>
-        )}
-
-        {/* Transaction summary */}
-        <div className="flex items-center gap-3 rounded-lg border p-3">
-          <div
-            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'text-success' : 'text-destructive'}`}
-          >
-            {isIncome ? (
-              <ArrowUpRightIcon className="h-4 w-4" />
-            ) : (
-              <ArrowDownRightIcon className="h-4 w-4" />
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm break-all">{tx.description}</p>
-            <p className="text-xs text-muted-foreground">{formatDate(tx.date)}</p>
-          </div>
-          <div className="text-right flex-shrink-0">
-            {isForeign ? (
-              <>
-                <p className={`font-medium text-sm tabular-nums ${isIncome ? 'text-success' : ''}`}>
-                  {isIncome ? '+' : ''}
-                  {formatCurrency(tx.amount, tx.currency)}
-                </p>
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {rateLoading || sekConversionMissing
-                    ? t('amount_loading')
-                    : t('amount_approx', { sign: isIncome ? '+' : '', sek: formatCurrency(sekAmount, 'SEK') })}
-                </p>
-              </>
-            ) : (
-              <p className={`font-medium text-sm tabular-nums ${isIncome ? 'text-success' : ''}`}>
-                {isIncome ? '+' : ''}
-                {formatCurrency(sekAmount, 'SEK')}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {isForeign && tx.exchange_rate != null && tx.exchange_rate_date && !sekConversionMissing && (
-          <p className="text-xs text-muted-foreground -mt-1">
-            {t('rate_footnote', {
-              rate: formatCurrency(tx.exchange_rate, 'SEK'),
-              currency: tx.currency,
-              date: formatDate(tx.exchange_rate_date),
-            })}
+        {/* The amount, the headline number. A foreign row shows its own
+            currency first and the SEK the verifikat books under it. */}
+        <div>
+          <p className={cn('font-display text-3xl tabular-nums', isIncome ? 'text-success' : 'text-strong')}>
+            {isIncome ? '+' : ''}
+            {isForeign ? formatCurrency(tx.amount, tx.currency) : formatCurrency(sekAmount, 'SEK')}
           </p>
-        )}
-
-        {rateError && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/[0.05] px-3 py-2">
-            <p className="text-xs text-destructive leading-snug">{rateError}</p>
-          </div>
-        )}
+          {isForeign && (
+            <p className="text-[13px] tabular-nums text-foreground/80">
+              {rateLoading || sekConversionMissing
+                ? t('amount_loading')
+                : t('amount_approx', { sign: isIncome ? '+' : '', sek: formatCurrency(sekAmount, 'SEK') })}
+            </p>
+          )}
+          {isForeign && tx.exchange_rate != null && tx.exchange_rate_date && !sekConversionMissing && (
+            <p className="text-xs text-muted-foreground">
+              {t('rate_footnote', {
+                rate: formatCurrency(tx.exchange_rate, 'SEK'),
+                currency: tx.currency,
+                date: formatDate(tx.exchange_rate_date),
+              })}
+            </p>
+          )}
+          {rateError && <p role="alert" className="mt-1 text-xs text-destructive">{rateError}</p>}
+        </div>
 
         {/* One header says what will be booked and why: the pick, the source
             of the recommendation, and beneath it the assistant's verdict on
-            it. The verifikat block further down is the proof. */}
+            it. "Det här bokförs" further down is the proof. */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <span className={SECTION_LABEL_CLASS}>
               {picked || proposal.source === 'manual' ? t('rec_kicker_manual') : t('rec_kicker')}
             </span>
             {onChangeTemplate && !hasCounterpartyPattern && (
@@ -977,26 +968,27 @@ export default function QuickReviewDialog({
               // held here goes along to the review the pick opens (the row's
               // own is on the row), and an upload or a pin still on its way
               // is waited for, not dropped.
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'text-[12.5px] disabled:pointer-events-none disabled:opacity-50')}
+              <Button
+                variant="ghost"
+                className="-my-1.5 -mr-2.5"
                 disabled={uploadInFlight(uploadedFiles) || underlagState.busy}
                 onClick={() => onChangeTemplate(underlagToCarry(held))}
               >
-                {t('rec_change')}
-              </button>
+                {accountMissing ? t('rec_pick') : t('rec_change')}
+              </Button>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[15px] font-medium text-foreground">{proposal.name_sv}</span>
+            <span className="text-[15px] font-medium leading-[22px] text-strong">{proposal.name_sv}</span>
+            {currentAccount && <span className={ACCOUNT_TAG_CLASS}>{currentAccount}</span>}
             {patternDimsLabel && (
               <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                 {patternDimsLabel}
               </Badge>
             )}
           </div>
-          <p className="text-[12.5px] text-muted-foreground">{whyFor(proposal)}</p>
-          {ruleLine && <p className="text-[12.5px] leading-snug text-muted-foreground">{ruleLine}</p>}
+          <p className="text-xs text-muted-foreground">{whyFor(proposal)}</p>
+          {ruleLine && <p className="text-xs leading-snug text-muted-foreground">{ruleLine}</p>}
           {boxDispute && currentSide && (
             <AttnLine
               action={
@@ -1025,11 +1017,11 @@ export default function QuickReviewDialog({
           )}
           {/* The assistant's read, unless this review already is its pick. */}
           {previous && (
-            <p className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-foreground">
-              <span>{t('changed_from', { label: `${previous.name_sv} ${businessAccount(previous)}` })}</span>
+            <p className="text-[13px] leading-5 text-foreground">
+              {t('changed_from', { label: `${previous.name_sv} ${businessAccount(previous)}` })}{' '}
               <button
                 type="button"
-                className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}
+                className={INLINE_ACTION_CLASS}
                 onClick={() => {
                   setProposal(previous)
                   setPrevious(null)
@@ -1069,66 +1061,14 @@ export default function QuickReviewDialog({
           )}
         </div>
 
-        {/* Journal entry preview: hidden until we have a SEK conversion;
-            otherwise we'd render a verifikation in the wrong currency. */}
-        {!sekConversionMissing && !rateLoading && (
-          <div>
-            <JournalEntryPreview lines={preview.lines} loading={preview.loading} error={preview.error} changedAccounts={changedAccounts} />
-            {/* "Andra rader": send the computed lines into the manual booking
-                dialog for per-line editing. Offered on every proposal surface
-                (AI suggestion, static template, counterparty pattern). */}
-            {onEditLines && proposalLines.length > 0 && (
-              <div className="mt-2 flex justify-end">
-                <button
-                  type="button"
-                  className="text-xs text-primary hover:underline disabled:pointer-events-none disabled:opacity-50"
-                  disabled={isProcessing}
-                  onClick={handleEditLines}
-                >
-                  {t('edit_lines')}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {vatRateMismatch && (
-          <AttnLine>
-            {t('vat_template_rate_differs', { doc: vatRateMismatch.underlag, template: vatRateMismatch.template })}
-          </AttnLine>
-        )}
-
-        {/* Moms per the underlag: stated whenever the document has one, with
-            the choice to book it when it differs from the proposal's rate. */}
-        {/* The underlag's moms, only when it disagrees with the rate: when
-            they agree the verifikat above already shows the figure, and
-            saying it twice reads as two different facts. */}
-        {docVatDiffers && (
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
-            <span>
-              {useDocVat
-                ? t('vat_doc_wins', { amount: formatCurrency(docVat, tx.currency) })
-                : t('vat_rate_wins', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })}
-            </span>
-            <button
-              type="button"
-              className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}
-              disabled={isProcessing}
-              onClick={() => setUseDocVat((v) => !v)}
-            >
-              {useDocVat
-                ? t('vat_use_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })
-                : t('vat_use_doc_amount', { amount: formatCurrency(docVat, tx.currency) })}
-            </button>
-          </p>
-        )}
-
-        {/* Account & VAT: hidden for template bookings (accounts defined by the template) */}
+        {/* Account & VAT: hidden for template bookings (accounts defined by
+            the template). Both fields side by side, the box a reverse-charge
+            purchase reports in under them. */}
         {!isTemplateBooking && (
-          <>
-            <div>
-              <label className="text-sm font-medium text-muted-foreground">{t('label_account')}</label>
-              <div className="mt-1">
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
+                <Label>{t('label_account')}</Label>
                 <AccountCombobox
                   value={accountOverride}
                   accounts={accounts}
@@ -1137,119 +1077,153 @@ export default function QuickReviewDialog({
                   onChange={handleAccountChange}
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-muted-foreground">{t('label_vat_treatment')}</label>
-              <div className="mt-1">
+              <div className="min-w-0 space-y-1.5">
+                <Label>{t('label_vat_treatment')}</Label>
                 {isLiabilityAccount ? (
-                  <p className="text-sm text-muted-foreground">
-                    {t('no_vat_liability_account')}
-                  </p>
-                ) : showVatDropdown ? (
+                  <>
+                    <div aria-disabled="true" className={cn(FIELD_CLASS, FIELD_LINE_CLASS, 'field-disabled items-center')}>
+                      {t('no_vat_default')}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{t('no_vat_liability_account')}</p>
+                  </>
+                ) : (
                   <VatTreatmentSelect
                     value={vatTreatment}
                     onValueChange={setVatTreatment}
                   />
-                ) : (
-                  <p className="text-sm">
-                    {(() => {
-                      const opt = VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)
-                      return opt ? tCat(opt.labelKey) : t('no_vat_default')
-                    })()}
-                    {rcBoxText && ` · ${rcBoxText}`}
-                    {' '}
-                    <button
-                      type="button"
-                      className="text-xs text-primary hover:underline"
-                      onClick={() => setShowVatDropdown(true)}
-                    >
-                      {t('change')}
-                    </button>
-                  </p>
                 )}
               </div>
             </div>
 
-            {showVatDropdown && rcBoxApplies && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground">{t('label_rc_box')}</label>
-                <div className="mt-1">
-                  {rcAccountRule?.mode === 'fixed' ? (
-                    <p className="text-sm">{rcBoxText}</p>
-                  ) : (
-                    <ReverseChargeBoxSelect
-                      value={rcKind}
-                      onValueChange={setReverseChargeKind}
-                      ariaLabel={t('label_rc_box')}
-                      disabled={isProcessing}
-                    />
-                  )}
-                </div>
+            {rcBoxApplies && (
+              <div className="min-w-0 space-y-1.5">
+                <Label>{t('label_rc_box')}</Label>
+                {rcAccountRule?.mode === 'fixed' ? (
+                  <p className="text-[13px] text-foreground">{rcBoxText}</p>
+                ) : (
+                  <ReverseChargeBoxSelect
+                    value={rcKind}
+                    onValueChange={setReverseChargeKind}
+                    ariaLabel={t('label_rc_box')}
+                    disabled={isProcessing}
+                  />
+                )}
               </div>
             )}
-          </>
+          </div>
         )}
 
-        {/* Dimension tags (kostnadsställe/projekt): rendered for category,
-            library-template and legacy counterparty bookings. Multi-line
-            counterparty patterns are excluded: their per-line bags are
-            authoritative server-side and an edit here would be ignored. */}
-        {dimensionsEnabled && !hasCounterpartyPattern && !showDims && (
-          <div className="flex justify-end">
-            <button type="button" className={cn(QUIET_LINK_CLASS, 'text-xs')} onClick={() => setDimsOpen(true)} disabled={isProcessing}>
-              {t('label_dimensions')}
-            </button>
+        {/* What the moms rests on, when the template or the rate and the
+            underlag disagree: said beside the moms, never acted on. */}
+        {(vatRateMismatch || docVatDiffers) && (
+          <div className="space-y-1.5">
+            {vatRateMismatch && (
+              <AttnLine>
+                {t('vat_template_rate_differs', { doc: vatRateMismatch.underlag, template: vatRateMismatch.template })}
+              </AttnLine>
+            )}
+            {/* The underlag's moms, only when it disagrees with the rate: when
+                they agree the preview below already shows the figure, and
+                saying it twice reads as two different facts. */}
+            {docVatDiffers && (
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                <span>
+                  {useDocVat
+                    ? t('vat_doc_wins', { amount: formatCurrency(docVat, tx.currency) })
+                    : t('vat_rate_wins', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })}
+                </span>
+                <button
+                  type="button"
+                  className={cn(QUIET_LINK_CLASS, 'text-xs')}
+                  disabled={isProcessing}
+                  onClick={() => setUseDocVat((v) => !v)}
+                >
+                  {useDocVat
+                    ? t('vat_use_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })
+                    : t('vat_use_doc_amount', { amount: formatCurrency(docVat, tx.currency) })}
+                </button>
+              </p>
+            )}
           </div>
         )}
-        {dimensionsEnabled && !hasCounterpartyPattern && showDims && (
-          <div>
-            <label className="text-sm font-medium text-muted-foreground">{t('label_dimensions')}</label>
-            <div className="mt-1">
-              <LineDimensionFields
-                dimensions={dims}
-                onChange={(sieDimNo, code) => {
-                  setDims((prev) => {
-                    const next = { ...prev }
-                    if (code) next[sieDimNo] = code
-                    else delete next[sieDimNo]
-                    return next
-                  })
-                }}
-                inputClassName="h-8"
+
+        {/* "Det här bokförs": the lines the booking posts, a flat ledger
+            table with its Summa row. Hidden until we have a SEK conversion;
+            otherwise it would show a verifikation in the wrong currency. */}
+        {!sekConversionMissing && !rateLoading && (
+          <section aria-busy={preview.loading} className="min-w-0">
+            <h3 className={cn(SECTION_LABEL_CLASS, 'mb-1.5')}>{t('preview_label')}</h3>
+            {preview.error ? (
+              <p role="alert" className="text-[13px] text-destructive">{preview.error}</p>
+            ) : preview.lines.length === 0 ? (
+              preview.loading ? <p className="text-[13px] text-muted-foreground">{t('preview_loading')}</p> : null
+            ) : (
+              <VoucherLinesTable
+                className={cn('transition-opacity duration-150', preview.loading && 'opacity-60')}
+                lines={preview.lines.map((line) => ({
+                  ...voucherLineView(line),
+                  // The lines the previous proposal did not have: the change
+                  // the assistant's pick made is seen, not inferred.
+                  extra: changedAccounts.includes(line.account) ? (
+                    <span className="rounded-sm bg-attn/15 px-1 text-xs font-medium text-attn">{t('preview_new')}</span>
+                  ) : undefined,
+                }))}
+                showTotals
+                totalLabel={
+                  <span className={cn('font-normal', previewUnbalanced ? 'text-destructive' : 'text-muted-foreground')}>
+                    {previewUnbalanced
+                      ? t('preview_differs', {
+                          amount: formatCurrency(roundOre(Math.abs(previewDebit - previewCredit)), 'SEK'),
+                        })
+                      : t('preview_balanced')}
+                  </span>
+                }
               />
-            </div>
-          </div>
+            )}
+          </section>
         )}
 
         {/* The underlag: what was attached here (the first of it is the row's
             own the moment it lands, so closing keeps it) and the way to add
             more. The row's underlag from before this review is beside it,
-            with its own x. Locked while the booking runs: handleConfirm
-            links what was attached when it started. */}
-        <div className="rounded-lg border">
-          <button
-            type="button"
-            onClick={() => setShowUploadZone(!showUploadZone)}
-            className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-secondary/60 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <PaperClipIcon className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">{t('doc_label')}</span>
+            with its own x; then the zone folds behind the label. Locked
+            while the booking runs: handleConfirm links what was attached
+            when it started. */}
+        <section className="space-y-2">
+          {viewerDocId ? (
+            <Button
+              variant="ghost"
+              className="-ml-2.5"
+              aria-expanded={zoneOpen}
+              onClick={() => setShowUploadZone(!showUploadZone)}
+            >
+              {t('doc_label')}
               {attachedCount > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  {t('doc_attached_count', { count: attachedCount })}
-                </span>
+                <span className="text-xs text-muted-foreground">{t('doc_attached_count', { count: attachedCount })}</span>
+              )}
+              <ChevronDownIcon className={cn('h-3 w-3 transition-transform duration-150', zoneOpen && 'rotate-180')} />
+            </Button>
+          ) : (
+            <div className="flex items-baseline gap-2">
+              <h3 className={SECTION_LABEL_CLASS}>{t('doc_label')}</h3>
+              {attachedCount > 0 && (
+                <span className="text-xs text-muted-foreground">{t('doc_attached_count', { count: attachedCount })}</span>
               )}
             </div>
-            {showUploadZone ? (
-              <ChevronUpIcon className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
-          {showUploadZone && (
-            <div className="px-3 pb-3 space-y-2">
+          )}
+          {/* A purchase worth asking about and nothing to show for it: said
+              where the underlag goes, and the button says what booking now
+              means. */}
+          {bookingWithoutUnderlag && (
+            <AttnLine>
+              <span className="font-medium text-strong">
+                {t('underlag_missing_title', { amount: formatCurrency(Math.abs(tx.amount), tx.currency) })}
+              </span>{' '}
+              {t('underlag_missing_body')}
+            </AttnLine>
+          )}
+          {zoneOpen && (
+            <div className="space-y-2">
               <DocumentUploadZone
                 files={uploadedFiles}
                 onFilesChange={handleFilesChange}
@@ -1257,6 +1231,15 @@ export default function QuickReviewDialog({
                 compact
                 disabled={isProcessing}
                 dropSurfaceRef={dropSurfaceRef}
+                actions={
+                  // Locked while the booking is in flight: handleConfirm captured
+                  // pickedInboxDocs when it started, so anything picked now would
+                  // never be linked and would then be cleared on completion,
+                  // vanishing from the list with no error to explain it.
+                  <Button variant="ghost" disabled={isProcessing} onClick={() => setInboxPickerOpen(true)}>
+                    {t('doc_pick_inbox')}
+                  </Button>
+                }
               />
               {pickedInboxDocs.map((doc) => (
                 <UnderlagFileRow
@@ -1267,42 +1250,86 @@ export default function QuickReviewDialog({
                   onRemove={() => void letGo(doc.document_id)}
                 />
               ))}
-              {/* Locked while the booking is in flight: handleConfirm captured
-                  pickedInboxDocs when it started, so anything picked now would
-                  never be linked and would then be cleared on completion,
-                  vanishing from the list with no error to explain it.
-                  Styled as the dropzone's footer (same treatment as
-                  TransactionBookingDialog) so upload and inbox-pick read as
-                  one underlag surface. */}
-              <button
-                type="button"
-                disabled={isProcessing}
-                onClick={() => setInboxPickerOpen(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-              >
-                <InboxIcon className="h-4 w-4" />
-                <span>{t('doc_pick_existing_inline')}</span>
-              </button>
             </div>
           )}
-        </div>
+        </section>
+
+        {/* "Fler alternativ": the dimension tags (kostnadsställe/projekt) for
+            category, library-template and legacy counterparty bookings, and
+            "Ändra rader", which sends the computed lines into the manual
+            booking dialog for per-line editing (offered on every proposal
+            surface: AI suggestion, static template, counterparty pattern). */}
+        {(dimsEditable || !!onEditLines) && (
+          <div>
+            <Button
+              variant="ghost"
+              className="-ml-2.5"
+              aria-expanded={moreOpen}
+              disabled={isProcessing}
+              onClick={() => setMoreOpen((v) => !v)}
+            >
+              {tCommon('more_options')}
+              <ChevronDownIcon className={cn('h-3 w-3 transition-transform duration-150', moreOpen && 'rotate-180')} />
+            </Button>
+            {moreOpen && (
+              <div className="space-y-3 pt-2">
+                {dimsEditable && (
+                  <div className="space-y-1.5">
+                    <Label>{t('label_dimensions')}</Label>
+                    <LineDimensionFields
+                      dimensions={dims}
+                      onChange={(sieDimNo, code) => {
+                        setDims((prev) => {
+                          const next = { ...prev }
+                          if (code) next[sieDimNo] = code
+                          else delete next[sieDimNo]
+                          return next
+                        })
+                      }}
+                      inputClassName="h-8"
+                    />
+                  </div>
+                )}
+                {onEditLines && (
+                  <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <button
+                      type="button"
+                      className={INLINE_ACTION_CLASS}
+                      disabled={isProcessing || !canEditLines}
+                      onClick={handleEditLines}
+                    >
+                      {t('edit_lines')}
+                    </button>
+                    <span className="text-xs text-muted-foreground">{t('edit_lines_help')}</span>
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
           </div>
         </div>
         </div>
 
-        {/* Actions, outside the scrolling body. "Stäng", not "Avbryt": an
+        {/* The footer: what the primary does on the left, Stäng and Bokför on
+            the right, outside the scrolling body. "Stäng", not "Avbryt": an
             underlag dropped in here is archived the moment it lands and the
             first one stays on the row, so closing undoes nothing; the button
-            only closes the review (PostHog PH 118). */}
-        <div className="shrink-0 space-y-3 border-t px-4 py-3 sm:px-6 sm:py-4">
-          {error && (
-            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-              {error}
-            </div>
-          )}
+            only closes the review (PostHog PH 118). A failed booking says so
+            here, in the consequence's place. The frame pads the footer as the
+            primitive's padded content would, so its bleed and hairline reach
+            the dialog's edges and the look stays the primitive's own. */}
+        <div className="shrink-0 px-5 pb-5">
           <DialogFooter>
+            {error ? (
+              <DialogConsequence role="alert" className="text-destructive">{error}</DialogConsequence>
+            ) : (
+              <DialogConsequence>
+                {accountMissing ? t('consequence_pick_account') : t('consequence_book')}
+              </DialogConsequence>
+            )}
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => onOpenChange(false)}
               disabled={isProcessing}
             >
@@ -1313,16 +1340,17 @@ export default function QuickReviewDialog({
                 categorize route read it, and miss the verifikat. */}
             <Button
               onClick={handleConfirm}
+              loading={isProcessing}
               disabled={
                 isProcessing ||
                 (!isTemplateBooking && !accountOverride) ||
                 rateLoading ||
                 sekConversionMissing ||
                 uploadInFlight(uploadedFiles) ||
-                underlagState.busy
+                underlagState.busy ||
+                previewUnbalanced
               }
             >
-              <CheckIcon className="mr-2 h-4 w-4" />
               {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : bookingWithoutUnderlag ? t('book_without_underlag') : t('book')}
             </Button>
           </DialogFooter>

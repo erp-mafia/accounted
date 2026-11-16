@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { formatChipDate, type DetailsChip } from '@/lib/invoices/editor/details'
 
 const CHIP_CLASS =
-  'inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-background px-3 text-[12.5px] tabular-nums transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-coarse:min-h-10'
+  'inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-background px-3 text-xs tabular-nums transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-coarse:min-h-10'
 
 const ADD_CHIP_CLASS = cn(CHIP_CLASS, 'border-dashed bg-transparent text-muted-foreground')
 

@@ -92,8 +92,8 @@ export default function WooCommerceSettingsPanel() {
               // Orders the sync skipped for an unusable currency stay listed
               // until a sync imports them: the cursor has moved past them, so
               // this is the only lasting trace (lib/skipped-orders).
-              <div className="max-w-prose space-y-1 border-t border-border pt-4">
-                <p className="attn text-[12.5px]">{t('skipped_orders_attn', { count: skipped.count })}</p>
+              <div className="max-w-prose space-y-1 border-t-hairline pt-4">
+                <p className="attn text-xs">{t('skipped_orders_attn', { count: skipped.count })}</p>
                 <p className="text-sm text-muted-foreground">{t('skipped_orders_help')}</p>
                 <p className="text-sm text-muted-foreground">
                   {t('skipped_orders_list', { orders: skipped.orders.map(skippedOrderLabel).join(', ') })}
@@ -178,7 +178,7 @@ export default function WooCommerceSettingsPanel() {
             </div>
 
             {manualMode ? (
-              <div className="space-y-4 rounded-lg border border-border p-4">
+              <div className="space-y-4 rounded-lg p-4 bg-control shadow-raised">
                 <p className="text-sm text-muted-foreground">{t('manual_hint')}</p>
                 <div className="space-y-2">
                   <Label htmlFor="woocommerce-consumer-key">{t('consumer_key_label')}</Label>
@@ -209,10 +209,10 @@ export default function WooCommerceSettingsPanel() {
                     disabled={!storeUrl || !consumerKey || !consumerSecret}
                     loading={connecting}
                   >
-                    {!connecting && <KeyIcon className="mr-2 h-4 w-4" />}
+                    {!connecting && <KeyIcon className="h-4 w-4" />}
                     {connecting ? tf('connecting') : t('manual_connect')}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setManualMode(false)} disabled={connecting}>
+                  <Button variant="ghost" onClick={() => setManualMode(false)} disabled={connecting}>
                     {tf('cancel')}
                   </Button>
                 </div>
@@ -221,10 +221,10 @@ export default function WooCommerceSettingsPanel() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button onClick={handleConnect} disabled={!storeUrl} loading={connecting}>
-                    {!connecting && <LinkIcon className="mr-2 h-4 w-4" />}
+                    {!connecting && <LinkIcon className="h-4 w-4" />}
                     {connecting ? tf('connecting') : t('connect')}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setManualMode(true)} disabled={connecting}>
+                  <Button variant="ghost" onClick={() => setManualMode(true)} disabled={connecting}>
                     {t('manual_toggle')}
                   </Button>
                 </div>

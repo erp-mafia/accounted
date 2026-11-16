@@ -60,7 +60,7 @@ export function NewBudgetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('new_title')}</DialogTitle>
           <DialogDescription>{t('new_description')}</DialogDescription>
@@ -133,7 +133,7 @@ export function SpreadDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('spread_title')}</DialogTitle>
           <DialogDescription>{t('spread_description')}</DialogDescription>
@@ -153,7 +153,7 @@ export function SpreadDialog({
               placeholder="1 200 000"
               className="tabular-nums"
             />
-            <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
+            <p className="text-xs text-muted-foreground">{t('sign_hint')}</p>
           </div>
           <div className="space-y-2">
             <Label>{t('spread_method_label')}</Label>
@@ -238,7 +238,7 @@ export function CopyActualsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('copy_title')}</DialogTitle>
           <DialogDescription>

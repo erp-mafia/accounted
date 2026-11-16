@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { SupportLink } from '@/components/ui/support-link'
+import { StandaloneMessage } from '@/components/standalone/StandalonePage'
 
 /**
  * App-wide error boundary (rendered from app/error.tsx). It catches any render
@@ -94,19 +95,23 @@ export function AppErrorBoundary({
   // never flashes any UI at all.
   if (phase === 'reloading') return null
 
+  // The standalone frame of the sign-in pages: what happened, what to do,
+  // one way on.
   return (
-    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-6 text-center">
-      <h2 className="text-xl">{t('error_boundary_title')}</h2>
-      <p className="max-w-md text-sm text-muted-foreground">
-        {t.rich('error_boundary_body', {
-          support: (chunks) => (
-            <SupportLink variant="inline" subject={t('error_boundary_support_subject')}>
-              {chunks}
-            </SupportLink>
-          ),
-        })}
-      </p>
-      <Button onClick={() => window.location.reload()}>{t('retry')}</Button>
-    </div>
+    <StandaloneMessage
+      width="auth"
+      title={t('error_boundary_title')}
+      body={t.rich('error_boundary_body', {
+        support: (chunks) => (
+          <SupportLink variant="inline" subject={t('error_boundary_support_subject')}>
+            {chunks}
+          </SupportLink>
+        ),
+      })}
+    >
+      <Button size="lg" className="w-full" onClick={() => window.location.reload()}>
+        {t('retry')}
+      </Button>
+    </StandaloneMessage>
   )
 }

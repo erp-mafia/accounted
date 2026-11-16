@@ -118,7 +118,6 @@ export function KvittojaktenButton({
       <Button
         type="button"
         variant="outline"
-        size="sm"
         onClick={() => open(primary.id)}
         disabled={disabled}
         title={t('ai_kvittojakten_hint', { client: primary.name })}
@@ -129,7 +128,7 @@ export function KvittojaktenButton({
       {others.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline" size="icon-sm" disabled={disabled} aria-label={t('ai_fix_first_other')}>
+            <Button type="button" variant="outline" size="icon" disabled={disabled} aria-label={t('ai_fix_first_other')}>
               <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden />
             </Button>
           </DropdownMenuTrigger>

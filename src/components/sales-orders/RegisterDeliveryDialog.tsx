@@ -111,7 +111,7 @@ export default function RegisterDeliveryDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !isSubmitting && onOpenChange(v)}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('delivery_dialog_title')}</DialogTitle>
           <DialogDescription>{t('delivery_dialog_description')}</DialogDescription>
@@ -167,7 +167,7 @@ export default function RegisterDeliveryDialog({
             </table>
           </div>
 
-          <Button type="button" variant="ghost" size="sm" onClick={deliverAll} className="text-muted-foreground">
+          <Button type="button" variant="ghost" onClick={deliverAll} className="text-muted-foreground">
             {t('deliver_all')}
           </Button>
         </div>

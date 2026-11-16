@@ -245,7 +245,7 @@ export function AccrualReplanDialog({ schedule, onOpenChange, onReplanned }: Acc
             <div className={cn('max-h-64 overflow-y-auto', loading && 'opacity-60')}>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <tr className="text-left text-xs font-medium text-muted-foreground">
                     <th className="pb-2">{t('replan_col_month')}</th>
                     <th className="pb-2 text-right">{t('replan_col_now')}</th>
                     <th className="pb-2 text-right">{t('replan_col_after')}</th>
@@ -253,7 +253,7 @@ export function AccrualReplanDialog({ schedule, onOpenChange, onReplanned }: Acc
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.month} className="border-t border-border">
+                    <tr key={row.month} className="border-t-hairline">
                       <td className="py-1.5 tabular-nums">{row.month.slice(0, 7)}</td>
                       <td className="py-1.5 text-right">{cell(row.now)}</td>
                       <td className="py-1.5 text-right">{cell(row.after)}</td>

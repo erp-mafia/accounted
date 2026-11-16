@@ -149,7 +149,7 @@ Example response `200`:
 
 Creates a new company owned by the API key user (or attached to one of their teams) and sets it up in one call: owner membership, BAS chart of accounts for the company form, compliance settings, the first fiscal period and the automatic tax deadlines. A 30-day trial with every paid capability starts immediately. Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.
 
-**Use when:** A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Members (/settings/members).
+**Use when:** A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Users (/settings/members).
 **Do not use for:** Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).
 
 **Pitfalls:**
@@ -1039,7 +1039,7 @@ Example response `200`:
 Creates a gnubok_sk_ key that acts as the service account: it reaches only the account's company, acts with the access of the account's sponsor, and everything it writes is recorded with the actor service_account (the account's name), acting for the sponsor. The response carries the secret in key, exactly once. Its scopes must be ones the calling key holds itself; service_accounts:manage is never granted, so a service account cannot mint keys or create accounts.
 
 **Use when:** You set up the integration that runs as the service account, or rotate its key (mint the new one, switch, revoke the old one).
-**Do not use for:** A key for a person (create it in Settings > API & MCP). Recovering a lost secret: mint a new key and revoke the old one.
+**Do not use for:** A key for a person (create it in Agents > Connect an agent). Recovering a lost secret: mint a new key and revoke the old one.
 
 **Pitfalls:**
 - The secret is returned exactly once. Idempotency-Key is not honoured: a repeated call mints a second key, so check GET /service-accounts/{id} and revoke any extra.

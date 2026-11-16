@@ -1,0 +1,1 @@
+[2026-11-01] The brand wordmark (BrandWordmark, BrandHomeLink) keeps the display face: it is the logotype, not UI typography, and a white-label brand sets its own display font for it. "Hedvig only for numbers" governs the interface; one place to change if wanted.

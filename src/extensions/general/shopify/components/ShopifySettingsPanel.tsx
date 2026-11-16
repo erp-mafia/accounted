@@ -144,7 +144,7 @@ export default function ShopifySettingsPanel() {
               disabled={!shopDomain || !clientId || !clientSecret}
               loading={connecting}
             >
-              {!connecting && <KeyIcon className="mr-2 h-4 w-4" />}
+              {!connecting && <KeyIcon className="h-4 w-4" />}
               {connecting ? tf('connecting') : t('connect')}
             </Button>
           </div>

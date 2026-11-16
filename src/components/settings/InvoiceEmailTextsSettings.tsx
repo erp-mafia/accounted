@@ -149,7 +149,7 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
         </div>
       }
     >
-      <div className="flex flex-wrap items-center gap-3 border-b border-border px-1 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b-hairline px-1 py-3">
         <SettingsSeg
           value={lang}
           onChange={setLang}

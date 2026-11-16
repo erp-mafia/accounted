@@ -175,7 +175,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   const titleMark = flowShowsBankMark(state, titleBank)
   const title = flowTitle(state, titleBank, t)
   const cancelButton = (
-    <Button variant="secondary" onClick={requestClose}>
+    <Button variant="outline" onClick={requestClose}>
       {t('cancel')}
     </Button>
   )
@@ -183,10 +183,10 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   return (
     <>
       <Dialog open onOpenChange={(next) => !next && requestClose()}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             {position && (
-              <p className="text-[12.5px] tabular-nums text-muted-foreground" data-ph-unmask="">
+              <p className="text-xs tabular-nums text-muted-foreground" data-ph-unmask="">
                 {t('step_of', { n: position.n, total: position.total })}
               </p>
             )}
@@ -207,6 +207,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
             session={session}
             banks={banks}
             banksFailed={banksFailed}
+            onRetryBanks={availability.refresh}
             soleTrader={soleTrader}
             closeButton={cancelButton}
             onClose={onClose}

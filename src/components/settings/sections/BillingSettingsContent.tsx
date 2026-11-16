@@ -18,7 +18,7 @@ import {
   SettingsSectionHeader,
   SettingsSeg,
 } from '@/components/settings/SettingsRows'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { ConnectorSettingsSection } from '@/components/settings/ConnectorSettingsSection'
@@ -167,8 +167,8 @@ function PlanCard({
   return (
     <section
       className={cn(
-        'flex flex-col rounded-lg border p-6',
-        current ? 'border-foreground' : 'border-border',
+        'flex flex-col rounded-lg p-6 bg-control shadow-raised',
+        current && 'ring-[1.5px] ring-strong',
       )}
     >
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
@@ -184,7 +184,7 @@ function PlanCard({
           <p className="mt-1 text-xs tabular-nums text-muted-foreground">{note}</p>
         </>
       )}
-      <div className="my-6 border-t border-border" />
+      <div className="my-6 border-t-hairline" />
       <ul className="space-y-3">{items}</ul>
       {footer && <div className="mt-auto pt-8">{footer}</div>}
     </section>
@@ -572,7 +572,7 @@ function BillingCoreContent({ reason }: { reason: UpgradeReason | null }) {
         type="button"
         onClick={() => setComparing((v) => !v)}
         aria-expanded={comparing}
-        className="mt-4 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
+        className="mt-4 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
       >
         {t('compare_plans')}
         <ChevronDownIcon
@@ -656,7 +656,7 @@ function PaymentPacksRow() {
       <span className="tabular-nums">{packs.packs > 0 ? t('packs_row_value', { packs: packs.packs, payments }) : t('packs_row_none')}</span>
       {packs.can_buy && (
         <SettingsRowEnd>
-          <Button variant="outline" size="sm" onClick={() => setBuying(true)}>
+          <Button variant="outline" onClick={() => setBuying(true)}>
             {packs.packs > 0 ? t('packs_row_change') : t('packs_row_buy')}
           </Button>
         </SettingsRowEnd>
@@ -729,7 +729,7 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
     content = <p className="text-[13px] text-muted-foreground">{t('receipts_empty')}</p>
   } else {
     content = (
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -745,17 +745,17 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
           <tbody className="stagger-enter">
             {receipts.map((r) => (
               <tr key={r.id} className="transition-colors duration-150 hover:bg-secondary/35">
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(r.created)}</td>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(r.created)}</td>
                 <td className={TD_CLASS}>{r.description ?? r.number ?? t('paid_title')}</td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                  {formatCurrency(r.amountPaid, r.currency.toUpperCase())}
+                  {formatRowAmount(r.amountPaid, r.currency.toUpperCase())}
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                   {t(RECEIPT_STATUS_KEY[r.status] ?? 'receipt_status_open')}
                 </td>
-                <td className={cn(TD_CLASS, 'py-1 text-right')}>
+                <td className={cn(TD_CLASS, 'py-1 text-right date-figures')}>
                   {r.pdfUrl && (
-                    <Button variant="ghost" size="sm" asChild>
+                    <Button variant="ghost" asChild>
                       <a
                         href={r.pdfUrl}
                         target="_blank"
@@ -779,7 +779,7 @@ function ReceiptsPanel({ isPaying, configured }: { isPaying: boolean; configured
     <div>
       <div role="status" aria-live="polite">{content}</div>
       {isPaying && (
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t-hairline pt-4">
           <span className="text-[13px]">{t('receipts_manage')}</span>
           <BillingActions isPaying configured={configured} />
         </div>

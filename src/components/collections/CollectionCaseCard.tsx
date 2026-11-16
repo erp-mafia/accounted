@@ -212,7 +212,7 @@ export function CollectionCaseCard({
         </span>
         {view.caseNumber && <span className="tabular-nums text-muted-foreground">{tp('card_case_number', { number: view.caseNumber })}</span>}
         {chip && <Badge variant={chip.variant}>{stageLabel(view.stage)}</Badge>}
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground sm:ml-auto">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:ml-auto">
           {view.lastSyncedAt && (
             <span className="tabular-nums">{tp('card_last_synced', { time: formatDateTime(view.lastSyncedAt) })}</span>
           )}
@@ -241,7 +241,7 @@ export function CollectionCaseCard({
           <p>{tp('card_failed')}</p>
           {view.syncError && <p className="text-muted-foreground">{errorText(view.syncError)}</p>}
           {canWrite && availability.start === 'ready' && isOwedInvoiceStatus(invoiceStatus) && (
-            <Button size="sm" variant="outline" onClick={onOpenHandover}>
+            <Button variant="outline" onClick={onOpenHandover}>
               {tp('card_retry')}
             </Button>
           )}
@@ -274,7 +274,7 @@ export function CollectionCaseCard({
             </p>
           )}
           {view.isOpen && (view.nextActionDate || view.nextActionLabel) && (
-            <p className="py-1 text-[12.5px] text-muted-foreground">
+            <p className="py-1 text-xs text-muted-foreground">
               {view.nextActionDate && view.nextActionLabel
                 ? tp('card_next_dated', { label: view.nextActionLabel, date: formatDate(view.nextActionDate) })
                 : view.nextActionDate
@@ -283,19 +283,19 @@ export function CollectionCaseCard({
             </p>
           )}
           {view.isOpen && view.forwardsInFlight && (
-            <p className="py-2 text-[12.5px] text-muted-foreground">{tp('card_forward_in_flight')}</p>
+            <p className="py-2 text-xs text-muted-foreground">{tp('card_forward_in_flight')}</p>
           )}
-          {view.merged && <p className="py-2 text-[12.5px] text-muted-foreground">{tp('card_merged')}</p>}
+          {view.merged && <p className="py-2 text-xs text-muted-foreground">{tp('card_merged')}</p>}
           {notes.map((note) => (
-            <p key={note} className={note.startsWith('card_paused_') ? 'py-2 text-[12.5px] text-attn' : 'py-2 text-[12.5px] text-muted-foreground'}>
+            <p key={note} className={note.startsWith('card_paused_') ? 'py-2 text-xs text-attn' : 'py-2 text-xs text-muted-foreground'}>
               {tp(note)}
             </p>
           ))}
           {view.syncError && view.isOpen && (
-            <p className="py-2 text-[12.5px] text-muted-foreground">{tp('card_sync_error', { error: errorText(view.syncError) })}</p>
+            <p className="py-2 text-xs text-muted-foreground">{tp('card_sync_error', { error: errorText(view.syncError) })}</p>
           )}
           {view.outstandingMismatch && (
-            <p className="py-2 text-[12.5px] text-attn">
+            <p className="py-2 text-xs text-attn">
               {tp(view.outstandingMismatch.provider > view.outstandingMismatch.expected ? 'card_mismatch_more' : 'card_mismatch_less', {
                 provider_amount: formatKronor(view.outstandingMismatch.provider),
                 expected: formatKronor(view.outstandingMismatch.expected),
@@ -303,7 +303,7 @@ export function CollectionCaseCard({
             </p>
           )}
           {view.possiblePayments.map((payment) => (
-            <div key={payment.id} className="py-2 text-[12.5px]">
+            <div key={payment.id} className="py-2 text-xs">
               <p className="text-attn">
                 {tp(`possible_payment_${payment.pauseState}`, { amount: formatKronor(payment.amount), date: formatDate(payment.date) })}
               </p>
@@ -312,7 +312,7 @@ export function CollectionCaseCard({
                   <Link href={`/transactions?highlight=${encodeURIComponent(payment.transactionId)}`} className="underline underline-offset-2">
                     {tp('possible_payment_book')}
                   </Link>
-                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => void dismissPossiblePayment(payment.id)}>
+                  <Button variant="ghost" disabled={busy} onClick={() => void dismissPossiblePayment(payment.id)}>
                     {tp('possible_payment_dismiss')}
                   </Button>
                 </div>
@@ -320,7 +320,7 @@ export function CollectionCaseCard({
             </div>
           ))}
           {view.forwardIssues.map((issue) => (
-            <div key={issue.id} className="py-2 text-[12.5px]">
+            <div key={issue.id} className="py-2 text-xs">
               <p className={issue.issue === 'retrying' ? 'text-muted-foreground' : 'text-attn'}>
                 {tp(`forward_${issue.issue}_${issue.kind}${issue.issue === 'excess' ? '' : `_${issue.operation}`}`, {
                   amount: formatKronor(issue.amount),
@@ -331,11 +331,11 @@ export function CollectionCaseCard({
               {canWrite && issue.issue !== 'retrying' && (
                 <div className="flex flex-wrap gap-2 pt-1.5">
                   {issue.issue === 'failed' && (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void forwardAction(issue.id, 'retry')}>
+                    <Button variant="outline" disabled={busy} onClick={() => void forwardAction(issue.id, 'retry')}>
                       {tp('forward_retry')}
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => void forwardAction(issue.id, 'resolve')}>
+                  <Button variant="ghost" disabled={busy} onClick={() => void forwardAction(issue.id, 'resolve')}>
                     {tp('forward_resolve')}
                   </Button>
                 </div>
@@ -348,7 +348,6 @@ export function CollectionCaseCard({
               {buttons.map((button) => (
                 <Button
                   key={button.action}
-                  size="sm"
                   variant={button.primary ? 'default' : 'outline'}
                   onClick={() => (button.kind === 'handover' ? onOpenHandover() : openDialog(button.action))}
                 >
@@ -361,11 +360,11 @@ export function CollectionCaseCard({
           {/* Händelser, collapsed to the latest one until the person asks for all. */}
           <div className="pt-2">
             <div className="flex items-baseline justify-between gap-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('card_timeline')}</p>
+              <p className="text-xs font-medium text-muted-foreground">{tp('card_timeline')}</p>
               {(timeline.hidden > 0 || showAllEvents) && view.events.length > 1 && (
                 <button
                   type="button"
-                  className="text-[12.5px] underline underline-offset-2"
+                  className="text-xs underline underline-offset-2"
                   aria-expanded={showAllEvents}
                   onClick={() => setShowAllEvents((v) => !v)}
                 >
@@ -400,9 +399,9 @@ export function CollectionCaseCard({
 
       <Dialog open={dialog !== null} onOpenChange={(next) => !busy && !next && setDialog(null)}>
         {dialog && spec && (
-          <DialogContent className="max-h-[90vh] overflow-y-auto sm:min-w-[460px] sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
-              <DialogTitle className="font-display text-lg tracking-tight">{tp(spec.titleKey)}</DialogTitle>
+              <DialogTitle className="text-lg">{tp(spec.titleKey)}</DialogTitle>
               {spec.bodyKeys.map((key) => (
                 <DialogDescription key={key} className="text-[13px] leading-relaxed">
                   {tp(key)}
@@ -414,9 +413,9 @@ export function CollectionCaseCard({
               <div className="space-y-2 text-[13px]">
                 {gate.state === 'loading' && <p className="text-muted-foreground">{tp('escalation_checking')}</p>}
                 {gate.state === 'unavailable' && <p className="text-muted-foreground">{tp('escalation_unavailable')}</p>}
-                {gate.state === 'paid' && <p className="text-attn text-[12.5px]">{tp('escalation_paid')}</p>}
+                {gate.state === 'paid' && <p className="text-attn text-xs">{tp('escalation_paid')}</p>}
                 {gate.state === 'not_reported' && (
-                  <p className="text-attn text-[12.5px]">
+                  <p className="text-attn text-xs">
                     {tp('escalation_not_reported', {
                       remaining: formatKronor(gate.remaining),
                       outstanding: formatKronor(gate.providerOutstanding),
@@ -443,7 +442,7 @@ export function CollectionCaseCard({
                 {spec.message.labelKey && <span>{tp(spec.message.labelKey)}</span>}
                 <Textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} maxLength={2000} />
                 {!messageLongEnough(spec, message) && message.length > 0 && (
-                  <span className="text-[12.5px] text-muted-foreground">{tp('message_min')}</span>
+                  <span className="text-xs text-muted-foreground">{tp('message_min')}</span>
                 )}
               </label>
             )}
@@ -457,7 +456,7 @@ export function CollectionCaseCard({
                   max={pauseWindow.latest}
                   onChange={(e) => setUntil(e.target.value)}
                 />
-                {untilProblem && <span className="text-[12.5px] text-muted-foreground">{tp(untilProblem)}</span>}
+                {untilProblem && <span className="text-xs text-muted-foreground">{tp(untilProblem)}</span>}
               </label>
             )}
             {error && <p className="text-[13px] text-destructive">{error}</p>}
@@ -477,7 +476,7 @@ export function CollectionCaseCard({
 
   // Open: a compact card at the top of the invoice. Closed or refused: with the invoice's history further down.
   return placement === 'top' ? (
-    <section aria-label={t(caseKickerKey(view.stage))} className="min-w-0 space-y-1 rounded-lg border border-border px-4 py-3">
+    <section aria-label={t(caseKickerKey(view.stage))} className="min-w-0 space-y-1 rounded-lg px-4 py-3 bg-control shadow-raised">
       {content}
     </section>
   ) : (

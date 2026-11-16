@@ -39,9 +39,9 @@ export function FirstInvoiceLogoPrompt({
   const t = useTranslations('first_invoice_logo_prompt')
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
-          <DialogTitle className="font-display text-xl tracking-tight">
+          <DialogTitle className="text-xl">
             {t('title')}
           </DialogTitle>
           <DialogDescription>

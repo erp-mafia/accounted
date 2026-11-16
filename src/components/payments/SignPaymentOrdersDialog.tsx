@@ -61,7 +61,7 @@ export function SignPaymentOrdersDialog({
           pendingBatchId={pendingBatchId}
           secondSignatureBatchId={secondSignatureBatchId}
           closeButton={
-            <Button variant="secondary" onClick={() => close(false)}>
+            <Button variant="outline" onClick={() => close(false)}>
               {t('close')}
             </Button>
           }

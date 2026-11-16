@@ -97,7 +97,7 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
       </div>
 
       {willOverwrite && existingIsAccounting && (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+        <div className="bg-destructive/8 flex items-start gap-2 rounded-lg p-3 text-sm text-destructive">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-medium">Ersätter räkenskapsinformation</p>
@@ -111,7 +111,7 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
         </div>
       )}
       {addsToExisting && (
-        <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
+        <div className="rounded-lg p-2 text-xs text-muted-foreground bg-control shadow-raised">
           {addsToVerifikat
             ? existingDocName
               ? t('attach_adds_to_verifikat', { file: existingDocName })
@@ -122,7 +122,7 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
         </div>
       )}
       {willOverwrite && !existingIsAccounting && (
-        <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
+        <div className="rounded-lg p-2 text-xs text-muted-foreground bg-control shadow-raised">
           Ersätter befintligt dokument{existingDocName ? `: ${existingDocName}` : ''}.
         </div>
       )}
@@ -132,8 +132,8 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
 
 function PreviewCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-3 space-y-1.5">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="rounded-lg p-3 space-y-1.5 bg-control shadow-raised">
+      <p className="text-xs font-medium text-muted-foreground">
         {label}
       </p>
       {children}

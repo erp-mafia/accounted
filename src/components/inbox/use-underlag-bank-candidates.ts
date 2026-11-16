@@ -28,6 +28,8 @@ export interface UnderlagBankCandidates {
   loading: boolean
   /** The load failed; the list is then empty. */
   error: string | null
+  /** Run the failed load again ("Försök igen"). */
+  retry: () => void
   /** SEK per unit of the underlag currency; null for SEK, pending, unsupported or failed. */
   fxRate: number | null
   /** The underlag total in kronor, or null. */
@@ -62,6 +64,8 @@ export function useUnderlagBankCandidates({
   // of the empty state before the fetch runs.
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by retry() to run the row fetch again.
+  const [attempt, setAttempt] = useState(0)
   const [fxRate, setFxRate] = useState<number | null>(null)
 
   useEffect(() => {
@@ -136,7 +140,7 @@ export function useUnderlagBankCandidates({
     return () => {
       cancelled = true
     }
-  }, [open, searchTerm])
+  }, [open, searchTerm, attempt])
 
   const ranked = useMemo(() => rankBankRowsForUnderlag(rows, facts, fxRate), [rows, facts, fxRate])
   const totalSek = underlagTotalSek(facts, fxRate)
@@ -146,6 +150,7 @@ export function useUnderlagBankCandidates({
     rowById,
     loading,
     error,
+    retry: () => setAttempt((n) => n + 1),
     fxRate,
     totalSek,
     amountMatchUnavailable: facts.total != null && facts.currency !== 'SEK' && totalSek == null,

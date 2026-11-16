@@ -15,7 +15,7 @@ export function CustomerLossNote({ view }: { view: CustomerLossView | null }) {
   if (!view) return null
   if (view.invoiceStatus === 'written_off') {
     return (
-      <div className="rounded-lg border border-border px-4 py-3 text-sm">
+      <div className="rounded-lg px-4 py-3 text-sm bg-control shadow-raised">
         <p className="font-medium">{t('written_off_note')}</p>
         {view.recovery && !view.recovery.booked && (
           <p className="mt-1 text-xs text-muted-foreground">{t('recovery_not_booked')}</p>
@@ -29,7 +29,7 @@ export function CustomerLossNote({ view }: { view: CustomerLossView | null }) {
   }
   if (view.reserve > 0) {
     return (
-      <div className="rounded-lg border border-border px-4 py-3 text-sm">
+      <div className="rounded-lg px-4 py-3 text-sm bg-control shadow-raised">
         <p className="font-medium">{t('doubtful_booked')}</p>
         <p className="mt-1 text-xs text-muted-foreground">
           {t('doubtful_booked_detail', { amount: formatLossAmount(view.reserve) })}

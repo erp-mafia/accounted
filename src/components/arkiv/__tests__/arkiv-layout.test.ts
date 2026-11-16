@@ -12,7 +12,7 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 
 describe('Arkiv layout at narrow widths', () => {
   it('the agreements table has its own horizontal scroller', () => {
-    expect(read('src/components/arkiv/ArkivAgreements.tsx')).toMatch(/<div className="overflow-x-auto">\s*<table className="w-full border-collapse text-\[13px\]">/)
+    expect(read('src/components/arkiv/ArkivAgreements.tsx')).toMatch(/<div className="-mx-2 overflow-x-auto">\s*<table className="w-full border-collapse text-\[13px\]">/)
   })
 
   it('the folder tree table has a minimum width that leaves room for the title', () => {

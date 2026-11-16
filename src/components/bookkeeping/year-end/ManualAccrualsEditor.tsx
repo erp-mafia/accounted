@@ -45,11 +45,10 @@ export function ManualAccrualsEditor({ entries, onChange }: ManualAccrualsEditor
           <Button
             key={t.kind}
             variant="outline"
-            size="sm"
             onClick={() => add(t)}
             className="justify-start text-left h-auto px-3"
           >
-            <PlusIcon className="mr-2 h-3.5 w-3.5 shrink-0" />
+            <PlusIcon className="h-3.5 w-3.5 shrink-0" />
             <span className="flex-1 min-w-0 py-2">
               <span className="block font-medium">{t.name}</span>
               <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
@@ -98,10 +97,10 @@ function ManualAccrualEntryEditor({
   const secondaryLabel = template.side === 'deferred_revenue' ? 'Intäktskonto' : 'Kostnadskonto'
 
   return (
-    <div className="rounded-lg border border-border p-3 space-y-3">
+    <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
+        <Button variant="ghost" size="icon" onClick={onRemove} aria-label="Ta bort">
           <TrashIcon className="h-3.5 w-3.5" />
         </Button>
       </div>

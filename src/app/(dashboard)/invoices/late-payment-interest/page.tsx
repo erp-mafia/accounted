@@ -4,16 +4,15 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { PercentBadgeIcon } from '@/components/icons'
-import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { LatePaymentInterestReport } from '@/lib/invoices/late-payment-interest-report'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 
-const SECTION_HEADING_CLASS = 'text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADING_CLASS = 'text-xs font-medium text-muted-foreground'
 const NUM_TH = cn(TH_CLASS, 'text-right')
 const NUM_TD = cn(TD_CLASS, 'text-right tabular-nums')
 
@@ -26,6 +25,7 @@ const NUM_TD = cn(TD_CLASS, 'text-right tabular-nums')
  */
 export default function LatePaymentInterestPage() {
   const t = useTranslations('latePaymentInterest')
+  const tNav = useTranslations('nav')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const [report, setReport] = useState<LatePaymentInterestReport | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -53,26 +53,30 @@ export default function LatePaymentInterestPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('title')} help={<HelpPopover>{t('help')}</HelpPopover>} />
+      <PageHeader parent={{ label: tNav('v3_invoices'), href: '/invoices' }} title={t('title')} help={<HelpPopover>{t('help')}</HelpPopover>} />
 
-      {loadFailed && (
-        <div className="flex items-center gap-3 text-[13px] text-muted-foreground">
-          <span>{t('load_failed')}</span>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {t('retry')}
-          </Button>
-        </div>
-      )}
+      {loadFailed && <LoadError title={t('load_failed')} onRetry={() => void load()} />}
 
       {!report && !loadFailed && (
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-72" />
-          <Skeleton className="h-32 w-full" />
-        </div>
+        <LateReveal>
+          <Skeleton className="mb-6 h-3 w-72" />
+          <Skeleton className="mb-3 h-3 w-40" />
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="ml-auto h-3.5 w-10" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
       )}
 
       {report && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t(report.rate_is_override ? 'rate_line_override' : 'rate_line', {
             rate: percent(report.rate),
             date: formatDate(report.as_of),
@@ -86,11 +90,11 @@ export default function LatePaymentInterestPage() {
         <>
           <section className="space-y-3">
             <h2 className={SECTION_HEADING_CLASS}>{t('paid_late_heading')}</h2>
-            <p className="text-[12.5px] text-muted-foreground">{t('paid_late_scope')}</p>
+            <p className="text-xs text-muted-foreground">{t('paid_late_scope')}</p>
             {report.paid_late.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">{t('paid_late_empty')}</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="stagger-enter w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -114,11 +118,11 @@ export default function LatePaymentInterestPage() {
                         <td className={cn(TD_CLASS, 'max-w-[220px] truncate')} data-ph-mask>
                           {row.customer_name ?? ''}
                         </td>
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(row.due_date)}</td>
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(row.last_payment_date)}</td>
+                        <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(row.due_date)}</td>
+                        <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(row.last_payment_date)}</td>
                         <td className={NUM_TD}>{row.days_late}</td>
-                        <td className={NUM_TD}>{formatCurrency(row.paid_late_amount, row.currency)}</td>
-                        <td className={NUM_TD}>{formatCurrency(row.interest, row.currency)}</td>
+                        <td className={NUM_TD}>{formatRowAmount(row.paid_late_amount, row.currency)}</td>
+                        <td className={NUM_TD}>{formatRowAmount(row.interest, row.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -146,7 +150,7 @@ export default function LatePaymentInterestPage() {
             {report.overdue_open.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">{t('overdue_empty')}</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="stagger-enter w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -169,10 +173,10 @@ export default function LatePaymentInterestPage() {
                         <td className={cn(TD_CLASS, 'max-w-[220px] truncate')} data-ph-mask>
                           {row.customer_name ?? ''}
                         </td>
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(row.due_date)}</td>
+                        <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(row.due_date)}</td>
                         <td className={NUM_TD}>{row.days_overdue}</td>
-                        <td className={NUM_TD}>{formatCurrency(row.remaining_amount, row.currency)}</td>
-                        <td className={NUM_TD}>{formatCurrency(row.interest, row.currency)}</td>
+                        <td className={NUM_TD}>{formatRowAmount(row.remaining_amount, row.currency)}</td>
+                        <td className={NUM_TD}>{formatRowAmount(row.interest, row.currency)}</td>
                       </tr>
                     ))}
                   </tbody>

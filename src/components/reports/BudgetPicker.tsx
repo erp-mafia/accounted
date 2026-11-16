@@ -41,7 +41,7 @@ export function BudgetPicker({
 
   return (
     <div className="flex flex-col gap-2">
-      <Label className="field-label text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('budget_picker_label')}</Label>
+      <Label className="field-label text-xs font-medium text-muted-foreground">{t('budget_picker_label')}</Label>
       <Select value={value ?? NONE} onValueChange={(v) => onChange(v === NONE ? null : v)}>
         <SelectTrigger className={cn(TOOLBAR_FIELD_CLASS, 'w-[200px]')}>
           <SelectValue />

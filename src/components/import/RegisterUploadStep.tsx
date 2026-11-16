@@ -80,11 +80,11 @@ export default function RegisterUploadStep({
             </div>
           ) : (
             <>
-              <ArrowUpTrayIcon className="h-8 w-8 text-muted-foreground/50 mb-3" />
+              <ArrowUpTrayIcon className="h-8 w-8 text-muted-foreground mb-3" />
               <p className="text-sm font-medium">Dra och släpp din fil här</p>
               <p className="text-sm text-muted-foreground mt-1">eller</p>
               {/* The zone is the button: this only looks like one. */}
-              <Button variant="outline" size="sm" className="mt-2" asChild>
+              <Button variant="outline" className="mt-2" asChild>
                 <span>Välj fil</span>
               </Button>
               {/* Articles are read in the browser (crm#1383), not posted. */}
@@ -96,13 +96,13 @@ export default function RegisterUploadStep({
         </FileDropzone>
 
         {error && (
-          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <div className="bg-destructive/8 flex items-start gap-3 rounded-lg px-4 py-3">
             <ExclamationCircleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>
         )}
 
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
+        <div className="flex items-start gap-3 rounded-lg px-4 py-3 bg-control shadow-raised">
           <TableCellsIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <div className="text-sm text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">Filformat</p>

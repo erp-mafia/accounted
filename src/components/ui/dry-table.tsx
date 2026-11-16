@@ -6,20 +6,27 @@ import { ArrowDownIcon, ArrowUpIcon, ArrowsUpDownIcon } from '@/components/icons
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS } from './dry-table-classes'
 
-// Concept dry-table (scenes 9/10): borderless table straight on the panel,
-// uppercase hairline heads, 13px rows, hover-revealed row controls. Shared by
-// the verifikat list and the transaction inbox so the two read as the same
-// instrument. Keep these in sync with .claude/rules/design.md; page-specific
-// tweaks belong at the call site via cn(), not here.
-export const TH_CLASS =
-  'px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border whitespace-nowrap'
-export const TD_CLASS = 'px-4 py-[11px] border-b border-border align-top'
+// Dry-table (Stil v3): a borderless table straight on the panel, 12px
+// sentence-case heads over a hairline, 13px rows divided by hairlines, row
+// controls that stay quiet until the row is hovered. Two row heights only:
+// 44px for lists (TD_CLASS), 36px for ledger-style tables (VTD_CLASS:
+// voucher lines, report rows, previews). List cells sit 8px in and the list
+// bleeds 8px past the gutter (LIST_BLEED_CLASS on the table's wrapper), so
+// the cell text sits on the 24px gutter while the hover tint and hairlines
+// reach past it, and columns stay 16px apart (boards Kundfakturor-v3,
+// Transaktioner-v3). Keep these
+// in sync with .claude/rules/design.md; page-specific tweaks belong at the
+// call site via cn(), not here.
+export { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS }
 export const VTH_CLASS =
-  'py-2 pr-4 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
-export const VTD_CLASS = 'py-[7px] pr-4 border-b border-border align-top'
+  'h-8 pr-4 text-left align-middle text-[12px] font-medium leading-4 text-muted-foreground border-b-hairline'
+export const VTD_CLASS = 'h-9 py-2 pr-4 border-b-hairline align-top'
+/** A Summa or total row's cells: the strong rule above, the value in the strong ink. */
+export const TOTAL_TD_CLASS = 'h-9 py-2 pr-4 border-t-total font-medium text-strong tabular-nums'
 export const QUIET_LINK_CLASS =
-  'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
+  'text-[12px] text-muted-foreground underline decoration-foreground/25 underline-offset-[3px] transition-colors duration-150 hover:text-foreground hover:decoration-foreground/60'
 
 // Row controls that stay out of the way until the row is hovered. Coarse
 // pointers never fire hover, so without pointer-coarse: the control would be
@@ -32,13 +39,14 @@ export const QUIET_LINK_CLASS =
 export const HOVER_REVEAL_CLASS =
   'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100'
 
-// Row SELECTION checkboxes are not hover-reveal controls: bulk-select is a
-// primary workflow on list pages, and an invisible 16px target forces a
-// precise hover-then-aim per row (user feedback: "sjukt pilligt"). They rest
-// always-visible at muted opacity and go solid on hover/focus/coarse
-// pointers; solid when checked. Action controls (chevrons, buttons) keep
-// HOVER_REVEAL_CLASS above. Render row checkboxes with RowSelectCheckbox
-// below, which applies this.
+// Row SELECTION checkboxes (Stil v3 polish P2, founder-approved
+// 2026-10-31): hidden at rest, shown on row hover, on keyboard focus, on
+// coarse pointers, when checked, and on every row once any row is selected
+// (pass revealed). The column keeps its width, so nothing shifts. The hit
+// area stays the widened 32px (40px on touch) below, which is what the
+// "sjukt pilligt" feedback was about: a near-miss beside the box. Action
+// controls (chevrons, buttons) keep HOVER_REVEAL_CLASS above. Render row
+// checkboxes with RowSelectCheckbox below, which applies this.
 //
 // A list that keeps the reveal on a WRAPPER must still put
 // `border-foreground` (unconditionally) on the Checkbox itself: the
@@ -46,7 +54,7 @@ export const HOVER_REVEAL_CLASS =
 // opacity-50 lands ~1.2:1, under the WCAG 3:1 non-text minimum.
 // border-foreground composites to >=3.4:1 at rest in every theme.
 export const CHECKBOX_REVEAL_CLASS =
-  'opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
+  'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
 
 // The pointer target of a row selection checkbox: the box stays 16px, its
 // ::after reaches 8px past each edge (32px), 12px on touch (40px, the design
@@ -125,10 +133,9 @@ interface SortableThProps {
 }
 
 /**
- * A sortable dry-table head: the TH_CLASS idiom with a button that keeps the
- * uppercase (Preflight resets text-transform on buttons), states the sort to
- * assistive tech (aria-sort, "Sortera efter X"), has a keyboard focus ring
- * and a 40px target. The invoice and supplier invoice lists had this; the
+ * A sortable dry-table head: the TH_CLASS idiom with a button that states
+ * the sort to assistive tech (aria-sort, "Sortera efter X"), has a keyboard
+ * focus ring and a 32px target (40px on touch). The invoice and supplier invoice lists had this; the
  * customer, article and dimension lists had a bare button without any of it.
  */
 export function SortableTh({ label, direction, onSort, rank, align = 'left', className }: SortableThProps) {
@@ -142,16 +149,16 @@ export function SortableTh({ label, direction, onSort, rank, align = 'left', cla
       <button
         type="button"
         className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          '-mx-2 inline-flex min-h-8 items-center gap-1 rounded-sm px-2 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 pointer-coarse:min-h-10',
           align === 'right' && 'ml-auto justify-end',
         )}
         aria-label={t('sort_by', { column: label })}
         onClick={onSort}
       >
         <span>{label}</span>
-        <SortIcon aria-hidden="true" className={cn('h-3.5 w-3.5 shrink-0', !direction && 'text-muted-foreground/60')} />
+        <SortIcon aria-hidden="true" className={cn('h-3.5 w-3.5 shrink-0', !direction && 'text-muted-foreground')} />
         {rank != null && (
-          <span className="text-[11px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
+          <span className="text-[12px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
             {rank}
           </span>
         )}
@@ -166,7 +173,7 @@ export function ShowMoreFooter({ shown, total, onMore }: { shown: number; total:
   if (shown >= total) return null
   return (
     <div className="flex justify-center">
-      <Button type="button" variant="outline" onClick={onMore}>
+      <Button type="button" variant="ghost" onClick={onMore}>
         {t('load_more')}
       </Button>
     </div>

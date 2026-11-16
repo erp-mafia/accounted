@@ -8,15 +8,18 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { PlusIcon } from '@/components/icons'
+import { ContextPicker } from '@/components/common/ContextPicker'
+import { NAME_LINK_CLASS, ROW_ACTIONS_TD } from './register-table'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DEFAULT_LOAN_ACCOUNTS, LOAN_EXCEPTIONS, LOAN_RELATIONS, type LoanDirection } from '@/lib/bolaget/owner-tax/types'
@@ -88,6 +91,7 @@ export function loanBody(form: FormState): Record<string, unknown> {
  */
 export function OwnerTax() {
   const t = useTranslations('bolaget_owner_tax')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -95,6 +99,11 @@ export function OwnerTax() {
   const [year, setYear] = useState<number>(() => Number(todayIsoStockholm().slice(0, 4)))
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
+  // The page could not be read. The year the data on screen belongs to
+  // tells a failed refresh (keep it, one line above) from a failed year
+  // change (another year's figures must not stand in for this one's).
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [dataYear, setDataYear] = useState<number | null>(null)
   const [people, setPeople] = useState<Person[]>([])
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -115,14 +124,21 @@ export function OwnerTax() {
     try {
       const [res, register] = await Promise.all([fetch(`/api/bolaget/owner-tax?year=${year}`), fetch('/api/bolaget/share-register')])
       const body = await res.json().catch(() => ({}))
-      if (!res.ok) return fail(t('load_failed'), body)
+      if (!res.ok) {
+        setLoadFailed(true)
+        return
+      }
       setData(body.data as PageData)
+      setDataYear(year)
+      setLoadFailed(false)
       const reg = await register.json().catch(() => ({}))
       if (register.ok) setPeople(((reg.data?.people ?? []) as Person[]).map((p) => ({ party_id: p.party_id, name: p.name, kind: p.kind })))
+    } catch {
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [fail, t, year])
+  }, [year])
 
   useEffect(() => {
     void load()
@@ -158,8 +174,8 @@ export function OwnerTax() {
     if (!preview) return null
     const ban = (preview.loan_ban ?? null) as { status?: string } | null
     return (
-      <div className="space-y-2 rounded-lg border border-border p-4 text-[13px]">
-        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('preview_heading')}</div>
+      <div className="space-y-2 rounded-lg p-4 text-[13px] bg-control shadow-raised">
+        <div className="text-xs font-medium text-muted-foreground">{t('preview_heading')}</div>
         {ban?.status ? <div>{t(`ban_${ban.status}` as 'ban_prohibited')}</div> : null}
         {warningsOf(preview).map((w) => (
           <AttnLine key={w}>{w}</AttnLine>
@@ -340,21 +356,22 @@ export function OwnerTax() {
         title={t('title')}
         subtitle={t('subtitle')}
         help={t('help')}
+        toolbar={
+          <ContextPicker
+            ariaLabel={t('year')}
+            triggerLabel={`${t('year')} ${year}`}
+            items={years.map((y) => ({ id: String(y), label: String(y) }))}
+            value={String(year)}
+            onChange={(id) => setYear(Number(id))}
+          />
+        }
         action={
-          <div className="flex items-center gap-2">
-            <SettingsSelect aria-label={t('year')} value={String(year)} onChange={(e) => setYear(Number(e.target.value))} wrapperClassName="w-28">
-              {years.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </SettingsSelect>
-            {canWrite ? (
-              <Button size="sm" onClick={() => openLoan('borrows')}>
-                {t('new_loan')}
-              </Button>
-            ) : null}
-          </div>
+          canWrite ? (
+            <Button onClick={() => openLoan('borrows')}>
+              <PlusIcon className="h-4 w-4" />
+              {t('new_loan')}
+            </Button>
+          ) : undefined
         }
       />
     </>
@@ -364,8 +381,18 @@ export function OwnerTax() {
     return (
       <div className="space-y-8">
         {header}
-        <Skeleton className="h-40 w-full" />
-        <Skeleton className="h-40 w-full" />
+        <LateReveal className="space-y-8">
+          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full" />
+        </LateReveal>
+      </div>
+    )
+  }
+  if (loadFailed && (!data || dataYear !== year)) {
+    return (
+      <div className="space-y-8">
+        {header}
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
       </div>
     )
   }
@@ -383,21 +410,26 @@ export function OwnerTax() {
     <div className="space-y-8">
       {header}
 
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+
       {/* K10 */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('k10_heading', { year: k10.income_year })}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('k10_heading', { year: k10.income_year })}</h2>
         {!k10.supported ? (
           <EmptyState title={t('k10_unsupported_title')} description={k10.unsupported_reason_sv ?? ''} />
         ) : (
           <>
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {k10.famansforetag.value ? t('famans_yes') : t('famans_no')} {k10.famansforetag.confirmed ? t('famans_confirmed') : t('famans_derived')}{' '}
               {t('payroll_line', { year: k10.payroll.year, amount: formatCurrency(k10.payroll.total), runs: k10.payroll.runs })}
             </p>
             {k10.owners.length === 0 ? (
               <EmptyState title={t('k10_empty_title')} description={t('k10_empty_body')} />
             ) : (
-              <table className="w-full border-collapse text-[13px] stagger-enter">
+              <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('col_owner')}</th>
@@ -410,9 +442,9 @@ export function OwnerTax() {
                 </thead>
                 <tbody>
                   {k10.owners.map((o) => (
-                    <tr key={o.party_id} className="hover:bg-secondary/35">
+                    <tr key={o.party_id} className="group hover:bg-secondary/35">
                       <td className={TD_CLASS} data-ph-mask="">
-                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setOwner(o)}>
+                        <button type="button" className={NAME_LINK_CLASS} onClick={() => setOwner(o)}>
                           {o.name}
                         </button>
                         {o.warnings.length > 0 ? (
@@ -422,27 +454,28 @@ export function OwnerTax() {
                         ) : null}
                       </td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{o.shares_at_start.toLocaleString('sv-SE')}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(o.result.total_limit)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(o.result.dividend)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(o.result.saved_space_carried_forward)}</td>
-                      <td className={cn(TD_CLASS, 'text-right')}>
-                        <span className="flex justify-end gap-3">
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(o.result.total_limit)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(o.result.dividend)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(o.result.saved_space_carried_forward)}</td>
+                      <td className={ROW_ACTIONS_TD}>
+                        <span className="flex justify-end">
                           {canWrite ? (
-                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => openInputs(o)}>
+                            <Button variant="row" onClick={() => openInputs(o)}>
                               {t('edit_inputs')}
-                            </button>
+                            </Button>
                           ) : null}
-                          <a className={QUIET_LINK_CLASS} href={`/api/bolaget/owner-tax/k10/${k10.income_year}/owners/${o.party_id}/pdf`}>
-                            {t('pdf')}
-                          </a>
+                          <Button variant="row" asChild>
+                            <a href={`/api/bolaget/owner-tax/k10/${k10.income_year}/owners/${o.party_id}/pdf`}>{t('pdf')}</a>
+                          </Button>
                         </span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+</div>
             )}
-            {k10.company_holders.length > 0 ? <p className="text-[12.5px] text-muted-foreground">{t('company_holders', { names: k10.company_holders.map((c) => c.name).join(', ') })}</p> : null}
+            {k10.company_holders.length > 0 ? <p className="text-xs text-muted-foreground">{t('company_holders', { names: k10.company_holders.map((c) => c.name).join(', ') })}</p> : null}
           </>
         )}
       </section>
@@ -450,9 +483,10 @@ export function OwnerTax() {
       {/* Owner loans */}
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('loans_heading')}</h2>
+          <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('loans_heading')}</h2>
           {canWrite ? (
-            <Button size="sm" variant="outline" onClick={() => openLoan('lends')}>
+            <Button variant="ghost" onClick={() => openLoan('lends')}>
+              <PlusIcon className="h-4 w-4" />
               {t('new_loan_lends')}
             </Button>
           ) : null}
@@ -461,7 +495,8 @@ export function OwnerTax() {
         {loans.loans.length === 0 ? (
           <EmptyState title={t('loans_empty_title')} description={t('loans_empty_body')} />
         ) : (
-          <table className="w-full border-collapse text-[13px] stagger-enter">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_counterparty')}</th>
@@ -476,15 +511,15 @@ export function OwnerTax() {
             </thead>
             <tbody>
               {loans.loans.map((l) => (
-                <tr key={l.owner_loan_id} className="hover:bg-secondary/35">
+                <tr key={l.owner_loan_id} className="group hover:bg-secondary/35">
                   <td className={TD_CLASS} data-ph-mask="">
                     {l.party.name}
                   </td>
                   <td className={cn(TD_CLASS, 'text-muted-foreground')}>{dirLabel(l)}</td>
                   <td className={cn(TD_CLASS, 'tabular-nums')}>{l.account ?? ''}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(l.kind === 'security' ? l.principal : l.outstanding)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(l.kind === 'security' ? l.principal : l.outstanding)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.interest_rate === null ? '' : `${l.interest_rate.toLocaleString('sv-SE')} %`}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(l.start_date)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(l.start_date)}</td>
                   <td className={TD_CLASS}>
                     {l.status === 'active' && l.loan_ban.status === 'prohibited' ? (
                       <Badge variant="warning">{t('ban_prohibited_chip')}</Badge>
@@ -494,17 +529,17 @@ export function OwnerTax() {
                       <span className="text-xs text-muted-foreground">{t(`status_${l.status}` as 'status_active')}</span>
                     )}
                   </td>
-                  <td className={cn(TD_CLASS, 'text-right')}>
+                  <td className={ROW_ACTIONS_TD}>
                     {canWrite && l.status !== 'cancelled' ? (
-                      <span className="flex justify-end gap-3">
+                      <span className="flex justify-end">
                         {l.kind === 'loan' ? (
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => openInterest(l)}>
+                          <Button variant="row" onClick={() => openInterest(l)}>
                             {t('interest_action')}
-                          </button>
+                          </Button>
                         ) : null}
-                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => openEdit(l)}>
+                        <Button variant="row" onClick={() => openEdit(l)}>
                           {t('edit_action')}
-                        </button>
+                        </Button>
                       </span>
                     ) : null}
                   </td>
@@ -512,9 +547,11 @@ export function OwnerTax() {
               ))}
             </tbody>
           </table>
+</div>
         )}
         {loans.reconciliation.length > 0 ? (
-          <table className="w-full border-collapse text-[13px]">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_account')}</th>
@@ -527,17 +564,18 @@ export function OwnerTax() {
               {loans.reconciliation.map((r) => (
                 <tr key={r.account} className="hover:bg-secondary/35">
                   <td className={cn(TD_CLASS, 'tabular-nums')}>{r.account}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(r.register_amount)}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{r.ledger_amount === null ? t('ledger_unread') : formatCurrency(r.ledger_amount)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(r.register_amount)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{r.ledger_amount === null ? t('ledger_unread') : formatRowAmount(r.ledger_amount)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                    {r.matches === false ? <Badge variant="warning">{formatCurrency(r.difference ?? 0)}</Badge> : <span className="text-xs text-muted-foreground">{r.matches ? t('matches') : ''}</span>}
+                    {r.matches === false ? <Badge variant="warning">{formatRowAmount(r.difference ?? 0)}</Badge> : <span className="text-xs text-muted-foreground">{r.matches ? t('matches') : ''}</span>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         ) : null}
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t('special_list_line', { year, count: data.special_list.length })}{' '}
           <a className={QUIET_LINK_CLASS} href={`/api/bolaget/owner-tax/special-list/${year}`}>
             {t('special_list_pdf')}
@@ -547,7 +585,7 @@ export function OwnerTax() {
 
       {/* ÅRL 5:18 note */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('note_heading', { date: formatDate(data.board_note.balance_date) })}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('note_heading', { date: formatDate(data.board_note.balance_date) })}</h2>
         {data.board_note.applicable ? (
           <div className="space-y-1 text-[13px]">
             <div className="font-medium">{data.board_note.heading_sv}</div>
@@ -560,11 +598,12 @@ export function OwnerTax() {
 
       {/* KU20 */}
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('ku20_heading', { year: ku20.income_year })}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('ku20_heading', { year: ku20.income_year })}</h2>
         {ku20.recipients.length === 0 ? (
-          <p className="text-[13px] text-muted-foreground">{t('ku20_empty', { year: ku20.income_year })}</p>
+          ku20.blockers.length === 0 && ku20.warnings.length === 0 && <p className="text-[13px] text-muted-foreground">{t('ku20_empty', { year: ku20.income_year })}</p>
         ) : (
-          <table className="w-full border-collapse text-[13px] stagger-enter">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_recipient')}</th>
@@ -580,25 +619,26 @@ export function OwnerTax() {
                     {r.name}
                     {r.identity ? <span className="ml-2 text-muted-foreground tabular-nums">{r.identity}</span> : null}
                   </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(r.reported_interest)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(r.reported_interest)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                    {r.expected_tax !== null && r.expected_tax !== r.tax_withheld ? <Badge variant="warning">{formatCurrency(r.reported_tax)}</Badge> : formatCurrency(r.reported_tax)}
+                    {r.expected_tax !== null && r.expected_tax !== r.tax_withheld ? <Badge variant="warning">{formatRowAmount(r.reported_tax)}</Badge> : formatRowAmount(r.reported_tax)}
                   </td>
                   <td className={cn(TD_CLASS, 'text-muted-foreground')}>{r.delagare ? t('yes') : t('no')}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         )}
         {ku20.blockers.length > 0 || ku20.warnings.length > 0 ? (
-          <ul className="space-y-1 text-[12.5px] text-muted-foreground">
+          <ul className="max-w-[760px] space-y-1 text-[13px] text-muted-foreground">
             {[...ku20.blockers, ...ku20.warnings].map((b) => (
               <li key={`${b.code}-${b.party_id ?? ''}`}>{b.message_sv}</li>
             ))}
           </ul>
         ) : null}
         {data.can_download_ku20 && ku20.ready ? (
-          <Button size="sm" variant="outline" asChild>
+          <Button variant="outline" asChild>
             <a href={`/api/bolaget/owner-tax/ku20/${ku20.income_year}/file`}>{t('ku20_download')}</a>
           </Button>
         ) : null}
@@ -606,7 +646,7 @@ export function OwnerTax() {
 
       {/* One owner's K10 underlag. */}
       <Dialog open={Boolean(owner)} onOpenChange={(open) => (open ? null : setOwner(null))}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{owner ? t('owner_title', { name: owner.name, year: k10.income_year }) : ''}</DialogTitle>
           </DialogHeader>
@@ -627,7 +667,7 @@ export function OwnerTax() {
                   {owner.result.lines.map((l) => (
                     <tr key={l.key}>
                       <td className={TD_CLASS}>{l.label_sv}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.unit === 'percent' ? `${l.amount.toLocaleString('sv-SE')} %` : formatCurrency(l.amount)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.unit === 'percent' ? `${l.amount.toLocaleString('sv-SE')} %` : formatRowAmount(l.amount)}</td>
                       <td className={cn(TD_CLASS, 'text-muted-foreground')}>{l.detail_sv}</td>
                     </tr>
                   ))}
@@ -652,7 +692,7 @@ export function OwnerTax() {
 
       {/* The owner's own K10 figures. */}
       <Dialog open={Boolean(inputs)} onOpenChange={(open) => (open ? null : setInputs(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{inputs ? t('inputs_title', { name: inputs.owner.name, year: k10.income_year }) : ''}</DialogTitle>
           </DialogHeader>
@@ -666,7 +706,7 @@ export function OwnerTax() {
                   </div>
                 ))}
               </div>
-              <p className="text-[12.5px] text-muted-foreground">{t('inputs_hint')}</p>
+              <p className="text-xs text-muted-foreground">{t('inputs_hint')}</p>
               <div className="flex items-start gap-2">
                 <Checkbox
                   id="k10-basic"
@@ -680,7 +720,7 @@ export function OwnerTax() {
                   {t('field_uses_basic_amount')}
                 </Label>
               </div>
-              {preview ? <div className="rounded-lg border border-border p-4 text-[13px] text-muted-foreground">{t('inputs_preview')}</div> : null}
+              {preview ? <div className="rounded-lg p-4 text-[13px] text-muted-foreground bg-control shadow-raised">{t('inputs_preview')}</div> : null}
             </div>
           ) : null}
           {footer(() => setInputs(null), () => void submitInputs(true), () => void submitInputs(false), t('save'))}
@@ -689,7 +729,7 @@ export function OwnerTax() {
 
       {/* New loan or security. */}
       <Dialog open={Boolean(loanForm)} onOpenChange={(open) => (open ? null : setLoanForm(null))}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{loanForm?.direction === 'lends' ? t('new_loan_lends') : t('new_loan')}</DialogTitle>
           </DialogHeader>
@@ -819,7 +859,7 @@ export function OwnerTax() {
 
       {/* Change a loan. */}
       <Dialog open={Boolean(loanEdit)} onOpenChange={(open) => (open ? null : setLoanEdit(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{loanEdit ? t('edit_title', { name: loanEdit.loan.party.name }) : ''}</DialogTitle>
           </DialogHeader>
@@ -875,7 +915,7 @@ export function OwnerTax() {
 
       {/* The year's interest. */}
       <Dialog open={Boolean(interest)} onOpenChange={(open) => (open ? null : setInterest(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{interest ? t('interest_title', { name: interest.loan.party.name }) : ''}</DialogTitle>
           </DialogHeader>

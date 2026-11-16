@@ -4,7 +4,7 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
 import { menuTrail, type UiLabels } from '../ui-map'
 
 // Shared by the tests that check a prompt's UI wording against the real menu
-// (nav-v2.ts + the settings sections, labelled from sv.json), so a renamed or
+// (nav-v3.ts + the settings sections, labelled from sv.json), so a renamed or
 // moved page fails the test instead of reaching a user as a dead direction.
 
 function table(t: Record<string, unknown>): (key: string) => string {
@@ -48,7 +48,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
   }
 }
 
-/** The real Swedish menu path to a page ("Inköp → Underlag"); throws when no menu entry leads there. */
+/** The real Swedish menu path to a page ("Dokument → Inkommande"); throws when no menu entry leads there. */
 export function svMenuPath(route: string, ctx: NavGateContext = gateContext()): string {
   const trail = menuTrail(route, { ctx, labels: SV_LABELS, hasMcpExtension: true })
   if (!trail) throw new Error(`no menu entry leads to ${route}`)

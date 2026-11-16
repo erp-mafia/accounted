@@ -9,8 +9,8 @@
  * wider last column, and the two flexible columns and the amounts shift away
  * from their heads (crm#1309).
  *
- * The last column is counted in icon-sm buttons, `--kontering-icon` wide
- * (32px, 40px on a touch screen, as `components/ui/button.tsx` sizes them;
+ * The last column is counted in icon buttons, `--kontering-icon` wide
+ * (28px, 40px on a touch screen, as `components/ui/button.tsx` sizes them;
  * KONTERING_ICON_WIDTH_CLASS sets it on the editor): remove alone, or the
  * caller's row actions, at most two, plus remove.
  */
@@ -18,8 +18,8 @@
 /** The most row actions a caller may render before the remove button. */
 export const KONTERING_MAX_ROW_ACTIONS = 2
 
-/** Sets the icon-sm button width the last column is counted in. */
-export const KONTERING_ICON_WIDTH_CLASS = '[--kontering-icon:32px] pointer-coarse:[--kontering-icon:40px]'
+/** Sets the icon button width the last column is counted in. */
+export const KONTERING_ICON_WIDTH_CLASS = '[--kontering-icon:28px] pointer-coarse:[--kontering-icon:40px]'
 
 // Literal class names: Tailwind only generates the classes it finds in source.
 // The `*3` is KONTERING_MAX_ROW_ACTIONS plus the remove button.

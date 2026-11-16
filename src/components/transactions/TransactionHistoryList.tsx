@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -14,7 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
@@ -58,6 +59,8 @@ interface TransactionHistoryListProps {
    *  rendered with .row-exit so the departure is visible, not a hard jump. */
   exitingIds?: Set<string>
   searchTerm?: string
+  /** Empties the page's search (the no-hits line's "Rensa sökningen"). */
+  onClearSearch?: () => void
   /** Page-level source chip selection (the toolbar ContextPicker on
    *  /transactions, shared with the inbox mode). */
   sourceFilter: SourceFilter
@@ -103,6 +106,7 @@ export default function TransactionHistoryList({
   skvRows = [],
   exitingIds,
   searchTerm = '',
+  onClearSearch,
   sourceFilter,
   filter,
   onFilterChange,
@@ -122,6 +126,7 @@ export default function TransactionHistoryList({
   giroCounterpartyFor,
 }: TransactionHistoryListProps) {
   const t = useTranslations('tx_history')
+  const tCommon = useTranslations('common')
 
   // Which chip shows which row: lib/transactions/history-filter.
   const bankFiltered = transactions.filter((tx) => {
@@ -179,18 +184,26 @@ export default function TransactionHistoryList({
         />
       </div>
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && searchTerm ? (
+        // No hits for the search: one muted line in the list, not a block.
+        <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+          <span>{t('empty_search')}</span>
+          {onClearSearch && (
+            <Button variant="link" onClick={onClearSearch}>
+              {tCommon('clear_search')}
+            </Button>
+          )}
+        </div>
+      ) : filtered.length === 0 ? (
         <DataListEmpty
           icon={<ArrowsRightLeftIcon className="h-6 w-6" />}
           title={t('empty_title')}
-          description={
-            searchTerm ? t('empty_search') : filter === 'ignored' ? t('empty_ignored') : t('empty_filter')
-          }
+          description={filter === 'ignored' ? t('empty_ignored') : t('empty_filter')}
         />
       ) : (
         /* Negative margin + matching padding: keeps the columns flush with
            the page edges (mirrors the inbox table on the transactions page). */
-        <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
+        <div className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -282,6 +295,7 @@ function BankHistoryRow({
   // already 403s for viewers but rendering the trigger creates a confusing
   // dead end.
   const { canWrite } = useCanWrite()
+  const { lockedTitle } = useViewerLock()
   const isIncome = transaction.amount > 0
   // The pointer alone misses a row split over several verifikat (#1553): its
   // journal_entry_id is NULL and the anchors sit in transaction_voucher_links,
@@ -342,7 +356,7 @@ function BankHistoryRow({
       inert={isExiting || undefined}
     >
       <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
-      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(transaction.date)}
       </td>
       {/* overflow-hidden: see #2003, the shrink-0 markers below cannot
@@ -396,12 +410,12 @@ function BankHistoryRow({
         )}
         title={
           transaction.currency !== 'SEK' && transaction.amount_sek != null
-            ? formatCurrency(transaction.amount_sek)
+            ? formatRowAmount(transaction.amount_sek)
             : undefined
         }
       >
         {isIncome ? '+' : ''}
-        {formatCurrency(transaction.amount, transaction.currency)}
+        {formatRowAmount(transaction.amount, transaction.currency)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="row-collapsible inline-flex items-center justify-end gap-2">
@@ -447,9 +461,10 @@ function BankHistoryRow({
             // One signal per row: the Bokför button already says the row is
             // not booked, so no "Ej bokförd" chip beside it.
             <Button
-              size="sm"
               variant="outline"
               onClick={() => onOpenCategoryDialog(transaction)}
+              disabled={!canWrite}
+              title={lockedTitle}
             >
               {t('book')}
             </Button>
@@ -463,7 +478,7 @@ function BankHistoryRow({
                         the middle of the STATUS header, not at the page edge. */}
                     <Button
                       variant="ghost"
-                      size="icon-sm"
+                      size="icon"
                       className={cn('mr-2 text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                       aria-label="Fler alternativ"
                     >
@@ -537,6 +552,7 @@ function SkattekontoHistoryRow({
   onMatch?: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('tx_history')
+  const skvLock = useViewerLock()
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
   const isBooked = !!row.journal_entry_id
@@ -544,7 +560,7 @@ function SkattekontoHistoryRow({
   return (
     <tr data-tx-id={row.id} className="group transition-colors duration-150 hover:bg-secondary/35">
       <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
-      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(row.transaktionsdatum)}
       </td>
       {/* overflow-hidden: see the bank row above. */}
@@ -558,7 +574,7 @@ function SkattekontoHistoryRow({
             {t('skv_badge')}
           </span>
           {!isBooked && row.match_suggestion && (
-            <Badge variant="warning" className="h-4 shrink-0 px-1.5 py-0 text-[11px]">
+            <Badge variant="warning" className="h-4 shrink-0 px-1.5 py-0 text-xs">
               {t('possible_duplicate')}
             </Badge>
           )}
@@ -572,7 +588,7 @@ function SkattekontoHistoryRow({
         )}
       >
         {isIncome ? '+' : ''}
-        {formatCurrency(amount)}
+        {formatRowAmount(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="inline-flex items-center justify-end gap-2">
@@ -588,15 +604,16 @@ function SkattekontoHistoryRow({
             <>
               {onMatch && (
                 <Button
-                  size="sm"
                   variant="outline"
                   onClick={() => onMatch(row)}
+                  disabled={!skvLock.canWrite}
+                  title={skvLock.lockedTitle}
                 >
                   {row.match_suggestion ? t('link') : t('match')}
                 </Button>
               )}
               {!row.match_suggestion && onBokfor && (
-                <button type="button" className={QUIET_LINK_CLASS} onClick={() => onBokfor(row)}>
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => onBokfor(row)} disabled={!skvLock.canWrite} title={skvLock.lockedTitle}>
                   {t('book')}
                 </button>
               )}

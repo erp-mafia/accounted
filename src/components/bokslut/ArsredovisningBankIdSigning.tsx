@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -108,6 +109,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
   const t = useTranslations('annualReportSigning')
   const locale = useLocale() as ErrorLocale
   const router = useRouter()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [members, setMembers] = useState<CompanyMemberOption[]>([])
   const [assign, setAssign] = useState<Record<string, SlotAssignment>>({})
   const [message, setMessage] = useState('')
@@ -234,7 +236,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
   // A version is signed one way: evidence by hand on a slot rules BankID out.
   if (track.kind === 'manual') {
     return (
-      <div className="space-y-2 rounded-lg border border-border p-6">
+      <div className="space-y-2 rounded-lg p-6 bg-control shadow-raised">
         {heading}
         <p className="text-[13px] text-muted-foreground">{t('blocked_by_manual')}</p>
       </div>
@@ -267,7 +269,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
         .join(' ')
 
   return (
-    <div className="space-y-6 rounded-lg border border-border p-6">
+    <div className="space-y-6 rounded-lg p-6 bg-control shadow-raised">
       <div className="space-y-2">
         {heading}
         <p className="text-[13px] text-muted-foreground">{t('panel_intro')}</p>
@@ -313,7 +315,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
             ))}
           </ul>
           {created.result.signers.some((s) => s.url && s.signer_id !== created.mineSignerId) && (
-            <p className="m-0 text-[12.5px] text-muted-foreground">{t('created_link_hint')}</p>
+            <p className="m-0 text-xs text-muted-foreground">{t('created_link_hint')}</p>
           )}
         </div>
       )}
@@ -352,7 +354,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
               const errors = rowErrors[slot.id] ?? { email: false, personalNumber: false }
               const pickable = members.filter((m) => !m.is_current_user && m.user_id !== a.userId)
               return (
-                <li key={slot.id} className="space-y-2 border-b border-border py-3 first:pt-0 last:border-b-0">
+                <li key={slot.id} className="space-y-2 border-b-hairline py-3 first:pt-0 last:border-b-0">
                   <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                     <p className="m-0 min-w-0 text-[13px]" data-ph-mask="">
                       {slot.signer_name}
@@ -364,13 +366,13 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
                           {t('not_me')}
                         </button>
                       ) : (
-                        <Button type="button" size="sm" variant="outline" onClick={() => setMember(slot.id, me)}>
+                        <Button type="button" variant="outline" onClick={() => setMember(slot.id, me)}>
                           {t('its_me')}
                         </Button>
                       ))}
                   </div>
                   {mine ? (
-                    <p className="m-0 text-[12.5px] text-muted-foreground">{t('mine_hint')}</p>
+                    <p className="m-0 text-xs text-muted-foreground">{t('mine_hint')}</p>
                   ) : (
                     <>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -391,7 +393,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
                         ) : pickable.length > 0 ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button type="button" size="sm" variant="secondary">
+                              <Button type="button" variant="outline">
                                 {t('pick_member')}
                               </Button>
                             </DropdownMenuTrigger>
@@ -417,7 +419,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
                             aria-invalid={errors.personalNumber || undefined}
                             className="max-w-xs tabular-nums"
                           />
-                          <p className="m-0 text-[12.5px] text-muted-foreground">{errors.personalNumber ? t('pn_invalid') : t('pn_hint')}</p>
+                          <p className="m-0 text-xs text-muted-foreground">{errors.personalNumber ? t('pn_invalid') : t('pn_hint')}</p>
                         </div>
                       ) : (
                         <button type="button" className={QUIET_LINK_CLASS} onClick={() => update(slot.id, { locking: true })}>
@@ -453,15 +455,15 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
             </div>
           )}
 
-          <p className="m-0 text-[12.5px] text-muted-foreground">{outcome}</p>
-          <p className="m-0 text-[12.5px] text-muted-foreground">{t('name_rule_short')}</p>
+          <p className="m-0 text-xs text-muted-foreground">{outcome}</p>
+          <p className="m-0 text-xs text-muted-foreground">{t('name_rule_short')}</p>
           {showErrors && !formValid ? (
             <AttnLine>{t('form_invalid', { max: SIGNING_MAX_TTL_DAYS })}</AttnLine>
           ) : error != null ? (
             <AttnLine>{getErrorMessage(error, { locale, fallback: t('send_failed') })}</AttnLine>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" loading={busy} disabled={busy || (showErrors && !formValid)}>
+            <Button type="submit" loading={busy} disabled={!canWrite || busy || (showErrors && !formValid)} title={lockedTitle}>
               {oneSitting ? t('sign_now') : t('send')}
             </Button>
           </div>

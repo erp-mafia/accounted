@@ -364,7 +364,7 @@ export function EditAssetDialog({
           />
 
           {basisLocked && (
-            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
               <LockClosedIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Anskaffningsdatum, anskaffningsvärde och kategori är låsta eftersom avskrivningar
@@ -387,7 +387,7 @@ export function EditAssetDialog({
           )}
 
           {(isK3 || hasComponents) && (
-            <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+            <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">{t('components.title')}</p>
@@ -399,7 +399,6 @@ export function EditAssetDialog({
                   <Button
                     type="button"
                     variant={useComponents ? 'default' : 'outline'}
-                    size="sm"
                     onClick={() => toggleComponents(!useComponents)}
                   >
                     {useComponents ? t('components.on') : t('components.off')}
@@ -437,7 +436,7 @@ export function EditAssetDialog({
           )}
 
           {!useComponents && !isLand && (
-          <div className="space-y-3 rounded-lg border border-border p-4">
+          <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
             <p className="text-sm font-medium">{t('opening.title')}</p>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -517,7 +516,7 @@ export function EditAssetDialog({
           )}
 
           {!asset.disposed_at && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg p-4 bg-control shadow-raised">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-medium">{t('impairment.title')}</p>
@@ -529,14 +528,14 @@ export function EditAssetDialog({
                   </p>
                 )}
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setImpairing(true)} disabled={!canWrite}>
+              <Button type="button" variant="outline" onClick={() => setImpairing(true)} disabled={!canWrite}>
                 {t('impairment.open')}
               </Button>
             </div>
           )}
 
           {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="bg-destructive/8 rounded-lg p-3 text-sm text-destructive">
               {error}
             </div>
           )}
@@ -552,7 +551,7 @@ export function EditAssetDialog({
               onClick={onDelete}
               disabled={submitting}
             >
-              <TrashIcon className="mr-2 h-4 w-4" />
+              <TrashIcon className="h-4 w-4" />
               {t('action_delete')}
             </Button>
           ) : (
@@ -570,7 +569,7 @@ export function EditAssetDialog({
                 !canWrite ? 'Endast användare med skrivrättigheter kan ändra tillgångar.' : undefined
               }
             >
-              {!canWrite && <LockClosedIcon className="mr-1 h-4 w-4" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4" />}
               {submitting ? (
                 'Sparar…'
               ) : (

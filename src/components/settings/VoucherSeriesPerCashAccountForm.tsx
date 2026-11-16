@@ -251,7 +251,6 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
                         onClick={() => setPrimaryTarget(account)}
                         disabled={savingId === account.id}
                         aria-label={t('per_account_make_primary_aria', { account: accountLabel(account) })}
@@ -280,7 +279,6 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
                         onClick={() => setRemoveTarget(account)}
                         disabled={savingId === account.id}
                         aria-label={t('per_account_remove_aria', { account: accountLabel(account) })}
@@ -320,7 +318,6 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
                   onClick={() => setRemoveTarget(account)}
                   disabled={savingId === account.id}
                   aria-label={t('per_account_remove_aria', { account: accountLabel(account) })}

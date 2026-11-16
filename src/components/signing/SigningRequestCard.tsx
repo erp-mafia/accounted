@@ -116,7 +116,7 @@ export function SigningRequestCard({ request, available, onChanged, showHeading 
             </p>
             <SigningRequestState request={request} />
           </div>
-          <p className="m-0 text-[12.5px] text-muted-foreground">
+          <p className="m-0 text-xs text-muted-foreground">
             {open
               ? t('sent_open_until', { sent: formatDateLong(request.created_at), until: formatDateLong(request.expires_at) })
               : t('sent_on', { sent: formatDateLong(request.created_at) })}
@@ -131,7 +131,7 @@ export function SigningRequestCard({ request, available, onChanged, showHeading 
           const canReissue = available && open && s.status === 'pending' && !s.email && !s.user_id
           const fresh = freshLinks[s.signer_id]
           return (
-            <li key={s.signer_id} className="space-y-1 border-b border-border py-2 last:border-b-0">
+            <li key={s.signer_id} className="space-y-1 border-b-hairline py-2 last:border-b-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <span className="min-w-0" data-ph-mask="">
                   {s.name}
@@ -153,16 +153,16 @@ export function SigningRequestCard({ request, available, onChanged, showHeading 
                 </span>
               </div>
               {s.status === 'declined' && s.decline_reason ? (
-                <p className="m-0 text-[12.5px] text-muted-foreground" data-ph-mask="">
+                <p className="m-0 text-xs text-muted-foreground" data-ph-mask="">
                   {t('signer_decline_reason', { reason: s.decline_reason })}
                 </p>
               ) : null}
               {s.status === 'pending' && !s.email && open ? (
-                <p className="m-0 text-[12.5px] text-muted-foreground">{s.user_id ? t('signer_member_no_email') : t('signer_no_email')}</p>
+                <p className="m-0 text-xs text-muted-foreground">{s.user_id ? t('signer_member_no_email') : t('signer_no_email')}</p>
               ) : null}
               {fresh ? (
                 <div className="space-y-1 pt-1">
-                  <p className="m-0 text-[12.5px] text-muted-foreground">{t('fresh_link_hint', { name: s.name })}</p>
+                  <p className="m-0 text-xs text-muted-foreground">{t('fresh_link_hint', { name: s.name })}</p>
                   <CopyLink url={fresh} label={t('link_label', { name: s.name })} />
                 </div>
               ) : null}
@@ -184,7 +184,7 @@ export function SigningRequestCard({ request, available, onChanged, showHeading 
             </Link>
           )}
           {request.state === 'completed' && (!request.signed_document_id || !request.evidence_document_id) && (
-            <span className="text-[12.5px] text-muted-foreground">{t('sealing')}</span>
+            <span className="text-xs text-muted-foreground">{t('sealing')}</span>
           )}
           {open && (
             <button type="button" className={QUIET_LINK_CLASS} onClick={() => void cancel()}>

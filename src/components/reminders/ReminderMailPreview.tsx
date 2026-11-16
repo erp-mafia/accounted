@@ -9,7 +9,7 @@ import type { ReminderPreview } from '@/lib/reminders/preview'
 import { errorLocale, fetchReminderPreview, type ReminderCall } from './reminders-client'
 
 /** Height of the mail frame: about one screen of a reminder mail. */
-const FRAME_CLASS = 'h-[420px] w-full rounded-lg border border-border'
+const FRAME_CLASS = 'h-[420px] w-full rounded-lg bg-control shadow-raised'
 
 /**
  * The reminder mail for one invoice (or, without one, the company's latest
@@ -67,7 +67,7 @@ export function ReminderMailPreview({
     return (
       <div className="flex items-center justify-between gap-3 text-[13px] text-muted-foreground">
         <span>{result.message}</span>
-        <Button variant="outline" size="sm" onClick={onRetry}>
+        <Button variant="outline" onClick={onRetry}>
           {t('retry')}
         </Button>
       </div>

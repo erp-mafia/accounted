@@ -1,0 +1,1 @@
+[2026-11-09] The wiki shows the agent's context by running gnubok_get_agent_briefing and gnubok_get_record through the core agent tool registry, never its own reads: the page then cannot drift from what agents receive. Wiki is its own sidebar row; /agent-knowledge redirects.

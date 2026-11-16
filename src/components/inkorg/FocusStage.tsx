@@ -19,7 +19,7 @@ import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { bookedOnAccount, focusDecision, type DecisionQuestion, type InkorgStartable } from '@/lib/inkorg/decision'
 import { doorOf, itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SellerRegion } from '@/lib/vat/seller-country'
@@ -139,6 +139,7 @@ export function FocusStage({
   onBack,
   onBook,
   openEditor = null,
+  canWrite = true,
 }: {
   item: InkorgItem
   /** The receipt the invoice came with as one purchase (its pairing): shown as its second document. */
@@ -163,6 +164,8 @@ export function FocusStage({
   onBook?: (booking: OneClickBooking) => void
   /** Bumped when a one-click booking came back refused for its date: the editor opens, prefilled. */
   openEditor?: number | null
+  /** False for a read-only member: every answer and edit is locked. */
+  canWrite?: boolean
 }) {
   const t = useTranslations('inkorg')
   const tWork = useTranslations('inbox_workspace')
@@ -220,7 +223,7 @@ export function FocusStage({
         itemId={item.id}
         value={detail.purchase_category}
         alternatives={detail.purchase_category_alternatives}
-        locked={!!item.created_supplier_invoice_id}
+        locked={!!item.created_supplier_invoice_id || !canWrite}
         // "Varje gång" needs a matched supplier card; the headline is its name as read.
         supplierName={detail.matched_supplier_id && item.extracted_data.supplier?.name?.trim() ? headline.name : null}
         label={account ? null : undefined}
@@ -239,7 +242,7 @@ export function FocusStage({
     <div role="group" aria-label={t('seller_country_question')} className="flex flex-wrap items-center gap-2 text-[13px]">
       <span className="text-muted-foreground">{t('seller_country_question')}</span>
       {SELLER_REGIONS.map((region) => (
-        <Button key={region} type="button" variant="outline" size="sm" onClick={() => setAnswers({ ...answered, seller: region })}>
+        <Button key={region} type="button" variant="outline" onClick={() => setAnswers({ ...answered, seller: region })}>
           {t(`seller_country_${region}`)}
         </Button>
       ))}
@@ -268,7 +271,7 @@ export function FocusStage({
             className="aspect-[210/297] lg:h-[calc(100vh-12rem)] lg:w-auto lg:max-w-[40rem]"
             paper
           />
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             {meta && (
               <a href={meta.url} target="_blank" rel="noopener noreferrer" className={QUIET_LINK_CLASS}>
                 {t('open_full_size')}
@@ -284,7 +287,7 @@ export function FocusStage({
         </div>
 
         <div className="@container order-1 min-w-0 space-y-6 lg:order-2 lg:max-w-[36rem]">
-          <header className="flex items-start gap-3 border-b border-border pb-6">
+          <header className="flex items-start gap-3 border-b-hairline pb-6">
             {headline.name ? (
               <BrandMark name={headline.name} variant="mark" size={40} logoUrl={item.logo_url} />
             ) : (
@@ -294,10 +297,10 @@ export function FocusStage({
             )}
             <div className="min-w-0 flex-1">
               {/* Sized by the column, not the window: the large step only where the name and the amount fit side by side. */}
-              <h2 data-ph-mask="" className="font-display text-2xl leading-8 tracking-[-0.02em] [overflow-wrap:anywhere] @lg:text-3xl @lg:leading-9">
+              <h2 data-ph-mask="" className="text-2xl leading-8 tracking-[-0.02em] [overflow-wrap:anywhere] @lg:text-3xl @lg:leading-9">
                 {headline.name ?? t('row_unknown')}
               </h2>
-              <p className="mt-1 text-[12.5px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {metaParts.map((part, i) => (
                   <span key={i} className="whitespace-nowrap">
                     {i > 0 && ' · '}
@@ -343,12 +346,13 @@ export function FocusStage({
             bookingPlan={bookingPlan}
             answers={answered.seller ? { seller_country: answered.seller } : {}}
             onBook={onBook}
+            canWrite={canWrite}
             openEditor={openEditor}
           />
 
-          <div className="border-t border-border">
+          <div className="border-t-hairline">
             <Fold
-              className="border-b border-border"
+              className="border-b-hairline"
               label={t('fine_booking')}
               open={finePrint.booking}
               onToggle={(booking) => onFinePrint((current) => ({ ...current, booking }))}
@@ -369,7 +373,7 @@ export function FocusStage({
                     formatDate={(iso) => shortDate(iso, locale)}
                     fallback={
                       item.email_from || item.email_subject ? (
-                        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+                        <p data-ph-mask="" className="text-xs text-muted-foreground">
                           {[item.email_from, item.email_subject].filter(Boolean).join(' · ')}
                         </p>
                       ) : null
@@ -379,7 +383,7 @@ export function FocusStage({
               </div>
             </Fold>
             <Fold
-              className="border-b border-border"
+              className="border-b-hairline"
               label={t('fine_fields')}
               open={finePrint.fields}
               onToggle={(fields) => onFinePrint((current) => ({ ...current, fields }))}
@@ -390,7 +394,7 @@ export function FocusStage({
                   reading={detail?.reading ?? null}
                   loading={detailLoading}
                   failed={!detailLoading && readingFailed}
-                  locked={!!item.created_supplier_invoice_id}
+                  locked={!!item.created_supplier_invoice_id || !canWrite}
                   onChanged={() => void onDone({ leaves: false })}
                 />
               </div>
@@ -401,7 +405,7 @@ export function FocusStage({
 
       {finishing && (
         <div className="absolute inset-0 flex items-start justify-center bg-background/70 pt-12 animate-fade-in" aria-live="polite">
-          <span className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium">
+          <span className="flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-[13px] font-medium">
             <CheckIcon aria-hidden="true" className="h-4 w-4" />
             {t('done')}
           </span>
@@ -425,18 +429,18 @@ function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem;
       : t(`ev_paid_${payment.method}`)
     : null
   return (
-    <div role="group" aria-label={t('companion_label')} className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]">
+    <div role="group" aria-label={t('companion_label')} className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] bg-control shadow-raised">
       <PaperClipIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1">
         <span className="block">{t('companion_title')}</span>
         {paid && (
-          <span data-ph-mask="" className="block text-[12.5px] text-muted-foreground">
+          <span data-ph-mask="" className="block text-xs text-muted-foreground">
             {paid}
           </span>
         )}
       </span>
       {onToggle && (
-        <button type="button" onClick={onToggle} className={`${QUIET_LINK_CLASS} shrink-0 text-[12.5px]`}>
+        <button type="button" onClick={onToggle} className={`${QUIET_LINK_CLASS} shrink-0 text-xs`}>
           {showing ? t('companion_show_invoice') : t('companion_show')}
         </button>
       )}
@@ -448,21 +452,21 @@ function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem;
 function ProposalLines({ lines }: { lines: ReadonlyArray<Pick<SuggestedBooking['lines'][number], 'account_number' | 'description' | 'debit_amount' | 'credit_amount'>> }) {
   const t = useTranslations('inkorg')
   return (
-    <table className="w-full border-collapse text-[12.5px]">
-      <caption className="pb-1 text-left text-[12.5px] text-muted-foreground">{t('proposal_caption')}</caption>
+    <table className="w-full border-collapse text-xs">
+      <caption className="pb-1 text-left text-xs text-muted-foreground">{t('proposal_caption')}</caption>
       <tbody>
         {lines.map((line, i) => (
-          <tr key={`${line.account_number}-${i}`} className="border-b border-border last:border-0">
+          <tr key={`${line.account_number}-${i}`} className="border-b-hairline last:border-0">
             <td className="w-12 py-1 pr-2 tabular-nums text-muted-foreground">{line.account_number}</td>
             <td data-ph-mask="" className="max-w-0 truncate py-1 pr-2">
               {line.description}
             </td>
             {/* Journal lines are in SEK whatever the document's currency. */}
             <td data-ph-mask="" className="w-24 py-1 text-right tabular-nums">
-              {line.debit_amount ? formatCurrency(line.debit_amount, 'SEK') : ''}
+              {line.debit_amount ? formatRowAmount(line.debit_amount, 'SEK') : ''}
             </td>
             <td data-ph-mask="" className="w-24 py-1 pl-2 text-right tabular-nums text-muted-foreground">
-              {line.credit_amount ? formatCurrency(line.credit_amount, 'SEK') : ''}
+              {line.credit_amount ? formatRowAmount(line.credit_amount, 'SEK') : ''}
             </td>
           </tr>
         ))}

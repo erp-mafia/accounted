@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { HashtagIcon, PlusIcon, TrashIcon } from '@/components/icons'
@@ -30,7 +30,7 @@ import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-a
 import UnitPicker from '@/components/invoices/UnitPicker'
 import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import { formatQty } from '@/components/sales-orders/labels'
 import { CURRENCIES, type Article, type SalesOrder, type SalesOrderItem, type SalesOrderItemInput } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -78,6 +78,14 @@ function compactDims(dims: Record<string, string>): string {
 interface SalesOrderFormProps {
   mode: 'create' | 'edit'
   initial?: SalesOrder
+  /**
+   * Set by a page that carries Avbryt and the primary in its top bar: the
+   * form takes this id and renders no button row of its own; the page's
+   * button submits it through the `form` attribute.
+   */
+  formId?: string
+  /** Tells the host while a submit is running, for its button's loading state. */
+  onSubmittingChange?: (submitting: boolean) => void
 }
 
 let keyCounter = 0
@@ -147,7 +155,7 @@ function blankTextLine(): LineState {
  * periodisering, payment links). POST on create, PATCH on edit; existing
  * line ids ride along on edit so delivered/invoiced history survives.
  */
-export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
+export default function SalesOrderForm({ mode, initial, formId, onSubmittingChange }: SalesOrderFormProps) {
   const t = useTranslations('sales_order_form')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
@@ -176,6 +184,9 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   })
   const [errors, setErrors] = useState<{ customer?: string; lines?: string }>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  useEffect(() => {
+    onSubmittingChange?.(isSubmitting)
+  }, [isSubmitting, onSubmittingChange])
   // Dimension tagging (kostnadsställe/projekt): the pickers render only when
   // company_settings.dimensions_enabled; stored bags round-trip either way.
   // defaultDims is the order's default_dimensions, copied onto the invoice.
@@ -391,15 +402,14 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8" noValidate>
-      <DetailSection kicker={t('section_customer')}>
+    <form id={formId} onSubmit={handleSubmit} className="space-y-8" noValidate>
+      <DetailSection kicker={t('section_customer')} className="max-w-[760px]">
         <div className="max-w-md">
           <CustomerCombobox
             value={customerId}
             customers={customers}
             keepId={initial?.customer_id}
             onChange={handleCustomerChange}
-            className="h-12 font-display text-base"
             aria-required
             aria-invalid={errors.customer ? true : undefined}
             loading={customersLoading}
@@ -410,7 +420,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
         </div>
       </DetailSection>
 
-      <DetailSection kicker={t('section_details')}>
+      <DetailSection kicker={t('section_details')} className="max-w-[760px]">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="space-y-2">
             <Label htmlFor="so-order-date">{t('order_date_label')}</Label>
@@ -424,7 +434,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="so-delivery-date">{t('requested_delivery_date_label')}</Label>
+            <Label htmlFor="so-delivery-date" optional>{t('requested_delivery_date_label')}</Label>
             <Input
               id="so-delivery-date"
               type="date"
@@ -449,7 +459,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="so-your-ref">{t('your_reference_label')}</Label>
+            <Label htmlFor="so-your-ref" optional>{t('your_reference_label')}</Label>
             <Input
               id="so-your-ref"
               value={yourReference}
@@ -458,7 +468,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="so-our-ref">{t('our_reference_label')}</Label>
+            <Label htmlFor="so-our-ref" optional>{t('our_reference_label')}</Label>
             <Input
               id="so-our-ref"
               value={ourReference}
@@ -467,7 +477,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             />
           </div>
           <div className="space-y-2 sm:col-span-2 lg:col-span-3">
-            <Label htmlFor="so-notes">{t('notes_label')}</Label>
+            <Label htmlFor="so-notes" optional>{t('notes_label')}</Label>
             <Textarea
               id="so-notes"
               value={notes}
@@ -487,7 +497,10 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
       </DetailSection>
 
       <DetailSection kicker={t('section_lines')}>
-        <div className="overflow-x-auto">
+        {/* relative: the cells' absolutely placed helpers (sr-only text, a
+            select's hidden native element) stay inside the scroller instead of
+            widening the page on a phone. */}
+        <div className="relative overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -624,7 +637,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                       )}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                      {!isText && formatCurrency(lineNet(line), currency)}
+                      {!isText && formatRowAmount(lineNet(line), currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
                       <span className="inline-flex items-center gap-1">
@@ -661,7 +674,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                   {dimsOpen && (
                     <tr>
                       <td colSpan={8} className={cn(TD_CLASS, 'pl-0 pr-0')}>
-                        <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-3">
+                        <div className="space-y-1 rounded-lg p-3 bg-control shadow-raised">
                           <div className="max-w-md">
                             <LineDimensionFields
                               dimensions={line.dimensions}
@@ -690,16 +703,14 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
           <Button
             type="button"
             variant="outline"
-            size="sm"
             onClick={() => setLines((prev) => [...prev, blankProductLine(vatPlan.defaultRate)])}
           >
-            <PlusIcon className="mr-2 h-4 w-4" />
+            <PlusIcon className="h-4 w-4" />
             {t('add_row')}
           </Button>
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={() => setLines((prev) => [...prev, blankTextLine()])}
             className="text-muted-foreground"
           >
@@ -716,21 +727,24 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             <span className="text-muted-foreground">{t('vat')}</span>
             <span className="tabular-nums">{formatCurrency(totals.vat, currency)}</span>
           </div>
-          <div className="flex justify-between border-t border-border pt-2">
+          <div className="flex justify-between border-t-hairline pt-2">
             <span>{t('total')}</span>
             <span className="font-display text-xl tabular-nums">{formatCurrency(totals.total, currency)}</span>
           </div>
         </div>
       </DetailSection>
 
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={() => router.back()} disabled={isSubmitting}>
-          {tCommon('cancel')}
-        </Button>
-        <Button type="submit" loading={isSubmitting}>
-          {mode === 'edit' ? t('submit_edit') : t('submit_create')}
-        </Button>
-      </div>
+      {/* The page's top bar carries the buttons when the form has an id. */}
+      {!formId && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => router.back()} disabled={isSubmitting}>
+            {tCommon('cancel')}
+          </Button>
+          <Button type="submit" loading={isSubmitting}>
+            {mode === 'edit' ? t('submit_edit') : t('submit_create')}
+          </Button>
+        </div>
+      )}
     </form>
   )
 }

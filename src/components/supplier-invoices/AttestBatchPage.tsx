@@ -2,7 +2,16 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { useBranding } from '@/lib/branding/brand-context'
+import {
+  STANDALONE_LINK_CLASS,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneOutcome,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,7 +19,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { AttestBatchDecisionResult, AttestBatchInvoiceView, AttestBatchPageData } from '@/lib/supplier-invoices/attest-batch-route'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 
 /**
  * The page the batched attest mail opens, without a login: every invoice the
@@ -22,6 +31,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
  */
 export function AttestBatchPage({ token, initial }: { token: string; initial: AttestBatchPageData }) {
   const t = useTranslations('attest_batch_page')
+  const tSigning = useTranslations('signing_page')
+  const { appName } = useBranding()
   const locale = useLocale() as ErrorLocale
   const [data, setData] = useState(initial)
   const [approve, setApprove] = useState<Set<string>>(
@@ -142,27 +153,23 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
         : t('submit_mixed', { approve: approveIds.length, reject: rejectIds.length })
 
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-2xl space-y-6 stagger-enter">
-        <header className="space-y-4">
-          <BrandWordmark size="inline" />
-          <div className="space-y-1">
-            <p className="text-[12.5px] uppercase tracking-wider text-muted-foreground">{t('eyebrow', { company: data.company_name })}</p>
-            <h1 className="font-display text-2xl tracking-tight" data-ph-mask="">
-              {title}
-            </h1>
-            <p className="text-[13px] text-muted-foreground">{data.kind === 'reminder' ? t('lead_reminder') : t('lead')}</p>
-          </div>
-        </header>
+    <StandalonePage width="form" brand={false}>
+        <StandaloneFrom name={data.company_name} via={tSigning('via', { platform: appName })} />
+        <StandaloneHeading
+          className="mt-5"
+          eyebrow={t('eyebrow', { company: data.company_name })}
+          title={<span data-ph-mask="">{title}</span>}
+          sub={data.kind === 'reminder' ? t('lead_reminder') : t('lead')}
+        />
 
-        <ul className="divide-y divide-border rounded-lg border border-border" data-ph-mask="">
+        <ul className="mt-5 border-t-hairline" data-ph-mask="">
           {data.invoices.map((invoice) => {
             const rejecting = reject.has(invoice.id)
             const line = stateLine(invoice)
             const failure = failures.get(invoice.id)
             const checkboxId = `attest-${invoice.id}`
             return (
-              <li key={invoice.id} className="space-y-3 p-4">
+              <li key={invoice.id} className="space-y-3 border-b-hairline py-3">
                 <div className="flex items-start gap-3">
                   {invoice.state === 'open' && invoice.may_approve ? (
                     <Checkbox
@@ -187,7 +194,7 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
                       )}
                       <span className="text-[13px] font-medium tabular-nums">{formatCurrency(invoice.total, invoice.currency)}</span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                       <span>{labelOf(invoice)}</span>
                       <span aria-hidden="true">·</span>
                       <span className="tabular-nums">{t('due', { date: formatDate(invoice.due_date) })}</span>
@@ -211,7 +218,7 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
                         </>
                       )}
                     </div>
-                    {line && <p className="text-[12.5px] text-muted-foreground">{line}</p>}
+                    {line && <p className="text-xs text-muted-foreground">{line}</p>}
                     {failure && <AttnLine>{t('result_failed', { message: failure })}</AttnLine>}
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       {invoice.has_document && (
@@ -219,18 +226,18 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
                           href={`/api/attest/lista/${encodeURIComponent(token)}/document/${encodeURIComponent(invoice.id)}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-[12.5px] text-muted-foreground underline-offset-4 hover:underline"
+                          className={cn(STANDALONE_LINK_CLASS, 'text-xs')}
                         >
                           {t('open_document')}
                         </a>
                       )}
                       {invoice.state === 'open' && invoice.may_reject && !rejecting && (
-                        <Button type="button" size="sm" variant="outline" onClick={() => setRejection(invoice.id, '')}>
+                        <Button type="button" variant="outline" onClick={() => setRejection(invoice.id, '')}>
                           {t('reject')}
                         </Button>
                       )}
                       {rejecting && (
-                        <Button type="button" size="sm" variant="outline" onClick={() => setRejection(invoice.id, null)}>
+                        <Button type="button" variant="outline" onClick={() => setRejection(invoice.id, null)}>
                           {t('undo_reject')}
                         </Button>
                       )}
@@ -252,23 +259,28 @@ export function AttestBatchPage({ token, initial }: { token: string; initial: At
         </ul>
 
         {answered && (
-          <section className="space-y-1 rounded-lg border border-border p-6">
-            <h2 className="font-display text-xl tracking-tight">{t('done_title')}</h2>
-            <p className="text-[13px] text-muted-foreground">{t('done_counts', { approved: answered.approved, rejected: answered.rejected })}</p>
-            {open.length === 0 && <p className="text-[13px] text-muted-foreground">{t('all_done')}</p>}
-          </section>
+          <StandaloneOutcome className="mt-4" mark={<StatusGlyph tone="ok" size={16} />} title={t('done_title')}>
+            <p>{t('done_counts', { approved: answered.approved, rejected: answered.rejected })}</p>
+            {open.length === 0 && <p>{t('all_done')}</p>}
+          </StandaloneOutcome>
         )}
 
         {open.length > 0 && (
-          <section className="space-y-3">
+          <section className="mt-4 flex flex-col gap-3">
             {error && <AttnLine>{error}</AttnLine>}
-            <Button type="button" onClick={() => void submit()} loading={busy} disabled={approveIds.length + rejectIds.length === 0}>
+            <Button
+              type="button"
+              size="lg"
+              className="w-full"
+              onClick={() => void submit()}
+              loading={busy}
+              disabled={approveIds.length + rejectIds.length === 0}
+            >
               {submitLabel}
             </Button>
-            <p className="text-[12.5px] text-muted-foreground">{t('expires', { date: formatDate(data.expires_at) })}</p>
+            <StandaloneSmall className="mt-0">{t('expires', { date: formatDate(data.expires_at) })}</StandaloneSmall>
           </section>
         )}
-      </div>
-    </main>
+    </StandalonePage>
   )
 }

@@ -27,15 +27,16 @@ function track(event: DiscordInviteEvent): void {
   }
 }
 
-// Empty space between the sidebar menu's last item and its bottom edge. The
+// Empty space between the sidebar menu's last row and the menu's bottom edge
+// (the area sidebar's scrolling menu, AreaSidebar's data-sidebar-menu). The
 // sidebar is display:none under md, so on a phone this measures zero and the
 // card stays hidden there.
 function freeSpaceBelowMenu(anchor: HTMLElement | null): number {
-  const nav = anchor?.closest('aside')?.querySelector('nav')
-  const last = nav?.lastElementChild
-  if (!nav || !last) return 0
-  const paddingBottom = Number.parseFloat(getComputedStyle(nav).paddingBottom) || 0
-  return nav.getBoundingClientRect().bottom - paddingBottom - last.getBoundingClientRect().bottom
+  const menu = anchor?.closest('aside')?.querySelector('[data-sidebar-menu]')
+  const last = menu?.lastElementChild
+  if (!menu || !last) return 0
+  const paddingBottom = Number.parseFloat(getComputedStyle(menu).paddingBottom) || 0
+  return menu.getBoundingClientRect().bottom - paddingBottom - last.getBoundingClientRect().bottom
 }
 
 /**
@@ -69,18 +70,18 @@ export function DiscordInviteCard() {
   }
 
   return (
-    <div ref={anchorRef} className="flex-shrink-0 px-3">
+    <div ref={anchorRef} className="flex-shrink-0 px-2.5">
       {visible && (
         <section
           aria-labelledby="discord-invite-title"
-          className="relative mb-2 rounded-lg border border-border bg-background p-3 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 ease-emphasized"
+          className="relative mb-2 rounded-lg bg-control p-3 shadow-raised animate-in fade-in-0 slide-in-from-bottom-1 duration-300 ease-emphasized"
         >
           {/* The close button sits in the corner over the padding, and the
               title keeps clear of it with pr-6, so the title fits one line
               at sidebar width. The Discord mark lives on the join button. */}
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon"
             aria-label={t('close')}
             onClick={() => finish('discord_invite_dismissed')}
             className="absolute right-1 top-1 text-muted-foreground"
@@ -90,8 +91,8 @@ export function DiscordInviteCard() {
           <p id="discord-invite-title" className="pr-6 text-[13px] font-medium text-foreground">
             {t('title')}
           </p>
-          <p className="mt-1 text-[12.5px] leading-[18px] text-muted-foreground">{t('body')}</p>
-          <Button asChild size="sm" className="mt-3 w-full gap-2">
+          <p className="mt-1 text-xs text-muted-foreground">{t('body')}</p>
+          <Button asChild className="mt-3 w-full gap-2">
             <a
               href={DISCORD_INVITE_URL}
               target="_blank"

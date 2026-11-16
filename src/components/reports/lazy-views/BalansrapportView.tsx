@@ -26,7 +26,7 @@ const COLUMNS = 6
 export default function BalansrapportView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const t = useTranslations('reports')
   const reportQs = reportQuery(periodId, dateRange)
-  const { data, loading, error } = useReportData<BalansrapportReport>(
+  const { data, loading, error, refetch } = useReportData<BalansrapportReport>(
     `/api/reports/balansrapport?${reportQs}`,
     'Kunde inte hämta balansrapport',
   )
@@ -37,7 +37,7 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data || data.groups.length === 0) {
@@ -67,11 +67,11 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
       </div>
 
       <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+        <CardContent>
+          <div className="overflow-x-auto print:overflow-visible">
+            <table className="w-full text-sm print:text-[11px] print:[&_td]:px-1.5 print:[&_th]:px-1.5">
               <thead>
-                <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr className="border-b text-xs text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
                   <th className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={t('balansrapport_col_year_ib_hint')}>
@@ -88,7 +88,7 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={COLUMNS} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+                      <td colSpan={COLUMNS} className="px-4 py-2 text-xs font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -117,7 +117,7 @@ export default function BalansrapportView({ periodId, dateRange, drilldown }: { 
       </Card>
 
       <Card>
-        <CardContent className="p-6 space-y-2">
+        <CardContent className="space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Summa tillgångar</span>
             <span className="tabular-nums">{formatAmount(data.total_assets_ub)} kr</span>
@@ -185,7 +185,7 @@ function BalansrapportSectionRows({
       </tr>
       {section.note && (
         <tr>
-          <td colSpan={COLUMNS} className="px-4 pb-1.5 text-[12.5px] text-muted-foreground">
+          <td colSpan={COLUMNS} className="px-4 pb-1.5 text-xs text-muted-foreground">
             {section.note}
           </td>
         </tr>

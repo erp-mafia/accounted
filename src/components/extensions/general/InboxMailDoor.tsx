@@ -39,7 +39,7 @@ export function InboxMailDoor({
   const connections = view.connections
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b-hairline">
       <div className="flex items-center gap-3 px-4 py-2">
         <GoogleMark className="h-3.5 w-3.5 shrink-0" />
         <span className="flex-1 truncate">Gmail</span>
@@ -48,7 +48,7 @@ export function InboxMailDoor({
         ) : (
           <>
             {hunt.hunting && !hunt.stopping ? (
-              <Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={hunt.stop}>
+              <Button type="button" variant="ghost" className="shrink-0" onClick={hunt.stop}>
                 {tMail('hunt_stop')}
               </Button>
             ) : null}
@@ -57,19 +57,18 @@ export function InboxMailDoor({
             <Button
               type="button"
               variant="outline"
-              size="sm"
               className="shrink-0"
               loading={hunt.hunting}
               disabled={active.length === 0 || !hasAi}
               onClick={() => void hunt.hunt()}
             >
-              {!hunt.hunting && <MagnifyingGlassIcon className="mr-1.5 h-3.5 w-3.5" />}
+              {!hunt.hunting && <MagnifyingGlassIcon className="h-3.5 w-3.5" />}
               {hunt.hunting ? tMail('hunt_running') : t('hunt_button')}
             </Button>
           </>
         )}
       </div>
-      <div className="space-y-1.5 px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground">
+      <div className="space-y-1.5 px-4 pb-2.5 pl-11 text-xs text-muted-foreground">
         {connections.length > 0 ? (
           <ul className="space-y-0.5">
             {connections.map((connection) => (
@@ -96,7 +95,7 @@ export function InboxMailDoor({
           </ul>
         ) : null}
         {connections.length > 0 ? <ReceiptHuntStatus hunt={hunt} blocked={!hasAi} /> : null}
-        <Link href={MAIL_SETTINGS_HREF} className={cn(QUIET_LINK_CLASS, 'block text-[11px]')}>
+        <Link href={MAIL_SETTINGS_HREF} className={cn(QUIET_LINK_CLASS, 'block text-xs')}>
           {connections.length > 0 ? t('source_gmail_manage') : t('source_gmail_connect')}
         </Link>
       </div>

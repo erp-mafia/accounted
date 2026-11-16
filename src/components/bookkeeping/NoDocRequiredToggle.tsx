@@ -184,10 +184,10 @@ export default function NoDocRequiredToggle({
           </Label>
           <div className="flex flex-wrap items-center gap-2">
             {reasonInput(() => void handleConfirm())}
-            <Button size="sm" onClick={() => void handleConfirm()} loading={saving}>
+            <Button onClick={() => void handleConfirm()} loading={saving}>
               {t('no_doc_required_save_reason')}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => void handleToggle(false)} disabled={saving}>
+            <Button variant="ghost" onClick={() => void handleToggle(false)} disabled={saving}>
               {t('no_doc_required_cancel')}
             </Button>
           </div>
@@ -199,7 +199,7 @@ export default function NoDocRequiredToggle({
           {editingReason ? (
             <div className="flex items-center gap-2">
               {reasonInput(() => void handleSaveReason())}
-              <Button size="sm" variant="outline" onClick={() => void handleSaveReason()} disabled={saving}>
+              <Button variant="outline" onClick={() => void handleSaveReason()} disabled={saving}>
                 {t('no_doc_required_save_reason')}
               </Button>
             </div>

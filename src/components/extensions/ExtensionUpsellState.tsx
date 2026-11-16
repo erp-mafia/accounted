@@ -1,7 +1,5 @@
 'use client'
 
-import Link from 'next/link'
-import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 
@@ -32,11 +30,11 @@ export function ExtensionUpsellState({
   ctaHref,
 }: ExtensionUpsellStateProps) {
   const Icon = iconName ? resolveIcon(iconName) : undefined
+  // /e/* is a full-bleed route (MainContainer adds no padding there), so the
+  // state brings the page's own gutter.
   return (
-    <EmptyState icon={Icon} title={title} description={description}>
-      <Link href={ctaHref}>
-        <Button>{ctaLabel}</Button>
-      </Link>
-    </EmptyState>
+    <div className="px-4 pb-8 pt-4 md:px-6">
+      <EmptyState icon={Icon} title={title} description={description} actionLabel={ctaLabel} actionHref={ctaHref} />
+    </div>
   )
 }

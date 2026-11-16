@@ -80,7 +80,6 @@ export function AutomaticRemindersControl({
       )}
       {canManage && (state.on || state.eligible) && (
         <Button
-          size="sm"
           variant={state.on ? 'outline' : 'default'}
           loading={busy}
           onClick={() => (state.on ? void change(false) : setConfirmOn(true))}

@@ -114,7 +114,7 @@ export function EditorPreviewPane({
             {visible && (
               // The way out when the browser shows no PDF: a link here, never
               // fallback content inside the <object> (see below).
-              <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="icon-toolbar" className="text-muted-foreground">
                 <a href={visible} target="_blank" rel="noreferrer" aria-label={t('preview_open')} title={t('preview_open')}>
                   <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 </a>
@@ -124,7 +124,7 @@ export function EditorPreviewPane({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-8 items-center gap-1 rounded-md px-3 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {zoom === 'page' ? t('zoom_page') : t('zoom_width')}
                   <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -195,7 +195,7 @@ export function EditorPreviewPane({
                     onLoad={() => setShown(url)}
                     className={cn(
                       PDF_BOX[zoomOf(url)],
-                      'rounded-lg border border-border bg-background',
+                      'rounded-lg bg-control shadow-raised',
                       !isShown && 'pointer-events-none opacity-0',
                     )}
                   />

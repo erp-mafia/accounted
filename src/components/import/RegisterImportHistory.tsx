@@ -1,12 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import {
   Dialog,
@@ -24,6 +26,7 @@ import type {
   RegisterUndoResult,
 } from '@/lib/import/register-runs'
 import { cn, formatDateTime } from '@/lib/utils'
+import { useImportHistoryRows, ImportHistorySkeleton } from './import-history-parts'
 
 const KIND_LABEL_KEY: Record<RegisterKind, string> = {
   customers: 'register_history_kind_customers',
@@ -69,31 +72,14 @@ const REFERRER_LABEL_KEY: Record<string, string> = {
  */
 export default function RegisterImportHistory() {
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  const { canWrite, lockedTitle } = useViewerLock()
   const locale = useLocale()
   const { toast } = useToast()
-  const [rows, setRows] = useState<RegisterImportRunListRow[] | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const { rows, loadFailed, reload: fetchRuns } = useImportHistoryRows<RegisterImportRunListRow>('/api/import/registers')
   const [pendingUndo, setPendingUndo] = useState<RegisterImportRunListRow | null>(null)
   const [keptView, setKeptView] = useState<RegisterUndoKeptRow[] | null>(null)
 
-  const fetchRuns = useCallback(async () => {
-    try {
-      const res = await fetch('/api/import/registers')
-      if (!res.ok) {
-        setLoadFailed(true)
-        return
-      }
-      const data = await res.json()
-      setRows(Array.isArray(data.data) ? data.data : [])
-      setLoadFailed(false)
-    } catch {
-      setLoadFailed(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchRuns()
-  }, [fetchRuns])
 
   const handleUndoConfirm = useCallback(async () => {
     if (!pendingUndo) return
@@ -181,22 +167,12 @@ export default function RegisterImportHistory() {
     )
   }
 
-  if (loadFailed) {
-    return (
-      <p className="px-1 text-xs leading-5 text-muted-foreground">
-        {t('register_history_load_error')}
-      </p>
-    )
+  if (loadFailed && rows === null) {
+    return <LoadError title={t('register_history_load_error')} onRetry={() => void fetchRuns()} />
   }
 
   if (rows === null) {
-    return (
-      <div className="space-y-2" role="status">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
-    )
+    return <ImportHistorySkeleton />
   }
 
   if (rows.length === 0) {
@@ -209,7 +185,12 @@ export default function RegisterImportHistory() {
 
   return (
     <div>
-      <div className="overflow-x-auto">
+      {loadFailed && (
+        <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void fetchRuns() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -237,11 +218,12 @@ export default function RegisterImportHistory() {
                   {!row.undone_at && (
                     <Button
                       variant="outline"
-                      size="sm"
                       className="text-destructive hover:text-destructive"
                       onClick={() => setPendingUndo(row)}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                     >
-                      <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+                      <ArrowUturnLeftIcon className="h-4 w-4" />
                       {t('register_history_undo_button')}
                     </Button>
                   )}
@@ -269,7 +251,7 @@ export default function RegisterImportHistory() {
           if (!open) setKeptView(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('register_history_kept_title')}</DialogTitle>
             <DialogDescription>{t('register_history_kept_description')}</DialogDescription>

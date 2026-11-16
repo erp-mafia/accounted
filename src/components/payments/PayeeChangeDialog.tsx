@@ -6,7 +6,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -38,6 +39,8 @@ export function PayeeChangeDialog({ supplierInvoiceId, initial = null, onOpenCha
   const { toast } = useToast()
   const [view, setView] = useState<InvoicePayeeView | null>(initial)
   const [loadFailed, setLoadFailed] = useState(false)
+  // "Försök igen" after a failed read bumps it.
+  const [retryKey, setRetryKey] = useState(0)
   const [lookup, setLookup] = useState<CreditorLookupResult | null>(null)
   const [updateCard, setUpdateCard] = useState(true)
   const [note, setNote] = useState('')
@@ -48,7 +51,9 @@ export function PayeeChangeDialog({ supplierInvoiceId, initial = null, onOpenCha
     let cancelled = false
     fetchInvoicePayee(supplierInvoiceId)
       .then((next) => {
-        if (!cancelled) setView(next)
+        if (cancelled) return
+        setView(next)
+        setLoadFailed(false)
       })
       .catch(() => {
         if (!cancelled) setLoadFailed(true)
@@ -56,7 +61,7 @@ export function PayeeChangeDialog({ supplierInvoiceId, initial = null, onOpenCha
     return () => {
       cancelled = true
     }
-  }, [initial, supplierInvoiceId])
+  }, [initial, supplierInvoiceId, retryKey])
 
   // The name Bankgirot has registered for the new giro: advice, never a gate,
   // and nothing at all while the lookup is switched off.
@@ -108,12 +113,17 @@ export function PayeeChangeDialog({ supplierInvoiceId, initial = null, onOpenCha
         </DialogHeader>
         {!view ? (
           loadFailed ? (
-            <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
+            <LoadError
+              onRetry={() => {
+                setLoadFailed(false)
+                setRetryKey((key) => key + 1)
+              }}
+            />
           ) : (
-            <div className="space-y-2">
+            <LateReveal className="space-y-2">
               <Skeleton className="h-5 w-2/3" />
               <Skeleton className="h-5 w-1/2" />
-            </div>
+            </LateReveal>
           )
         ) : (
           <div className="space-y-4 text-[13px]">
@@ -133,13 +143,13 @@ export function PayeeChangeDialog({ supplierInvoiceId, initial = null, onOpenCha
               <AttnLine>{t('registered_name_differs', { name: registeredName, supplier: view.supplier_name })}</AttnLine>
             )}
             {view.decision === 'rejected' && <p className="text-muted-foreground">{t('rejected_before')}</p>}
-            <p className="text-[12.5px] text-muted-foreground">{t('check_advice')}</p>
+            <p className="text-xs text-muted-foreground">{t('check_advice')}</p>
             <label className="flex items-start gap-3">
               <Checkbox checked={updateCard} onCheckedChange={(checked) => setUpdateCard(checked === true)} className="mt-0.5" />
               <span>{t('update_card')}</span>
             </label>
             <div className="space-y-1">
-              <label htmlFor="payee-change-note" className="text-[12.5px] text-muted-foreground">
+              <label htmlFor="payee-change-note" className="text-xs text-muted-foreground">
                 {t('note_label')}
               </label>
               <Input id="payee-change-note" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder={t('note_placeholder')} />

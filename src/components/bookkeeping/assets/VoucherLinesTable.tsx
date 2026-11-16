@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button'
 import { DialogFooter } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 
 export interface PreviewVoucherLine {
   account_number: string
@@ -30,8 +30,8 @@ export function VoucherLinesTable({ lines, t }: { lines: readonly PreviewVoucher
         {lines.map((line, index) => (
           <TableRow key={`${line.account_number}-${index}`}>
             <TableCell className="tabular-nums">{line.account_number}</TableCell>
-            <TableCell className="text-right tabular-nums">{line.debit ? formatCurrency(line.debit) : ''}</TableCell>
-            <TableCell className="text-right tabular-nums">{line.credit ? formatCurrency(line.credit) : ''}</TableCell>
+            <TableCell className="text-right tabular-nums">{line.debit ? formatRowAmount(line.debit) : ''}</TableCell>
+            <TableCell className="text-right tabular-nums">{line.credit ? formatRowAmount(line.credit) : ''}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -42,7 +42,7 @@ export function VoucherLinesTable({ lines, t }: { lines: readonly PreviewVoucher
 /** A voucher dialog's error line. */
 export function VoucherDialogError({ error }: { error: string | null }) {
   if (!error) return null
-  return <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>
+  return <div className="bg-destructive/8 rounded-lg p-3 text-sm text-destructive">{error}</div>
 }
 
 /**

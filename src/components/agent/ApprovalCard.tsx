@@ -12,6 +12,7 @@ import {
   XMarkIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -106,6 +107,8 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  // Approving and rejecting are ledger writes: locked for a read-only member.
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('pending')
   // Chart names for the preview lines (same source as /pending).
   const accountNames = useAccountNamesSource()
@@ -294,7 +297,7 @@ export default function ApprovalCard({
     // screen readers but don't render it.
     return (
       <div
-        className="rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm"
+        className="bg-success/9 rounded-lg px-4 py-3 text-sm"
         aria-description={message}
       >
         <div className="flex items-center gap-2 font-medium">
@@ -322,13 +325,13 @@ export default function ApprovalCard({
   if (state === 'rejected') {
     return (
       <div
-        className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+        className="rounded-lg px-4 py-3 text-sm text-muted-foreground bg-control shadow-raised"
         aria-description={message}
       >
         <div className="flex items-center gap-2">
           <XMarkIcon className="h-4 w-4" /> Avslaget
           {rejectCategory && (
-            <span className="text-xs text-muted-foreground/80">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
+            <span className="text-xs text-muted-foreground">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
           )}
         </div>
       </div>
@@ -353,14 +356,14 @@ export default function ApprovalCard({
       )}
     >
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Förslag · risk {translateRisk(riskLevel)}
         </p>
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>
 
       {preview != null && typeof preview === 'object' && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <AccountNamesContext.Provider value={accountNames}>
             <OperationPreview
               op={{
@@ -384,7 +387,7 @@ export default function ApprovalCard({
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={isBusy}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full rounded-lg px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
             autoComplete="off"
             aria-label="Bekräfta med ordet godkänn"
           />
@@ -394,7 +397,7 @@ export default function ApprovalCard({
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
       {showRejectForm ? (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs font-medium">Vad är fel?</p>
           <Select
             value={rejectCategory}
@@ -423,11 +426,11 @@ export default function ApprovalCard({
             aria-label="Notering"
           />
           {hasAi ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Med en anledning eller notering föreslår assistenten en korrigerad bokning direkt.
             </p>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Din anledning sparas på förslaget. Vill du att assistenten automatiskt
               föreslår en korrigerad bokning?{' '}
               <Link href="/settings/billing" className="font-medium text-foreground hover:underline">
@@ -439,9 +442,9 @@ export default function ApprovalCard({
           <div className="flex gap-2">
             <Button
               variant="destructive"
-              size="sm"
               onClick={handleReject}
-              disabled={isBusy || !rejectCategory}
+              disabled={!canWrite || isBusy || !rejectCategory}
+              title={lockedTitle}
               loading={state === 'rejecting'}
               className="flex-1"
             >
@@ -449,7 +452,6 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setShowRejectForm(false)}
               disabled={isBusy}
               className="flex-1"
@@ -459,16 +461,16 @@ export default function ApprovalCard({
           </div>
         </div>
       ) : accountsToActivate ? (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs leading-5">
             Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
             <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
           </p>
           <div className="flex gap-2">
             <Button
-              size="sm"
               onClick={handleActivateAndCommit}
-              disabled={isBusy}
+              disabled={!canWrite || isBusy}
+              title={lockedTitle}
               loading={state === 'committing'}
               className="flex-1"
             >
@@ -476,7 +478,6 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setAccountsToActivate(null)}
               disabled={isBusy}
               className="flex-1"
@@ -489,9 +490,9 @@ export default function ApprovalCard({
         <>
           <div className="flex gap-2">
             <Button
-              size="sm"
               onClick={handleCommit}
-              disabled={isBusy || !canCommit}
+              disabled={!canWrite || isBusy || !canCommit}
+              title={lockedTitle}
               loading={state === 'committing'}
               className="flex-1"
             >
@@ -499,9 +500,9 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setShowRejectForm(true)}
-              disabled={isBusy}
+              disabled={!canWrite || isBusy}
+              title={lockedTitle}
               className="flex-1"
             >
               Avslå
@@ -509,7 +510,7 @@ export default function ApprovalCard({
           </div>
           {/* Keep in sync with EXPIRY_DAYS in
               app/api/pending-operations/expire/cron/route.ts. */}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Om du inte gör något utgår förslaget automatiskt efter 30 dagar, inget bokförs.
           </p>
         </>
@@ -521,21 +522,21 @@ export default function ApprovalCard({
 function PeriodBadge({ status }: { status: PeriodStatus }) {
   if (status.status === 'open') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-success">
+      <span className="inline-flex items-center gap-1 text-xs text-success">
         <ShieldCheckIcon className="h-3 w-3" /> Period öppen
       </span>
     )
   }
   if (status.status === 'locked') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-warning">
+      <span className="inline-flex items-center gap-1 text-xs text-warning">
         <LockClosedIcon className="h-3 w-3" /> Period låst
         {status.lock_date ? <span className="tabular-nums">· {status.lock_date}</span> : null}
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-destructive">
+    <span className="inline-flex items-center gap-1 text-xs text-destructive">
       <LockClosedIcon className="h-3 w-3" /> Period stängd
     </span>
   )

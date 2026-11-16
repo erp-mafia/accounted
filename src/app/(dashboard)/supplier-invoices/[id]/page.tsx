@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { FocusDocumentPreview, useDocumentMeta } from '@/components/inkorg/FocusDocumentPreview'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
@@ -32,7 +33,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { isCreditableSupplierInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 import { supplierCreditBooksOriginalFirst } from '@/lib/bookkeeping/booking-mode'
-import { formatDate, cn } from '@/lib/utils'
+import { formatDate, cn, formatRowAmount } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -79,6 +80,11 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordHeader } from '@/components/ui/record-header'
+import { PageHeaderOverflowItems } from '@/components/ui/page-header-actions'
 import type { BASAccount, EntityType } from '@/types'
 
 // A line is periodiserad when both period dates are set: the cost was parked
@@ -125,7 +131,7 @@ function InlineAccountCell({
     <>
       <button
         type="button"
-        className="-mx-1 rounded-full px-1 transition-colors duration-150 hover:bg-secondary/60"
+        className="-mx-1 rounded-md px-1 transition-colors duration-150 hover:bg-secondary/60"
         aria-label={label}
         onClick={(e) => {
           setManual('')
@@ -147,12 +153,35 @@ function InlineAccountCell({
           </div>
           {/* Any account in the company's own chart, by number or name: the
               template search covers the common ones, this covers the rest. */}
-          <div className="border-t border-border bg-background px-3 py-2">
+          <div className="border-t-hairline bg-background px-3 py-2">
             <AccountCombobox value={manual} accounts={accounts} onChange={setManual} onCommit={pick} />
           </div>
         </CategoryPopover>
       )}
     </>
+  )
+}
+
+/**
+ * The supplier's document in the page, as the file itself (V7 Inköp: an
+ * external document is shown, never redrawn), with the way to open it in
+ * full size under it. The same preview the inbox uses.
+ */
+function SupplierInvoiceDocument({ documentId, openLabel }: { documentId: string; openLabel: string }) {
+  const [generation, setGeneration] = useState(0)
+  const { meta, state } = useDocumentMeta(documentId, generation)
+  return (
+    <div className="overflow-hidden rounded-lg bg-control shadow-raised">
+      <FocusDocumentPreview
+        meta={meta}
+        state={state}
+        onRetry={() => setGeneration((n) => n + 1)}
+        className="h-[70vh] min-h-[420px]"
+      />
+      <div className="flex items-center justify-end border-t-hairline px-3 py-2">
+        <DocumentViewButton documentId={documentId} label={openLabel} />
+      </div>
+    </div>
   )
 }
 
@@ -185,6 +214,12 @@ export default function SupplierInvoiceDetailPage() {
   const tList = useTranslations('supplier_invoices')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // What the last read left: nothing wrong, the invoice is gone, or the read
+  // failed. A failure with this invoice not on screen says so in place of it;
+  // the invoice already on screen stays, with one line above it.
+  const [loadError, setLoadError] = useState<{ kind: 'not_found' } | { kind: 'failed'; description: string } | null>(
+    null,
+  )
   // The rows' periodisering schedules, for "Ändra periodisering".
   const accrualSchedules = useInvoiceAccrualSchedules(
     { supplierInvoiceId: invoiceIdParam },
@@ -251,21 +286,21 @@ export default function SupplierInvoiceDetailPage() {
       // envelope object, and rendering an object as a toast description throws
       // out of the root layout into global-error.
       if (!res.ok || body?.error || !body?.data) {
-        toast({
-          title: t('load_failed_title'),
-          description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }),
-          variant: 'destructive',
-        })
+        setLoadError(
+          res.status === 404
+            ? { kind: 'not_found' }
+            : {
+                kind: 'failed',
+                description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }),
+              },
+        )
       } else {
         setInvoice(body.data)
+        setLoadError(null)
       }
     } catch (err) {
       if (seq !== fetchSeqRef.current) return
-      toast({
-        title: t('load_failed_title'),
-        description: getErrorMessage(err, { context: 'supplier_invoice' }),
-        variant: 'destructive',
-      })
+      setLoadError({ kind: 'failed', description: getErrorMessage(err, { context: 'supplier_invoice' }) })
     } finally {
       // A stale request must not stop the newest one's skeleton early: only
       // the request that still owns the page resolves the loading state.
@@ -548,13 +583,21 @@ export default function SupplierInvoiceDetailPage() {
     return <DetailPageSkeleton cards={3} />
   }
 
-  if (!invoice) {
+  // A pager step that failed leaves the previous invoice in state: never show
+  // it under this id.
+  if (!invoice || (loadError && invoice.id !== params.id)) {
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground">{t('not_found')}</p>
-        <Button variant="outline" className="mt-4" onClick={() => router.push('/supplier-invoices')}>
-          {t('back')}
-        </Button>
+      <div className="space-y-8">
+        <PageHeader title={tList('title')} />
+        {loadError?.kind === 'failed' ? (
+          <LoadError
+            title={t('load_failed_title')}
+            description={loadError.description}
+            onRetry={() => void fetchInvoice()}
+          />
+        ) : (
+          <EmptyState title={t('not_found')} actionLabel={t('back')} actionHref="/supplier-invoices" />
+        )}
       </div>
     )
   }
@@ -632,19 +675,6 @@ export default function SupplierInvoiceDetailPage() {
   // The list row's marker, from the same derivation: a payment instruction
   // already covers the invoice. It links to where that payment is followed.
   const openPayment = openPaymentMarker({ ...invoice, open_payment: lifecycle ?? null })
-
-  const metaParts = [
-    invoice.supplier?.name ?? null,
-    docNumber ? t('arrival_header', { number: invoice.arrival_number }) : null,
-    t('created_at', { date: formatDate(invoice.created_at) }),
-    invoice.is_self_billed && invoice.self_billing_agreement_ref
-      ? t('self_billing_agreement_meta', { agreement: invoice.self_billing_agreement_ref })
-      : null,
-    // The mellanlage (#2220) reads as a dated fact here, next to the bock.
-    invoice.bank_entered_at
-      ? t('bank_entered_meta', { date: formatDate(invoice.bank_entered_at) })
-      : null,
-  ].filter(Boolean)
 
   // Attest keys off approved_at, not the status: the overdue cron flips
   // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
@@ -773,37 +803,40 @@ export default function SupplierInvoiceDetailPage() {
       />
     ) : null
 
+  const statusChips = (
+    <>
+      {status.exception ? (
+        <Badge variant={status.variant}>{status.label}</Badge>
+      ) : (
+        <span className="text-sm text-muted-foreground">{status.label}</span>
+      )}
+      {items.some(itemHasAccrual) && (
+        <Badge variant="outline" className="gap-1">
+          <CalendarDaysIcon className="h-3 w-3" />
+          {t('badge_accrued')}
+        </Badge>
+      )}
+      {invoice.is_self_billed && <Badge variant="outline">{t('badge_self_billed')}</Badge>}
+    </>
+  )
+
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu.
           The sidebar says where we are, so there is no back link; the
           prev/next pager sits in the bar. */}
-      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* data-ph-mask: the title carries the supplier's invoice number */}
-            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
-            <HelpPopover>
-              {companyAttestsSupplierInvoices(companySettings?.accounting_method) ? t('help_body') : t('help_body_cash')}
-            </HelpPopover>
-            {status.exception ? (
-              <Badge variant={status.variant}>{status.label}</Badge>
-            ) : (
-              <span className="text-sm text-muted-foreground">{status.label}</span>
-            )}
-            {items.some(itemHasAccrual) && (
-              <Badge variant="outline" className="gap-1">
-                <CalendarDaysIcon className="h-3 w-3" />
-                {t('badge_accrued')}
-              </Badge>
-            )}
-            {invoice.is_self_billed && <Badge variant="outline">{t('badge_self_billed')}</Badge>}
-          </div>
-          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+      <RecordHeader
+        parent={{ label: tList('title'), href: '/supplier-invoices' }}
+        title={title}
+        mask
+        help={
+          <HelpPopover>
+            {companyAttestsSupplierInvoices(companySettings?.accounting_method) ? t('help_body') : t('help_body_cash')}
+          </HelpPopover>
+        }
+        status={statusChips}
+        actions={<>
           <DetailPager
             contextKey={listContextKey('supplier-invoices', company?.id)}
             basePath="/supplier-invoices"
@@ -816,7 +849,7 @@ export default function SupplierInvoiceDetailPage() {
           )}
           {/* A självfaktura is our document: rendered from the frozen parties (crm#1367). */}
           {invoice.is_self_billed && (
-            <Button size="sm" variant="outline" asChild>
+            <Button size="toolbar" variant="outline" asChild>
               <a href={`/api/supplier-invoices/${invoice.id}/self-billing-pdf?disposition=inline`} target="_blank" rel="noreferrer">
                 <DocumentTextIcon className="mr-2 h-4 w-4" />
                 {t('download_self_billing')}
@@ -824,16 +857,16 @@ export default function SupplierInvoiceDetailPage() {
             </Button>
           )}
           {canApprove && (
-            <Button size="sm"
+            <Button size="toolbar"
               onClick={handleApprove}
               disabled={isProcessing || !mayAttest}
               loading={processingAction === 'approve'}
               title={!mayAttest ? t('viewer_disabled_tooltip') : undefined}
             >
               {processingAction === 'approve' ? null : mayAttest ? (
-                <CheckCircleIcon className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="h-4 w-4" />
               ) : (
-                <LockClosedIcon className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="h-4 w-4" />
               )}
               {t('approve')}
             </Button>
@@ -853,18 +886,18 @@ export default function SupplierInvoiceDetailPage() {
             />
           ) : singlePayOption ? (
             <Button
-              size="sm"
+              size="toolbar"
               variant={payVariant}
               onClick={singlePayOption.onSelect}
               disabled={singlePayOption.disabled}
               title={singlePayOption.disabledTitle}
             >
-              {singlePayOption.icon && <singlePayOption.icon className="mr-2 h-4 w-4" />}
+              {singlePayOption.icon && <singlePayOption.icon className="h-4 w-4" />}
               {singlePayOption.label}
             </Button>
           ) : null}
           {canUncredit && (
-            <Button size="sm"
+            <Button size="toolbar"
               variant="outline"
               onClick={handleUncredit}
               disabled={isProcessing || !canWrite}
@@ -872,9 +905,9 @@ export default function SupplierInvoiceDetailPage() {
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {processingAction === 'uncredit' ? null : canWrite ? (
-                <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+                <ArrowUturnLeftIcon className="h-4 w-4" />
               ) : (
-                <LockClosedIcon className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="h-4 w-4" />
               )}
               {t('uncredit_button')}
             </Button>
@@ -885,8 +918,9 @@ export default function SupplierInvoiceDetailPage() {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon-toolbar"
                   aria-label={tCommon('more_options')}
+                  data-topbar-overflow-host=""
                   loading={processingAction === 'credit' || processingAction === 'delete'}
                 >
                   {processingAction !== 'credit' && processingAction !== 'delete' && (
@@ -895,6 +929,8 @@ export default function SupplierInvoiceDetailPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {/* On a phone the bar's other actions are listed here first. */}
+                <PageHeaderOverflowItems />
                 {canCredit && (
                   <DropdownMenuItem onSelect={() => void handleCredit()} disabled={isProcessing || !canWrite}>
                     <DocumentTextIcon className="h-4 w-4" />
@@ -917,8 +953,14 @@ export default function SupplierInvoiceDetailPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </div>
-      </div>
+        </>}
+      />
+
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchInvoice() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
 
       {lifecycle && (
         <StageSteps
@@ -999,245 +1041,257 @@ export default function SupplierInvoiceDetailPage() {
         )}
       </div>
 
-      {/* Invoice lines: the list-page table idiom straight on the panel, with
-          the totals as a right-aligned block and the total in the serif. */}
-      <DetailSection kicker={t('rows_title')}>
-        {/* overflow-x-auto: from md the eight columns can outgrow the panel (768 px
-            with the sidebar leaves ~480 px); the row scrolls instead of the page. */}
-        <div className="hidden overflow-x-auto md:block">
-          <table className="w-full border-collapse text-[13px]">
-            <thead>
-              <tr>
-                <th className={cn(TH_CLASS, 'pl-0')}>{t('col_description')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('col_quantity')}</th>
-                <th className={TH_CLASS}>{t('col_unit')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('col_unit_price')}</th>
-                <th className={TH_CLASS}>{t('col_account')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('col_vat_rate')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
-                <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_vat')}</th>
-              </tr>
-            </thead>
-            <tbody>
+      {/* The document and its lines on the left, the facts about payment and
+          booking in a capped column on the right (V7 Inköp: label-value rows
+          do not stretch across the panel). One column below xl. */}
+      <div className="grid gap-x-12 gap-y-8 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0 space-y-8">
+          {/* The supplier's own document, shown as the file itself. */}
+          {invoice.document_id && (
+            <SupplierInvoiceDocument documentId={invoice.document_id} openLabel={t('view_document')} />
+          )}
+
+          {/* Invoice lines: the list-page table idiom straight on the panel, with
+              the totals as a right-aligned block and the total in the serif. */}
+          <DetailSection kicker={t('rows_title')}>
+            {/* overflow-x-auto: from md the eight columns can outgrow the panel (768 px
+                with the sidebar leaves ~480 px); the row scrolls instead of the page. */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={cn(TH_CLASS, 'pl-0')}>{t('col_description')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('col_quantity')}</th>
+                    <th className={TH_CLASS}>{t('col_unit')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('col_unit_price')}</th>
+                    <th className={TH_CLASS}>{t('col_account')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('col_vat_rate')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
+                    <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_vat')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id}>
+                      <td className={cn(TD_CLASS, 'pl-0')}>
+                        {item.description}
+                        {accrualInfo(item)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
+                      <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                        {formatRowAmount(item.unit_price, invoice.currency)}
+                      </td>
+                      <td className={TD_CLASS}>
+                        <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                      </td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                        {formatRowAmount(item.line_total, invoice.currency)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
+                        {formatRowAmount(item.vat_amount, invoice.currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Narrow screens: one flat row per line, no numeric columns to cram. */}
+            <div className="divide-y divide-border text-sm md:hidden">
               {items.map((item) => (
-                <tr key={item.id}>
-                  <td className={cn(TD_CLASS, 'pl-0')}>
-                    {item.description}
+                <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+                  <div className="min-w-0">
+                    <p>{item.description}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
+                    </p>
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      <AccountNumber number={item.account_number} />
+                      {' · '}{t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}
+                      {' · '}{t('vat_amount_inline', { amount: formatCurrency(item.vat_amount, invoice.currency) })}
+                    </p>
                     {accrualInfo(item)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
-                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                    {formatCurrency(item.unit_price, invoice.currency)}
-                  </td>
-                  <td className={TD_CLASS}>
-                    <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                  </div>
+                  <span className="shrink-0 tabular-nums">
                     {formatCurrency(item.line_total, invoice.currency)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                    {formatCurrency(item.vat_amount, invoice.currency)}
-                  </td>
-                </tr>
+                  </span>
+                </div>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </div>
 
-        {/* Narrow screens: one flat row per line, no numeric columns to cram. */}
-        <div className="divide-y divide-border text-sm md:hidden">
-          {items.map((item) => (
-            <div key={item.id} className="flex items-start justify-between gap-4 py-3">
-              <div className="min-w-0">
-                <p>{item.description}</p>
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
-                </p>
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  <AccountNumber number={item.account_number} />
-                  {' · '}{t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}
-                  {' · '}{t('vat_amount_inline', { amount: formatCurrency(item.vat_amount, invoice.currency) })}
-                </p>
-                {accrualInfo(item)}
+            <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground">{t('net_excl_vat')}</span>
+                <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
               </div>
-              <span className="shrink-0 tabular-nums">
-                {formatCurrency(item.line_total, invoice.currency)}
-              </span>
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground">{t('vat_label')}</span>
+                <span>{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
+              </div>
+              {rounding.applies && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{t('ore_rounding')}</span>
+                  <span>{formatCurrency(rounding.roundingDelta, invoice.currency)}</span>
+                </div>
+              )}
+              <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2">
+                <span>{t('total_label')}</span>
+                <span className="font-display text-xl">{formatCurrency(rounding.displayed, invoice.currency)}</span>
+              </div>
             </div>
-          ))}
-        </div>
+          </DetailSection>
 
-        <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-            <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
-          </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-muted-foreground">{t('vat_label')}</span>
-            <span>{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
-          </div>
-          {rounding.applies && (
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{t('ore_rounding')}</span>
-              <span>{formatCurrency(rounding.roundingDelta, invoice.currency)}</span>
-            </div>
+          {invoice.notes && (
+            <DetailSection kicker={t('notes_title')}>
+              <p className="py-2 text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
+            </DetailSection>
           )}
-          <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
-            <span>{t('total_label')}</span>
-            <span className="font-display text-xl">{formatCurrency(rounding.displayed, invoice.currency)}</span>
-          </div>
         </div>
-      </DetailSection>
-
-      {/* Payment: paid / remaining always, plus the payment events once any
-          exist, so a partly paid invoice exposes what is still open. */}
-      <DetailSection kicker={t('payment_section')}>
-        {lifecycle?.batch && (
-          <DefRow label={t('payment_file_label')}>
-            <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
-              {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
-            </Link>
-          </DefRow>
-        )}
-        {/* An open bank payment, linked to where it is followed (the header
-            chip that used to carry the link repeated the strip). */}
-        {lifecycle?.payment_order && (
-          <DefRow label={t('bank_payment_label')}>
-            <Link href="/payments" className="hover:underline underline-offset-4">
-              {t('bank_payment_created', { date: formatDate(lifecycle.payment_order.created_at) })}
-            </Link>
-          </DefRow>
-        )}
-        {(canSetAutoDebit || (invoice.auto_debit && !invoice.is_credit_note)) && (
-          <DefRow label={t('payment_method_label')}>
-            {canSetAutoDebit ? (
-              <label className={cn('inline-flex select-none items-center gap-2', !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'auto_debit' && 'opacity-50')}>
-                <Checkbox
-                  checked={!!invoice.auto_debit}
-                  disabled={isProcessing}
-                  onCheckedChange={(value) => void handleAutoDebit(value === true)}
-                  aria-label={t('auto_debit_aria')}
-                />
-                <span className="text-muted-foreground">
-                  {invoice.auto_debit ? t('auto_debit_on', { date: formatDate(invoice.due_date) }) : t('auto_debit_hint')}
-                </span>
-              </label>
-            ) : (
-              <span className="text-muted-foreground">{t('auto_debit_on', { date: formatDate(invoice.due_date) })}</span>
+        <div className="min-w-0 space-y-8">
+          {/* Payment: paid / remaining always, plus the payment events once any
+              exist, so a partly paid invoice exposes what is still open. */}
+          <DetailSection kicker={t('payment_section')}>
+            {lifecycle?.batch && (
+              <DefRow label={t('payment_file_label')}>
+                <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
+                  {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
+                </Link>
+              </DefRow>
             )}
-          </DefRow>
-        )}
-        {/* The bock (#2220): "I have entered this payment in the bank". A
-            labelled checkbox rather than a button, because it is a fact the
-            user records, not an action that posts anything. */}
-        {showBankEntered && !lifecycle?.batch && (!lifecycle?.payment_order || !!invoice.bank_entered_at) && (
-          <DefRow label={t('bank_entered_label')}>
-            <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
-              <Checkbox
-                checked={!!invoice.bank_entered_at}
-                disabled={isProcessing || !canWrite}
-                onCheckedChange={(value) => void handleBankEntered(value === true)}
-                aria-label={t('bank_entered_aria')}
-              />
-              <span className="text-muted-foreground">
-                {invoice.bank_entered_at ? formatDate(invoice.bank_entered_at) : t('bank_entered_hint')}
-              </span>
-            </label>
-          </DefRow>
-        )}
-        <DefRow label={t('paid_label')}>
-          <span className="tabular-nums">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
-        </DefRow>
-        <DefRow label={t('remaining_label')}>
-          <span className={cn('tabular-nums', invoice.status === 'partially_paid' && 'text-attn')}>
-            {formatCurrency(invoice.remaining_amount, invoice.currency)}
-          </span>
-        </DefRow>
-        {payments.length > 0 && (
-          <DefRow label={t('payment_history_title')} className="items-baseline">
-            <ul className="divide-y divide-border">
-              {payments.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
-                  <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
-                  <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
-                  {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
-                  {p.journal_entry_id && (
-                    <Link
-                      href={`/bookkeeping/${p.journal_entry_id}`}
-                      className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {t('view_voucher')}
-                    </Link>
-                  )}
-                  {/* Only on a plain link to an existing verifikat (the
-                      server marks the row); a booked payment is undone by a
-                      storno of its verifikat instead. */}
-                  {p.can_unlink_voucher && canWrite && (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
-                      onClick={() => void handleUnlinkVoucher(p)}
+            {/* An open bank payment, linked to where it is followed (the header
+                chip that used to carry the link repeated the strip). */}
+            {lifecycle?.payment_order && (
+              <DefRow label={t('bank_payment_label')}>
+                <Link href="/payments" className="hover:underline underline-offset-4">
+                  {t('bank_payment_created', { date: formatDate(lifecycle.payment_order.created_at) })}
+                </Link>
+              </DefRow>
+            )}
+            {(canSetAutoDebit || (invoice.auto_debit && !invoice.is_credit_note)) && (
+              <DefRow label={t('payment_method_label')}>
+                {canSetAutoDebit ? (
+                  <label className={cn('inline-flex select-none items-center gap-2', !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'auto_debit' && 'opacity-50')}>
+                    <Checkbox
+                      checked={!!invoice.auto_debit}
                       disabled={isProcessing}
-                    >
-                      {t('unlink_voucher_action')}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </DefRow>
-        )}
-      </DetailSection>
+                      onCheckedChange={(value) => void handleAutoDebit(value === true)}
+                      aria-label={t('auto_debit_aria')}
+                    />
+                    <span className="text-muted-foreground">
+                      {invoice.auto_debit ? t('auto_debit_on', { date: formatDate(invoice.due_date) }) : t('auto_debit_hint')}
+                    </span>
+                  </label>
+                ) : (
+                  <span className="text-muted-foreground">{t('auto_debit_on', { date: formatDate(invoice.due_date) })}</span>
+                )}
+              </DefRow>
+            )}
+            {/* The bock (#2220): "I have entered this payment in the bank". A
+                labelled checkbox rather than a button, because it is a fact the
+                user records, not an action that posts anything. */}
+            {showBankEntered && !lifecycle?.batch && (!lifecycle?.payment_order || !!invoice.bank_entered_at) && (
+              <DefRow label={t('bank_entered_label')}>
+                <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
+                  <Checkbox
+                    checked={!!invoice.bank_entered_at}
+                    disabled={isProcessing || !canWrite}
+                    onCheckedChange={(value) => void handleBankEntered(value === true)}
+                    aria-label={t('bank_entered_aria')}
+                  />
+                  <span className="text-muted-foreground">
+                    {invoice.bank_entered_at ? formatDate(invoice.bank_entered_at) : t('bank_entered_hint')}
+                  </span>
+                </label>
+              </DefRow>
+            )}
+            <DefRow label={t('paid_label')}>
+              <span className="tabular-nums">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
+            </DefRow>
+            <DefRow label={t('remaining_label')}>
+              <span className={cn('tabular-nums', invoice.status === 'partially_paid' && 'text-attn')}>
+                {formatCurrency(invoice.remaining_amount, invoice.currency)}
+              </span>
+            </DefRow>
+            {payments.length > 0 && (
+              <DefRow label={t('payment_history_title')} className="items-baseline">
+                <ul className="divide-y divide-border">
+                  {payments.map((p) => (
+                    <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
+                      <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
+                      <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
+                      {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
+                      {p.journal_entry_id && (
+                        <Link
+                          href={`/bookkeeping/${p.journal_entry_id}`}
+                          className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        >
+                          {t('view_voucher')}
+                        </Link>
+                      )}
+                      {/* Only on a plain link to an existing verifikat (the
+                          server marks the row); a booked payment is undone by a
+                          storno of its verifikat instead. */}
+                      {p.can_unlink_voucher && canWrite && (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                          onClick={() => void handleUnlinkVoucher(p)}
+                          disabled={isProcessing}
+                        >
+                          {t('unlink_voucher_action')}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </DefRow>
+            )}
+          </DetailSection>
 
-      {/* Verifikat and underlag (sambandskrav): the booking this invoice
-          produced, and the supplier's document it rests on. */}
-      <DetailSection kicker={t('vouchers_title')}>
-        <DefRow label={t('registration_voucher')}>
-          {invoice.registration_journal_entry_id ? (
-            <Link href={`/bookkeeping/${invoice.registration_journal_entry_id}`} className="hover:underline">
-              {t('view_voucher')}
-            </Link>
-          ) : canBookAfterwards ? (
-            <span className="flex flex-wrap items-center gap-3">
-              <span className="text-muted-foreground">{t('not_booked_yet')}</span>
-              <Button
-                size="sm"
-                variant="outline"
-                className="-my-1"
-                onClick={handleBook}
-                disabled={isProcessing || !canWrite}
-                loading={processingAction === 'book'}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {processingAction !== 'book' && !canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
-                {t('book_action')}
-              </Button>
-            </span>
-          ) : (
-            <span className="text-muted-foreground">{t('no_registration_voucher')}</span>
-          )}
-        </DefRow>
-        {invoice.payment_journal_entry_id && (
-          <DefRow label={t('payment_voucher')}>
-            <Link href={`/bookkeeping/${invoice.payment_journal_entry_id}`} className="hover:underline">
-              {t('view_voucher')}
-            </Link>
-          </DefRow>
-        )}
-        {invoice.document_id && (
-          <DefRow label={t('document_title')}>
-            <span className="text-muted-foreground">{t('document_attached')}</span>
-          </DefRow>
-        )}
-      </DetailSection>
-
-      {invoice.notes && (
-        <DetailSection kicker={t('notes_title')}>
-          <p className="py-2 text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
-        </DetailSection>
-      )}
+          {/* Verifikat and underlag (sambandskrav): the booking this invoice
+              produced, and the supplier's document it rests on. */}
+          <DetailSection kicker={t('vouchers_title')}>
+            <DefRow label={t('registration_voucher')}>
+              {invoice.registration_journal_entry_id ? (
+                <Link href={`/bookkeeping/${invoice.registration_journal_entry_id}`} className="hover:underline">
+                  {t('view_voucher')}
+                </Link>
+              ) : canBookAfterwards ? (
+                <span className="flex flex-wrap items-center gap-3">
+                  <span className="text-muted-foreground">{t('not_booked_yet')}</span>
+                  <Button
+                    variant="outline"
+                    className="-my-1"
+                    onClick={handleBook}
+                    disabled={isProcessing || !canWrite}
+                    loading={processingAction === 'book'}
+                    title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                  >
+                    {processingAction !== 'book' && !canWrite && <LockClosedIcon className="h-4 w-4" />}
+                    {t('book_action')}
+                  </Button>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{t('no_registration_voucher')}</span>
+              )}
+            </DefRow>
+            {invoice.payment_journal_entry_id && (
+              <DefRow label={t('payment_voucher')}>
+                <Link href={`/bookkeeping/${invoice.payment_journal_entry_id}`} className="hover:underline">
+                  {t('view_voucher')}
+                </Link>
+              </DefRow>
+            )}
+            {invoice.document_id && (
+              <DefRow label={t('document_title')}>
+                <span className="text-muted-foreground">{t('document_attached')}</span>
+              </DefRow>
+            )}
+          </DetailSection>
+        </div>
+      </div>
 
       {isBankDialogOpen && (
         <PayViaBankDialog

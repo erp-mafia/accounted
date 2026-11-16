@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
@@ -77,6 +78,8 @@ export function SkattekontoLinkProposalsDialog({
   const router = useRouter()
   const [summary, setSummary] = useState<ProposalPairsSummary | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  // Bumped by "Försök igen" to load the proposals again.
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [linking, setLinking] = useState(false)
 
   useEffect(() => {
@@ -95,7 +98,7 @@ export function SkattekontoLinkProposalsDialog({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, loadAttempt])
 
   async function undo(ids: string[]) {
     let failed = 0
@@ -184,9 +187,9 @@ export function SkattekontoLinkProposalsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !linking && onOpenChange(next)}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="" className="text-lg">
             {summary && !empty ? t('title', { count: summary.row_count }) : t('empty_title')}
           </DialogTitle>
           {summary && !empty && (
@@ -205,16 +208,16 @@ export function SkattekontoLinkProposalsDialog({
         </DialogHeader>
 
         {loadFailed ? (
-          <p className="text-[13px] text-destructive">{t('load_failed')}</p>
+          <LoadError title={t('load_failed')} onRetry={() => setLoadAttempt((n) => n + 1)} />
         ) : summary === null ? (
-          <div className="space-y-2" aria-busy="true">
+          <LateReveal className="space-y-2">
             <Skeleton className="h-4 w-3/4 rounded-sm" />
             <Skeleton className="h-4 w-2/3 rounded-sm" />
             <Skeleton className="h-4 w-1/2 rounded-sm" />
-          </div>
+          </LateReveal>
         ) : !empty ? (
           <div className="space-y-3 text-[13px]">
-            <ul className="divide-y divide-border rounded-lg border border-border">
+            <ul className="divide-y divide-border">
               {summary.pairs.slice(0, SHOWN_VOUCHERS).map((p) => (
                 <li
                   key={`${p.journal_entry_id}:${p.external_ids[0]}`}
@@ -236,19 +239,19 @@ export function SkattekontoLinkProposalsDialog({
               ))}
             </ul>
             {summary.pairs.length > SHOWN_VOUCHERS && (
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {t('more_pairs', { count: summary.pairs.length - SHOWN_VOUCHERS })}
               </p>
             )}
             {focusOutside && (
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('focus_outside')}{' '}
                 <button type="button" onClick={openManual} className={QUIET_LINK_CLASS}>
                   {t('manual_cta')}
                 </button>
               </p>
             )}
-            <p className="text-[12.5px] leading-5 text-muted-foreground">{t('undo_hint')}</p>
+            <p className="text-xs leading-5 text-muted-foreground">{t('undo_hint')}</p>
           </div>
         ) : null}
 

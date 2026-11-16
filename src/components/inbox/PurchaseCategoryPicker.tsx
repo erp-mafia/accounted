@@ -145,7 +145,7 @@ export function PurchaseCategoryPicker({
         )}
       >
         <span className="min-w-0 flex-1 truncate">{tc(purchaseCategoryNameKey(option.code))}</span>
-        {option.hint && <span className="max-w-[50%] shrink-0 truncate text-[11px] text-muted-foreground">{option.hint}</span>}
+        {option.hint && <span className="max-w-[50%] shrink-0 truncate text-xs text-muted-foreground">{option.hint}</span>}
         <CheckIcon aria-hidden className={cn('h-4 w-4 shrink-0', picked ? 'opacity-100' : 'opacity-0')} />
       </div>
     )
@@ -155,7 +155,7 @@ export function PurchaseCategoryPicker({
     <div
       id={id}
       role="presentation"
-      className={cn('px-2 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground', first ? 'pt-1' : 'pt-3')}
+      className={cn('px-2 pb-1 text-xs font-medium text-muted-foreground', first ? 'pt-1' : 'pt-3')}
     >
       {label}
     </div>
@@ -193,7 +193,7 @@ export function PurchaseCategoryPicker({
         aria-label={t('pick')}
         // A fixed height: the dialog is centred, so a list that shrank with the
         // matches would make it jump while typing.
-        className="h-[min(20rem,45dvh)] overflow-y-auto rounded-lg border border-border p-1 scrollbar-visible"
+        className="h-[min(20rem,45dvh)] overflow-y-auto p-1 scrollbar-visible"
       >
         {searching ? (
           options.length > 0 ? (
@@ -228,7 +228,7 @@ export function PurchaseCategoryPicker({
       <span className="sr-only" aria-live="polite">
         {searching ? t('results_count', { count: options.length }) : ''}
       </span>
-      <p className="hidden text-[11px] text-muted-foreground sm:block pointer-coarse:hidden">{t('keyboard_hint')}</p>
+      <p className="hidden text-xs text-muted-foreground sm:block pointer-coarse:hidden">{t('keyboard_hint')}</p>
     </div>
   )
 }

@@ -740,7 +740,7 @@ async function checkCompanyAccessGate(
         companyId,
         required_scope: requiredScope,
         message:
-          'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Settings > API & MCP.',
+          'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Agents > Connect an agent.',
       },
     }), { role: membershipRole, permissionRefusal: 'CONNECTION_READ_ONLY' })
   }

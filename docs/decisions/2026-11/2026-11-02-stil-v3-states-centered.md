@@ -1,0 +1,1 @@
+[2026-11-02] Stil v3 state blocks (EmptyState, LoadError, NotFoundState, DataListEmpty, the error and 404 pages) are centered, not left-aligned on the gutter as on the Tillstand-v3 board: founder call while previewing. The search no-hits line stays a left-aligned list line.

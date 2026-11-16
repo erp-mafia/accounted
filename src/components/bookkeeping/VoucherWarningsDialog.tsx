@@ -47,7 +47,7 @@ export default function VoucherWarningsDialog({
             {(warnings ?? []).map((warning) => {
               const voucherId = typeof warning.details.journal_entry_id === 'string' ? warning.details.journal_entry_id : null
               return (
-                <li key={warning.code} className="space-y-1 rounded-lg border border-border p-3 text-sm">
+                <li key={warning.code} className="space-y-1 rounded-lg p-3 text-sm bg-control shadow-raised">
                   <div>{locale === 'en' ? warning.message_en : warning.message_sv}</div>
                   {voucherId && (
                     <a

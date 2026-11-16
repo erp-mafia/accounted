@@ -11,12 +11,15 @@ import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
 import { bankDetailsSettled, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
 import { AffiliatePicker } from './AffiliatePicker'
+import { LoadError } from '@/components/ui/empty-state'
 
 interface BankPickStepProps {
   state: FlowState
   dispatch: (action: FlowAction) => void
   banks: OpenPaymentsBank[] | null
   banksFailed: boolean
+  /** Ask for the bank list again; with it, a failed list offers "Försök igen" in place. */
+  onRetryBanks?: () => void
   /** Enskild firma: the private account used in the business is a choice. */
   soleTrader: boolean
   onContinue: () => void
@@ -36,7 +39,7 @@ interface BankPickStepProps {
  * "Vilken sparbank?" follows the list; the choice travels as the party's
  * affiliated_aspsp_id and names the connection.
  */
-export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
+export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
   const t = useTranslations('bank_connect')
   const chosen = state.bank ? (banks?.find((b) => b.bic === state.bank?.bic) ?? null) : null
   const bankName = state.bank?.name ?? chosen?.name ?? ''
@@ -60,8 +63,12 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
           <OpenPaymentsBankMark bank={{ name: state.bank.name, logo_url: chosen?.logo_url ?? null }} />
           <span className="min-w-0 flex-1 truncate text-[13px]">{state.bank.name}</span>
         </div>
+      ) : banksFailed && onRetryBanks ? (
+        // Said where the list would be, with the way to ask again (Stil v3
+        // states), instead of "close and try again".
+        <LoadError title={t('bank_load_failed_title')} onRetry={onRetryBanks} />
       ) : banksFailed ? (
-        <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">
+        <p role="alert" className="px-1 text-xs leading-relaxed text-destructive">
           {t('bank_load_failed')}
         </p>
       ) : (
@@ -105,7 +112,7 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
       )}
 
       {guideUrl && (
-        <p className="px-1 text-[12.5px]">
+        <p className="px-1 text-xs">
           <a href={guideUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground">
             {t('guide_link', { bank: bankName })}
           </a>

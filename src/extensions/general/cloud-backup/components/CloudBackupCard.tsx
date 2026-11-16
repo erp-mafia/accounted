@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
@@ -261,16 +262,18 @@ function ReauthAttn({ providers }: { providers: CloudProviderStatus[] }) {
   const t = useTranslations('extensions')
   const labels = providers.map((p) => PROVIDER_META[p.provider]?.label ?? p.provider)
   const { isConnecting, connect } = useConnectProvider(providers[0].provider, labels[0])
+  const { canWrite } = useViewerLock()
 
   return (
     <AttnLine
       className="pb-3"
-      action={{
+      // Reconnecting is a write: a read-only member sees the sentence without the action.
+      action={canWrite ? {
         label: isConnecting
           ? t('ext_cloud_backup_redirecting')
           : t('ext_cloud_backup_reauth_action', { provider: labels[0] }),
         onClick: connect,
-      }}
+      } : undefined}
     >
       {t(
         // A grant without the storage box ticked needs different advice than
@@ -317,6 +320,7 @@ interface ProviderRowProps {
  */
 function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('extensions')
   const errorLocale = useLocale() as ErrorLocale
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -474,7 +478,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
       : null
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b-hairline">
       <DestructiveConfirmDialog {...dialogProps} />
 
       {/* Header row: identity left, action right, in every state. */}
@@ -509,29 +513,29 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
           <div className="flex shrink-0 items-center gap-2">
             {status.connected ? (
               <>
-                <Button variant="outline" onClick={handleSync} loading={isSyncing}>
+                <Button variant="outline" onClick={handleSync} loading={isSyncing} disabled={!canWrite} title={lockedTitle}>
                   {isSyncing ? (
                     t('ext_cloud_backup_syncing')
                   ) : (
                     <>
-                      <ArrowPathIcon className="mr-2 h-4 w-4" />
+                      <ArrowPathIcon className="h-4 w-4" />
                       {t('ext_cloud_backup_sync_now')}
                     </>
                   )}
                 </Button>
-                <Button variant="ghost" onClick={handleDisconnect} loading={isDisconnecting}>
+                <Button variant="ghost" onClick={handleDisconnect} loading={isDisconnecting} disabled={!canWrite} title={lockedTitle}>
                   {isDisconnecting ? (
                     t('ext_cloud_backup_disconnecting')
                   ) : (
                     <>
-                      <LinkSlashIcon className="mr-2 h-4 w-4" />
+                      <LinkSlashIcon className="h-4 w-4" />
                       {t('ext_cloud_backup_disconnect')}
                     </>
                   )}
                 </Button>
               </>
             ) : (
-              <Button onClick={handleConnect} loading={isConnecting}>
+              <Button onClick={handleConnect} loading={isConnecting} disabled={!canWrite} title={lockedTitle}>
                 {isConnecting ? (
                   t('ext_cloud_backup_redirecting')
                 ) : (
@@ -555,7 +559,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
         <div
           role="group"
           aria-label={provider}
-          className="ml-3 border-l border-border pb-3 pl-4"
+          className="ml-3 border-l-hairline pb-3 pl-4"
         >
           <SettingsRow label={t('ext_cloud_backup_last_sync_label')} align="baseline">
             {status.last_sync ? (
@@ -666,6 +670,7 @@ function ScheduleSection({
   onUpdated,
 }: ScheduleSectionProps) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('extensions')
   const errorLocale = useLocale() as ErrorLocale
 
@@ -750,7 +755,8 @@ function ScheduleSection({
           <Switch
             checked={enabled}
             onCheckedChange={handleToggle}
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
+            title={lockedTitle}
             aria-label={t('ext_cloud_backup_auto_sync_title')}
           />
         </SettingsRowEnd>
@@ -762,7 +768,7 @@ function ScheduleSection({
             id={hourId}
             value={localHour}
             onChange={handleHourChange}
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
             className="tabular-nums"
           >
             {Array.from({ length: 24 }, (_, h) => (

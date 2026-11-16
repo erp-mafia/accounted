@@ -11,10 +11,11 @@ import { Fragment, createContext, useContext, useEffect, useState, type ReactNod
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ArrowDownIcon } from '@/components/icons'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { isUuid } from '@/lib/invariants/uuid'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/bookkeeping/rot-rut-rules'
@@ -32,6 +33,9 @@ import { voucherLineViews, type PostingLineLike } from '@/lib/bookkeeping/vouche
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 import { formatPreviewNumber } from './preview-facts'
+import { Fact, FactGroupLabel, FactList, FactRows, PreviewBlock, PreviewDensityContext, ReviewTitleContext, useIsTemplate } from './preview-parts'
+import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
+import { proposalFacts, voucherFacts } from './review-model'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 // The subset of a PendingOperation the preview actually reads. operation_type
@@ -61,35 +65,22 @@ function money(v: unknown, currency: string): string {
 }
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  const template = useIsTemplate()
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK): staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
   const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
+  // Entry date first, then (for a bank row in another currency) its own
+  // amount beside the SEK lines: review-model's categorizeFacts.
+  const facts = proposalFacts('categorize_transaction', data) ?? []
+  // The template heads the block itself ("Det här bokförs").
+  const caption = template ? null : <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
 
   if (lines.length > 0) {
-    // Journal lines are always SEK (BFL 5 kap 2 §). When the bank row itself
-    // is in another currency, say so next to the lines: a 2 500 USD receipt
-    // booked as 24 292,50 kr read as a wrong SEK figure to an approver who
-    // only saw one of the two numbers.
-    const txCurrency = (data.currency as string) || 'SEK'
-    const txAmount = typeof data.amount === 'number' && Number.isFinite(data.amount) ? data.amount : null
     return (
-      <div className="space-y-1 text-sm">
-        {/* Entry date first: with two open fiscal years the approver could
-            not tell which year a categorization belonged to. */}
-        {typeof data.date === 'string' && data.date && (
-          <div className="flex justify-between gap-4 text-xs mb-1">
-            <span className="text-muted-foreground">Datum</span>
-            <span className="font-mono tabular-nums">{data.date}</span>
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
-        {txCurrency !== 'SEK' && txAmount !== null && (
-          <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
-            <span>Banktransaktion</span>
-            <span className="tabular-nums shrink-0">{formatCurrency(txAmount, txCurrency)}</span>
-          </div>
-        )}
+      <div className="space-y-2 text-sm">
+        <FactRows groups={facts} />
+        {caption}
         <StagedLinesTable lines={lines} />
       </div>
     )
@@ -101,8 +92,8 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   // blank accounts for a preview that does describe the entry in full.
   if (isKonteringLines(data.preview_lines)) {
     return (
-      <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+      <div className="space-y-2 text-sm">
+        {caption}
         <PreviewKonteringTable lines={data.preview_lines} />
       </div>
     )
@@ -113,63 +104,39 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   const legacyAmount = typeof data.amount === 'number' && Number.isFinite(data.amount)
     ? data.amount
     : null
+  // On the review template a proposal staged without its kontering states
+  // the date and the amount; the template marks the account as missing in a
+  // row of its own, so two blank account rows would say the same thing twice.
+  const noAccounts = !data.debit_account && !data.credit_account
+  if (template && noAccounts) {
+    return (
+      <div className="text-sm">
+        <FactRows groups={facts} />
+        <FactList className={facts.some((group) => group.length > 0) ? 'border-t-0' : undefined}>
+          <Fact label="Belopp" numeric>
+            {legacyAmount === null ? '-' : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
+          </Fact>
+        </FactList>
+      </div>
+    )
+  }
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Debetkonto</span>
-        <span className="font-mono">{String(data.debit_account ?? '')}</span>
-        <span className="text-muted-foreground">Kreditkonto</span>
-        <span className="font-mono">{String(data.credit_account ?? '')}</span>
-        <span className="text-muted-foreground">Belopp</span>
-        <span className="font-mono tabular-nums">
-          {/* A preview with no usable amount used to render "NaN kr": show the
-              gap as a gap instead of a number that isn't one. */}
-          {legacyAmount === null
-            ? '-'
-            : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
-        </span>
-      </div>
+      <FactList>
+        <Fact label="Debetkonto" mono>{String(data.debit_account ?? '')}</Fact>
+        <Fact label="Kreditkonto" mono>{String(data.credit_account ?? '')}</Fact>
+        {/* A preview with no usable amount used to render "NaN kr": show the
+            gap as a gap instead of a number that isn't one. */}
+        <Fact label="Belopp" mono>
+          {legacyAmount === null ? '-' : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
+        </Fact>
+      </FactList>
       {vatLines.length > 0 && (
-        <div className="border-t pt-2">
+        <div className={cn(!template && 'border-t pt-2')}>
           <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
           <StagedLinesTable lines={vatLines} />
         </div>
       )}
-    </div>
-  )
-}
-
-function CustomerPreview({ data }: { data: Record<string, unknown> }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Namn</span>
-      <span>{String(data.name ?? '')}</span>
-      <span className="text-muted-foreground">Typ</span>
-      <span>{String(data.customer_type ?? '')}</span>
-      {data.customer_number ? (
-        <>
-          <span className="text-muted-foreground">Kundnr</span>
-          <span className="font-mono">{String(data.customer_number)}</span>
-        </>
-      ) : null}
-      {data.email ? (
-        <>
-          <span className="text-muted-foreground">E-post</span>
-          <span>{String(data.email)}</span>
-        </>
-      ) : null}
-      {data.org_number ? (
-        <>
-          <span className="text-muted-foreground">Org.nr</span>
-          <span className="font-mono">{String(data.org_number)}</span>
-        </>
-      ) : null}
-      {data.personal_number_masked ? (
-        <>
-          <span className="text-muted-foreground">Personnr</span>
-          <span className="font-mono">{String(data.personal_number_masked)}</span>
-        </>
-      ) : null}
     </div>
   )
 }
@@ -265,35 +232,34 @@ function VatWarningLines({ data }: { data: Record<string, unknown> }) {
 }
 
 function InvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const template = useIsTemplate()
   const items = isPreviewInvoiceLines(data.items) ? data.items : []
+  const [head = [], totals = []] = proposalFacts('create_invoice', data) ?? []
 
   return (
     <div className="space-y-3 text-sm">
       <VatWarningLines data={data} />
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
-        <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Datum</span>
-        <span>{String(data.invoice_date ?? '')}</span>
-        <span className="text-muted-foreground">Förfallodatum</span>
-        <span>{String(data.due_date ?? '')}</span>
-      </div>
+      <FactRows groups={[head]} />
       {items.length > 0 && (
-        <div className="border-t pt-2">
+        <div className={cn(!template && 'border-t pt-2')}>
           <InvoiceLineRows items={items} currency={(data.currency as string) || 'SEK'} />
         </div>
       )}
-      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Netto</span>
-        <span className="tabular-nums text-right">{money(data.subtotal, (data.currency as string) || 'SEK')}</span>
-        <span className="text-muted-foreground">Moms</span>
-        <span className="tabular-nums text-right">{money(data.vat_amount, (data.currency as string) || 'SEK')}</span>
-        <span className="font-medium">Totalt</span>
-        <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
+      <div className={cn(!template && 'border-t pt-2')}>
+        <FactRows groups={[totals]} totalsFrom={0} />
       </div>
     </div>
   )
 }
+
+// A registration's fields as staged: the text or date, '-' where it is absent.
+const textOrDash = (value: unknown) => (typeof value === 'string' && value.trim() ? value : '-')
+const dateOrDash = (value: unknown) => (typeof value === 'string' && value ? formatDate(value) : '-')
+/** The verifikat a registration is tied to: its label and, when staged, its date. */
+const registeredVoucherLine = (data: Record<string, unknown>) =>
+  [textOrDash(data.voucher_label), typeof data.voucher_date === 'string' && data.voucher_date ? formatDate(data.voucher_date) : null]
+    .filter(Boolean)
+    .join(', ')
 
 /**
  * A create_invoice staged by gnubok_register_booked_invoice (crm#1094):
@@ -302,56 +268,36 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
  */
 function RegisterBookedInvoicePreview({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations('pending')
+  const template = useIsTemplate()
   const currency = (data.currency as string) || 'SEK'
-  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value : '-')
-  const date = (value: unknown) => (typeof value === 'string' && value ? formatDate(value) : '-')
-  const voucher = [text(data.voucher_label), typeof data.voucher_date === 'string' && data.voucher_date ? formatDate(data.voucher_date) : null]
-    .filter(Boolean)
-    .join(', ')
+  const voucher = registeredVoucherLine(data)
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">{t('preview_field.customer_name')}</span>
-        <span className="min-w-0 break-words">{text(data.customer_name)}</span>
-        <span className="text-muted-foreground">{t('preview_field.invoice_number')}</span>
-        <span className="font-mono tabular-nums">{text(data.invoice_number)}</span>
-        <span className="text-muted-foreground">{t('preview_field.invoice_date')}</span>
-        <span className="tabular-nums">{date(data.invoice_date)}</span>
-        <span className="text-muted-foreground">{t('preview_field.due_date')}</span>
-        <span className="tabular-nums">{date(data.due_date)}</span>
-        <span className="text-muted-foreground">{t('preview_field.voucher_label')}</span>
-        <span className="tabular-nums">{voucher}</span>
+      <FactList>
+        <Fact label={t('preview_field.customer_name')}>{textOrDash(data.customer_name)}</Fact>
+        <Fact label={t('preview_field.invoice_number')} mono>{textOrDash(data.invoice_number)}</Fact>
+        <Fact label={t('preview_field.invoice_date')} numeric>{dateOrDash(data.invoice_date)}</Fact>
+        <Fact label={t('preview_field.due_date')} numeric>{dateOrDash(data.due_date)}</Fact>
+        <Fact label={t('preview_field.voucher_label')} numeric>{voucher}</Fact>
         {typeof data.voucher_description === 'string' && data.voucher_description.trim() && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.voucher_description')}</span>
-            <span className="min-w-0 break-words">{data.voucher_description}</span>
-          </>
+          <Fact label={t('preview_field.voucher_description')}>{data.voucher_description}</Fact>
         )}
-      </div>
-      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">{t('preview_field.vat_amount')}</span>
-        <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
-        <span className="text-muted-foreground">{t('preview_field.total')}</span>
-        <span className="tabular-nums text-right">{money(data.total, currency)}</span>
+      </FactList>
+      <FactList className={cn(!template && 'border-t pt-2')}>
+        <Fact label={t('preview_field.vat_amount')} numeric alignEnd>{money(data.vat_amount, currency)}</Fact>
+        <Fact label={t('preview_field.total')} numeric alignEnd>{money(data.total, currency)}</Fact>
         {/* A foreign invoice: the rate read from its verifikat, and the kronor that verifikat books. */}
         {typeof data.exchange_rate === 'number' && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.exchange_rate')}</span>
-            <span className="tabular-nums text-right">
-              {new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 6 }).format(data.exchange_rate)} ({money(data.total_sek, 'SEK')})
-            </span>
-          </>
+          <Fact label={t('preview_field.exchange_rate')} numeric alignEnd>
+            {new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 6 }).format(data.exchange_rate)} ({money(data.total_sek, 'SEK')})
+          </Fact>
         )}
-        <span className="font-medium">{t('preview_field.invoice_remaining')}</span>
-        <span className="tabular-nums font-medium text-right">{money(data.remaining_amount, currency)}</span>
+        <Fact label={t('preview_field.invoice_remaining')} numeric alignEnd strong>{money(data.remaining_amount, currency)}</Fact>
         {typeof data.balance_as_of === 'string' && data.balance_as_of && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.balance_as_of')}</span>
-            <span className="tabular-nums text-right">{formatDate(data.balance_as_of)}</span>
-          </>
+          <Fact label={t('preview_field.balance_as_of')} numeric alignEnd>{formatDate(data.balance_as_of)}</Fact>
         )}
-      </div>
+      </FactList>
     </div>
   )
 }
@@ -364,69 +310,142 @@ function RegisterBookedInvoicePreview({ data }: { data: Record<string, unknown> 
  */
 function RegisterBookedSupplierInvoicePreview({ data }: { data: Record<string, unknown> }) {
   const t = useTranslations('pending')
+  const template = useIsTemplate()
   const currency = (data.currency as string) || 'SEK'
-  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value : '-')
-  const date = (value: unknown) => (typeof value === 'string' && value ? formatDate(value) : '-')
-  const voucher = [text(data.voucher_label), typeof data.voucher_date === 'string' && data.voucher_date ? formatDate(data.voucher_date) : null]
-    .filter(Boolean)
-    .join(', ')
+  const voucher = registeredVoucherLine(data)
   const voucherLinesCaption = t('preview_registered_voucher_lines')
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">{t('preview_field.supplier_name')}</span>
-        <span className="min-w-0 break-words">{text(data.supplier_name)}</span>
-        <span className="text-muted-foreground">{t('preview_field.supplier_invoice_number')}</span>
-        <span className="font-mono tabular-nums">{text(data.supplier_invoice_number)}</span>
+      <FactList>
+        <Fact label={t('preview_field.supplier_name')}>{textOrDash(data.supplier_name)}</Fact>
+        <Fact label={t('preview_field.supplier_invoice_number')} mono>{textOrDash(data.supplier_invoice_number)}</Fact>
         {typeof data.payment_reference === 'string' && data.payment_reference.trim() && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.payment_reference')}</span>
-            <span className="min-w-0 break-words font-mono tabular-nums">{data.payment_reference}</span>
-          </>
+          <Fact label={t('preview_field.payment_reference')} mono>{data.payment_reference}</Fact>
         )}
         {typeof data.arrival_number === 'number' && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.arrival_number')}</span>
-            <span className="font-mono tabular-nums">{data.arrival_number}</span>
-          </>
+          <Fact label={t('preview_field.arrival_number')} mono>{data.arrival_number}</Fact>
         )}
-        <span className="text-muted-foreground">{t('preview_field.invoice_date')}</span>
-        <span className="tabular-nums">{date(data.invoice_date)}</span>
-        <span className="text-muted-foreground">{t('preview_field.due_date')}</span>
-        <span className="tabular-nums">{date(data.due_date)}</span>
-        <span className="text-muted-foreground">{t('preview_field.voucher_label')}</span>
-        <span className="tabular-nums">{voucher}</span>
+        <Fact label={t('preview_field.invoice_date')} numeric>{dateOrDash(data.invoice_date)}</Fact>
+        <Fact label={t('preview_field.due_date')} numeric>{dateOrDash(data.due_date)}</Fact>
+        <Fact label={t('preview_field.voucher_label')} numeric>{voucher}</Fact>
         {typeof data.voucher_description === 'string' && data.voucher_description.trim() && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.voucher_description')}</span>
-            <span className="min-w-0 break-words">{data.voucher_description}</span>
-          </>
+          <Fact label={t('preview_field.voucher_description')}>{data.voucher_description}</Fact>
         )}
-      </div>
+      </FactList>
       {isKonteringLines(data.voucher_lines) && (
-        <div className="space-y-1 border-t pt-2">
+        <div className={cn('space-y-1', !template && 'border-t pt-2')}>
           <p className="text-xs text-muted-foreground">{voucherLinesCaption}</p>
           <PreviewKonteringTable lines={data.voucher_lines} label={voucherLinesCaption} />
         </div>
       )}
-      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">{t('preview_field.subtotal')}</span>
-        <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
-        <span className="text-muted-foreground">{t('preview_field.vat_amount')}</span>
-        <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
-        <span className="text-muted-foreground">{t('preview_field.total')}</span>
-        <span className="tabular-nums text-right">{money(data.total, currency)}</span>
-        <span className="font-medium">{t('preview_field.invoice_remaining')}</span>
-        <span className="tabular-nums font-medium text-right">{money(data.invoice_remaining, currency)}</span>
+      <FactList className={cn(!template && 'border-t pt-2')}>
+        <Fact label={t('preview_field.subtotal')} numeric alignEnd>{money(data.subtotal, currency)}</Fact>
+        <Fact label={t('preview_field.vat_amount')} numeric alignEnd>{money(data.vat_amount, currency)}</Fact>
+        <Fact label={t('preview_field.total')} numeric alignEnd>{money(data.total, currency)}</Fact>
+        <Fact label={t('preview_field.invoice_remaining')} numeric alignEnd strong>{money(data.invoice_remaining, currency)}</Fact>
         {typeof data.balance_as_of === 'string' && data.balance_as_of && (
-          <>
-            <span className="text-muted-foreground">{t('preview_field.balance_as_of')}</span>
-            <span className="tabular-nums text-right">{formatDate(data.balance_as_of)}</span>
-          </>
+          <Fact label={t('preview_field.balance_as_of')} numeric alignEnd>{formatDate(data.balance_as_of)}</Fact>
         )}
-      </div>
+      </FactList>
     </div>
+  )
+}
+
+interface PreviewSupplierInvoiceLine {
+  description?: string
+  account_number?: string
+  line_total?: number
+}
+
+/**
+ * A supplier invoice read from the inbox, on the review template: the fields
+ * a person checks against the file, the invoice rows with the account each
+ * is booked on, and the sums. The other surfaces keep the generic preview.
+ */
+function SupplierInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const tLines = useTranslations('voucher_lines')
+  const accountNames = useContext(AccountNamesContext)
+  const currency = (data.currency as string) || 'SEK'
+  const [head = [], totals = []] = proposalFacts('create_supplier_invoice_from_inbox', data) ?? []
+  const items = Array.isArray(data.items_preview) ? (data.items_preview as PreviewSupplierInvoiceLine[]) : []
+  return (
+    <div className="space-y-3 text-sm">
+      <FactRows groups={[head]} />
+      {items.length > 0 && (
+        <table className="w-full border-collapse text-[13px]" aria-label={t('review_invoice_lines')}>
+          <thead>
+            <tr>
+              <th className={VTH_CLASS}>{tLines('account')}</th>
+              <th className={VTH_CLASS}>{tLines('description')}</th>
+              <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{t('preview_field.subtotal')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, index) => (
+              <tr key={index}>
+                <td className={VTD_CLASS}>
+                  {item.account_number ? (
+                    <>
+                      <span className="font-mono text-sm">{item.account_number}</span>
+                      {accountNames[item.account_number] && <span className="ml-1">{accountNames[item.account_number]}</span>}
+                    </>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+                <td className={cn(VTD_CLASS, 'text-muted-foreground')} data-ph-mask="">{item.description ?? ''}</td>
+                <td className={cn(VTD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')} data-ph-mask="">
+                  {isLedgerCurrency(currency) && typeof item.line_total === 'number' ? formatAmount(item.line_total) : money(item.line_total, currency)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <FactRows groups={[totals]} totalsFrom={0} />
+    </div>
+  )
+}
+
+/**
+ * A bank row matched to a customer invoice, on the review template: the bank
+ * row is the proposal's underlag, so the proposal states the invoice.
+ */
+function MatchInvoiceFacts({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const txDate = typeof data.transaction_date === 'string' ? data.transaction_date : null
+  const invoiceDate = typeof data.invoice_date === 'string' ? data.invoice_date : null
+  // The same nudge as the two-card preview: more than a month apart.
+  const drift =
+    txDate && invoiceDate && Math.abs(new Date(txDate).getTime() - new Date(invoiceDate).getTime()) > 31 * 24 * 60 * 60 * 1000
+  return (
+    <div className="space-y-2 text-sm">
+      <FactRows groups={proposalFacts('match_transaction_invoice', data) ?? []} />
+      {drift && <p className="text-xs text-muted-foreground">{t('preview_match_date_drift')}</p>}
+    </div>
+  )
+}
+
+/**
+ * A document attached to a bank row, on the review template: the file and
+ * the bank row are the underlag slot's, so the proposal names the two.
+ */
+function AttachDocumentFacts({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('pending')
+  const amount = typeof data.transaction_amount === 'number' ? data.transaction_amount : null
+  return (
+    <FactList>
+      <Fact label={t('preview_link_file')}>{textOrDash(data.document_file_name)}</Fact>
+      <Fact label={t('review_bank_row')}>{textOrDash(data.transaction_description)}</Fact>
+      {typeof data.transaction_date === 'string' && data.transaction_date && (
+        <Fact label="Datum" numeric>{data.transaction_date}</Fact>
+      )}
+      {amount !== null && (
+        <Fact label="Belopp" numeric>{formatCurrency(amount, (data.transaction_currency as string) || 'SEK')}</Fact>
+      )}
+    </FactList>
   )
 }
 
@@ -440,6 +459,7 @@ const UPDATE_INVOICE_FIELD_LABELS: Record<string, string> = {
 }
 
 function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const template = useIsTemplate()
   const currency = (data.currency as string) || 'SEK'
   const changes = (data.changes && typeof data.changes === 'object' ? (data.changes as Record<string, unknown>) : {})
   const headerEntries = Object.entries(changes).filter(
@@ -453,34 +473,28 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-3 text-sm">
       <VatWarningLines data={data} />
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
-        <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Faktura</span>
-        <span>{data.invoice_number ? String(data.invoice_number) : 'utkast'}</span>
+      <FactList>
+        <Fact label="Kund">{String(data.customer_name ?? '')}</Fact>
+        <Fact label="Faktura">{data.invoice_number ? String(data.invoice_number) : 'utkast'}</Fact>
         {headerEntries.map(([key, value]) => (
-          <Fragment key={key}>
-            <span className="text-muted-foreground">{UPDATE_INVOICE_FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}</span>
-            {/* null is an explicit clear (delivery_date: null), not a missing value */}
-            <span>{value === null ? 'rensas' : renderValue(value)}</span>
-          </Fragment>
+          // null is an explicit clear (delivery_date: null), not a missing value
+          <Fact key={key} label={UPDATE_INVOICE_FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}>
+            {value === null ? 'rensas' : renderValue(value)}
+          </Fact>
         ))}
         {hasDimensionChange && (
-          <>
-            <span className="text-muted-foreground">Dimensioner</span>
-            <span className="font-mono text-xs">
-              {dimensionBag && Object.keys(dimensionBag).length > 0
-                ? Object.entries(dimensionBag).map(([dim, code]) => `${dim}: ${code}`).join(', ')
-                : 'rensas'}
-            </span>
-          </>
+          <Fact label="Dimensioner" mono>
+            {dimensionBag && Object.keys(dimensionBag).length > 0
+              ? Object.entries(dimensionBag).map(([dim, code]) => `${dim}: ${code}`).join(', ')
+              : 'rensas'}
+          </Fact>
         )}
-      </div>
+      </FactList>
       {/* Full replace: show what goes away next to what comes in, so a
           quantity fix that also moves revenue off the article's account
           (3041 to 3001) or changes the VAT rate is visible before approval. */}
       {currentItems && (
-        <div className="border-t pt-2 space-y-1">
+        <div className={cn('space-y-1', !template && 'border-t pt-2')}>
           <div className="text-xs text-muted-foreground">
             {currentItems.length > 0 ? 'Nuvarande rader (ersätts)' : 'Nuvarande rader: inga'}
           </div>
@@ -488,44 +502,18 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
       {newItems && (
-        <div className="border-t pt-2 space-y-1">
+        <div className={cn('space-y-1', !template && 'border-t pt-2')}>
           <div className="text-xs text-muted-foreground">Nya rader</div>
           <InvoiceLineRows items={newItems} currency={currency} />
         </div>
       )}
       {newItems && typeof data.total === 'number' && (
-        <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-          <span className="text-muted-foreground">Netto</span>
-          <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
-          <span className="text-muted-foreground">Moms</span>
-          <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
-          <span className="font-medium">Totalt</span>
-          <span className="tabular-nums font-medium text-right">{money(data.total, currency)}</span>
-        </div>
+        <FactList className={cn(!template && 'border-t pt-2')}>
+          <Fact label="Netto" numeric alignEnd>{money(data.subtotal, currency)}</Fact>
+          <Fact label="Moms" numeric alignEnd>{money(data.vat_amount, currency)}</Fact>
+          <Fact label="Totalt" numeric alignEnd strong>{money(data.total, currency)}</Fact>
+        </FactList>
       )}
-    </div>
-  )
-}
-
-function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
-  const currency = (data.currency as string) || 'SEK'
-
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Datum</span>
-      <span className="font-mono">{String(data.date ?? '')}</span>
-      <span className="text-muted-foreground">Beskrivning</span>
-      <span className="truncate">{String(data.description ?? '')}</span>
-      <span className="text-muted-foreground">Belopp</span>
-      <span className="font-mono tabular-nums">
-        {money(data.amount, currency)}
-      </span>
-      {data.external_id ? (
-        <>
-          <span className="text-muted-foreground">Extern referens</span>
-          <span className="font-mono text-xs truncate">{String(data.external_id)}</span>
-        </>
-      ) : null}
     </div>
   )
 }
@@ -535,6 +523,11 @@ function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
 // operation may be another company's. voucherLineViews reads every line shape
 // the payloads use (account/debit/credit and account_number/debit_amount/
 // credit_amount).
+
+// The line-text column folded to nothing (not removed: the Summa row spans
+// it, so its figures stay under Debet and Kredit).
+const LEDGER_NARROW_CLASS =
+  '@max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:invisible @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:max-w-0 @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:overflow-hidden @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:whitespace-nowrap @max-[460px]:[&_td:nth-child(2):nth-last-child(3)]:px-0 @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:invisible @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:max-w-0 @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:overflow-hidden @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:whitespace-nowrap @max-[460px]:[&_th:nth-child(2):nth-last-child(3)]:px-0'
 
 function StagedLinesTable({
   lines,
@@ -546,45 +539,32 @@ function StagedLinesTable({
   label?: string
 }) {
   const accountNames = useContext(AccountNamesContext)
+  // The review of one proposal reads the lines as a ledger: plain amounts
+  // with the Summa row, so debit and credit are seen to balance. The confirm
+  // surfaces state kronor.
+  const template = useIsTemplate()
+  const t = useTranslations('pending')
+  const title = useContext(ReviewTitleContext)?.toLowerCase() ?? null
+  const views = voucherLineViews(lines)
+  // A line text the proposal's title already carries (the bank text of a
+  // categorisation) is not repeated on every row.
+  const repeated = title
+    ? views.map((line) => line.description?.trim()).filter((text): text is string => !!text && title.includes(text.toLowerCase()))
+    : []
   return (
     <VoucherLinesTable
       accountNames={accountNames}
-      withCurrency
-      showTotals={showTotals}
-      aria-label={label}
-      lines={voucherLineViews(lines)}
+      withCurrency={!template}
+      showTotals={showTotals || (template && lines.length > 1)}
+      aria-label={label ?? (template ? t('review_ledger_label') : undefined)}
+      redundantTexts={repeated}
+      // In a narrow column (a phone, the review beside its file) the line
+      // text gives way: account, debit and credit are never cut or scrolled
+      // out of view. The cell is the second of four; the Summa row has three.
+      className={template ? LEDGER_NARROW_CLASS : undefined}
+      lines={views}
     />
   )
-}
-
-// The verifikat's kontering with, when known, its sums: the staged lines of
-// create_voucher and a toEntryPreview payload, and the posted lines a
-// link_document_to_voucher review fetches.
-function VoucherLinesBlock({
-  lines,
-  totalDebit,
-  totalCredit,
-}: {
-  lines: PostingLineLike[]
-  totalDebit?: number
-  totalCredit?: number
-}) {
-  if (lines.length === 0) return null
-  return <StagedLinesTable lines={lines} showTotals={totalDebit != null && totalCredit != null} />
-}
-
-// The momsdeklaration impact a staged create_voucher carries (crm#1447):
-// server-built Swedish, like the ruta labels it names. Shown when the
-// declaration leaves the voucher out, when it moves a ruta, when the outcome
-// waits for posting, or when it could not be computed; silent when the
-// voucher moves no ruta or the company files no momsdeklaration.
-function readVatDeclarationSummary(value: unknown): string | null {
-  if (!isPlainObject(value)) return null
-  const { summary, status, counted, rutor_change: change } = value
-  if (typeof summary !== 'string' || summary === '' || status === 'not_vat_registered') return null
-  const moves = isPlainObject(change) && Object.keys(change).length > 0
-  if (status === 'ok' && counted === true && !moves) return null
-  return summary
 }
 
 // showSeries: false for a toEntryPreview payload, which carries no series;
@@ -593,51 +573,24 @@ function readVatDeclarationSummary(value: unknown): string | null {
 // warning (BFL 5 kap 6 §) is read by complianceWarningOf and rendered by
 // OperationPreview above every preview type, not here.
 function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
-  const t = useTranslations('pending')
   const tWarnings = useTranslations('voucherWarnings')
   const locale = useLocale()
   const lines = (data.lines as PostingLineLike[]) || []
-  const totalDebit = data.total_debit as number | undefined
-  const totalCredit = data.total_credit as number | undefined
-  const vatSummary = readVatDeclarationSummary(data.vat_declaration)
   // The booking-time warnings the person confirmed when the voucher was staged.
   const confirmedWarnings = Array.isArray(data.voucher_warnings) ? (data.voucher_warnings as VoucherWarning[]) : []
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        {/* A lines-only payload (mark_invoice_paid's journal_entry_preview)
-            has no date or text of its own: no empty rows for them. */}
-        {data.entry_date ? (
-          <>
-            <span className="text-muted-foreground">Datum</span>
-            <span className="font-mono">{String(data.entry_date)}</span>
-          </>
-        ) : null}
-        {data.description ? (
-          <>
-            <span className="text-muted-foreground">Beskrivning</span>
-            <span className="truncate">{String(data.description)}</span>
-          </>
-        ) : null}
-        {showSeries && (
-          <>
-            <span className="text-muted-foreground">Serie</span>
-            <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
-          </>
-        )}
-        {vatSummary ? (
-          <>
-            <span className="text-muted-foreground">{t('preview_vat_declaration')}</span>
-            <span>{vatSummary}</span>
-          </>
-        ) : null}
-      </div>
-      <VoucherLinesBlock lines={lines} totalDebit={totalDebit} totalCredit={totalCredit} />
+      {/* A lines-only payload (mark_invoice_paid's journal_entry_preview) has
+          no date or text of its own: no empty rows for them. The
+          momsdeklaration impact (crm#1447) is one of the fields. */}
+      <FactRows groups={[voucherFacts(data, showSeries)]} />
+      {/* The kontering with, when the payload carries them, its sums. */}
+      {lines.length > 0 && <StagedLinesTable lines={lines} showTotals={data.total_debit != null && data.total_credit != null} />}
       {confirmedWarnings.length > 0 && (
         <div className="space-y-1">
-          <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tWarnings('pending_heading')}</div>
-          <ul className="space-y-1 text-[12.5px] text-muted-foreground">
+          <div className="text-xs font-medium text-muted-foreground">{tWarnings('pending_heading')}</div>
+          <ul className="space-y-1 text-xs text-muted-foreground">
             {confirmedWarnings.map((w) => (
               <li key={w.code}>{locale === 'en' ? w.message_en : w.message_sv}</li>
             ))}
@@ -655,36 +608,11 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
   // a wrong one. Journal lines are SEK; the bank sum is shown in the rows'
   // own currency so a foreign batch is never misread as SEK.
   const lines = (data.lines as PostingLineLike[]) || []
-  const txCount = typeof data.tx_count === 'number' ? data.tx_count : null
-  const txSum = typeof data.tx_sum === 'number' && Number.isFinite(data.tx_sum) ? data.tx_sum : null
-  const currency = (data.currency as string) || 'SEK'
   const linkExisting = data.mode === 'link_existing'
-  const t = useTranslations('pending')
-  // A link may carry rows of several dates: earliest and latest.
-  const txDate = String(data.tx_date ?? '')
-  const txDates = data.tx_date_to
-    ? t('preview_field.date_range', { from: txDate, to: String(data.tx_date_to) })
-    : txDate
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{txDates}</span>
-        <span className="text-muted-foreground">Transaktioner</span>
-        <span className="font-mono tabular-nums">
-          {txCount ?? '-'}
-          {txSum !== null ? ` · ${formatCurrency(txSum, currency)}` : ''}
-        </span>
-        <span className="text-muted-foreground">Åtgärd</span>
-        <span>{linkExisting ? 'Länka till befintligt verifikat' : 'Ny samlingsverifikation'}</span>
-        {data.entry_description ? (
-          <>
-            <span className="text-muted-foreground">Beskrivning</span>
-            <span className="truncate">{String(data.entry_description)}</span>
-          </>
-        ) : null}
-      </div>
+      <FactRows groups={proposalFacts('bulk_book_transactions', data) ?? []} />
       {lines.length > 0 && <StagedLinesTable lines={lines} showTotals />}
       {linkExisting && lines.length === 0 && (
         <p className="text-xs text-muted-foreground">
@@ -712,14 +640,14 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-4 text-sm">
       <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+        <p className="text-xs text-muted-foreground mb-1">
           Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
         </p>
-        <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
+        <p className="text-xs text-muted-foreground mb-2">{original.description ?? ''}</p>
         {original.lines && original.lines.length > 0 && <StagedLinesTable lines={original.lines} />}
       </div>
       <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+        <p className="text-xs text-muted-foreground mb-1">
           Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
         </p>
         {correction.lines && correction.lines.length > 0 && (
@@ -744,7 +672,7 @@ function renderValue(value: unknown): ReactNode {
   if (Array.isArray(value)) return `${value.length} rader`
   if (isPlainObject(value)) {
     return (
-      <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px]">
+      <pre className="whitespace-pre-wrap break-words font-mono text-xs">
         {JSON.stringify(value, null, 2)}
       </pre>
     )
@@ -886,10 +814,14 @@ const ENTRY_LIST_COMPACT = 3
 
 function GenericPreview({ data, detail = false }: { data: Record<string, unknown>; detail?: boolean }) {
   const t = useTranslations('pending')
+  const template = useIsTemplate()
   // A uuid is a database handle, not something the approver can check
   // against anything: the title already names the objects involved.
+  // `will` is the staging tool's note to the agent, in English: on the
+  // review template the bar states what the approval does, in the person's
+  // language.
   const entries = Object.entries(data).filter(
-    ([k, v]) => v != null && v !== '' && !GENERIC_PREVIEW_SKIPPED_KEYS.has(k) && !isUuid(v),
+    ([k, v]) => v != null && v !== '' && !GENERIC_PREVIEW_SKIPPED_KEYS.has(k) && !isUuid(v) && !(template && k === 'will'),
   )
   const entryPreviews = entries.filter(([, v]) => isEntryPreview(v))
   const entryLists = entries.filter(([, v]) => isEntryPreviewList(v))
@@ -937,12 +869,9 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
     return Array.isArray(value) ? value.join(', ') : value
   }
   const factRow = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>, nested = false) => (
-    <Fragment key={key}>
-      <span className={cn('min-w-0 break-words text-muted-foreground', nested && 'pl-3')}>{t(`preview_field.${key}`)}</span>
-      <span className={cn('min-w-0 break-words', typeof value === 'number' && 'font-mono tabular-nums')}>
-        {fact(key, value, scope)}
-      </span>
-    </Fragment>
+    <Fact key={key} label={t(`preview_field.${key}`)} mono={typeof value === 'number'} nested={nested}>
+      {fact(key, value, scope)}
+    </Fact>
   )
   // An empty or unreadable value (a dimension bag) shows as '-'. A long text
   // is cut outside the review panel, where the whole text is a click away.
@@ -957,43 +886,36 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
     const known = field in update.before && (stated(before) || before == null || before === '')
     const beforeScope = { ...data, ...update.before }
     const afterScope = { ...data, ...update.after }
-    const label = (
-      <span className="min-w-0 break-words pl-3 text-muted-foreground">{t(`preview_field.${field}`)}</span>
-    )
+    const label = t(`preview_field.${field}`)
     if (isStructuredValue(after) || isStructuredValue(before)) {
       return (
-        <Fragment key={field}>
-          {label}
-          <span className="min-w-0 break-words">{t('preview_change_structured')}</span>
-        </Fragment>
+        <Fact key={field} label={label} nested>
+          {t('preview_change_structured')}
+        </Fact>
       )
     }
     // A text too long for one line reads as the old text struck above the
     // new one, each kept as written (line breaks included).
     if (isLongText(before) || isLongText(after)) {
       return (
-        <Fragment key={field}>
-          {label}
-          <span className="min-w-0 space-y-1 break-words">
+        <Fact key={field} label={label} nested>
+          <span className="block space-y-1 text-left">
             {known && stated(before) && (
               <del className="block whitespace-pre-wrap text-muted-foreground">{changeValue(field, before, beforeScope)}</del>
             )}
             <ins className="block whitespace-pre-wrap no-underline">{changeValue(field, after, afterScope)}</ins>
           </span>
-        </Fragment>
+        </Fact>
       )
     }
     return (
-      <Fragment key={field}>
-        {label}
-        <span className={cn('min-w-0 break-words', (typeof after === 'number' || typeof before === 'number') && 'font-mono tabular-nums')}>
-          {known ? (
-            <ValueChange before={changeValue(field, before, beforeScope)} after={changeValue(field, after, afterScope)} />
-          ) : (
-            changeValue(field, after, afterScope)
-          )}
-        </span>
-      </Fragment>
+      <Fact key={field} label={label} nested mono={typeof after === 'number' || typeof before === 'number'}>
+        {known ? (
+          <ValueChange before={changeValue(field, before, beforeScope)} after={changeValue(field, after, afterScope)} />
+        ) : (
+          changeValue(field, after, afterScope)
+        )}
+      </Fact>
     )
   }
   if (entryPreviews.length + entryLists.length + konteringEntries.length + facts.length + groups.length + changeFields.length === 0) {
@@ -1010,11 +932,11 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
         const shown = detail ? list : list.slice(0, ENTRY_LIST_COMPACT)
         return (
           <div key={key} className="space-y-3">
-            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t('preview_entries_heading', { count: list.length })}
             </p>
             {shown.map((entry, i) => (
-              <div key={i} className={cn(i > 0 && 'border-t pt-3')}>
+              <div key={i} className={cn(i > 0 && !template && 'border-t pt-3')}>
                 <VoucherPreview data={entry} showSeries={false} />
               </div>
             ))}
@@ -1030,21 +952,21 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
         <PreviewKonteringTable key={key} lines={value as PostingLineLike[]} />
       ))}
       {facts.length + groups.length + changeFields.length > 0 && (
-        <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1 text-sm">
+        <FactList compactClassName="grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           {facts.map(([key, value]) => factRow(key, value, data))}
           {groups.map(([key, obj, rows]) => (
             <Fragment key={key}>
-              <span className="col-span-2 pt-1 text-muted-foreground">{t(`preview_field.${key}`)}</span>
+              <FactGroupLabel>{t(`preview_field.${key}`)}</FactGroupLabel>
               {rows.map(([k, v]) => factRow(k, v, { ...data, ...obj }, true))}
             </Fragment>
           ))}
           {changeFields.length > 0 && (
             <>
-              <span className="col-span-2 pt-1 text-muted-foreground">{t('preview_field.changes')}</span>
+              <FactGroupLabel>{t('preview_field.changes')}</FactGroupLabel>
               {changeFields.map(changeRow)}
             </>
           )}
-        </div>
+        </FactList>
       )}
     </div>
   )
@@ -1073,21 +995,17 @@ function UpdateAccountPreview({ data }: { data: Record<string, unknown> }) {
     return String(value)
   }
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">{t('preview_account')}</span>
-      <span className="min-w-0 break-words">
+    <FactList>
+      <Fact label={t('preview_account')}>
         <span className="font-mono tabular-nums">{String(data.account_number ?? '')}</span>
         {current.account_name ? ` ${String(current.account_name)}` : null}
-      </span>
+      </Fact>
       {Object.entries(changes).map(([field, value]) => (
-        <Fragment key={field}>
-          <span className="text-muted-foreground">{label(field)}</span>
-          <span className="min-w-0 break-words">
-            <ValueChange before={show(field, current[field])} after={show(field, value)} />
-          </span>
-        </Fragment>
+        <Fact key={field} label={label(field)}>
+          <ValueChange before={show(field, current[field])} after={show(field, value)} />
+        </Fact>
       ))}
-    </div>
+    </FactList>
   )
 }
 
@@ -1137,25 +1055,15 @@ function useVoucherLines(journalEntryId: string | null) {
   return { loading: journalEntryId != null && current == null, lines: current?.lines ?? null }
 }
 
-function LinkPreviewCard({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0 space-y-2 rounded-lg border border-border p-3">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
-      {children}
-    </div>
-  )
-}
-
 function LinkPreviewRows({ rows }: { rows: Array<{ label: string; value: ReactNode; tabular?: boolean }> }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-3 gap-y-1">
+    <FactList compactClassName="grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-3">
       {rows.map((row) => (
-        <Fragment key={row.label}>
-          <span className="text-xs text-muted-foreground">{row.label}</span>
-          <span className={cn('min-w-0 break-words', row.tabular && 'tabular-nums')}>{row.value}</span>
-        </Fragment>
+        <Fact key={row.label} label={row.label} numeric={row.tabular}>
+          {row.value}
+        </Fact>
       ))}
-    </div>
+    </FactList>
   )
 }
 
@@ -1174,10 +1082,13 @@ function LinkDocumentToVoucherPreview({
   data,
   params,
   detail,
+  ownDocument,
 }: {
   data: Record<string, unknown>
   params: Record<string, unknown>
   detail: boolean
+  /** False where the surface shows the file itself, in its underlag slot. */
+  ownDocument: boolean
 }) {
   const t = useTranslations('pending')
   const tStatus = useTranslations('journal_status')
@@ -1201,15 +1112,15 @@ function LinkDocumentToVoucherPreview({
   ]
 
   const voucherCard = (
-    <LinkPreviewCard label={t('preview_link_voucher_heading')}>
+    <PreviewBlock label={t('preview_link_voucher_heading')}>
       <LinkPreviewRows rows={voucherRows} />
       {detail && journalEntryId && (
         <div className="space-y-2 pt-1">
           {linesLoading ? (
-            <div className="space-y-1.5">
+            <LateReveal className="space-y-1.5">
               <Skeleton className="h-4 w-full rounded-sm" />
               <Skeleton className="h-4 w-full rounded-sm" />
-            </div>
+            </LateReveal>
           ) : lines && lines.length > 0 ? (
             <StagedLinesTable lines={lines} showTotals />
           ) : (
@@ -1220,12 +1131,12 @@ function LinkDocumentToVoucherPreview({
           </Link>
         </div>
       )}
-    </LinkPreviewCard>
+    </PreviewBlock>
   )
 
-  const showViewer = detail && documentId != null
+  const showViewer = detail && ownDocument && documentId != null
   const documentCard = (
-    <LinkPreviewCard label={t('preview_link_document_heading')}>
+    <PreviewBlock label={t('preview_link_document_heading')}>
       {/* The viewer's own header names the file. */}
       {!showViewer && <LinkPreviewRows rows={[{ label: t('preview_link_file'), value: fileName ?? '-' }]} />}
       {data.document_already_linked === true && (
@@ -1242,12 +1153,12 @@ function LinkDocumentToVoucherPreview({
             fileName={fileName}
             className="h-[56vh]"
           />
-        ) : (
+        ) : ownDocument ? (
           <div className="pt-1">
             <DocumentViewButton documentId={documentId} />
           </div>
-        ))}
-    </LinkPreviewCard>
+        ) : null)}
+    </PreviewBlock>
   )
 
   if (detail) {
@@ -1278,15 +1189,30 @@ export function useComplianceWarningText(): (warning: ComplianceWarning) => stri
   return (warning) => (warning.kind === 'missing_underlag' ? t('warning_missing_underlag') : warning.text)
 }
 
-export function OperationPreview({ op, detail = false }: { op: OperationPreviewInput; detail?: boolean }) {
+/**
+ * `template`: the review of one proposal (ProposalReview). The preview then
+ * sets its fields as the template's hairline rows and leaves the warning and
+ * the underlag to the template, which has a fixed place for each.
+ */
+export function OperationPreview({
+  op,
+  detail = false,
+  template = false,
+}: {
+  op: OperationPreviewInput
+  detail?: boolean
+  template?: boolean
+}) {
   const warningText = useComplianceWarningText()
   const warning = complianceWarningOf(op)
   const body = (() => {
     switch (op.operation_type) {
       case 'categorize_transaction':
         return <CategorizePreview data={op.preview_data} />
+      // Typed fields only: review-model's customerFacts and transactionFacts.
       case 'create_customer':
-        return <CustomerPreview data={op.preview_data} />
+      case 'create_transaction':
+        return <FactRows groups={proposalFacts(op.operation_type, op.preview_data) ?? []} />
       case 'create_invoice':
         return isRegisterBookedInvoiceParams(op.preview_data)
           ? <RegisterBookedInvoicePreview data={op.preview_data} />
@@ -1294,11 +1220,11 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
       case 'create_supplier_invoice_from_inbox':
         return isRegisterBookedInvoiceParams(op.preview_data)
           ? <RegisterBookedSupplierInvoicePreview data={op.preview_data} />
-          : <GenericPreview data={op.preview_data} />
+          : template
+            ? <SupplierInvoicePreview data={op.preview_data} />
+            : <GenericPreview data={op.preview_data} />
       case 'update_invoice':
         return <UpdateInvoicePreview data={op.preview_data} />
-      case 'create_transaction':
-        return <CreateTransactionPreview data={op.preview_data} />
       case 'create_voucher':
         return <VoucherPreview data={op.preview_data} />
       case 'bulk_book_transactions':
@@ -1308,13 +1234,26 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
       case 'update_account':
         return <UpdateAccountPreview data={op.preview_data} />
       case 'attach_document_to_transaction':
-        return <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
+        // In the template the file and the bank row sit in the underlag
+        // slot: the proposal states the pairing as typed fields.
+        return template ? (
+          <AttachDocumentFacts data={op.preview_data} />
+        ) : (
+          <AttachDocumentPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
+        )
       case 'match_transaction_invoice':
-        return <MatchTransactionInvoicePreview data={op.preview_data} />
+        return template ? <MatchInvoiceFacts data={op.preview_data} /> : <MatchTransactionInvoicePreview data={op.preview_data} />
       case 'link_documents_to_vouchers':
         return <LinkDocumentsPreview data={op.preview_data} />
       case 'link_document_to_voucher':
-        return <LinkDocumentToVoucherPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
+        return (
+          <LinkDocumentToVoucherPreview
+            data={op.preview_data}
+            params={op.params ?? {}}
+            detail={detail}
+            ownDocument={!template}
+          />
+        )
       case 'reconciliation_match':
         // An operation staged before the pairs were described (crm#1147)
         // carries ids only: it keeps the generic preview.
@@ -1327,6 +1266,7 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
         return <GenericPreview data={op.preview_data} detail={detail} />
     }
   })()
+  if (template) return <PreviewDensityContext.Provider value="template">{body}</PreviewDensityContext.Provider>
   // One line above every preview type, from the same reading the Granskning
   // row uses. The VAT explanation stays inside the invoice previews, next to
   // the lines it is about.

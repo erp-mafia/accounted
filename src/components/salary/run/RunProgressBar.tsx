@@ -127,11 +127,11 @@ export function RunProgressBar(props: RunProgressBarProps) {
           <p className="text-sm font-medium">
             {activeStep ? activeStep.label : t('rail_all_done')}
           </p>
-          <p className="text-[11px] text-muted-foreground tabular-nums">
+          <p className="text-xs text-muted-foreground tabular-nums">
             {t('rail_step_counter', { done: doneCount, total: steps.length })}
           </p>
         </div>
-        {exception && <p className="text-[11px] text-muted-foreground">{exception}</p>}
+        {exception && <p className="text-xs text-muted-foreground">{exception}</p>}
       </div>
 
       {/* Desktop: segmented track with per-segment labels; a line beneath

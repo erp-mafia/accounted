@@ -13,7 +13,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { DocumentTextIcon, MagnifyingGlassIcon, PhotoIcon } from '@/components/icons'
 import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
@@ -72,12 +73,17 @@ export function InvoiceArchivePicker({
   onPick: (docs: ArchivedAttachmentPick[]) => void
 }) {
   const t = useTranslations('invoice_attachments')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const [rows, setRows] = useState<ArkivDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<ArkivDocumentRow[]>([])
   const [error, setError] = useState<string | null>(null)
+  // The archive could not be read: said in place of the list, with "Försök
+  // igen" (bumps retryKey), instead of reading as an empty archive.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const [preview, setPreview] = useState<ArkivDocumentRow | null>(null)
 
   // A fresh start each time it opens.
@@ -105,11 +111,14 @@ export function InvoiceArchivePicker({
             const res = await fetch(`/api/arkiv/documents?${params.toString()}`)
             if (!res.ok) throw new Error(String(res.status))
             const json = (await res.json()) as { data?: ArkivDocumentRow[] }
-            if (!cancelled) setRows(json.data ?? [])
+            if (!cancelled) {
+              setRows(json.data ?? [])
+              setLoadFailed(false)
+            }
           } catch {
             if (!cancelled) {
               setRows([])
-              setError(t('picker_load_failed'))
+              setLoadFailed(true)
             }
           } finally {
             if (!cancelled) setLoading(false)
@@ -122,7 +131,7 @@ export function InvoiceArchivePicker({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, serverQuery, t])
+  }, [open, serverQuery, retryKey])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -195,7 +204,7 @@ export function InvoiceArchivePicker({
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => !o && close()}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('picker_title')}</DialogTitle>
             <DialogDescription>
@@ -220,18 +229,22 @@ export function InvoiceArchivePicker({
 
           <div className="-mx-6 max-h-[55vh] divide-y overflow-y-auto px-6">
             {loading ? (
-              <div className="space-y-3 py-3">
+              <LateReveal className="space-y-3 py-3">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
+              </LateReveal>
+            ) : loadFailed ? (
+              <LoadError onRetry={() => setRetryKey((key) => key + 1)} />
+            ) : visible.length === 0 && hasSearch ? (
+              <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+                <span data-ph-mask="">{t('picker_empty_search', { query: search.trim() })}</span>
+                <Button variant="link" onClick={() => setSearch('')}>
+                  {tCommon('clear_search')}
+                </Button>
               </div>
             ) : visible.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-10 text-center">
-                <DocumentTextIcon className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_empty')}
-                </p>
-              </div>
+              <EmptyState icon={DocumentTextIcon} title={t('picker_empty')} />
             ) : (
               visible.map((row) => {
                 const isAttached = attachedSet.has(row.document_id)
@@ -294,7 +307,6 @@ export function InvoiceArchivePicker({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       className="shrink-0 text-muted-foreground"
                       onClick={() => setPreview(row)}
                     >
@@ -326,7 +338,7 @@ export function InvoiceArchivePicker({
       </Dialog>
 
       <Dialog open={preview !== null} onOpenChange={(o) => !o && setPreview(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle data-ph-mask="" className="truncate pr-6">
               {preview?.title}

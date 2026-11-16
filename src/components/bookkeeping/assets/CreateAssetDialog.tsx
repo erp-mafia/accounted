@@ -369,13 +369,13 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               type="button"
               onClick={() => setOpeningExpanded(true)}
               aria-expanded={false}
-              className="inline-flex items-center gap-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+              className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
               <ChevronRightIcon className="h-3.5 w-3.5" aria-hidden="true" />
               {t('opening.disclosure')}
             </button>
           ) : (
-            <div className="space-y-3 rounded-lg border border-border p-4">
+            <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium">{t('opening.title')}</p>
                 <HelpPopover>{t('opening.hint')}</HelpPopover>
@@ -413,10 +413,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             </div>
           )}
           {isK3 && !isLand && (
-            <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+            <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
-                  <Label className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                  <Label className="text-sm font-medium text-muted-foreground">
                     {t('components.title')}
                   </Label>
                   <p className="text-xs text-muted-foreground">{t('components.hint')}</p>
@@ -424,7 +424,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                 <Button
                   type="button"
                   variant={useComponents ? 'default' : 'outline'}
-                  size="sm"
                   onClick={() => toggleUseComponents(!useComponents)}
                 >
                   {useComponents ? t('components.on') : t('components.off')}
@@ -441,7 +440,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             </div>
           )}
           {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="bg-destructive/8 rounded-lg p-3 text-sm text-destructive">
               {error}
             </div>
           )}

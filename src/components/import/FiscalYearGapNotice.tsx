@@ -32,7 +32,7 @@ export function FiscalYearGapNotice() {
         {t('title', { count: gaps.length })}
       </AttnLine>
       {gaps.map((gap) => (
-        <p key={`${gap.missing_from}-${gap.missing_to}`} className="text-[12.5px] leading-5 text-muted-foreground tabular-nums">
+        <p key={`${gap.missing_from}-${gap.missing_to}`} className="text-xs leading-5 text-muted-foreground tabular-nums">
           {t('gap', { from: gap.missing_from, to: gap.missing_to, after: gap.after.name, before: gap.before.name })}
         </p>
       ))}

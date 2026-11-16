@@ -327,7 +327,7 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
                 <option value="k2">{t('previous_year_k2')}</option>
                 {previousYear === null && <option value="none">{t('previous_year_none')}</option>}
               </SettingsSelect>
-              <p className="text-[12.5px] text-muted-foreground">{t('previous_year_help')}</p>
+              <p className="text-xs text-muted-foreground">{t('previous_year_help')}</p>
             </div>
           )}
           {isK3ToK2 && (
@@ -343,10 +343,10 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
                   onChange={(e) => setReason(e.target.value)}
                   onInput={(e) => e.stopPropagation()}
                 />
-                <p className="text-[12.5px] text-muted-foreground">{t('reason_help')}</p>
+                <p className="text-xs text-muted-foreground">{t('reason_help')}</p>
               </div>
               {earlierK2Known ? (
-                <p className="text-[12.5px] text-muted-foreground">{t('previously_k2_known')}</p>
+                <p className="text-xs text-muted-foreground">{t('previously_k2_known')}</p>
               ) : (
                 <label className="flex items-start gap-2 text-[13px]">
                   <Checkbox

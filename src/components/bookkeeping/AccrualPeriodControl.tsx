@@ -204,15 +204,15 @@ export default function AccrualPeriodControl({
     onChange(accrualValueAfterEdit({ direction, targetAccount, invoiceDate }, value, patch))
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+    <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="text-xs font-medium text-muted-foreground">
           {t('panel_title')}
         </span>
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           onClick={onRemove}
           aria-label={t('remove_aria')}
         >

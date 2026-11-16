@@ -180,7 +180,7 @@ export function BankSyncProgressDialog({
                 {formatElapsed(elapsedSec)}
               </span>
             </div>
-            <ul className="rounded-lg border border-border divide-y divide-border text-sm">
+            <ul className="divide-y divide-border text-sm">
               {enabledAccounts.map((a) => (
                 <li key={a.uid} className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="truncate">{a.name || a.iban || a.uid}</span>
@@ -196,7 +196,7 @@ export function BankSyncProgressDialog({
         )}
 
         {state.kind === 'failed' && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <div className="rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
             {state.error.message}
           </div>
         )}
@@ -263,7 +263,7 @@ function DoneBody({
 
   return (
     <div className="space-y-3 py-2">
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-4">
+      <div className="flex items-center gap-3 rounded-lg p-4 bg-control shadow-raised">
         <CheckCircleIcon className="h-6 w-6 shrink-0 text-foreground" />
         <div className="text-sm">
           <p>
@@ -290,7 +290,7 @@ function DoneBody({
       </div>
 
       {noticeText && (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             {noticeText}{' '}
@@ -302,7 +302,7 @@ function DoneBody({
       )}
 
       {wasTruncated && (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             Banken returnerade kortare historik än begärt. För äldre data, använd{' '}

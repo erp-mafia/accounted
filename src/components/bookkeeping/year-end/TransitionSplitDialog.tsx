@@ -104,7 +104,7 @@ export function TransitionSplitDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('split_title', { name: asset.name })}</DialogTitle>
         </DialogHeader>
@@ -156,7 +156,7 @@ export function TransitionSplitDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => setRows((current) => current.filter((candidate) => candidate.key !== row.key))}
                   aria-label={t('component_remove', { name: row.name || '' })}
                 >
@@ -170,10 +170,10 @@ export function TransitionSplitDialog({
             </div>
           ))}
           <div className="flex items-center justify-between gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setRows((current) => [...current, componentDraft()])}>
-              <PlusIcon className="mr-1 h-4 w-4" /> {t('component_add')}
+            <Button type="button" variant="outline" onClick={() => setRows((current) => [...current, componentDraft()])}>
+              <PlusIcon className="h-4 w-4" /> {t('component_add')}
             </Button>
-            <span className="text-[12.5px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {t('split_sum', { sum: formatCurrency(sum), total: formatCurrency(asset.carrying_amount) })}
             </span>
           </div>

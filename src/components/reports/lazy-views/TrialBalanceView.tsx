@@ -45,7 +45,7 @@ export default function TrialBalanceView({
   // IB is the balance the day before fromDate, Förändring the activity in
   // the range, UB the balance at toDate.
   const reportQs = reportQuery(periodId, dateRange)
-  const { data, loading, error } = useReportData<{
+  const { data, loading, error, refetch } = useReportData<{
     rows: TrialBalanceRow[]
     totalDebit: number
     totalCredit: number
@@ -58,7 +58,7 @@ export default function TrialBalanceView({
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data || data.rows.length === 0) {
@@ -121,7 +121,7 @@ export default function TrialBalanceView({
           <div className="overflow-x-auto -mx-2 px-2">
             {viewMode === 'simplified' ? (
               <table className="w-full text-sm tabular-nums min-w-[500px]">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
                     <th className="py-2 w-8"></th>
                     <th className="py-2 w-20">Konto</th>
@@ -147,7 +147,7 @@ export default function TrialBalanceView({
               </table>
             ) : (
               <table className="w-full text-sm tabular-nums min-w-[600px]">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
                     <th className="py-2 w-8"></th>
                     <th className="py-2 w-20">Konto</th>

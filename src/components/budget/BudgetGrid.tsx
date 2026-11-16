@@ -17,7 +17,7 @@ interface Props {
   onCellChange: (account: string, monthIndex: number, amount: number) => void
 }
 
-const NUM_CELL = 'px-2 py-1.5 text-right tabular-nums whitespace-nowrap border-b border-border'
+const NUM_CELL = 'px-2 py-1.5 text-right tabular-nums whitespace-nowrap border-b-hairline'
 
 /**
  * The budget as an account x month grid: class bands with subtotals and the
@@ -36,7 +36,7 @@ export function BudgetGrid({ months, rows, editable, onCellChange }: Props) {
   const colCount = months.length + 2
 
   return (
-    <div className="overflow-x-auto stagger-enter">
+    <div className="-mx-2 overflow-x-auto stagger-enter">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
@@ -53,13 +53,13 @@ export function BudgetGrid({ months, rows, editable, onCellChange }: Props) {
           {model.groups.map((group) => (
             <React.Fragment key={group.account_class}>
               <tr className="bg-muted/30">
-                <td colSpan={colCount} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+                <td colSpan={colCount} className="px-4 py-2 text-xs font-semibold text-muted-foreground">
                   {RESULT_CLASS_LABELS[group.account_class]}
                 </td>
               </tr>
               {group.rows.map((row) => (
                 <tr key={row.account_number} className="hover:bg-secondary/35">
-                  <td className="sticky left-0 z-10 bg-background px-4 py-1.5 border-b border-border">
+                  <td className="sticky left-0 z-10 bg-background px-4 py-1.5 border-b-hairline">
                     <div className="flex items-center gap-2 min-w-0">
                       <AccountNumber number={row.account_number} name={row.account_name ?? ''} />
                       <span className="truncate max-w-[160px]">{row.account_name}</span>
@@ -82,7 +82,7 @@ export function BudgetGrid({ months, rows, editable, onCellChange }: Props) {
                 </tr>
               ))}
               <tr className="font-medium">
-                <td className="sticky left-0 z-10 bg-background px-4 py-1.5 border-b border-border text-muted-foreground">
+                <td className="sticky left-0 z-10 bg-background px-4 py-1.5 border-b-hairline text-muted-foreground">
                   {t('subtotal')}
                 </td>
                 {group.subtotal.map((v, i) => (

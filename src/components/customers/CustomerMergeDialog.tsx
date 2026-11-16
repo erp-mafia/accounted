@@ -92,7 +92,7 @@ export function CustomerMergeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('merge_dialog_title')}</DialogTitle>
           <DialogDescription>{t('merge_dialog_body')}</DialogDescription>
@@ -113,7 +113,7 @@ export function CustomerMergeDialog({
             />
           </div>
           {other ? (
-            <ul className="divide-y divide-border rounded-lg border border-border">
+            <ul className="divide-y divide-border">
               {cards.map((c) => (
                 <li key={c.id} className="flex items-center gap-3 px-4 py-3 text-[13px]">
                   <span className="min-w-0 flex-1 truncate font-medium">{label(c)}</span>

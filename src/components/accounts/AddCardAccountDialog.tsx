@@ -300,7 +300,7 @@ export default function AddCardAccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) reset(); onOpenChange(next) }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
@@ -362,7 +362,7 @@ export default function AddCardAccountDialog({
                 aria-invalid={last4Parsed === null}
                 onChange={(e) => setLast4(e.target.value.replace(/[^\d,;\s]/g, ''))}
               />
-              <div className="text-[12.5px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 {last4Parsed === null ? <span className="text-destructive">{t('last4_invalid')}</span> : t('last4_hint')}
               </div>
             </div>
@@ -373,7 +373,7 @@ export default function AddCardAccountDialog({
                 value={voucherSeries}
                 maxLength={1}
                 placeholder={t('voucher_series_hint')}
-                className="uppercase placeholder:normal-case"
+                className="placeholder:normal-case"
                 onChange={(e) => setVoucherSeries(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
               />
             </div>
@@ -404,11 +404,11 @@ export default function AddCardAccountDialog({
                 </SelectContent>
               </Select>
             ) : loadFailed ? (
-              <div className="text-[12.5px] text-destructive">{t('load_failed')}</div>
+              <div className="text-xs text-destructive">{t('load_failed')}</div>
             ) : (
               <Skeleton className="h-9 w-full rounded-lg" />
             )}
-            <div className="text-[12.5px] text-muted-foreground">{t('ledger_hint')}</div>
+            <div className="text-xs text-muted-foreground">{t('ledger_hint')}</div>
             {attention && <AttnLine action={attention.action}>{attention.text}</AttnLine>}
             {suggestion && suggestion.ledger === null && <AttnLine>{t('no_free_ledger')}</AttnLine>}
           </div>

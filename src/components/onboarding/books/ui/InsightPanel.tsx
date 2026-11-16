@@ -128,7 +128,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
         <div className="vatwrap">
           {!vatOpen ? (
             <>
-              <Button variant="link" size="sm" className={CHANGE_LINK_CLASS} style={{ margin: '0 6px 0 0' }} onClick={openVat}>
+              <Button variant="link" className={CHANGE_LINK_CLASS} style={{ margin: '0 6px 0 0' }} onClick={openVat}>
                 {t('vat_set_now')}
               </Button>
               {t('vat_or_later')}
@@ -189,14 +189,14 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
             <p className="insight-headline">{headline}</p>
             <p className="insight-meta">
               {attention > 0 ? <span className="insight-attn">{t('insight_attention', { count: attention })}</span> : null}
-              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setDetailsOpen(true)}>
+              <Button variant="ghost" className="text-muted-foreground" onClick={() => setDetailsOpen(true)}>
                 {t('insight_show')}
               </Button>
             </p>
           </>
         )}
         <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <DialogContent className="bks-host sm:max-w-xl">
+          <DialogContent size="form" className="bks-host">
             <DialogHeader>
               <DialogTitle>{t('insight_dialog_title')}</DialogTitle>
             </DialogHeader>

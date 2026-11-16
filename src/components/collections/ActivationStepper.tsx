@@ -240,11 +240,11 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
               </a>
             </SettingsRow>
           ) : null}
-          <label className="flex items-start gap-3 border-b border-border py-3 text-[13px]">
+          <label className="flex items-start gap-3 border-b-hairline py-3 text-[13px]">
             <Checkbox className="mt-0.5" checked={acceptTerms} onCheckedChange={(v) => setAcceptTerms(v === true)} />
             <span>{tp('consent_terms')}</span>
           </label>
-          <label className="flex items-start gap-3 border-b border-border py-3 text-[13px]">
+          <label className="flex items-start gap-3 border-b-hairline py-3 text-[13px]">
             <Checkbox className="mt-0.5" checked={acceptData} onCheckedChange={(v) => setAcceptData(v === true)} />
             <span>{tp('consent_data')}</span>
           </label>
@@ -331,7 +331,7 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
             </SettingsRow>
             {/* Mounted only after Ja: after Nej or no answer the box is not on the page at all. */}
             {kycDescriptionShown(kyc[flag]) && (
-              <div className="ml-3 border-l border-border pl-4 animate-fade-in">
+              <div className="ml-3 border-l-hairline pl-4 animate-fade-in">
                 <SettingsRow label={t(describe)} htmlFor={`coll-${description}`} align="baseline">
                   <SettingsTextarea id={`coll-${description}`} value={kyc[description]} onChange={(e) => setKyc({ ...kyc, [description]: e.target.value })} />
                   {fieldError(`kyc.${description}`)}
@@ -343,13 +343,13 @@ export function ActivationStepper({ data, onChanged }: ActivationStepperProps) {
       </SettingsGroup>
 
       {/* The rules start from defaults; they are edited under Regler once the connection is active. */}
-      <p className="pt-6 text-[12.5px] text-muted-foreground">
+      <p className="pt-6 text-xs text-muted-foreground">
         {tp(rules.ladderMode === 'staged' ? 'activation_rules_note_ladder' : 'activation_rules_note', {
           amount: formatKronor(rules.minimumAmount),
         })}
       </p>
 
-      {message ? <p className="pt-4 text-[12.5px] text-attn">{message}</p> : null}
+      {message ? <p className="pt-4 text-xs text-attn">{message}</p> : null}
 
       <div className="flex items-center justify-end gap-3 pt-6">
         <Button onClick={submit} disabled={!canSubmit} loading={busy}>

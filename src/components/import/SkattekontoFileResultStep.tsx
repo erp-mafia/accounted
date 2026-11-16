@@ -27,11 +27,11 @@ export default function SkattekontoFileResultStep({
   return (
     <div className="space-y-6">
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           <div className="flex flex-col items-center gap-4 py-6 text-center">
             <CheckCircleIcon className="h-12 w-12 text-success" />
             <div>
-              <p className="font-display text-xl">{t('skattekonto_result_title')}</p>
+              <p className="text-[15px] font-medium leading-[22px] text-strong">{t('skattekonto_result_title')}</p>
               <p className="mt-2 text-sm text-muted-foreground">
                 {t('skattekonto_result_summary', {
                   imported: result.imported,

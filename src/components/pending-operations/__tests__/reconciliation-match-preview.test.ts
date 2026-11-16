@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 
 // The real Swedish strings, so a missing key shows as its raw name.
 vi.mock('next-intl', async () => {
@@ -32,6 +32,8 @@ const render = (preview_data: Record<string, unknown>, detail = false) =>
   )
 
 const sek = (amount: number) => formatCurrency(amount, 'SEK')
+// A row amount drops "kr" (Stil v3); the Summa row and the verifikat lines keep it.
+const row = (amount: number) => formatRowAmount(amount, 'SEK')
 
 const ROW_TAX = '11111111-1111-4111-8111-111111111111'
 const ROW_FEE = '22222222-2222-4222-8222-222222222222'
@@ -80,7 +82,8 @@ describe('the approval card of a reconciliation_match (crm#1147)', () => {
     for (const text of ['2026-09-14', 'Avdragen skatt augusti 2026', '2026-09-16', 'Arbetsgivaravgift augusti 2026']) {
       expect(html).toContain(text)
     }
-    for (const amount of [-4521, -7704, -12225]) expect(html).toContain(sek(amount))
+    for (const amount of [-4521, -7704]) expect(html).toContain(row(amount))
+    expect(html).toContain(sek(-12225))
     expect(html).toContain('Summa')
     // The verifikat: series and number, date, text.
     expect(html).toContain('A412')
@@ -263,6 +266,6 @@ describe('an operation staged before the details existed', () => {
       true,
     )
     expect(html).toContain('På kontot')
-    expect(html).toContain(sek(-1))
+    expect(html).toContain(row(-1))
   })
 })

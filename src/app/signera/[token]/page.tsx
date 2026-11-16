@@ -1,3 +1,4 @@
+import { StandaloneMessage } from '@/components/standalone/StandalonePage'
 import type { Metadata } from 'next'
 import { getTranslations } from 'next-intl/server'
 import { SigningPage } from '@/components/signing/SigningPage'
@@ -18,14 +19,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export const dynamic = 'force-dynamic'
 
 function MessageShell({ title, body }: { title: string; body: string }) {
-  return (
-    <main className="min-h-dvh bg-background flex items-center justify-center px-4 md:px-6">
-      <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-2">
-        <h1 className="font-display text-2xl tracking-tight">{title}</h1>
-        <p className="text-[13px] text-muted-foreground">{body}</p>
-      </div>
-    </main>
-  )
+  return <StandaloneMessage title={title} body={body} />
 }
 
 export default async function SigneraPage({ params }: { params: Promise<{ token: string }> }) {

@@ -1,0 +1,1 @@
+[2026-11-01] List cells sit 8px in and lists bleed 8px past the gutter (boards Kundfakturor-v3, Transaktioner-v3), not 16px: columns 16px apart. Ledger tables (VTH/VTD) and tables that zero their first cell never bleed; Hem's panes sit on the gutter with a 4px inset.

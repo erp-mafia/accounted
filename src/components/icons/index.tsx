@@ -113,6 +113,7 @@ import { MapIcon as MapSource } from '@heroicons-animated/react/map'
 import { MapPinIcon as MapPinSource } from '@heroicons-animated/react/map-pin'
 import { MegaphoneIcon as MegaphoneSource } from '@heroicons-animated/react/megaphone'
 import { MinusCircleIcon as MinusCircleSource } from '@heroicons-animated/react/minus-circle'
+import { MinusIcon as MinusSource } from '@heroicons-animated/react/minus'
 import { MoonIcon as MoonSource } from '@heroicons-animated/react/moon'
 import { NoSymbolIcon as NoSymbolSource } from '@heroicons-animated/react/no-symbol'
 import { PaperAirplaneIcon as PaperAirplaneSource } from '@heroicons-animated/react/paper-airplane'
@@ -296,6 +297,7 @@ export const MapIcon = icon(MapSource, 'MapIcon')
 export const MapPinIcon = icon(MapPinSource, 'MapPinIcon')
 export const MegaphoneIcon = icon(MegaphoneSource, 'MegaphoneIcon')
 export const MinusCircleIcon = icon(MinusCircleSource, 'MinusCircleIcon')
+export const MinusIcon = icon(MinusSource, 'MinusIcon')
 export const MoonIcon = icon(MoonSource, 'MoonIcon')
 export const NoSymbolIcon = icon(NoSymbolSource, 'NoSymbolIcon')
 export const PaperAirplaneIcon = icon(PaperAirplaneSource, 'PaperAirplaneIcon')

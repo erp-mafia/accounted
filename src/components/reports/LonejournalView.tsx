@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
 import {
@@ -17,7 +17,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { SalaryJournalReport, SalaryJournalRow } from '@/lib/reports/salary-journal'
 import { stockholmYearMonth } from '@/lib/dates/iso'
@@ -49,6 +49,9 @@ export function LonejournalView() {
   const [result, setResult] = useState<{ key: string; data?: SalaryJournalReport; error?: string } | null>(null)
 
   const query = `year=${year}&month_from=${monthFrom}&month_to=${monthTo}`
+  // "Försök igen" asks again under a new key, so the skeleton shows meanwhile.
+  const [attempt, setAttempt] = useState(0)
+  const requestKey = `${query}#${attempt}`
   useEffect(() => {
     let cancelled = false
     fetch(`/api/reports/salary-journal?${query}`)
@@ -56,24 +59,24 @@ export function LonejournalView() {
         const json = await res.json().catch(() => ({}))
         if (cancelled) return
         if (!res.ok) {
-          setResult({ key: query, error: getErrorMessage(json, { statusCode: res.status }) })
+          setResult({ key: requestKey, error: getErrorMessage(json, { statusCode: res.status }) })
           return
         }
-        setResult({ key: query, data: json.data as SalaryJournalReport })
+        setResult({ key: requestKey, data: json.data as SalaryJournalReport })
       })
       .catch(() => {
-        if (!cancelled) setResult({ key: query, error: t('load_failed') })
+        if (!cancelled) setResult({ key: requestKey, error: t('load_failed') })
       })
     return () => {
       cancelled = true
     }
-  }, [query, t])
+  }, [query, requestKey, t])
 
   const monthName = (month: number) =>
     new Intl.DateTimeFormat(locale, { month: 'long' }).format(new Date(2026, month - 1, 1))
 
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
-  const upToDate = result !== null && result.key === query
+  const upToDate = result !== null && result.key === requestKey
   const report = upToDate ? result.data ?? null : null
   const error = upToDate ? result.error ?? null : null
 
@@ -135,22 +138,17 @@ export function LonejournalView() {
       </div>
 
       {!upToDate ? (
-        <div className="space-y-3" aria-busy>
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-1/3" />
           <Skeleton className="h-40 w-full" />
-        </div>
+        </LateReveal>
       ) : error || !report ? (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-destructive">
-            <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
-            {error ?? t('load_failed')}
-          </CardContent>
-        </Card>
+        <LoadError title={error ?? t('load_failed')} onRetry={() => setAttempt((n) => n + 1)} />
       ) : report.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('empty')}</p>
+        <EmptyState title={t('empty')} />
       ) : (
         <Card>
-          <CardContent className="p-0">
+          <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -173,12 +171,12 @@ export function LonejournalView() {
                     <TableCell className="tabular-nums">
                       {row.periodYear}-{String(row.periodMonth).padStart(2, '0')}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.grossSalary)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.taxWithheld)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.netSalary)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.avgifterAmount)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.vacationAccrual)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.totalEmployerCost)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.grossSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.taxWithheld)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.netSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.avgifterAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.vacationAccrual)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.totalEmployerCost)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -205,7 +203,7 @@ export function LonejournalView() {
           accounts. Only worth a block when the roster spans groups. */}
       {report && (report.groupTotals ?? []).length > 1 && (
         <Card>
-          <CardContent className="p-0">
+          <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -222,10 +220,10 @@ export function LonejournalView() {
                   <TableRow key={group.group}>
                     <TableCell>{t(`group_${group.group}`)}</TableCell>
                     <TableCell className="text-right tabular-nums">{group.employeeCount}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(group.grossSalary)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(group.avgifterAmount)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(group.vacationAccrual)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(group.totalEmployerCost)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.grossSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.avgifterAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.vacationAccrual)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.totalEmployerCost)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

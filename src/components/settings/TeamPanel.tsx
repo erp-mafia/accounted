@@ -401,7 +401,7 @@ export function TeamPanel() {
   }
 
   return (
-    <SettingsGroup label={<span data-ph-mask="">{teamName || t('team_fallback')}</span>}>
+    <SettingsGroup wide label={<span data-ph-mask="">{teamName || t('team_fallback')}</span>}>
       {/* Member roster: flat hairline rows, no cards. */}
       {members.map((member) => {
         // Role select gates mirror the API: own row stays read-only (no
@@ -412,7 +412,7 @@ export function TeamPanel() {
         return (
           <div
             key={member.id}
-            className="flex items-center gap-3 border-b border-border px-1 py-3"
+            className="flex items-center gap-3 border-b-hairline px-1 py-3"
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/60">
               <span className="text-xs font-medium text-muted-foreground">
@@ -466,7 +466,7 @@ export function TeamPanel() {
             {removable && (
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('remove_aria', { email: member.email })}
                 onClick={() => setRemoveTarget(member)}
@@ -485,7 +485,7 @@ export function TeamPanel() {
           return (
             <div
               key={inv.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3"
+              className="flex items-center gap-3 border-b-hairline px-1 py-3"
             >
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border">
                 <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground" />
@@ -507,7 +507,7 @@ export function TeamPanel() {
               </span>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-foreground"
                 aria-label={t('resend_aria', { email: inv.email })}
                 onClick={() => void handleResendInvite(inv)}
@@ -518,7 +518,7 @@ export function TeamPanel() {
               </Button>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('revoke_aria', { email: inv.email })}
                 onClick={() => void handleRevokeInvite(inv)}
@@ -538,7 +538,7 @@ export function TeamPanel() {
       {canManage && shareInvite && (
         <div className="px-1 pt-3" role="status" aria-live="polite">
           {shareInvite.sent ? (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('invite_link_sent', { email: shareInvite.email })}{' '}
               <button
                 type="button"
@@ -578,7 +578,8 @@ export function TeamPanel() {
             onChange={(e) => setInviteEmail(e.target.value)}
             disabled={isSending}
             required
-            className="border-border sm:flex-1"
+            // The field class grows along the row (flex-1); stacked on a phone that same rule would collapse its height, so it holds its own there.
+            className="flex-none border-border sm:flex-1"
           />
           <Select
             value={inviteRole}
@@ -607,8 +608,8 @@ export function TeamPanel() {
               {accessLabel(inviteCompanyIds)}
             </button>
           )}
-          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
-            {!isSending && <PlusIcon className="mr-2 h-4 w-4" />}
+          <Button type="submit" disabled={!inviteEmail.trim()} loading={isSending}>
+            {!isSending && <PlusIcon className="h-4 w-4" />}
             {t('invite_button')}
           </Button>
         </form>

@@ -5,10 +5,11 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon, ChevronRightIcon, PencilSquareIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { RowFoldout, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDate } from '@/lib/utils'
 import type { SigningRequestStatusFilter, SigningRequestView } from '@/lib/signing/requests'
 import { SigningRequestCard, SigningRequestState } from './SigningRequestCard'
@@ -29,6 +30,7 @@ const FILTERS: Filter[] = ['all', 'open', 'completed', 'declined', 'cancelled']
  */
 export function SigningRequestsList() {
   const t = useTranslations('signing')
+  const tCommon = useTranslations('common')
   // Chasing a request already sent needs the feature, not the plan (only sending a new one does).
   const available = useSigningAvailability().offered
   const [filter, setFilter] = useState<Filter>('all')
@@ -73,20 +75,24 @@ export function SigningRequestsList() {
   )
 
   let body: React.ReactNode
-  if (failed) body = <p className="text-[13px] text-muted-foreground">{t('list_load_failed')}</p>
+  const retry = () => {
+    setFailed(false)
+    setReloadKey((n) => n + 1)
+  }
+  if (failed && !requests) body = <LoadError title={t('list_load_failed')} onRetry={retry} />
   else if (!requests)
     body = (
-      <div className="space-y-2">
+      <LateReveal className="space-y-2">
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-2/3" />
-      </div>
+      </LateReveal>
     )
   else if (requests.length === 0)
     body = <EmptyState icon={PencilSquareIcon} title={filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
   else
     body = (
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -115,14 +121,14 @@ export function SigningRequestsList() {
                         {r.signers.map((s) => s.name).join(', ')}
                       </span>
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(r.created_at)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(r.created_at)}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       <SigningRequestState request={r} />
                     </td>
                     <td className={cn(TD_CLASS, 'py-1 text-right align-middle')}>
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         aria-expanded={open}
                         aria-label={open ? t('row_collapse', { title: r.title }) : t('row_expand', { title: r.title })}
                         onClick={() => setExpanded(open ? null : r.signing_request_id)}
@@ -133,7 +139,7 @@ export function SigningRequestsList() {
                   </tr>
                   {open && (
                     <tr>
-                      <td colSpan={5} className="border-b border-border p-0">
+                      <td colSpan={5} className="border-b-hairline p-0">
                         <RowFoldout>
                           <div className="px-4 py-3">
                             <SigningRequestCard request={r} available={available} onChanged={() => setReloadKey((n) => n + 1)} showHeading={false} />
@@ -153,6 +159,9 @@ export function SigningRequestsList() {
   return (
     <div className="space-y-4">
       {toolbar}
+      {failed && requests && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: retry }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
       {body}
     </div>
   )

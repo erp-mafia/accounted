@@ -62,7 +62,7 @@ export function CounterpartList({
   const mixed = confirmedCount > 0 && confirmedCount < rows.length
 
   return (
-    <div className="overflow-x-auto">
+    <div className="-mx-2 overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
@@ -100,7 +100,7 @@ export function CounterpartList({
               {startsNewGroup ? (
                 <tr>
                   {/* What to do with them is in the page's "?" (cp_help). */}
-                  <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-8 text-left text-[13px] font-semibold text-foreground">
+                  <th colSpan={7} scope="colgroup" className="px-2 pb-2 pt-8 text-left text-[15px] font-medium leading-[22px] text-strong">
                     {t('cp_group_new', { count: rows.length - confirmedCount })}
                   </th>
                 </tr>
@@ -131,7 +131,7 @@ export function CounterpartList({
                         {t('cp_status_tentative')}
                       </Badge>
                     ) : null}
-                    {detail ? <span className="min-w-0 flex-1 basis-0 truncate text-[12.5px] text-muted-foreground">{detail}</span> : null}
+                    {detail ? <span className="min-w-0 flex-1 basis-0 truncate text-xs text-muted-foreground">{detail}</span> : null}
                   </div>
                 </td>
                 <td className={TD_CLASS}>
@@ -140,12 +140,13 @@ export function CounterpartList({
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.outSek)}</td>
-                <td className={`${TD_CLASS} whitespace-nowrap tabular-nums text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
-                <td className={`${TD_CLASS} text-right`}>
+                <td className={`${TD_CLASS} date-figures whitespace-nowrap text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
+                {/* py-2: the 28px menu button sits centred in the 44px row. */}
+                <td className={`${TD_CLASS} py-2 text-right`}>
                   {canWrite ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" className={cn(HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
+                        <Button variant="ghost" size="icon" className={cn(HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
                           <EllipsisHorizontalIcon className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>

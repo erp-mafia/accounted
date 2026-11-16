@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import {
   Dialog,
@@ -20,7 +21,9 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { buildSplitSelection, proposeSplitSelection } from '@/lib/reconciliation/split-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowDownRightIcon, ArrowUpRightIcon, SpinnerIcon } from '@/components/icons'
+import { ArrowDownRightIcon, ArrowUpRightIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { addDaysIso } from '@/lib/dates/iso'
@@ -57,6 +60,7 @@ export function MatchVoucherDialog({
   preferredNote = null,
 }: MatchVoucherDialogProps) {
   const { toast } = useToast()
+  const tCommon = useTranslations('common')
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
   // Picked verifikat, in pick order. One = the plain link (1:1, or N:1 behind
   // "visa matchade"); several = the split (1:N, #1553): one bank row that
@@ -70,6 +74,10 @@ export function MatchVoucherDialog({
   const [accountNumber, setAccountNumber] = useState('1930')
   const [accountFallback, setAccountFallback] = useState(false)
   const [loading, setLoading] = useState(false)
+  // The candidates could not be read: said in place of them (never "no
+  // vouchers in the period"), with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [wideRange, setWideRange] = useState(false)
   // Opt-in: also surface vouchers already matched to another bank transaction,
@@ -104,8 +112,14 @@ export function MatchVoucherDialog({
         }
 
         const res = await fetch(`/api/reconciliation/bank/unmatched-entries?${params}`)
-        const json = await res.json()
+        const json = await res.json().catch(() => null)
         if (signal.cancelled) return
+        if (!res.ok || !json) {
+          setGlLines([])
+          setLoadFailed(true)
+          return
+        }
+        setLoadFailed(false)
         const lines = (json.data ?? []) as UnlinkedGLLine[]
         setGlLines(lines)
         // Pre-select a strong auto-match (exact/reference/date-range) so the
@@ -132,6 +146,11 @@ export function MatchVoucherDialog({
         const proposed = strong ? null : proposeSplitSelection(lines, tx.amount, tx.date)
         setProposal(proposed)
         setSelected((prev) => (prev.length > 0 ? prev : strong ? [strong] : (proposed ?? [])))
+      } catch {
+        if (!signal.cancelled) {
+          setGlLines([])
+          setLoadFailed(true)
+        }
       } finally {
         if (!signal.cancelled) setLoading(false)
       }
@@ -146,7 +165,7 @@ export function MatchVoucherDialog({
     const signal = { cancelled: false }
     void loadCandidates(transaction, wideRange, includeMatched, signal)
     return () => { signal.cancelled = true }
-  }, [open, transaction, wideRange, includeMatched, loadCandidates])
+  }, [open, transaction, wideRange, includeMatched, loadCandidates, attempt])
 
   // Reset transient state when the dialog closes so the next open starts clean.
   useEffect(() => {
@@ -237,7 +256,7 @@ export function MatchVoucherDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -265,7 +284,7 @@ export function MatchVoucherDialog({
         </DialogHeader>
 
         {/* Transaction summary */}
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-sm">
+        <div className="flex items-center gap-3 rounded-lg bg-secondary/30 px-3 py-2.5 text-sm bg-control shadow-raised">
           <span
             className={isIncome ? 'text-success' : 'text-foreground/60'}
             aria-hidden
@@ -292,18 +311,23 @@ export function MatchVoucherDialog({
         {/* Candidate picker */}
         <div className="space-y-2">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
-              <SpinnerIcon className="h-4 w-4 animate-spin" />
-              Söker verifikationer…
-            </div>
+            <LateReveal aria-label={tCommon('loading')}>
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex h-9 items-center gap-4 border-b-hairline">
+                  <Skeleton className="h-3.5 w-16" />
+                  <Skeleton className="h-3.5 w-48" />
+                  <Skeleton className="ml-auto h-3.5 w-20" />
+                </div>
+              ))}
+            </LateReveal>
+          ) : loadFailed ? (
+            <LoadError title="Kunde inte hämta verifikationerna" onRetry={() => setAttempt((n) => n + 1)} />
           ) : glLines.length === 0 ? (
-            <div className="rounded-lg border border-border px-3 py-6 text-center text-sm text-muted-foreground">
-              <p>
-                {includeMatched
-                  ? `Inga verifikationer på ${accountNumber} i perioden.`
-                  : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
-              </p>
-            </div>
+            <p className="py-3 text-[13px] text-muted-foreground">
+              {includeMatched
+                ? `Inga verifikationer på ${accountNumber} i perioden.`
+                : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
+            </p>
           ) : (
             <>
               <MatchVerifikationPicker

@@ -2,7 +2,8 @@
  * Konton (/accounts): the account table bleeds its scroll container to the
  * panel edges with a negative margin equal to the page padding (MainContainer:
  * px-4, md:px-6). It used -mx-5, which overshot a phone's 16px gutter by 4px
- * per side and scrolled the whole page sideways on a 375px screen.
+ * per side and scrolled the whole page sideways on a 375px screen. Stil v3:
+ * the inner padding is 8px less than the page padding (the 8px list bleed).
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,7 +19,7 @@ describe('Konton table scroller', () => {
   })
 
   it('bleeds exactly the page padding', () => {
-    expect(overview).toContain('className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6"')
+    expect(overview).toContain('className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4"')
     expect(overview).not.toMatch(/className="[^"]*-mx-5/)
   })
 })

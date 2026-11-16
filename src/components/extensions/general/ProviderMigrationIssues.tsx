@@ -63,13 +63,13 @@ export default function ProviderMigrationIssues({ issues, provider, total, trunc
   return (
     <div className="space-y-6">
       {missing.length > 0 && <section className="space-y-3">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h3 className="text-xs font-medium text-muted-foreground">
           {t('ext_arcim_review_section_missing', { count: missingCount })}
         </h3>
         {missing.map(group => <ReasonBlock key={group.key} group={group} provider={providerName} />)}
       </section>}
       {imported.length > 0 && <section className="space-y-3">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h3 className="text-xs font-medium text-muted-foreground">
           {t('ext_arcim_review_section_imported', { count: importedCount })}
         </h3>
         <p className="text-[13px] text-muted-foreground">{t('ext_arcim_review_section_imported_note')}</p>
@@ -93,7 +93,7 @@ function ReasonBlock({ group, provider }: { group: ReasonGroup; provider: string
       <ul className="divide-y divide-border border-y border-border">
         {shown.map(issue => <IssueLine key={issue.id} issue={issue} />)}
       </ul>
-      {hidden > 0 && <Button variant="ghost" size="sm" onClick={() => setExpanded(true)}>
+      {hidden > 0 && <Button variant="ghost" onClick={() => setExpanded(true)}>
         {t('ext_arcim_review_more', { count: hidden })}
       </Button>}
     </div>
@@ -131,7 +131,7 @@ function IssueLine({ issue }: { issue: ProviderMigrationIssue }) {
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         {href
           ? <Link href={href} target="_blank" rel="noopener" title={t('ext_arcim_review_open_record')}
-              className="underline decoration-border underline-offset-2 hover:decoration-foreground">{name}</Link>
+              className="underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground">{name}</Link>
           : <span>{name}</span>}
         {facts && <span className="tabular-nums text-muted-foreground">{facts}</span>}
       </div>

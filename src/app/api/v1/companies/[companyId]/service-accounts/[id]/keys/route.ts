@@ -46,7 +46,7 @@ registerEndpoint({
     'service_accounts:manage is never granted, so a service account cannot mint keys or create accounts.',
   useWhen: 'You set up the integration that runs as the service account, or rotate its key (mint the new one, switch, revoke the old one).',
   doNotUseFor:
-    'A key for a person (create it in Settings > API & MCP). Recovering a lost secret: mint a new key and revoke the old one.',
+    'A key for a person (create it in Agents > Connect an agent). Recovering a lost secret: mint a new key and revoke the old one.',
   pitfalls: [
     'The secret is returned exactly once. Idempotency-Key is not honoured: a repeated call mints a second key, so check GET /service-accounts/{id} and revoke any extra.',
     'Each requested scope must be held by the calling key (403 SERVICE_ACCOUNT_SCOPE_NOT_HELD, details.not_held lists the rest).',

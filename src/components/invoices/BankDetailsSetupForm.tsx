@@ -150,8 +150,8 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
   const bankgiroError = errors.bankgiro?.message
 
   return (
-    <div className="space-y-4 rounded-lg border border-border p-4">
-      <p className="text-[12.5px] text-muted-foreground">
+    <div className="space-y-4 rounded-lg p-4 bg-control shadow-raised">
+      <p className="text-xs text-muted-foreground">
         {t('description_prefix')}
         <a href="/settings/invoicing" className="underline underline-offset-2 hover:text-foreground">{t('settings_link')}</a>
         {t('description_suffix')}

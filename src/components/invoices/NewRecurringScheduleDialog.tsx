@@ -100,18 +100,18 @@ export default function NewRecurringScheduleDialog({ open, onOpenChange, onSaved
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-        // Escape closes an untouched dialog, like every other overlay, but a
-        // half-typed schedule must survive a stray Escape (the customer and
-        // currency selects portal outside the dialog): then closing is
-        // explicit, the header X or Avbryt. Edit mode opens filled and the
-        // default dimensions live outside the form state, so "changed since
-        // open" decides (useEditedSinceOpen). A backdrop click never closes it.
-        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent size="document"
+
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed schedule must survive a stray Escape (the customer and
+ // currency selects portal outside the dialog): then closing is
+ // explicit, the header X or Avbryt. Edit mode opens filled and the
+ // default dimensions live outside the form state, so "changed since
+ // open" decides (useEditedSinceOpen). A backdrop click never closes it.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{schedule ? t('edit_title') : t('title')}</DialogTitle>
           {/* What the schedule's last run left for the person, in full: the
@@ -731,7 +731,7 @@ function NewRecurringScheduleForm({
             </div>
           </div>
 
-          <div className="rounded-lg border border-border p-4">
+          <div className="rounded-lg p-4 bg-control shadow-raised">
             <div className="flex items-start gap-3">
               <Controller
                 control={control}
@@ -832,12 +832,11 @@ function NewRecurringScheduleForm({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
                     className="mt-1 -ml-2 text-muted-foreground"
                     onClick={() => toggleItemDimensions(index)}
                     aria-expanded={isDimOpen(index)}
                   >
-                    <HashtagIcon className="mr-2 h-4 w-4" />
+                    <HashtagIcon className="h-4 w-4" />
                     {isDimOpen(index)
                       ? tInvoice('row_menu_remove_dimensions')
                       : tInvoice('row_menu_set_dimensions')}
@@ -910,7 +909,7 @@ function NewRecurringScheduleForm({
               {/* Per-item dims override: merged over the schedule default on
                   the revenue line this item books to. */}
               {dimensionsEnabled && isDimOpen(index) && (
-                <div className="col-span-12 space-y-1 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="col-span-12 space-y-1 rounded-lg p-3 bg-control shadow-raised">
                   <div className="max-w-md">
                     <LineDimensionFields
                       dimensions={items[index]?.dimensions}
@@ -930,24 +929,22 @@ function NewRecurringScheduleForm({
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              variant="secondary"
-              size="sm"
+              variant="outline"
               onClick={() =>
                 append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null })
               }
             >
-              <PlusIcon className="mr-2 h-4 w-4" />
+              <PlusIcon className="h-4 w-4" />
               {t('add_row')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
               onClick={() =>
                 append({ line_type: 'text', description: '', quantity: 0, unit: '', unit_price: 0, vat_rate: null })
               }
             >
-              <Bars3BottomLeftIcon className="mr-2 h-4 w-4" />
+              <Bars3BottomLeftIcon className="h-4 w-4" />
               {t('add_text_row')}
             </Button>
           </div>
@@ -1022,7 +1019,7 @@ function NewRecurringScheduleForm({
       </Card>
 
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel}>
           {t('cancel')}
         </Button>
         <Button type="submit" disabled={isSubmitting}>

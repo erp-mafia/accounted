@@ -94,13 +94,13 @@ export default function ImportResultStep({
       {/* "Din historia" reveal (theater ran) or the plain success/failure header */}
       {showReveal && theaterModel && preview ? (
         <Card>
-          <CardContent className="pt-6">
+          <CardContent>
             <div className="grid items-center gap-6 md:grid-cols-[minmax(280px,380px)_1fr]">
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <p className="text-xs font-medium text-muted-foreground">
                   {t('reveal_eyebrow')}
                 </p>
-                <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+                <h2 className="mt-2 text-xl text-balance">
                   {t('reveal_title', { years: Math.max(theaterModel.years.length, 1) })}
                 </h2>
                 <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
@@ -120,10 +120,10 @@ export default function ImportResultStep({
                     {t('reveal_skipped', { count: skipped.total })}
                   </p>
                 )}
-                <div className="mt-6 border-t border-border pt-4">
+                <div className="mt-6 border-t-hairline pt-4">
                   {/* Sandbox strips live bank connections from /import, so the
                       bridge quiets down to the plain way onward there. */}
-                  {!isSandbox && <p className="font-display text-base">{t('reveal_bridge')}</p>}
+                  {!isSandbox && <p className="text-[15px] font-medium leading-[22px] text-strong">{t('reveal_bridge')}</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     {/* Both migrator paths: PSD2 covers recent history (banks
                         cap the window around 90 days), CSV upload reaches the
@@ -132,20 +132,19 @@ export default function ImportResultStep({
                         Sandbox hides only the live bank connection; file-based
                         import works there and its CTA stays. */}
                     {!isSandbox && hasBanking && (
-                      <Button asChild size="sm">
+                      <Button asChild>
                         <Link href="/import?mode=psd2">{t('reveal_cta_bank')}</Link>
                       </Button>
                     )}
                     <Button
                       asChild
-                      size="sm"
                       variant={!isSandbox && hasBanking ? 'outline' : 'default'}
                     >
                       <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
                     </Button>
                     <Link
                       href="/"
-                      className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                      className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                     >
                       {t('reveal_cta_open')}
                     </Link>
@@ -162,7 +161,7 @@ export default function ImportResultStep({
         <div>
           <h2
             className={cn(
-              'font-display text-2xl leading-8 tracking-tight',
+              'text-xl',
               !result.success && 'text-destructive',
             )}
           >
@@ -188,7 +187,7 @@ export default function ImportResultStep({
               <DefRow label={t('result_accounts_created')} labelWidth={180}>
                 {result.accountsCreated ?? 0}
                 {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
-                  <span className="block text-[12.5px] text-muted-foreground">
+                  <span className="block text-xs text-muted-foreground">
                     {tStep('accounts_renamed', { count: result.accountsRenamed })}
                   </span>
                 )}
@@ -206,7 +205,7 @@ export default function ImportResultStep({
                     already has posted entries, so this year's IB is the prior
                     year's UB. Said here, not as a warning (#2462). */}
                 {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
-                  <span className="block text-[12.5px] text-muted-foreground">
+                  <span className="block text-xs text-muted-foreground">
                     {tStep('opening_balances_derived_hint')}
                   </span>
                 )}
@@ -404,7 +403,7 @@ export default function ImportResultStep({
           verifikat that were just imported, instead of landing as anonymous
           "Att bokföra" rows. Why and how far back sit behind the "?". */}
       {result.success && !showReveal && (
-        <div className="space-y-3 border-t border-border pt-4">
+        <div className="space-y-3 border-t-hairline pt-4">
           <p className="flex items-center gap-2 text-[13px] font-medium">
             {t('next_steps_title')}
             <HelpPopover className="shrink-0">
@@ -418,13 +417,12 @@ export default function ImportResultStep({
             {/* Sandbox hides only the live bank connection; file-based
                 import works there and its CTA stays. */}
             {!isSandbox && hasBanking && (
-              <Button asChild size="sm">
+              <Button asChild>
                 <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
               </Button>
             )}
             <Button
               asChild
-              size="sm"
               variant={!isSandbox && hasBanking ? 'outline' : 'default'}
             >
               <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
@@ -437,12 +435,12 @@ export default function ImportResultStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:flex-wrap sm:justify-between">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
-            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="h-4 w-4" />
             {tStep('new_import')}
           </Button>
           {result.success && result.importId && onUndo && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
-              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+              <ArrowUturnLeftIcon className="h-4 w-4" />
               {tStep('undo_import')}
             </Button>
           )}

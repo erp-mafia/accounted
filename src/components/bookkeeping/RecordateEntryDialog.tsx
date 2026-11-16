@@ -140,7 +140,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
         title: 'Verifikationen flyttad',
         description: 'En storno och en rättelse med rätt datum har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
+          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
             Visa rättelsen
           </Button>
         ) : undefined,
@@ -161,7 +161,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -272,7 +272,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
             already sits deep in a rättelse chain. Advisory, never a dead end:
             "Flytta ändå" resubmits with allow_deep_chain=true. */}
         <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
               <DialogTitle>{t('deep_chain_title')}</DialogTitle>
             </DialogHeader>

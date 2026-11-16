@@ -12,6 +12,7 @@ import {
   type PickerCompany,
 } from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
+import { STANDALONE_HEADING_CSS } from '@/lib/branding/standalone-page-css'
 import {
   builtInOnwardOrigins,
   capScopesForRole,
@@ -324,6 +325,7 @@ export async function GET(request: Request) {
   }
   const showCompanyPicker = pickerCompanies.length >= 2
 
+  const appName = escapeHtml(getBranding().appName)
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
   // Client identity and the host the browser will be sent to after consent.
@@ -390,13 +392,13 @@ export async function GET(request: Request) {
   //     decision of 2026-10-03 (issue #3408, option B) took approve out of
   //     that default, so a default connection always leaves the final approval
   //     with a human. Every write is STAGED as an agent proposal that the user
-  //     approves under Att göra › Agentförslag. A user who wants the agent to
+  //     approves under Att göra › Rutin. A user who wants the agent to
   //     approve its own proposals ticks approve themselves, and only then does
   //     the page show the segregation-of-duties sentence and /token record the
   //     acknowledgement. The full scope list stays on the page (collapsed but
   //     expandable) with every row untickable, the warn box explains each
   //     level above the button, and the grant is revocable under
-  //     Inställningar › API och MCP. RFC 6749 §3.3 lets the resource owner
+  //     Agenter › Koppla en agent. RFC 6749 §3.3 lets the resource owner
   //     authorise the set presented; the consent is the click on a page that
   //     shows exactly that set.
   //   - Pre-checked, DB-registered client: only what it explicitly asked for,
@@ -471,7 +473,7 @@ export async function GET(request: Request) {
   const levelLinesHtml = [
     `<li><strong>Läs:</strong> ${agentName} kan läsa och svara på frågor om bokföringen men ändrar inget.</li>`,
     ceilingHasStaging
-      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
+      ? `<li><strong>Skriv:</strong> ${agentName} förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Rutin. Enklare saker, som att ladda upp underlag, görs direkt.</li>`
       : '',
     approveOffered
       ? `<li><strong>Godkänn:</strong> ${agentName} får godkänna sina egna förslag och då bokförs det utan din granskning.</li>`
@@ -504,29 +506,29 @@ export async function GET(request: Request) {
   <title>Anslut MCP-klient: ${appNameLower}</title>
   <style>
     :root {
-      --bg: hsl(0 0% 100%);
+      --bg: hsl(43 26% 95%);
       --surface: hsl(0 0% 100%);
-      --secondary: hsl(40 11% 89%);
-      --secondary-hover: hsl(40 11% 84%);
-      --muted: hsl(40 8% 93%);
-      --border: hsl(45 5% 85%);
-      --border-strong: hsl(45 5% 72%);
-      --fg: hsl(0 0% 9%);
-      --fg-muted: hsl(0 0% 40%);
-      --fg-faint: hsl(0 0% 55%);
-      --primary: hsl(0 0% 9%);
-      --primary-hover: hsl(0 0% 20%);
+      --secondary: hsl(38 36% 35% / 0.1);
+      --secondary-hover: hsl(38 36% 35% / 0.14);
+      --muted: hsl(38 36% 35% / 0.07);
+      --border: hsl(36 22% 9% / 0.1);
+      --border-strong: hsl(36 22% 9% / 0.22);
+      --fg: hsl(38 21% 7%);
+      --fg-muted: hsl(40 3% 44%);
+      --fg-faint: hsl(40 3% 44%);
+      --primary: hsl(36 22% 9% / 0.88);
+      --primary-hover: hsl(36 22% 9% / 0.8);
       --warning: hsl(38 55% 50%);
       --warning-bg: hsl(38 60% 96%);
       --warning-border: hsl(38 45% 82%);
       --warning-fg: hsl(28 60% 28%);
       --warm-accent: hsl(38 45% 52%);
-      --ring: hsl(0 0% 9%);
+      --ring: hsl(215 100% 44% / 0.7);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; }
     body {
-      font-family: 'Geist', -apple-system, system-ui, 'Segoe UI', sans-serif;
+      font-family: Inter, -apple-system, system-ui, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--fg);
       display: flex;
@@ -541,7 +543,7 @@ export async function GET(request: Request) {
     }
     .card {
       background: var(--surface);
-      border: 1px solid var(--border);
+      box-shadow: 0 0 0 0.5px hsl(36 22% 9% / 0.07), 0 1px 2px 0 hsl(36 22% 9% / 0.04);
       border-radius: 12px;
       padding: 2.5rem;
       max-width: 960px;
@@ -558,33 +560,7 @@ export async function GET(request: Request) {
       .card { padding: 1.5rem; }
       .scope-groups { grid-template-columns: 1fr; column-gap: 0; }
     }
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-      font-size: 0.6875rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--fg-faint);
-      margin-bottom: 0.875rem;
-    }
-    .eyebrow::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--warm-accent);
-    }
-    h1 {
-      font-family: 'Hedvig Letters Serif', Georgia, 'Times New Roman', serif;
-      font-size: 2rem;
-      font-weight: 400;
-      letter-spacing: -0.018em;
-      line-height: 1.1;
-      color: var(--fg);
-      margin-bottom: 0.625rem;
-    }
+    ${STANDALONE_HEADING_CSS}
     .lede {
       font-size: 0.875rem;
       color: var(--fg-muted);
@@ -840,7 +816,7 @@ export async function GET(request: Request) {
       font-family: inherit;
       font-size: 0.8125rem;
       font-weight: 500;
-      border-radius: 8px;
+      border-radius: 6px;
       cursor: pointer;
       border: 1px solid;
       transition: background 150ms, border-color 150ms, color 150ms;
@@ -949,7 +925,7 @@ export async function GET(request: Request) {
 </head>
 <body>
   <main class="card" role="main">
-    <div class="eyebrow">${appNameLower} · mcp</div>
+    <div class="eyebrow">${appName} · MCP</div>
     <h1>Anslut MCP-klient</h1>
     <p class="lede">${ledeHtml}</p>
 
@@ -991,7 +967,7 @@ export async function GET(request: Request) {
         <div class="warn-body">
           <ul class="warn-levels">${levelLinesHtml}</ul>
           ${sodNoteHtml}
-          <p class="warn-change">Vill du ändra senare? Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Inställningar &rsaquo; API och MCP och anslut igen.</p>
+          <p class="warn-change">Vill du ändra senare? Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Agenter &rsaquo; Koppla en agent och anslut igen.</p>
         </div>
       </div>
 
@@ -1001,7 +977,7 @@ export async function GET(request: Request) {
       </div>
     </form>
 
-    <p class="footer">Du kan när som helst återkalla åtkomsten under Inställningar &rsaquo; API och MCP.</p>
+    <p class="footer">Du kan när som helst återkalla åtkomsten under Agenter &rsaquo; Koppla en agent.</p>
   </main>
 
   <script nonce="${cspNonce}">

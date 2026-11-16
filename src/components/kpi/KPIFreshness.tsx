@@ -26,7 +26,7 @@ export function KPIFreshness({
   className?: string
 }) {
   const t = useTranslations('kpi')
-  const metaClass = cn('text-[12.5px] leading-5 text-muted-foreground tabular-nums', className)
+  const metaClass = cn('text-xs leading-5 text-muted-foreground tabular-nums', className)
 
   if ('unavailable' in status) {
     return <p className={metaClass}>{t('freshness_unavailable')}</p>

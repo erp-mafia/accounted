@@ -195,14 +195,14 @@ export default function DimensionValueForm({
             disabled={isSaving}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            <TrashIcon className="mr-2 h-4 w-4" />
+            <TrashIcon className="h-4 w-4" />
             {t('form_delete')}
           </Button>
         ) : (
           <span />
         )}
         <Button type="submit" loading={isSaving}>
-          {isEditing ? t('form_save') : t('form_create')}
+          {isEditing ? t('form_save') : t('form_create_value')}
         </Button>
       </div>
 

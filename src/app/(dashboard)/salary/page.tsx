@@ -5,10 +5,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { BanknotesIcon, PlusIcon, UsersIcon } from '@/components/icons'
@@ -16,7 +17,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
 import {
   defaultRunPaymentDate,
@@ -40,10 +41,13 @@ const RUNS_SHOWN = 12
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
   const [runsLoading, setRunsLoading] = useState(true)
+  // The run list could not be read: the page says so in place of the list
+  // instead of drawing the first-run start card over runs it never saw.
+  const [runsFailed, setRunsFailed] = useState(false)
   // The list loads every run; past RUNS_SHOWN the rest wait behind one line.
   const [showAllRuns, setShowAllRuns] = useState(false)
   // The active roster from the session cache: the start card counts it.
-  const { employees, isLoading: employeesLoading } = useEmployees()
+  const { employees, isLoading: employeesLoading, error: employeesError } = useEmployees()
   const loading = runsLoading || employeesLoading
   // The month being created (formatRunPeriod), 'default' when the server
   // picks it; null when nothing is being started.
@@ -60,6 +64,8 @@ export default function SalaryPage() {
   const locale = useLocale() as ErrorLocale
   const t = useTranslations('salary')
   const tStart = useTranslations('start_cards')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
 
   const load = useCallback(async () => {
     const runsRes = await fetch('/api/salary/runs').catch(() => null)
@@ -67,8 +73,10 @@ export default function SalaryPage() {
       const { data } = await runsRes.json()
       setRuns(data || [])
       setChoices(runPeriodChoices(data || [], new Date()))
+      setRunsFailed(false)
     } else {
       setChoices(null)
+      setRunsFailed(true)
     }
     setRunsLoading(false)
   }, [])
@@ -151,26 +159,32 @@ export default function SalaryPage() {
     }
   })
 
+  // First time: no run and nobody to pay. The start card below leads with
+  // adding an employee, and the top bar does not offer a run that would be
+  // created empty. A roster that could not be read is not "nobody".
+  const firstTime = !loading && !runsFailed && !employeesError && runs.length === 0 && employees.length === 0
+
   const header = (
     <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-      <div className="flex items-center gap-4">
+      <h1 className="page-header-title">{tNav('v2_salary_runs')}</h1>
+      <PageHeaderActions className="flex items-center gap-4">
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
           {t('employees')}
         </Link>
         {canWrite &&
+          !firstTime &&
           (choices ? (
             <SplitButton
               options={startOptions}
               initialModeKey={defaultChoice ? formatRunPeriod(defaultChoice) : undefined}
             />
           ) : (
-            <Button size="sm" onClick={() => startRun(null)} disabled={loading} loading={startingKey !== null}>
-              {startingKey === null && <PlusIcon className="mr-2 h-4 w-4" />}
+            <Button size="toolbar" onClick={() => startRun(null)} disabled={loading} loading={startingKey !== null}>
+              {startingKey === null && <PlusIcon className="h-4 w-4" />}
               {t('start_run')}
             </Button>
           ))}
-      </div>
+      </PageHeaderActions>
     </div>
   )
 
@@ -178,11 +192,31 @@ export default function SalaryPage() {
     return (
       <div className="space-y-8">
         {header}
-        <div className="space-y-3">
+        <LateReveal>
           {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-10 rounded-lg" />
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-28" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      </div>
+    )
+  }
+
+  if (runsFailed && runs.length === 0) {
+    return (
+      <div className="space-y-8">
+        {header}
+        <LoadError
+          title={t('runs_load_failed')}
+          onRetry={() => {
+            setRunsLoading(true)
+            void load()
+          }}
+        />
       </div>
     )
   }
@@ -191,7 +225,7 @@ export default function SalaryPage() {
     <div className="space-y-8">
       {header}
 
-      {runs.length === 0 && employees.length === 0 ? (
+      {firstTime || (runs.length === 0 && employees.length === 0) ? (
         canWrite ? (
           <div className="animate-fade-in">
             <StartCard
@@ -224,7 +258,7 @@ export default function SalaryPage() {
               <EmptyState icon={BanknotesIcon} title={t('empty_runs_title')} description={t('empty_runs_description')} />
             )
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -264,7 +298,7 @@ export default function SalaryPage() {
                         </td>
                         {/* overflow-hidden: see #2003, nothing in this cell
                             truncates so it must clip. */}
-                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap')}>
+                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap date-figures')}>
                           <span className="inline-flex items-center gap-2">
                             {statusDisplay && statusDisplay.chip === null ? (
                               <span className="text-muted-foreground">{statusLabel}</span>
@@ -274,7 +308,7 @@ export default function SalaryPage() {
                               </Badge>
                             )}
                             {inFlight && (
-                              <span className="text-[11px] text-muted-foreground tabular-nums">
+                              <span className="text-xs text-muted-foreground tabular-nums">
                                 {t('run_payout_note', { date: formatDate(run.payment_date) })}
                               </span>
                             )}
@@ -284,10 +318,10 @@ export default function SalaryPage() {
                           {employeeCount ?? ''}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                          {formatCurrency(run.total_gross)}
+                          {formatRowAmount(run.total_gross)}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                          {formatCurrency(run.total_net)}
+                          {formatRowAmount(run.total_net)}
                         </td>
                       </tr>
                     )
@@ -298,7 +332,7 @@ export default function SalaryPage() {
                 <button
                   type="button"
                   onClick={() => setShowAllRuns(true)}
-                  className="px-4 py-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                  className="px-4 py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
                 >
                   {t('show_all_runs', { count: runs.length })}
                 </button>

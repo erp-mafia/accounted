@@ -13,7 +13,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import {
   MIGRATED_DEDUCTION_ROUTE,
   useMigratedDeductionStatus,
@@ -157,9 +157,9 @@ export default function MigratedDeductionCard({ className }: { className?: strin
         )}
       </div>
 
-      {status.importRunning && <p className="text-[12.5px] text-muted-foreground">{t('import_running')}</p>}
+      {status.importRunning && <p className="text-xs text-muted-foreground">{t('import_running')}</p>}
       {running && (
-        <p className="text-[12.5px] text-muted-foreground" role="status">
+        <p className="text-xs text-muted-foreground" role="status">
           {t(running === 'preview' ? 'running_preview' : 'running_apply')}
         </p>
       )}
@@ -175,7 +175,7 @@ export default function MigratedDeductionCard({ className }: { className?: strin
           <ReviewGroups report={report} />
           <SkippedLine report={report} />
           {!report.complete && (
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t(`stop_${report.stopReason ?? 'deadline'}`)}{' '}
               {t('progress', { processed: report.processed, candidates: report.candidates })}
             </p>
@@ -235,7 +235,7 @@ function PreviewResult({ report }: { report: DeductionBackfillReport }) {
                 <td className={cn(VTD_CLASS, 'text-right tabular-nums')}>{count}</td>
                 {/* A status repair moves no deduction: no amount to show. */}
                 <td className={cn(VTD_CLASS, 'pr-0 text-right tabular-nums')}>
-                  {bucket === 'status_only' ? null : formatCurrency(amount)}
+                  {bucket === 'status_only' ? null : formatRowAmount(amount)}
                 </td>
               </tr>
             )
@@ -282,7 +282,7 @@ function Failures({ report }: { report: DeductionBackfillReport }) {
       <p className="text-destructive">{t('result_failures', { count: report.failures.length })}</p>
       {groups.map((group) => (
         <div key={group.key} className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-[12.5px]">{t(group.key)}:</span>
+          <span className="text-xs">{t(group.key)}:</span>
           <InvoiceNumbers invoices={group.items} />
         </div>
       ))}
@@ -306,7 +306,7 @@ function ReviewGroups({ report }: { report: DeductionBackfillReport }) {
     <div className="space-y-4">
       {reasons.length > 0 && (
         <section className="space-y-2">
-          <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="text-xs font-medium text-muted-foreground">
             {t('bucket_review')}
           </h3>
           {reasons.map((group) => (
@@ -319,7 +319,7 @@ function ReviewGroups({ report }: { report: DeductionBackfillReport }) {
       )}
       {late.length > 0 && (
         <section className="space-y-2">
-          <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="text-xs font-medium text-muted-foreground">
             {t('late_title')}
           </h3>
           <p className="text-[13px]">{t('late_note')}</p>
@@ -328,7 +328,7 @@ function ReviewGroups({ report }: { report: DeductionBackfillReport }) {
       )}
       {report.doubleRequests.length > 0 && (
         <section className="space-y-2">
-          <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="text-xs font-medium text-muted-foreground">
             {t('bucket_double_request')}
           </h3>
           <InvoiceNumbers invoices={report.doubleRequests} />
@@ -345,7 +345,7 @@ function SkippedLine({ report }: { report: DeductionBackfillReport }) {
   )
   if (parts.length === 0) return null
   return (
-    <p className="text-[12.5px] tabular-nums text-muted-foreground">
+    <p className="text-xs tabular-nums text-muted-foreground">
       {t('skipped', { parts: parts.join(', ') })}
     </p>
   )
@@ -358,7 +358,7 @@ function InvoiceNumbers({ invoices }: { invoices: DeductionBackfillInvoice[] }) 
   const shown = expanded ? invoices : invoices.slice(0, VISIBLE_PER_GROUP)
   const hidden = invoices.length - shown.length
   return (
-    <p className="text-[12.5px] leading-6 tabular-nums text-muted-foreground">
+    <p className="text-xs leading-6 tabular-nums text-muted-foreground">
       {shown.map((invoice, index) => (
         <span key={invoice.invoiceId}>
           {index > 0 && ', '}
@@ -372,7 +372,7 @@ function InvoiceNumbers({ invoices }: { invoices: DeductionBackfillInvoice[] }) 
           {' '}
           <Button
             variant="link"
-            className="h-auto p-0 text-[12.5px] text-muted-foreground"
+            className="h-auto p-0 text-xs text-muted-foreground"
             onClick={() => setExpanded(true)}
           >
             {t('more', { count: hidden })}

@@ -274,7 +274,7 @@ export function KonteringLinesEditor({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               className="text-muted-foreground hover:text-destructive"
               onClick={() => onRemove(index)}
               disabled={lines.length <= minLines}
@@ -310,8 +310,8 @@ export function KonteringLinesEditor({
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={onAdd} className={cn(!toolbar && 'w-full sm:w-auto')}>
-          <PlusIcon className="mr-1 h-3.5 w-3.5" />
+        <Button type="button" variant="outline" onClick={onAdd} className={cn(!toolbar && 'w-full sm:w-auto')}>
+          <PlusIcon className="h-3.5 w-3.5" />
           {labels.addRow}
         </Button>
         {toolbar}

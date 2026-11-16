@@ -49,7 +49,7 @@ export function CompanyPickerList({
           <div
             key={company.company_id}
             className={cn(
-              'flex items-center gap-2 rounded-lg border border-border p-2 transition-colors duration-150',
+              'flex items-center gap-2 rounded-lg p-2 transition-colors duration-150 bg-control shadow-raised',
               checked ? 'bg-secondary' : 'hover:bg-secondary/60',
             )}
           >
@@ -69,7 +69,7 @@ export function CompanyPickerList({
                 {company.name}
               </span>
               {company.is_active && (
-                <span className="shrink-0 text-[11px] text-muted-foreground">
+                <span className="shrink-0 text-xs text-muted-foreground">
                   {t('active_company_tag')}
                 </span>
               )}

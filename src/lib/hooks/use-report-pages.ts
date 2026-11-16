@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import {
   fetchReportData,
   viewReportPages,
+  withoutFailedPages,
   type ReportPageChain,
   type ReportPagesView,
   type SettledReportPages,
@@ -14,6 +15,8 @@ export interface UseReportPagesResult<T> extends ReportPagesView<T> {
   hasMore: boolean
   /** Ask for the next page; it is appended when it lands. */
   loadMore: () => void
+  /** Ask again for the page that failed, keeping the pages already shown. */
+  retry: () => void
 }
 
 /**
@@ -58,5 +61,7 @@ export function useReportPages<T>(
     })
   }
 
-  return { ...view, hasMore: more !== null, loadMore }
+  const retry = () => setSettled((prev) => withoutFailedPages(prev))
+
+  return { ...view, hasMore: more !== null, loadMore, retry }
 }

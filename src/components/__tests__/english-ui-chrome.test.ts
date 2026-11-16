@@ -76,7 +76,7 @@ function render(element: ReactElement, locale: 'sv' | 'en'): string {
   // without a window (the server render) it renders nothing. Only that
   // component reads this stub: others probe a real window when one exists.
   if (element.type === AppErrorBoundary) {
-    vi.stubGlobal('window', { location: { pathname: '/x' }, sessionStorage: { getItem: () => '1', setItem: () => {} } })
+    vi.stubGlobal('window', { location: { pathname: '/x', href: 'http://localhost/x' }, sessionStorage: { getItem: () => '1', setItem: () => {} } })
     try {
       return renderInLocale(element, locale)
     } finally {

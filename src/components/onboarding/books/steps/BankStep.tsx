@@ -428,8 +428,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'pick' && !alreadyConnected ? (
         !findings ? (
           <div className="jny-qactions is-stack">
-            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
+            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
           </div>
         ) : openPayments.status === 'loading' ? (
           <Wait text={t('bank_loading')} height={96} />
@@ -439,7 +439,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
               {t('bank_open_flow')}
             </Button>
             <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_open_flow_hint')}</p>
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
               {t('bank_manual')}
             </Button>
           </div>
@@ -455,7 +455,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             </div>
             <div className="bank-picker-actions">
               {orderedBanks.length > PICK_COUNT || query ? (
-                <Button variant="ghost" size="sm" className="text-muted-foreground" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
+                <Button variant="ghost" className="text-muted-foreground" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
                   {more || query.trim() ? t('bank_less') : t('bank_more')}
                 </Button>
               ) : null}
@@ -471,7 +471,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
             {/* The way out sits under the banks, quiet: connecting is the point of the step (founder direction 2026-09-14). */}
             <div className="bank-exit">
-              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
                 {t('bank_manual')}
               </Button>
             </div>
@@ -643,7 +643,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           </Button>
         ) : null}
         {(phase === 'pick' && !alreadyConnected && (!flags.hasBanking || banks === null)) || phase === 'authed' ? (
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
             {t('bank_skip')}
           </Button>
         ) : null}

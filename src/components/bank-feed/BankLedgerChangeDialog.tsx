@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import {
   applyLedgerChange,
@@ -114,9 +114,9 @@ function BankLedgerChangeBody({ ask, ledgerLabel, onClose }: { ask: LedgerChange
 
   return (
     <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">
+          <DialogTitle className="text-lg">
             {state.kind === 'refused' ? t('refused_title') : t('confirm_title', { to: ledgerLabel(ask.toLedger) })}
           </DialogTitle>
           {state.kind === 'checking' ? (
@@ -137,10 +137,10 @@ function BankLedgerChangeBody({ ask, ledgerLabel, onClose }: { ask: LedgerChange
           )}
         </DialogHeader>
         {state.kind === 'checking' && (
-          <div className="space-y-2" aria-busy>
+          <LateReveal className="space-y-2">
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-2/3" />
-          </div>
+          </LateReveal>
         )}
         {state.kind === 'ready' && (
           <ul data-ph-mask="" className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">

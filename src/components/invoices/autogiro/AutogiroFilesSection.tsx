@@ -99,7 +99,7 @@ export function AutogiroFilesSection({
       {files.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('files_empty')}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -114,11 +114,11 @@ export function AutogiroFilesSection({
                 <tr key={file.id} className="group transition-colors duration-150 hover:bg-secondary/35">
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                     {fileKindLabel(file.kind, t)}
-                    <span className="ml-2 text-[12.5px] text-muted-foreground">
+                    <span className="ml-2 text-xs text-muted-foreground">
                       {file.direction === 'to_bankgirot' ? t('file_to_bankgirot') : t('file_from_bankgirot')}
                     </span>
                   </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(file.created_at)}</td>
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(file.created_at)}</td>
                   <td className={cn(TD_CLASS, 'max-w-0')}>
                     <span className="block truncate text-muted-foreground" title={file.filename ?? undefined}>
                       {fileSummary(file, t)}
@@ -127,21 +127,20 @@ export function AutogiroFilesSection({
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
                     <span className="inline-flex items-center justify-end gap-2">
                       {canWrite && withdrawable(file) && (
-                        <Button type="button" size="sm" variant="ghost" className={HOVER_REVEAL_CLASS} onClick={() => void withdraw(file)}>
+                        <Button type="button" variant="ghost" className={HOVER_REVEAL_CLASS} onClick={() => void withdraw(file)}>
                           {t('withdraw_action')}
                         </Button>
                       )}
                       {file.stored && (
                         <Button
                           type="button"
-                          size="sm"
                           variant="ghost"
                           className={HOVER_REVEAL_CLASS}
                           loading={downloading === file.id}
                           disabled={downloading !== null && downloading !== file.id}
                           onClick={() => void download(file)}
                         >
-                          {downloading !== file.id && <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
+                          {downloading !== file.id && <ArrowDownTrayIcon className="h-3.5 w-3.5" aria-hidden="true" />}
                           {t('download')}
                         </Button>
                       )}

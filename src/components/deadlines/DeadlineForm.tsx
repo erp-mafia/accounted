@@ -135,7 +135,7 @@ export function DeadlineForm({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>
             {initialData?.id ? 'Redigera deadline' : 'Ny deadline'}
@@ -256,7 +256,6 @@ export function DeadlineForm({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       onClick={() => setConfirmDelete(false)}
                     >
                       Avbryt
@@ -264,7 +263,6 @@ export function DeadlineForm({
                     <Button
                       type="button"
                       variant="destructive"
-                      size="sm"
                       onClick={() => {
                         onDelete(initialData)
                         onOpenChange(false)
@@ -277,7 +275,6 @@ export function DeadlineForm({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
                     className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmDelete(true)}
                   >
@@ -302,7 +299,7 @@ export function DeadlineForm({
                 disabled={isLoading || !formData.title || !canWrite}
                 title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
               >
-                {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                 {isLoading ? 'Sparar...' : initialData?.id ? 'Spara' : 'Skapa'}
               </Button>
             </div>

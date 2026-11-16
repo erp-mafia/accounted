@@ -2,6 +2,7 @@ import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { format as formatDateFns, parseISO, isValid } from "date-fns"
 import { roundOre } from "@/lib/money"
+import { isLedgerCurrency } from "@/lib/bookkeeping/currency-utils"
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export function cn(...inputs: ClassValue[]) {
@@ -155,6 +156,20 @@ export function formatAmount(amount: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount)
+}
+
+/**
+ * An amount in a list or table row (Stil v3 polish P7: no "kr" in rows; it
+ * stays on headlines, totals and dialogs). A SEK amount shows as the bare
+ * number, with formatCurrency's digits; any other currency keeps its code, so a EUR
+ * invoice in a krona list is never read as kronor. A NULL currency is the
+ * legacy SEK default, as in `formatCurrency`.
+ */
+export function formatRowAmount(amount: number, currency?: string | null): string {
+  if (!isLedgerCurrency(currency)) return formatCurrency(amount, currency)
+  // The same digits as formatCurrency (decimals only when there are öre),
+  // without the unit: dropping "kr" must not change how a number reads.
+  return new Intl.NumberFormat('sv-SE', currencyFractionDigits()).format(amount)
 }
 
 /**

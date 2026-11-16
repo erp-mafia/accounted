@@ -3,7 +3,7 @@ import { globalSingleton } from '@/lib/global-singleton'
 
 /**
  * The agent's reason on a staged write: one or two sentences on why it
- * proposes it. The person who approves it sees it (Att göra > Agentförslag),
+ * proposes it. The person who approves it sees it (Att göra > Rutin),
  * and the decision receipt keeps it (suggestion_log.agent_reason, migration
  * 20261028210000).
  *

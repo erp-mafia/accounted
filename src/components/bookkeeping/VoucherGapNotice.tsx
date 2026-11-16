@@ -271,12 +271,12 @@ export default function VoucherGapNotice({
             {t('gap_attn', { count: unexplained.length })}
           </AttnLine>
         ) : (
-          <p className="text-[12.5px] leading-5">{explainedToggle}</p>
+          <p className="text-xs leading-5">{explainedToggle}</p>
         )}
       </div>
 
       {showExplained && explained.length > 0 && (
-        <div className="divide-y divide-border border-b border-border text-[13px] leading-5">
+        <div className="divide-y divide-border border-b-hairline text-[13px] leading-5">
           {explained.map((gap) => {
             const key = gapKey(gap)
             const range = formatVoucherGapRange(gap, joiner)

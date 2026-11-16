@@ -285,7 +285,7 @@ export default function EmployeeTaxCard({
                     disabled={disabled}
                   />
                 ) : tableNumber ? (
-                  <div className="flex items-baseline gap-2 rounded-lg border border-input px-3 py-2">
+                  <div className="flex items-baseline gap-2 rounded-lg px-3 py-2 bg-control shadow-raised">
                     <span className="font-sans text-xl tabular-nums">{tableNumber}</span>
                     {(municipality || rate != null) && (
                       <span className="text-xs text-muted-foreground">

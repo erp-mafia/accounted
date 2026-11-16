@@ -106,13 +106,13 @@ export function RequestSigningLinkPanel({ orders, onClose, onIssued, withHeader 
         {header}
         <p className="text-[13px] leading-relaxed">{sentTo ? t('sent_to', { email: sentTo }) : t('created')}</p>
         <div className="flex items-center gap-2">
-          <Input readOnly value={issued.url} aria-label={t('link_label')} className="font-mono text-[12.5px]" onFocus={(e) => e.currentTarget.select()} />
-          <Button variant="secondary" size="sm" onClick={() => copyUrl(issued.url)}>
+          <Input readOnly value={issued.url} aria-label={t('link_label')} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+          <Button variant="outline" onClick={() => copyUrl(issued.url)}>
             {t('copy')}
           </Button>
         </div>
         {error && <AttnLine>{error}</AttnLine>}
-        <p className="text-[12.5px] text-muted-foreground">{t('valid_hours')}</p>
+        <p className="text-xs text-muted-foreground">{t('valid_hours')}</p>
         <DialogFooter>
           <Button onClick={onClose}>{t('close')}</Button>
         </DialogFooter>
@@ -140,7 +140,7 @@ export function RequestSigningLinkPanel({ orders, onClose, onIssued, withHeader 
           aria-invalid={!emailValid || undefined}
           aria-describedby="payment-signing-link-email-hint"
         />
-        <span id="payment-signing-link-email-hint" className="block text-[12.5px] text-muted-foreground">
+        <span id="payment-signing-link-email-hint" className="block text-xs text-muted-foreground">
           {t('email_hint')}
         </span>
       </label>
@@ -148,13 +148,13 @@ export function RequestSigningLinkPanel({ orders, onClose, onIssued, withHeader 
         <span className="text-muted-foreground">{t('note_label')}</span>
         <Textarea value={note} maxLength={NOTE_MAX} rows={3} onChange={(e) => setNote(e.target.value)} placeholder={t('note_placeholder')} />
       </label>
-      <p className="text-[12.5px] text-muted-foreground">{t('valid_hours')}</p>
+      <p className="text-xs text-muted-foreground">{t('valid_hours')}</p>
       {error && <AttnLine>{error}</AttnLine>}
       <DialogFooter>
-        <Button type="button" variant="secondary" onClick={onClose} disabled={busy !== null}>
+        <Button type="button" variant="outline" onClick={onClose} disabled={busy !== null}>
           {t('cancel')}
         </Button>
-        <Button type="button" variant="secondary" onClick={() => issue('copy')} loading={busy === 'copy'} disabled={busy !== null || !emailValid}>
+        <Button type="button" variant="outline" onClick={() => issue('copy')} loading={busy === 'copy'} disabled={busy !== null || !emailValid}>
           {t('copy_link')}
         </Button>
         <Button type="submit" loading={busy === 'send'} disabled={busy !== null || !trimmedEmail || !emailValid}>
@@ -177,7 +177,7 @@ export function RequestSigningLinkDialog({
 }) {
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <RequestSigningLinkPanel orders={orders} onClose={() => onOpenChange(false)} onIssued={onIssued} withHeader />
       </DialogContent>
     </Dialog>
@@ -193,19 +193,17 @@ export function RequestSigningLinkButton({
   onClick,
   loading = false,
   disabled = false,
-  size,
-  variant = 'secondary',
+  variant = 'outline',
 }: {
   label?: 'request' | 'approve_and_request'
   onClick: () => void
   loading?: boolean
   disabled?: boolean
-  size?: 'sm'
-  variant?: 'default' | 'secondary' | 'outline'
+  variant?: 'default' | 'outline'
 }) {
   const t = useTranslations('payment_signing_link')
   return (
-    <Button type="button" variant={variant} size={size} onClick={onClick} loading={loading} disabled={disabled}>
+    <Button type="button" variant={variant} onClick={onClick} loading={loading} disabled={disabled}>
       {t(label === 'approve_and_request' ? 'approve_and_request' : 'request')}
     </Button>
   )
@@ -237,7 +235,7 @@ export function SigningLinkRowNote({ link, canCancel, onCancelled }: { link: Ope
   }
 
   return (
-    <span className="ml-2 inline-flex items-center gap-2 text-[11px] text-muted-foreground">
+    <span className="ml-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
       <span data-ph-mask="">{link.recipient_email ? t('waiting_for', { email: link.recipient_email }) : t('waiting_for_link')}</span>
       {canCancel && (
         <button type="button" className={QUIET_LINK_CLASS} onClick={cancel} disabled={busy}>

@@ -22,7 +22,8 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction, type ToastActionElement } from '@/components/ui/toast'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -114,7 +115,6 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
   const { extensionId, request, summarize, onSyncPayload, syncNote, connectErrorMessage } = props
   const t = useTranslations(props.namespace)
   const tf = useTranslations('feed_connector')
-  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const router = useRouter()
@@ -360,10 +360,12 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
   if (loading) {
     return (
       <Card>
-        <CardContent className="space-y-3 p-6">
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="h-4 w-72" />
-          <Skeleton className="h-10 w-40" />
+        <CardContent>
+          <LateReveal className="space-y-3">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-72" />
+            <Skeleton className="h-10 w-40" />
+          </LateReveal>
         </CardContent>
       </Card>
     )
@@ -375,12 +377,8 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
         <CardHeader>
           <CardTitle className="text-base">{t('title')}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 pt-0">
-          <p className="text-sm text-destructive">{t('load_failed')}</p>
-          <Button variant="outline" size="sm" onClick={retryLoadStatus}>
-            <ArrowPathIcon className="mr-2 h-4 w-4" />
-            {tCommon('retry')}
-          </Button>
+        <CardContent>
+          <LoadError title={t('load_failed')} onRetry={retryLoadStatus} />
         </CardContent>
       </Card>
     )
@@ -394,7 +392,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
         <CardHeader>
           <CardTitle className="text-base">{t('title')}</CardTitle>
         </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent>
           <p className="text-sm text-muted-foreground">{t('not_configured')}</p>
         </CardContent>
       </Card>
@@ -414,7 +412,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
           {hasActive && <HelpPopover className="shrink-0">{t('description')}</HelpPopover>}
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-6 pt-0">
+      <CardContent className="space-y-6">
         {!hasActive && <p className="text-sm text-muted-foreground">{t('description')}</p>}
 
         {connections.map((connection) => {
@@ -431,7 +429,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
               ? tf('transaction_sync_never_synced')
               : null
           return (
-            <div key={connection.id} className="space-y-4 rounded-lg border border-border p-4">
+            <div key={connection.id} className="space-y-4 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <Icon className="h-5 w-5 text-muted-foreground" />
@@ -466,7 +464,6 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                     <div className="flex items-center gap-2">
                       <Button
                         variant="destructive"
-                        size="sm"
                         onClick={() => handleDisconnect(connection.id)}
                         disabled={blocked}
                       >
@@ -474,7 +471,6 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                       </Button>
                       <Button
                         variant="outline"
-                        size="sm"
                         onClick={() => setConfirmDisconnectId(null)}
                         disabled={blocked}
                       >
@@ -485,21 +481,19 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                     <div className="flex items-center gap-2">
                       <Button
                         variant="outline"
-                        size="sm"
                         onClick={() => handleSyncNow(connection.id)}
                         disabled={blocked}
                         loading={syncing}
                       >
-                        {!syncing && <ArrowPathIcon className="mr-2 h-4 w-4" />}
+                        {!syncing && <ArrowPathIcon className="h-4 w-4" />}
                         {syncing ? tf('syncing') : tf('sync_now')}
                       </Button>
                       <Button
                         variant="outline"
-                        size="sm"
                         onClick={() => setConfirmDisconnectId(connection.id)}
                         disabled={blocked}
                       >
-                        <LinkSlashIcon className="mr-2 h-4 w-4" />
+                        <LinkSlashIcon className="h-4 w-4" />
                         {tf('disconnect')}
                       </Button>
                     </div>
@@ -509,7 +503,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
               {/* Flat rows: the switch with its "?" and when it last ran, then
                   the backfill date and button with theirs. */}
               {isActive && (
-                <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+                <div className="flex items-center justify-between gap-4 border-t-hairline pt-4">
                   <div className="min-w-0">
                     <p className="flex items-center gap-2 text-sm font-medium">
                       {t('transaction_sync_title')}
@@ -530,7 +524,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
               )}
 
               {isActive && (
-                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t-hairline pt-4">
                   <p className="flex items-center gap-2 text-sm font-medium">
                     {t('backfill_title')}
                     <HelpPopover className="shrink-0">
@@ -553,12 +547,11 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                     />
                     <Button
                       variant="outline"
-                      size="sm"
                       onClick={() => handleBackfill(connection.id)}
                       disabled={blocked}
                       loading={backfilling}
                     >
-                      {!backfilling && <ClockIcon className="mr-2 h-4 w-4" />}
+                      {!backfilling && <ClockIcon className="h-4 w-4" />}
                       {backfilling ? tf('backfill_running') : tf('backfill_submit')}
                     </Button>
                   </div>

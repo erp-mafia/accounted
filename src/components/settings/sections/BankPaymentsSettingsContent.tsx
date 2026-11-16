@@ -184,11 +184,11 @@ export function BankPaymentsSettingsContent() {
                 <Skeleton className="h-4 w-40" />
               )}
               <SettingsRowEnd>
-                <Button variant="outline" size="sm" onClick={() => void refreshVerification()} loading={refreshing} disabled={busy}>
+                <Button variant="outline" onClick={() => void refreshVerification()} loading={refreshing} disabled={busy}>
                   {t('refresh')}
                 </Button>
                 {canWrite && canStart && (
-                  <Button size="sm" onClick={startVerification} loading={busy}>
+                  <Button onClick={startVerification} loading={busy}>
                     {t('start_verification')}
                   </Button>
                 )}
@@ -220,7 +220,7 @@ export function BankPaymentsSettingsContent() {
                 {canWrite && (
                   <SettingsRowEnd>
                     {capReached ? (
-                      <Button size="sm" onClick={askOrBuy}>
+                      <Button onClick={askOrBuy}>
                         {moreLabel}
                       </Button>
                     ) : (
@@ -278,7 +278,7 @@ export function BankPaymentsSettingsContent() {
                   <SettingsRowNote className={account.payable ? 'text-foreground' : 'text-attn'}>
                     {account.payable ? t('account_payable') : t(`account_reason_${account.reason ?? 'bank_unknown'}`)}
                   </SettingsRowNote>
-                  {account.iban && <SettingsRowEnd><span className="text-[12.5px] tabular-nums text-muted-foreground">{account.iban}</span></SettingsRowEnd>}
+                  {account.iban && <SettingsRowEnd><span className="text-xs tabular-nums text-muted-foreground">{account.iban}</span></SettingsRowEnd>}
                 </SettingsRow>
               ))
             )}

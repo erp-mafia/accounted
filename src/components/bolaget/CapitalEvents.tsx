@@ -8,16 +8,18 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { ContextPicker } from '@/components/common/ContextPicker'
+import { NAME_LINK_CLASS, ROW_ACTIONS_TD } from './register-table'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { CAPITAL_CHANGE_KINDS, FONDEMISSION_SOURCE_ACCOUNTS, MINSKNING_PURPOSES } from '@/lib/bolaget/capital/types'
@@ -26,6 +28,7 @@ import type { CapitalView } from '@/lib/bolaget/capital/view'
 import type { Ku31Status } from '@/lib/bolaget/capital/ku31'
 import type { LedgerPayout } from '@/lib/bolaget/capital/dividends'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ArrowDownTrayIcon, PlusIcon } from '@/components/icons'
 
 type FormState = Record<string, string>
 type Preview = Record<string, unknown>
@@ -73,6 +76,7 @@ export function dividendBody(form: FormState): Record<string, unknown> {
  */
 export function CapitalEvents() {
   const t = useTranslations('bolaget_capital')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -80,6 +84,10 @@ export function CapitalEvents() {
 
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
+  // The page (or the KU31 section) could not be read: said in place of what
+  // did not load, or as one line under the header when a refresh failed.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [ku31Failed, setKu31Failed] = useState(false)
   const [people, setPeople] = useState<Person[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -109,19 +117,27 @@ export function CapitalEvents() {
     try {
       const [capital, register] = await Promise.all([fetch('/api/bolaget/capital'), fetch('/api/bolaget/share-register')])
       const body = await capital.json().catch(() => ({}))
-      if (!capital.ok) return fail(t('load_failed'), body)
+      if (!capital.ok) {
+        setLoadFailed(true)
+        return
+      }
       setData(body.data as PageData)
+      setLoadFailed(false)
       const reg = await register.json().catch(() => ({}))
       if (register.ok) setPeople(((reg.data?.people ?? []) as Person[]).map((p) => ({ party_id: p.party_id, name: p.name, kind: p.kind })))
+    } catch {
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [fail, t])
+  }, [])
 
   const loadKu31 = useCallback(async () => {
-    const res = await fetch(`/api/bolaget/capital/ku31/${ku31Year}`)
-    const body = await res.json().catch(() => ({}))
-    if (!res.ok) return fail(t('load_failed'), body)
+    const res = await fetch(`/api/bolaget/capital/ku31/${ku31Year}`).catch(() => null) // unreachable: ku31Failed
+    const body = res ? await res.json().catch(() => ({})) : {}
+    // A year that could not be read must not show another year's figures.
+    setKu31Failed(!res?.ok)
+    if (!res?.ok) return
     const status = body.data as Ku31Status
     setKu31(status)
     setKu31Form({
@@ -130,7 +146,7 @@ export function CapitalEvents() {
       contact_phone: status.contact.phone ?? '',
       contact_email: status.contact.email ?? '',
     })
-  }, [fail, ku31Year, t])
+  }, [ku31Year])
 
   useEffect(() => {
     void load()
@@ -349,15 +365,16 @@ export function CapitalEvents() {
     const holders = (preview.holders as Array<{ party_id: string; name: string; identity: string | null; share_count: number; amount: number }> | undefined) ?? []
     const warnings = (preview.warnings as string[] | undefined) ?? []
     return (
-      <div className="space-y-3 rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('preview_heading')}</h3>
+      <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
+        <h3 className="text-sm font-medium text-muted-foreground">{t('preview_heading')}</h3>
         {typeof preview.total_amount === 'number' && (
           <p className="text-[13px]">
             {t('preview_total')}: <span className="tabular-nums">{formatCurrency(preview.total_amount)}</span>
           </p>
         )}
         {holders.length > 0 && (
-          <table className="w-full border-collapse text-[13px]">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_holder')}</th>
@@ -373,14 +390,16 @@ export function CapitalEvents() {
                     {h.identity ? <span className="ml-2 text-muted-foreground tabular-nums">{h.identity}</span> : null}
                   </td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{h.share_count.toLocaleString('sv-SE')}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(h.amount)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(h.amount)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         )}
         {lines.length > 0 && (
-          <table className="w-full border-collapse text-[13px]">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_account')}</th>
@@ -392,12 +411,13 @@ export function CapitalEvents() {
               {lines.map((l, i) => (
                 <tr key={`${l.account_number}-${i}`}>
                   <td className={cn(TD_CLASS, 'tabular-nums')}>{l.account_number}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.debit ? formatCurrency(l.debit) : ''}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.credit ? formatCurrency(l.credit) : ''}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.debit ? formatRowAmount(l.debit) : ''}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{l.credit ? formatRowAmount(l.credit) : ''}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         )}
         {warnings.map((w) => (
           <AttnLine key={w}>{w}</AttnLine>
@@ -451,7 +471,18 @@ export function CapitalEvents() {
     return (
       <div className="space-y-8">
         <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} />
-        <Skeleton className="h-40 w-full" />
+        <LateReveal>
+          <Skeleton className="h-40 w-full" />
+        </LateReveal>
+      </div>
+    )
+  }
+
+  if (loadFailed && !data) {
+    return (
+      <div className="space-y-8">
+        <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} />
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
       </div>
     )
   }
@@ -469,19 +500,10 @@ export function CapitalEvents() {
         help={t('help')}
         action={
           canWrite ? (
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setPreview(null)
-                  setDividendForm({ decided_on: todayIsoStockholm(), decided_by: 'arsstamma', amount_mode: 'per_share', amount: '', payment_date: '', record_date_basis: 'decision_date', record_date: '', prudence_confirmed: '', note: '' })
-                }}
-              >
-                {t('new_dividend')}
-              </Button>
+            <>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="outline">
+                  <Button variant="outline" data-topbar-overflow-host="">
                     {t('more_actions')}
                   </Button>
                 </DropdownMenuTrigger>
@@ -505,17 +527,31 @@ export function CapitalEvents() {
                   <DropdownMenuItem onSelect={() => void openLedger(ku31Year)}>{t('ledger_action')}</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>
+              <Button
+                onClick={() => {
+                  setPreview(null)
+                  setDividendForm({ decided_on: todayIsoStockholm(), decided_by: 'arsstamma', amount_mode: 'per_share', amount: '', payment_date: '', record_date_basis: 'decision_date', record_date: '', prudence_confirmed: '', note: '' })
+                }}
+              >
+                <PlusIcon className="h-4 w-4" />
+                {t('new_dividend')}
+              </Button>
+            </>
           ) : undefined
         }
       />
 
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('dividends_heading')}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('dividends_heading')}</h2>
         {dividends.length === 0 ? (
           <EmptyState title={t('dividends_empty_title')} description={t('dividends_empty_body')} />
         ) : (
-          <table className="w-full border-collapse text-[13px] stagger-enter">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_decided_on')}</th>
@@ -528,15 +564,15 @@ export function CapitalEvents() {
             </thead>
             <tbody>
               {dividends.map((d) => (
-                <tr key={d.dividend_id} className="hover:bg-secondary/35">
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSplit(d)}>
+                <tr key={d.dividend_id} className="group hover:bg-secondary/35">
+                  <td className={cn(TD_CLASS, 'date-figures')}>
+                    <button type="button" className={NAME_LINK_CLASS} onClick={() => setSplit(d)}>
                       {formatDate(d.decided_on)}
                     </button>
                   </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{d.amount_per_share !== null ? formatCurrency(d.amount_per_share) : ''}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(d.total_amount)}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(d.payment_date)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{d.amount_per_share !== null ? formatRowAmount(d.amount_per_share) : ''}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(d.total_amount)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(d.payment_date)}</td>
                   <td className={TD_CLASS}>
                     {d.status === 'paid' || d.status === 'cancelled' ? (
                       <span className="text-xs text-muted-foreground">{statusLabel(d.status)}</span>
@@ -544,46 +580,50 @@ export function CapitalEvents() {
                       <Badge variant="outline">{statusLabel(d.status)}</Badge>
                     )}
                   </td>
-                  <td className={cn(TD_CLASS, 'text-right')}>
+                  <td className={ROW_ACTIONS_TD}>
                     {canWrite && d.status === 'decided' && (
-                      <span className="flex justify-end gap-3">
-                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setAction({ kind: 'book', dividend: d, form: { prudence_confirmed: d.prudence_confirmed ? 'true' : '' } }) }}>
+                      <span className="flex justify-end">
+                        <Button variant="row" onClick={() => { setPreview(null); setAction({ kind: 'book', dividend: d, form: { prudence_confirmed: d.prudence_confirmed ? 'true' : '' } }) }}>
                           {t('book_action')}
-                        </button>
-                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => void cancelDividend(d.dividend_id)}>
+                        </Button>
+                        <Button variant="row" onClick={() => void cancelDividend(d.dividend_id)}>
                           {t('cancel_action')}
-                        </button>
+                        </Button>
                       </span>
                     )}
                     {canWrite && d.status === 'booked' && (
-                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setAction({ kind: 'pay', dividend: d, form: { paid_on: d.payment_date <= todayIsoStockholm() ? d.payment_date : todayIsoStockholm(), bank_account: paymentLedger } }) }}>
+                      <Button variant="row" onClick={() => { setPreview(null); setAction({ kind: 'pay', dividend: d, form: { paid_on: d.payment_date <= todayIsoStockholm() ? d.payment_date : todayIsoStockholm(), bank_account: paymentLedger } }) }}>
                         {t('pay_action')}
-                      </button>
+                      </Button>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         )}
       </section>
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('ku31_heading')}</h2>
-          <SettingsSelect aria-label={t('ku31_year')} value={String(ku31Year)} onChange={(e) => setKu31Year(Number(e.target.value))} wrapperClassName="w-32">
-            {years.map((y) => (
-              <option key={y} value={String(y)}>
-                {y}
-              </option>
-            ))}
-          </SettingsSelect>
+          <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('ku31_heading')}</h2>
+          <ContextPicker
+            ariaLabel={t('ku31_year')}
+            triggerLabel={`${t('ku31_year')} ${ku31Year}`}
+            items={years.map((y) => ({ id: String(y), label: String(y) }))}
+            value={String(ku31Year)}
+            onChange={(id) => setKu31Year(Number(id))}
+          />
         </div>
-        {ku31 && (
+        {ku31Failed ? (
+          <LoadError onRetry={() => void loadKu31()} />
+        ) : ku31 && (
           <div className="space-y-4">
             <p className="text-[13px] text-muted-foreground">{t('ku31_deadline', { date: formatDate(ku31.deadline) })}</p>
             {ku31.recipients.length > 0 && (
-              <table className="w-full border-collapse text-[13px]">
+              <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('col_holder')}</th>
@@ -599,8 +639,8 @@ export function CapitalEvents() {
                         {r.name}
                         {r.identity ? <span className="ml-2 text-muted-foreground tabular-nums">{r.identity}</span> : null}
                       </td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(r.amount)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{r.reported ? formatCurrency(r.reported_amount) : ''}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(r.amount)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{r.reported ? formatRowAmount(r.reported_amount) : ''}</td>
                       <td className={TD_CLASS}>
                         {r.reason === 'legal_person' ? (
                           <span className="text-xs text-muted-foreground">{t('ku31_legal_person')}</span>
@@ -612,13 +652,14 @@ export function CapitalEvents() {
                   ))}
                 </tbody>
               </table>
+</div>
             )}
             {ku31.blockers.length > 0 && <AttnLine>{ku31.blockers.map((b) => blockerText(b)).join(' ')}</AttnLine>}
-            {ku31.unbooked_dividends > 0 && <p className="text-[12.5px] text-muted-foreground">{t('ku31_unbooked', { count: ku31.unbooked_dividends })}</p>}
-            <div className="grid gap-4 sm:grid-cols-2">
+            {ku31.unbooked_dividends > 0 && <p className="text-xs text-muted-foreground">{t('ku31_unbooked', { count: ku31.unbooked_dividends })}</p>}
+            <div className="grid max-w-[760px] gap-4 sm:grid-cols-2">
               <div className="space-y-1 sm:col-span-2">
                 <Label htmlFor="cap-famans">{t('ku31_famans_question')}</Label>
-                <p className="text-[12.5px] text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {ku31.famansforetag_derivation.derived ? t('ku31_famans_suggest_yes', { pct: ku31.famansforetag_derivation.top_four_votes_pct }) : t('ku31_famans_suggest_no', { pct: ku31.famansforetag_derivation.top_four_votes_pct })}
                 </p>
                 <SettingsSelect id="cap-famans" value={ku31Form.famansforetag || 'unanswered'} onChange={(e) => setKu31Form({ ...ku31Form, famansforetag: e.target.value === 'unanswered' ? '' : e.target.value })} wrapperClassName="max-w-sm" disabled={!canWrite}>
@@ -642,32 +683,37 @@ export function CapitalEvents() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {canWrite && (
-                <Button size="sm" variant="outline" onClick={saveKu31} loading={busy}>
+                <Button variant="outline" onClick={saveKu31} loading={busy}>
                   {t('ku31_save')}
                 </Button>
               )}
               {data?.can_download_ku31 && ku31.ready ? (
-                <Button size="sm" asChild>
-                  <a href={`/api/bolaget/capital/ku31/${ku31Year}/file`}>{t('ku31_download')}</a>
+                <Button variant="outline" asChild>
+                  <a href={`/api/bolaget/capital/ku31/${ku31Year}/file`}>
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                    {t('ku31_download')}
+                  </a>
                 </Button>
               ) : (
-                <Button size="sm" disabled>
+                <Button variant="outline" disabled>
+                  <ArrowDownTrayIcon className="h-4 w-4" />
                   {t('ku31_download')}
                 </Button>
               )}
-              {!data?.can_download_ku31 && <span className="text-[12.5px] text-muted-foreground">{t('ku31_admin_only')}</span>}
+              {!data?.can_download_ku31 && <span className="text-xs text-muted-foreground">{t('ku31_admin_only')}</span>}
             </div>
-            <p className="text-[12.5px] text-muted-foreground">{t('ku31_how_to_file')}</p>
+            <p className="max-w-[760px] text-xs text-muted-foreground">{t('ku31_how_to_file')}</p>
           </div>
         )}
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('changes_heading')}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('changes_heading')}</h2>
         {changes.length === 0 ? (
           <p className="text-[13px] text-muted-foreground">{t('changes_empty')}</p>
         ) : (
-          <table className="w-full border-collapse text-[13px] stagger-enter">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_kind')}</th>
@@ -680,24 +726,24 @@ export function CapitalEvents() {
             </thead>
             <tbody>
               {changes.map((c) => (
-                <tr key={c.capital_change_id} className="hover:bg-secondary/35">
+                <tr key={c.capital_change_id} className="group hover:bg-secondary/35">
                   <td className={TD_CLASS}>{t(`change_kind_${c.kind}`)}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(c.decided_on)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(c.decided_on)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{c.share_count.toLocaleString('sv-SE')}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(c.share_capital_amount)}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{c.registered_on ? formatDate(c.registered_on) : <Badge variant="outline">{t('not_registered')}</Badge>}</td>
-                  <td className={cn(TD_CLASS, 'text-right')}>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(c.share_capital_amount)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{c.registered_on ? formatDate(c.registered_on) : <Badge variant="outline">{t('not_registered')}</Badge>}</td>
+                  <td className={ROW_ACTIONS_TD}>
                     {canWrite && c.status === 'decided' && (
-                      <span className="flex justify-end gap-3">
+                      <span className="flex justify-end">
                         {c.kind === 'nyemission' && !c.payment_entry_id && (
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'payment', date: todayIsoStockholm(), bank_account: paymentLedger } }) }}>
+                          <Button variant="row" onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'payment', date: todayIsoStockholm(), bank_account: paymentLedger } }) }}>
                             {t('change_pay_action')}
-                          </button>
+                          </Button>
                         )}
                         {(c.kind !== 'nyemission' || c.payment_entry_id) && (
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'registration', date: todayIsoStockholm(), bank_account: '' } }) }}>
+                          <Button variant="row" onClick={() => { setPreview(null); setChangeBook({ change: c, form: { step: 'registration', date: todayIsoStockholm(), bank_account: '' } }) }}>
                             {t('change_register_action')}
-                          </button>
+                          </Button>
                         )}
                       </span>
                     )}
@@ -706,15 +752,17 @@ export function CapitalEvents() {
               ))}
             </tbody>
           </table>
+</div>
         )}
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('contributions_heading')}</h2>
+        <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('contributions_heading')}</h2>
         {contributions.length === 0 ? (
           <p className="text-[13px] text-muted-foreground">{t('contributions_empty')}</p>
         ) : (
-          <table className="w-full border-collapse text-[13px] stagger-enter">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+<table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('col_holder')}</th>
@@ -727,21 +775,22 @@ export function CapitalEvents() {
               {contributions.map((c) => (
                 <tr key={c.shareholder_contribution_id} className="hover:bg-secondary/35">
                   <td className={TD_CLASS} data-ph-mask="">{c.name}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(c.promised_on)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(c.promised_on)}</td>
                   <td className={cn(TD_CLASS, 'text-muted-foreground')}>
                     {c.kind === 'repayment' ? t('contribution_repayment') : c.conditional ? t('contribution_conditional') : t('contribution_unconditional')}
                   </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(c.kind === 'repayment' ? -c.amount : c.amount)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(c.kind === 'repayment' ? -c.amount : c.amount)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+</div>
         )}
       </section>
 
       {/* The split of one dividend per holder. */}
       <Dialog open={Boolean(split)} onOpenChange={(open) => (open ? null : setSplit(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{split ? t('split_title', { date: formatDate(split.decided_on) }) : ''}</DialogTitle>
           </DialogHeader>
@@ -764,7 +813,7 @@ export function CapitalEvents() {
                         {h.identity ? <span className="ml-2 text-muted-foreground tabular-nums">{h.identity}</span> : null}
                       </td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{h.share_count.toLocaleString('sv-SE')}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(h.amount)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(h.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -776,7 +825,7 @@ export function CapitalEvents() {
 
       {/* New dividend. */}
       <Dialog open={Boolean(dividendForm)} onOpenChange={(open) => (open ? null : setDividendForm(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('new_dividend')}</DialogTitle>
           </DialogHeader>
@@ -839,7 +888,7 @@ export function CapitalEvents() {
 
       {/* Book or pay a dividend. */}
       <Dialog open={Boolean(action)} onOpenChange={(open) => (open ? null : setAction(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{action?.kind === 'pay' ? t('pay_title') : t('book_title')}</DialogTitle>
           </DialogHeader>
@@ -873,7 +922,7 @@ export function CapitalEvents() {
 
       {/* Aktieägartillskott. */}
       <Dialog open={Boolean(contributionForm)} onOpenChange={(open) => (open ? null : setContributionForm(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('new_contribution')}</DialogTitle>
           </DialogHeader>
@@ -940,7 +989,7 @@ export function CapitalEvents() {
 
       {/* Nyemission, fondemission, minskning. */}
       <Dialog open={Boolean(changeForm)} onOpenChange={(open) => (open ? null : setChangeForm(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('new_change')}</DialogTitle>
           </DialogHeader>
@@ -1024,7 +1073,7 @@ export function CapitalEvents() {
 
       {/* Book a capital change: payment or registration. */}
       <Dialog open={Boolean(changeBook)} onOpenChange={(open) => (open ? null : setChangeBook(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{changeBook?.form.step === 'payment' ? t('change_pay_action') : t('change_register_action')}</DialogTitle>
           </DialogHeader>
@@ -1051,7 +1100,7 @@ export function CapitalEvents() {
 
       {/* Who received a dividend already in the ledger. */}
       <Dialog open={Boolean(ledger)} onOpenChange={(open) => (open ? null : setLedger(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('ledger_title')}</DialogTitle>
           </DialogHeader>
@@ -1101,7 +1150,7 @@ export function CapitalEvents() {
                   </button>
                 </div>
               )}
-              <p className="text-[12.5px] text-muted-foreground">{t('ledger_personnummer_hint')}</p>
+              <p className="text-xs text-muted-foreground">{t('ledger_personnummer_hint')}</p>
               {previewBlock()}
             </div>
           )}

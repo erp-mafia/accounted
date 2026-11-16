@@ -5,8 +5,9 @@ import { useLocale, useTranslations } from 'next-intl'
 import { ArrowPathRoundedSquareIcon, DocumentArrowDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -41,11 +42,12 @@ export default function AutogiroPage() {
 
   const [data, setData] = useState<AutogiroOverviewResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [refreshFailed, setRefreshFailed] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   // Bumped to read the overview again after a change; a newer read wins.
   const [reloadKey, setReloadKey] = useState(0)
   const load = useCallback(() => setReloadKey((key) => key + 1), [])
-  // A reload that fails keeps the page as it was and says so in a toast.
+  // A reload that fails keeps the page as it was and says so in one line.
   const loaded = useRef(false)
 
   useEffect(() => {
@@ -53,12 +55,13 @@ export default function AutogiroPage() {
     void requestAutogiro<AutogiroOverviewResponse>('/api/invoices/autogiro', undefined, locale).then((result) => {
       if (!current) return
       if (!result.ok) {
-        if (loaded.current) toast({ title: t('load_failed_title'), description: result.message, variant: 'destructive' })
+        if (loaded.current) setRefreshFailed(true)
         else setLoadError(result.message)
         return
       }
       loaded.current = true
       setLoadError(null)
+      setRefreshFailed(false)
       setData(result.data)
       // Every invoice that can go in is chosen until the person says otherwise.
       setSelected(new Set(result.data.overview.due.filter((d) => d.blocker === null).map((d) => d.invoice_id)))
@@ -66,7 +69,7 @@ export default function AutogiroPage() {
     return () => {
       current = false
     }
-  }, [locale, reloadKey, t, toast])
+  }, [locale, reloadKey])
 
   const help = (
     <HelpPopover>
@@ -83,17 +86,24 @@ export default function AutogiroPage() {
       <div className="space-y-8">
         <PageHeader title={t('title')} help={help} />
         {loadError ? (
-          <EmptyState icon={ArrowPathRoundedSquareIcon} title={t('load_failed_title')} description={loadError}>
-            <Button type="button" variant="outline" onClick={() => load()}>
-              {tCommon('retry')}
-            </Button>
-          </EmptyState>
+          <LoadError
+            title={t('load_failed_title')}
+            description={loadError}
+            onRetry={() => {
+              setLoadError(null)
+              load()
+            }}
+          />
         ) : (
-          <div className="space-y-3" role="status" aria-label={tCommon('loading')}>
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-          </div>
+          <LateReveal role="status" aria-label={tCommon('loading')}>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3.5 w-24" />
+                <Skeleton className="ml-auto h-3.5 w-20" />
+              </div>
+            ))}
+          </LateReveal>
         )}
       </div>
     )
@@ -174,18 +184,22 @@ export default function AutogiroPage() {
         action={
           canCreate && debitable.length > 0 ? (
             <Button
-              size="sm"
+              size="toolbar"
               type="button"
               disabled={chosen.length === 0}
               title={chosen.length === 0 ? t('create_file_none_chosen') : undefined}
               onClick={() => void createDebitFile()}
             >
-              <DocumentArrowDownIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+              <DocumentArrowDownIcon className="h-4 w-4" aria-hidden="true" />
               {allChosen ? t('create_file') : t('create_file_count', { count: chosen.length })}
             </Button>
           ) : undefined
         }
       />
+
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: load }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
 
       <AutogiroAgreementSection
         key={overview.settings ? `${overview.settings.customer_number}-${overview.settings.bankgiro}` : 'none'}

@@ -83,11 +83,11 @@ export function CloseImportedYearsOffer({
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-border p-4 text-sm">
+    <div className="space-y-2 rounded-lg p-4 text-sm bg-control shadow-raised">
       <p className="font-medium">{t('close_years_title', { count: targets.length, years: names })}</p>
       <p className="text-muted-foreground">{t('close_years_body')}</p>
       <div className="flex flex-wrap items-center gap-3 pt-1">
-        <Button variant="outline" size="sm" loading={running} onClick={() => void run()}>
+        <Button variant="outline" loading={running} onClick={() => void run()}>
           {t('close_years_action')}
         </Button>
         {showUnderlagLink ? (

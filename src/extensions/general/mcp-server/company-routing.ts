@@ -680,7 +680,7 @@ export function assertMcpCompanyWriteAccess(
   if (refusal === 'CONNECTION_READ_ONLY') {
     throw readOnlyToolError(
       refusal,
-      `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Settings > API & MCP.`
+      `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Agents > Connect an agent.`
     )
   }
 }

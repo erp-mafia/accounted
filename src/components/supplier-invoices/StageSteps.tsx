@@ -26,7 +26,7 @@ export function StageSteps({
   const t = useTranslations('supplier_invoices')
   const idx = stageIndex(current)
   return (
-    <div className="mb-5 flex overflow-hidden rounded-lg border border-border">
+    <div className="mb-5 flex overflow-hidden">
       {stages.map((s) => {
         const i = stageIndex(s)
         const state: 'done' | 'now' | 'todo' = idx < 0 ? 'todo' : i < idx ? 'done' : i === idx ? 'now' : 'todo'
@@ -35,19 +35,19 @@ export function StageSteps({
           <div
             key={s}
             className={cn(
-              'flex min-w-0 flex-1 items-baseline gap-2 border-r border-border px-3 py-2 last:border-r-0',
+              'flex min-w-0 flex-1 items-baseline gap-2 border-r-hairline px-3 py-2 last:border-r-0',
               state === 'now' && 'bg-secondary shadow-[inset_0_-2px_0_hsl(var(--foreground))]',
             )}
           >
             <span
               className={cn(
-                'truncate text-[11px] font-semibold uppercase tracking-[0.06em]',
+                'truncate text-xs font-semibold',
                 state === 'done' ? 'text-success' : state === 'now' ? 'text-foreground' : 'text-muted-foreground',
               )}
             >
               {t(`stage_${s}`)}
             </span>
-            {date && <span className="min-w-0 truncate text-[12.5px] tabular-nums text-foreground/80">{date}</span>}
+            {date && <span className="min-w-0 truncate text-xs tabular-nums text-foreground/80">{date}</span>}
           </div>
         )
       })}

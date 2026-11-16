@@ -233,7 +233,7 @@ export function SalarySettingsContent() {
             </SettingsSelect>
           </SettingsRow>
           {effectiveFormat === 'bg_lb' && (
-            <p className="border-b border-border px-1 pb-3 text-[12.5px] leading-relaxed text-attn">
+            <p className="border-b-hairline px-1 pb-3 text-xs leading-relaxed text-attn">
               {t('sunset_warning')}
             </p>
           )}

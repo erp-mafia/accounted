@@ -285,7 +285,6 @@ export function FiscalPeriodEditor() {
             <Button
               type="button"
               variant="ghost"
-              size="sm"
               onClick={handleReset}
               disabled={isSaving}
               tabIndex={isDirty ? 0 : -1}

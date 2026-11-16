@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExclamationCircleIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
 import {
@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useFormat } from '@/lib/hooks/use-format'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { OssUnderlag } from '@/lib/webshop-orders/oss-underlag'
@@ -60,6 +60,9 @@ export function OssUnderlagView() {
   const [result, setResult] = useState<{ key: string; data?: OssUnderlag; error?: string } | null>(null)
 
   const query = `year=${year}&quarter=${quarter}`
+  // "Försök igen" asks again under a new key, so the skeleton shows meanwhile.
+  const [attempt, setAttempt] = useState(0)
+  const requestKey = `${query}#${attempt}`
   useEffect(() => {
     let cancelled = false
     fetch(`/api/webshop-orders/oss-underlag?${query}`)
@@ -67,18 +70,18 @@ export function OssUnderlagView() {
         const json = await res.json().catch(() => ({}))
         if (cancelled) return
         if (!res.ok) {
-          setResult({ key: query, error: getErrorMessage(json, { statusCode: res.status, locale: locale as ErrorLocale }) })
+          setResult({ key: requestKey, error: getErrorMessage(json, { statusCode: res.status, locale: locale as ErrorLocale }) })
           return
         }
-        setResult({ key: query, data: json.data as OssUnderlag })
+        setResult({ key: requestKey, data: json.data as OssUnderlag })
       })
       .catch(() => {
-        if (!cancelled) setResult({ key: query, error: t('load_failed') })
+        if (!cancelled) setResult({ key: requestKey, error: t('load_failed') })
       })
     return () => {
       cancelled = true
     }
-  }, [query, locale, t])
+  }, [query, requestKey, locale, t])
 
   const countryName = useMemo(() => {
     const names = new Intl.DisplayNames([locale === 'en' ? 'en' : 'sv'], { type: 'region' })
@@ -91,7 +94,7 @@ export function OssUnderlagView() {
   )
 
   const yearOptions = Array.from({ length: 5 }, (_, i) => stockholmYearMonth().year - i).filter((y) => y >= 2021)
-  const upToDate = result !== null && result.key === query
+  const upToDate = result !== null && result.key === requestKey
   const report = upToDate ? result.data ?? null : null
   const error = upToDate ? result.error ?? null : null
   const message = (w: { message_sv: string; message_en: string }) => (locale === 'en' ? w.message_en : w.message_sv)
@@ -128,32 +131,27 @@ export function OssUnderlagView() {
       </div>
 
       {!upToDate ? (
-        <div className="space-y-3" aria-busy>
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-1/3" />
           <Skeleton className="h-40 w-full" />
-        </div>
+        </LateReveal>
       ) : error || !report ? (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-destructive">
-            <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
-            {error ?? t('load_failed')}
-          </CardContent>
-        </Card>
+        <LoadError title={error ?? t('load_failed')} onRetry={() => setAttempt((n) => n + 1)} />
       ) : (
         <div className="space-y-6 animate-fade-in">
           {incomplete && <AttnLine>{t('attn_incomplete')}</AttnLine>}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('sales_eur')}</div>
+              <div className="text-xs text-muted-foreground">{t('sales_eur')}</div>
               <div className="font-display text-xl tabular-nums">{eur(report.totals.net_eur)}</div>
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('vat_eur')}</div>
+              <div className="text-xs text-muted-foreground">{t('vat_eur')}</div>
               <div className="font-display text-xl tabular-nums">{eur(report.totals.vat_eur)}</div>
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('corrections_eur')}</div>
+              <div className="text-xs text-muted-foreground">{t('corrections_eur')}</div>
               <div className="font-display text-xl tabular-nums">{eur(report.totals.corrections_vat_eur)}</div>
             </div>
           </div>
@@ -168,7 +166,7 @@ export function OssUnderlagView() {
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_rows')}</CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -186,7 +184,7 @@ export function OssUnderlagView() {
                         <TableCell className="text-right tabular-nums whitespace-nowrap">{percent.format(row.vat_rate)}&nbsp;%</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(row.net_eur)}</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(row.vat_eur)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(row.vat_sek)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatRowAmount(row.vat_sek)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -208,7 +206,7 @@ export function OssUnderlagView() {
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_corrections')}</CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -224,7 +222,7 @@ export function OssUnderlagView() {
                         <TableCell>{countryName(correction.country)}</TableCell>
                         <TableCell className="tabular-nums">{correction.period.label}</TableCell>
                         <TableCell className="text-right tabular-nums">{eur(correction.vat_eur)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(correction.vat_sek)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatRowAmount(correction.vat_sek)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -243,7 +241,7 @@ export function OssUnderlagView() {
                   <div key={w.code}>
                     <p>{message(w)}</p>
                     {w.order_numbers.length > 0 && (
-                      <p className="mt-1 text-[12.5px] text-muted-foreground tabular-nums">
+                      <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                         {t('orders_label', { numbers: w.order_numbers.join(', ') })}
                       </p>
                     )}
@@ -258,7 +256,7 @@ export function OssUnderlagView() {
               <CardHeader>
                 <CardTitle className="text-base">{t('heading_unaccounted')}</CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -276,9 +274,9 @@ export function OssUnderlagView() {
                             {formatVoucher(voucher)}
                           </Link>
                         </TableCell>
-                        <TableCell className="tabular-nums">{formatDate(voucher.entry_date)}</TableCell>
+                        <TableCell className="date-figures">{formatDate(voucher.entry_date)}</TableCell>
                         <TableCell className="max-w-64 truncate">{voucher.description}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(voucher.vat_sek)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatRowAmount(voucher.vat_sek)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -287,7 +285,7 @@ export function OssUnderlagView() {
             </Card>
           )}
 
-          <div className="space-y-1 text-[12.5px] text-muted-foreground">
+          <div className="space-y-1 text-xs text-muted-foreground">
             {report.rates.map((rate) =>
               rate.rate !== null && rate.rate_date ? (
                 <p key={`${rate.currency}-${rate.for_date}`} className="tabular-nums">

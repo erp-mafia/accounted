@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { classifyPayeeChange, type CardPayeeSource } from '@/lib/payments/payee-change'
 import { payFromDocumentDetails, plainAmount, statedPayeeOfDocument, type PayFromDocumentReading } from '@/lib/inkorg/pay-in-bank'
@@ -75,7 +75,7 @@ export function PayFromDocumentDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle data-ph-mask="">
             {details.supplierName ? t('pay_title_named', { name: details.supplierName }) : t('pay_title')}
@@ -84,11 +84,11 @@ export function PayFromDocumentDialog({
         </DialogHeader>
 
         {card.status === 'loading' ? (
-          <div className="space-y-3" aria-hidden="true">
+          <LateReveal className="space-y-3">
             {[0, 1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-8 w-full rounded-sm" />
             ))}
-          </div>
+          </LateReveal>
         ) : (
           <dl className="divide-y divide-border border-y border-border">
             {details.held ? (
@@ -118,7 +118,7 @@ export function PayFromDocumentDialog({
         {/* The card could not be read, so nothing says the account is the supplier's. */}
         {card.status === 'failed' && details.account && <AttnLine>{t('pay_doc_account_check')}</AttnLine>}
 
-        <p className="text-[12.5px] text-muted-foreground">{t('pay_doc_after')}</p>
+        <p className="text-xs text-muted-foreground">{t('pay_doc_after')}</p>
 
         <DialogFooter>
           <Button onClick={onDone}>{t('done')}</Button>

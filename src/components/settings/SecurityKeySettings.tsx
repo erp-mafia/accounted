@@ -145,7 +145,6 @@ function SecurityKeyRow() {
               {canRemove && (
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => handleRemove(key.id)}
                   loading={removingId === key.id}
                   disabled={removingId !== null}
@@ -160,7 +159,7 @@ function SecurityKeyRow() {
       )}
       <SettingsRowEnd>
         {supported ? (
-          <Button variant="outline" size="sm" onClick={handleAdd} loading={adding} disabled={keys === null}>
+          <Button variant="outline" onClick={handleAdd} loading={adding} disabled={keys === null}>
             {adding ? t('adding_security_key') : t('add_security_key')}
           </Button>
         ) : (

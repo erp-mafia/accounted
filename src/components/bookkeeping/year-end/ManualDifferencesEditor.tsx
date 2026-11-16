@@ -111,7 +111,7 @@ export function ManualDifferencesEditor({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               onClick={() => onChange(rows.filter((candidate) => candidate.key !== row.key))}
               aria-label={t('manual_remove', { label: row.label || '' })}
             >
@@ -120,8 +120,8 @@ export function ManualDifferencesEditor({
           </div>
         </div>
       ))}
-      <Button type="button" variant="outline" size="sm" onClick={() => onChange([...rows, manualDraft()])}>
-        <PlusIcon className="mr-1 h-4 w-4" /> {t('manual_add')}
+      <Button type="button" variant="outline" onClick={() => onChange([...rows, manualDraft()])}>
+        <PlusIcon className="h-4 w-4" /> {t('manual_add')}
       </Button>
     </div>
   )

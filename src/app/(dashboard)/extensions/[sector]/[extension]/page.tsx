@@ -50,9 +50,10 @@ export default async function ExtensionDetailPage({
     <div>
       <PageHeader
         title={extensionName}
+        parent={{ label: t('breadcrumb'), href: '/extensions' }}
         action={
           hasWorkspace ? (
-            <Button size="sm" asChild>
+            <Button size="toolbar" asChild>
               <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
                 {t('open')}
               </Link>
@@ -60,15 +61,6 @@ export default async function ExtensionDetailPage({
           ) : undefined
         }
       />
-
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
-        <Link href="/extensions" className="hover:text-foreground transition-colors">
-          {t('breadcrumb')}
-        </Link>
-        <span>/</span>
-        <span className="text-foreground">{extensionName}</span>
-      </nav>
 
       {/* Header */}
       <div className="flex items-start gap-4 mb-8">
@@ -86,14 +78,14 @@ export default async function ExtensionDetailPage({
       {/* Details */}
       <div className="space-y-6">
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('description_heading')}</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {extensionLongDescription}
           </p>
         </div>
 
         <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
+          <h2 className="text-sm text-muted-foreground mb-2">{t('data_source_heading')}</h2>
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>

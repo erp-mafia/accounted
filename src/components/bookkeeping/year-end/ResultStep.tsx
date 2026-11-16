@@ -15,7 +15,7 @@ import {
 import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
@@ -66,7 +66,7 @@ export function ResultStep({ result }: ResultStepProps) {
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10">
             <CheckCircleIcon className="h-7 w-7 text-success" />
           </div>
-          <h2 className="font-display text-2xl">Bokslutet är klart</h2>
+          <h2 className="text-2xl">Bokslutet är klart</h2>
           <p className="text-muted-foreground">
             Perioden är stängd och en ny räkenskapsperiod har skapats.
           </p>
@@ -74,7 +74,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Resultat</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Resultat</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <div className="space-y-3 px-1 pt-2 text-sm">
@@ -216,7 +216,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
 function ResultRow({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-border last:border-b-0 pb-3 last:pb-0">
+    <div className="flex items-center justify-between border-b-hairline last:border-b-0 pb-3 last:pb-0">
       <span className="text-muted-foreground">{label}</span>
       {href ? (
         <Link href={href} className="font-medium tabular-nums text-primary hover:underline">
@@ -254,7 +254,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
   return (
     <section>
       <div className="mb-3 flex items-center justify-between gap-2 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">IB/UB-avstämning</h3>
+        <h3 className="font-sans text-xs font-medium text-muted-foreground">IB/UB-avstämning</h3>
         {hasIssues ? (
           <Badge variant="destructive" className="gap-1">
             <ExclamationTriangleIcon className="h-3 w-3" />
@@ -285,7 +285,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
               if (rows.length === 0) return null
               return (
                 <div key={klass}>
-                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                  <h3 className="font-sans text-xs font-medium text-muted-foreground mb-2">
                     Klass {klass}: {klass === 1 ? 'Tillgångar' : 'Skulder & eget kapital'}
                   </h3>
                   <Table>
@@ -310,13 +310,13 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
                               </span>
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.previous_ub_net)}
+                              {formatRowAmount(d.previous_ub_net)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.current_ib_net)}
+                              {formatRowAmount(d.current_ib_net)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {formatCurrency(d.difference)}
+                              {formatRowAmount(d.difference)}
                             </TableCell>
                             <TableCell className="text-right">
                               {overTol ? (

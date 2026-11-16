@@ -148,7 +148,7 @@ export default function CreateInvoiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !isSubmitting && onOpenChange(v)}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('invoice_dialog_title')}</DialogTitle>
           <DialogDescription>{t('invoice_dialog_description')}</DialogDescription>
@@ -156,10 +156,10 @@ export default function CreateInvoiceDialog({
 
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => seed('remaining')}>
+            <Button type="button" variant="outline" onClick={() => seed('remaining')}>
               {t('mode_remaining')}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => seed('delivered')}>
+            <Button type="button" variant="outline" onClick={() => seed('delivered')}>
               {t('mode_delivered')}
             </Button>
           </div>

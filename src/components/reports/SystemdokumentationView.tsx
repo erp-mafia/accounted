@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn, formatDate } from '@/lib/utils'
@@ -26,6 +26,13 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
   const [report, setReport] = useState<SystemdokumentationReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to ask again for the same period.
+  const [attempt, setAttempt] = useState(0)
+  const retry = () => {
+    setError(null)
+    setLoading(true)
+    setAttempt((n) => n + 1)
+  }
 
   // Keyed on periodId by the caller: a new period is a fresh mount, so the
   // initial loading state is the reset.
@@ -50,24 +57,19 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
     return () => {
       cancelled = true
     }
-  }, [periodId, t])
+  }, [periodId, attempt, t])
 
   if (loading) {
     return (
-      <div className="space-y-3" aria-busy>
+      <LateReveal className="space-y-3">
         <Skeleton className="h-4 w-1/3" />
         <Skeleton className="h-40 w-full" />
-      </div>
+      </LateReveal>
     )
   }
   if (error || !report) {
     return (
-      <Card>
-        <CardContent className="py-8 text-center text-sm text-destructive">
-          <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
-          {error ?? t('load_failed')}
-        </CardContent>
-      </Card>
+      <LoadError title={error ?? t('load_failed')} onRetry={retry} />
     )
   }
 
@@ -91,8 +93,8 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
       </div>
 
       <Card>
-        <CardContent className="p-0">
-          <table className="w-full text-[13px]">
+        <CardContent>
+          <table className="-mx-2 w-[calc(100%+1rem)] text-[13px]">
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[220px]')}>{t('col_section')}</th>
@@ -101,7 +103,7 @@ export function SystemdokumentationView({ periodId }: SystemdokumentationViewPro
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.label} className="border-b border-border last:border-b-0 align-top">
+                <tr key={row.label} className="border-b-hairline last:border-b-0 align-top">
                   <td className={cn(TD_CLASS, 'font-medium')}>{row.label}</td>
                   <td className={TD_CLASS} data-ph-mask>
                     {row.value || '-'}

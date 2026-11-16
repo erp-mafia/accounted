@@ -43,13 +43,10 @@ function Logo({ src }: { src: string }) {
 export function FetchWithAiButton({
   clients,
   variant,
-  size,
   className,
 }: {
   clients: AiClient[]
   variant: ButtonProps['variant']
-  /** sm where it sits in a toolbar row (a view's heading); the default size in the focus view. */
-  size?: ButtonProps['size']
   className?: string
 }) {
   const t = useTranslations('inkorg')
@@ -67,7 +64,6 @@ export function FetchWithAiButton({
     return (
       <Button
         variant={variant}
-        size={size}
         className={className}
         onClick={() => openAiConnector(aiConnectAction('claude', { origin: window.location.origin, appName }).open)}
       >
@@ -104,7 +100,7 @@ export function FetchWithAiButton({
 
   if (clientId !== 'claude' || targets.length < 2) {
     return (
-      <Button variant={variant} size={size} className={className} onClick={() => start(clientId === 'claude' ? target : 'web')}>
+      <Button variant={variant} className={className} onClick={() => start(clientId === 'claude' ? target : 'web')}>
         {label}
       </Button>
     )
@@ -113,9 +109,9 @@ export function FetchWithAiButton({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant={variant} size={size} className={className}>
+        <Button variant={variant} className={className}>
           {label}
-          <ChevronDownIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+          <ChevronDownIcon aria-hidden="true" className="h-3.5 w-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-64" aria-label={tSkills('start_where')}>
@@ -133,7 +129,7 @@ export function FetchWithAiButton({
               <Icon aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] text-foreground">{tSkills(`open_in_${where}`)}</span>
-                <span className="block text-[11px] leading-snug text-muted-foreground">{tSkills(`open_in_${where}_note`)}</span>
+                <span className="block text-xs leading-snug text-muted-foreground">{tSkills(`open_in_${where}_note`)}</span>
               </span>
               {where === target && <CheckIcon aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
             </DropdownMenuItem>

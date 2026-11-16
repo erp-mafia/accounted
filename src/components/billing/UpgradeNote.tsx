@@ -19,7 +19,7 @@ export function UpgradeNote({ children, className }: { children?: React.ReactNod
   const frame = (content: React.ReactNode) => (
     <div
       className={cn(
-        'flex items-start gap-2.5 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground',
+        'flex items-start gap-2.5 rounded-lg bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground bg-control shadow-raised',
         className,
       )}
     >

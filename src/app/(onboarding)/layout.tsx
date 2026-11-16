@@ -83,7 +83,6 @@ export default async function OnboardingLayout({
         <Button
           asChild
           variant="ghost"
-          size="sm"
           className="fixed bottom-6 right-6 z-50 text-muted-foreground"
         >
           <Link href={ACCOUNT_DELETION_HREF}>{t('account_deletion_link')}</Link>

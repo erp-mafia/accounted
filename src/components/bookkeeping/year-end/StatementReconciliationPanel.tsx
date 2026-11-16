@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { StatementReconciliation } from '@/lib/reports/statement-reconciliation'
@@ -27,6 +28,8 @@ type LoadState =
  */
 export function StatementReconciliationPanel({ periodId }: StatementReconciliationPanelProps) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  // Bumped by "Försök igen" to fetch the same period again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -49,12 +52,12 @@ export function StatementReconciliationPanel({ periodId }: StatementReconciliati
     return () => {
       cancelled = true
     }
-  }, [periodId])
+  }, [periodId, attempt])
 
   return (
     <section>
       <div className="mb-3 flex items-center justify-between gap-2 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <h3 className="font-sans text-xs font-medium text-muted-foreground">
           Årets resultat i rapporterna
         </h3>
         {state.kind === 'ready' &&
@@ -72,15 +75,21 @@ export function StatementReconciliationPanel({ periodId }: StatementReconciliati
       </div>
 
       {state.kind === 'loading' && (
-        <div className="space-y-2 px-1" role="status" aria-label="Hämtar avstämningen">
+        <LateReveal className="space-y-2 px-1" role="status" aria-label="Hämtar avstämningen">
           <Skeleton className="h-5 w-full" />
           <Skeleton className="h-5 w-full" />
           <Skeleton className="h-5 w-full" />
-        </div>
+        </LateReveal>
       )}
 
       {state.kind === 'error' && (
-        <p className="px-1 text-sm text-muted-foreground">{state.message}</p>
+        <LoadError
+          title={state.message}
+          onRetry={() => {
+            setState({ kind: 'loading' })
+            setAttempt((n) => n + 1)
+          }}
+        />
       )}
 
       {state.kind === 'ready' && (
@@ -89,12 +98,12 @@ export function StatementReconciliationPanel({ periodId }: StatementReconciliati
             {state.data.figures.map((figure) => (
               <div
                 key={figure.surface}
-                className="flex items-start justify-between gap-4 border-b border-border pb-3 last:border-b-0 last:pb-0"
+                className="flex items-start justify-between gap-4 border-b-hairline pb-3 last:border-b-0 last:pb-0"
               >
                 <div className="min-w-0">
                   <p className="text-muted-foreground">{figure.surface}</p>
                   {figure.note && (
-                    <p className="text-[12.5px] leading-5 text-muted-foreground">{figure.note}</p>
+                    <p className="text-xs leading-5 text-muted-foreground">{figure.note}</p>
                   )}
                 </div>
                 <span className="shrink-0 font-medium tabular-nums">

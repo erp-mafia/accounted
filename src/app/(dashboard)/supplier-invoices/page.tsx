@@ -5,14 +5,18 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { groupRows } from '@/lib/lists/group-rows'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { fetchPayeeAlertMarkers, type PayeeAlertMarker } from '@/components/payments/payee-change-client'
 import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { IntentLink } from '@/components/ui/intent-link'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { DataListEmpty } from '@/components/ui/data-list'
 import {
   TH_CLASS,
@@ -25,18 +29,22 @@ import {
   ShowMoreFooter,
 } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
-  AdjustmentsHorizontalIcon,
+  ChevronDownIcon,
   DocumentArrowUpIcon,
+  DocumentTextIcon,
   LockClosedIcon,
   PlusIcon,
 } from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -45,7 +53,7 @@ import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import {
   canApproveSupplierInvoice,
@@ -60,7 +68,7 @@ import {
 } from '@/lib/supplier-invoices/supplier-invoice-list-sort'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import type { FiscalPeriod, SupplierInvoice } from '@/types'
+import type { SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { fetchPaymentsAvailability, type CompanyVerification } from '@/components/payments/payments-client'
 import { PaymentsVerificationLine } from '@/components/payments/PaymentsVerificationLine'
@@ -112,6 +120,10 @@ type ListInvoice = SupplierInvoice & {
 
 const TABS = ['all', 'registered', 'approved', 'to_pay', 'in_payment', 'paid'] as const
 type ListTab = (typeof TABS)[number]
+// The toolbar shows the working views as segments (Alla last, the default);
+// the two settled states sit behind the Status picker.
+const SEGMENT_TABS = ['registered', 'to_pay', 'in_payment', 'all'] as const satisfies readonly ListTab[]
+const PICKER_TABS = TABS.filter((tab) => !(SEGMENT_TABS as readonly ListTab[]).includes(tab))
 
 const TAB_LABEL_KEYS: Record<ListTab, string> = {
   all: 'tab_all',
@@ -158,6 +170,7 @@ const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
 
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -166,6 +179,9 @@ export default function SupplierInvoicesPage() {
   const company = useCompanyOptional()?.company ?? null
   const [invoices, setInvoices] = useState<ListInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no rows on screen the list says so in place
+  // of them; rows already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   // ?tab= opens a status tab directly: the Att göra row and the byrå client
   // list link to Att betala (to_pay) and the attest queue (registered).
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
@@ -196,8 +212,8 @@ export default function SupplierInvoicesPage() {
     return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
   })
   // Fiscal-year scope (convention 8): null = all years.
-  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
-  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  // The year is app-wide context (the sidebar); "all years" lists everything.
+  const { period: fyPeriod } = useFiscalScope()
   // A new tab, search or year starts the list from its first rows again.
   const changeTab = (tab: ListTab) => {
     setActiveTab(tab)
@@ -207,9 +223,12 @@ export default function SupplierInvoicesPage() {
     setSearchTerm(term)
     resetPaging()
   }
-  const changeFiscalYear = (periodId: string | null, period: FiscalPeriod | null) => {
-    setFyPeriodId(periodId)
-    setFyPeriod(period)
+  // The year is chosen in the sidebar, not on this page, so the reset follows
+  // the scope: state adjusted during render, no effect and no extra paint.
+  const fyScopeId = fyPeriod?.id ?? null
+  const [pagedFyScopeId, setPagedFyScopeId] = useState<string | null>(fyScopeId)
+  if (pagedFyScopeId !== fyScopeId) {
+    setPagedFyScopeId(fyScopeId)
     resetPaging()
   }
   const [approvingId, setApprovingId] = useState<string | null>(null)
@@ -236,7 +255,8 @@ export default function SupplierInvoicesPage() {
   // every entry point (the header button, the empty state, the command
   // palette, and the legacy /supplier-invoices/new redirect) opens the same
   // dialog, and the browser back button closes it.
-  const showNewInvoice = searchParams.has('new')
+  // A viewer registers nothing, so the link opens nothing for one (use-can-write.ts).
+  const showNewInvoice = canWrite && searchParams.has('new')
   const inboxItemId = searchParams.get('inbox_item_id')
   const closeNewInvoice = () => router.replace('/supplier-invoices', { scroll: false })
   const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
@@ -252,14 +272,11 @@ export default function SupplierInvoicesPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const { data } = await res.json()
       setInvoices(data || [])
+      setLoadFailed(false)
     } catch {
       // Without this, a failed fetch either stuck the skeleton forever or
       // silently rendered the empty state as if the invoices were gone.
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -438,6 +455,8 @@ export default function SupplierInvoicesPage() {
   const registeredCount = invoices.filter(isAwaitingAttestInList).length
   const toPayCount = invoices.filter(isToPayInList).length
   const inPaymentCount = invoices.filter((inv) => openPaymentMarker(inv) !== null).length
+  const tabCount = (tab: ListTab): number | undefined =>
+    tab === 'registered' ? registeredCount : tab === 'to_pay' ? toPayCount : tab === 'in_payment' ? inPaymentCount : undefined
 
   // An invoice with an open bank payment takes no new payment: no checkbox
   // (the server refuses it in both channels anyway).
@@ -570,96 +589,91 @@ export default function SupplierInvoicesPage() {
           is deliberately no mark-as-paid button here. */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2">
-          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+          <h1 className="page-header-title">{t('title')}</h1>
           <HelpPopover>{t('help_body')}</HelpPopover>
         </span>
         {/* The two ways an invoice gets here: mailed in by the supplier,
             or registered by hand. */}
-        <div className="flex min-w-0 items-center gap-2">
+        <PageHeaderActions className="flex min-w-0 items-center gap-2">
           <SupplierInboxAddress />
           {canWrite ? (
-            <Button size="sm" onClick={openNewInvoice}>
-              <PlusIcon className="mr-2 h-4 w-4" />
+            <Button size="toolbar" onClick={openNewInvoice}>
+              <PlusIcon className="h-4 w-4" />
               {t('register_invoice')}
             </Button>
           ) : (
-            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
+            <Button size="toolbar" disabled title={t('viewer_disabled_tooltip')}>
+              <LockClosedIcon className="h-4 w-4" />
               {t('register_invoice')}
             </Button>
           )}
-        </div>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: one status chip-picker (founder direction: the status
-          views live behind a filter chip, not a seg), sök, FyPicker far
-          right. Counts ride as row annotations and on the trigger. */}
+      {/* Toolbar (V7 list toolbars): the view segments first, the remaining
+          status views in the Status picker, then sök and Mer at the right
+          end; the year is the sidebar's. A view has one door. */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
+        <div className="max-w-full overflow-x-auto rounded-lg">
+          <SegmentedControl<ListTab>
+            aria-label={t('status_picker_aria')}
+            className="whitespace-nowrap"
+            value={activeTab}
+            onChange={(next) => changeTab(next)}
+            options={SEGMENT_TABS.map((tab) => ({
+              value: tab,
+              label: t(TAB_LABEL_KEYS[tab]),
+              count: tabCount(tab),
+            }))}
+          />
+        </div>
         <ContextPicker
           value={activeTab}
           onChange={(id) => changeTab(id as ListTab)}
           ariaLabel={t('status_picker_aria')}
-          triggerLabel={(() => {
-            const count =
-              activeTab === 'registered'
-                ? registeredCount
-                : activeTab === 'to_pay'
-                  ? toPayCount
-                  : activeTab === 'in_payment'
-                    ? inPaymentCount
-                    : 0
-            return count > 0
-              ? `${t(TAB_LABEL_KEYS[activeTab])} · ${count}`
+          triggerLabel={
+            (SEGMENT_TABS as readonly ListTab[]).includes(activeTab)
+              ? t('status_picker_label')
               : t(TAB_LABEL_KEYS[activeTab])
-          })()}
-          items={TABS.map((tab) => ({
+          }
+          items={PICKER_TABS.map((tab) => ({
             id: tab,
             label: t(TAB_LABEL_KEYS[tab]),
-            annotation:
-              tab === 'registered' && registeredCount > 0
-                ? String(registeredCount)
-                : tab === 'to_pay' && toPayCount > 0
-                  ? String(toPayCount)
-                  : tab === 'in_payment' && inPaymentCount > 0
-                    ? String(inPaymentCount)
-                    : undefined,
           }))}
         />
         <ToolbarSearch
-          containerClassName="min-w-[190px]"
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => changeSearch(e.target.value)}
         />
-        <div className="ml-auto flex items-center gap-4">
-          <FyPicker
-            value={fyPeriodId}
-            onChange={(periodId, period) => changeFiscalYear(periodId, period ?? null)}
-            includeAllOption
-          />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={cn('text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
-                aria-label={t('group_picker_aria')}
-                title={t('group_by')}
-              >
-                <AdjustmentsHorizontalIcon className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
-                {GROUP_MODES.map((mode) => (
-                  <DropdownMenuRadioItem key={mode} value={mode}>
-                    {t(GROUP_LABEL_KEYS[mode])}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="toolbar" aria-label={t('group_picker_aria')}>
+              {tCommon('more')}
+              <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            {/* Betalfiler has no gate of its own: the page is linked from
+                Betalningar for every company, and Skapa betalfil in the bulk
+                bar below is unconditional too. */}
+            <DropdownMenuItem onSelect={() => router.push('/supplier-invoices/payment-files')}>
+              <DocumentTextIcon className="h-4 w-4" />
+              {t('payment_files_link')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{t('group_by')}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
+              {GROUP_MODES.map((mode) => (
+                <DropdownMenuRadioItem key={mode} value={mode}>
+                  {t(GROUP_LABEL_KEYS[mode])}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Bulkbar: appears once anything is selected (transactions-page shape). */}
@@ -672,25 +686,41 @@ export default function SupplierInvoicesPage() {
       >
         {bankPaymentsAvailable && verificationInTheWay && <PaymentsVerificationLine verification={verificationInTheWay} compact onChange={setVerificationInTheWay} />}
         {bankPaymentsAvailable && (
-          <Button size="sm" onClick={() => setShowPayViaBankDialog(true)}>
+          <Button onClick={() => setShowPayViaBankDialog(true)}>
             {t('bulk_pay_via_bank')}
           </Button>
         )}
-        <Button size="sm" variant={bankPaymentsAvailable ? 'outline' : 'default'} onClick={() => setShowPaymentDialog(true)}>
+        <Button variant={bankPaymentsAvailable ? 'outline' : 'default'} onClick={() => setShowPaymentDialog(true)}>
           {t('bulk_create_file')}
         </Button>
       </BulkSelectionBar>
 
+      {loadFailed && invoices.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchInvoices() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-4 w-20 flex-1" />
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-5 w-16" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto h-3.5 w-16" />
+              <Skeleton className="hidden h-3.5 w-20 sm:block" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
             </div>
           ))}
+        </LateReveal>
+      ) : loadFailed && invoices.length === 0 ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void fetchInvoices()} />
+      ) : filteredInvoices.length === 0 && searchTerm ? (
+        <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+          <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+          <Button variant="link" onClick={() => setSearchTerm('')}>
+            {tCommon('clear_search')}
+          </Button>
         </div>
       ) : filteredInvoices.length === 0 ? (
         <DataListEmpty
@@ -719,7 +749,7 @@ export default function SupplierInvoicesPage() {
            trailing column is one slot for the row's next step: Godkänn while
            attest is pending, the I banken bock (#2220) once attested; it is
            sized for the bock plus its label, the wider of the two. */
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -808,7 +838,7 @@ export default function SupplierInvoicesPage() {
                         <td
                           colSpan={canWrite ? 9 : 8}
                           className={cn(
-                            'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                            'border-b-hairline px-1 pb-1.5 text-xs font-medium text-muted-foreground',
                             rowIndex === 0 ? 'pt-4' : 'pt-6',
                           )}
                         >
@@ -851,7 +881,7 @@ export default function SupplierInvoicesPage() {
                     )}
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                       <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate">{inv.supplier?.name || '-'}</span>
+                        <span className="truncate" title={inv.supplier?.name || undefined}>{inv.supplier?.name || '-'}</span>
                         {payeeMarkers.has(inv.id) && (
                           <Badge variant="warning" className="shrink-0 font-normal">
                             {t('payee_alert_badge')}
@@ -879,23 +909,23 @@ export default function SupplierInvoicesPage() {
                         </Badge>
                       )}
                     </td>
-                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                       {formatDate(inv.due_date)}
                     </td>
                     {/* Belopp rounds like the detail page when the invoice's
                         öresavrundning flag is on; "kvar att betala" stays
                         öre-exact (it is the actual outstanding debt). */}
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                      {formatCurrency(supplierInvoiceDisplayFigures({
+                      {formatRowAmount(supplierInvoiceDisplayFigures({
                         total: inv.total,
                         currency: inv.currency,
                         ore_rounding: inv.ore_rounding,
                       }).toPay, inv.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums rr-mask lg:table-cell')}>
-                      {formatCurrency(inv.remaining_amount, inv.currency)}
+                      {formatRowAmount(inv.remaining_amount, inv.currency)}
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                       <span className="inline-flex items-center gap-1">
                         {chipVariant ? (
                           <Badge variant={chipVariant} className="font-normal">
@@ -943,7 +973,7 @@ export default function SupplierInvoicesPage() {
                       {showBankEntered && (
                         <label
                           className={cn(
-                            'inline-flex select-none items-center gap-2 text-[12.5px] text-muted-foreground',
+                            'inline-flex select-none items-center gap-2 text-xs text-muted-foreground',
                             canWrite ? 'cursor-pointer' : 'cursor-default',
                             bankEntered ? 'opacity-100' : HOVER_REVEAL_CLASS,
                             bankEnteringId === inv.id && 'pointer-events-none opacity-50',

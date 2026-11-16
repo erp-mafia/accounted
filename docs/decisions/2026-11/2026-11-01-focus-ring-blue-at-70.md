@@ -1,0 +1,1 @@
+[2026-11-01] Keyboard focus is a blue ring at 70% (3.2:1 on the panel), not the canvas's 35%: the canvas value fails WCAG 1.4.11 for a focus indicator. Fields keep the soft 18% halo plus their hairline, as before.

@@ -31,7 +31,7 @@ export function OpenPaymentsBankSection({ flow, connections, onChanged, canConne
       {canConnect && (
         <SettingsRow label={t('op_connect_label')} borderless={connections.length === 0}>
           <SettingsRowEnd>
-            <Button size="sm" onClick={() => flow.open('new')} disabled={!canWrite}>
+            <Button onClick={() => flow.open('new')} disabled={!canWrite}>
               {t('op_connect_button')}
             </Button>
           </SettingsRowEnd>

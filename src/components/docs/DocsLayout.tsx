@@ -28,7 +28,7 @@ interface DocsLayoutProps {
 export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
   return (
     <div className="min-h-dvh bg-background">
-      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b border-border">
+      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b-hairline">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/docs/api" className="font-display text-xl tracking-tight" style={{ fontWeight: 700 }}>
             accounted <span className="text-muted-foreground" style={{ fontWeight: 400 }}>/ docs</span>
@@ -61,7 +61,7 @@ export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
           <div className="sticky top-24 space-y-8">
             {DOCS_NAV.map((section) => (
               <div key={section.label}>
-                <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 px-3">
+                <h3 className="text-xs text-muted-foreground mb-2 px-3">
                   {section.label}
                 </h3>
                 <ul className="space-y-px">
@@ -94,7 +94,7 @@ export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
         </main>
       </div>
 
-      <footer className="border-t border-border mt-20">
+      <footer className="border-t-hairline mt-20">
         <div className="max-w-7xl mx-auto px-6 py-8 text-sm text-muted-foreground flex items-center justify-between">
           <span>accounted REST API · Swedish bookkeeping for agents</span>
           <span className="font-mono text-xs">AGPL-3.0-or-later</span>

@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
@@ -36,6 +38,7 @@ import {
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
@@ -80,8 +83,12 @@ export default function JournalEntryAttachments({
   const { appName } = useBranding()
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
+  // The underlag list could not load: said in place with "Försök igen"
+  // (Stil v3 states), never an empty list that reads as "no underlag".
+  const [loadFailed, setLoadFailed] = useState(false)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
@@ -110,6 +117,10 @@ export default function JournalEntryAttachments({
         fetch(`/api/documents?journal_entry_id=${journalEntryId}&current_only=true`),
         fetch(`/api/bookkeeping/journal-entries/${journalEntryId}/references`),
       ])
+      if (!documentsRes.ok) {
+        setLoadFailed(true)
+        return
+      }
       const { data: directDocuments } = await documentsRes.json()
       const direct = (directDocuments || []) as DocumentRecord[]
       const directIds = new Set(direct.map((document) => document.id))
@@ -145,8 +156,9 @@ export default function JournalEntryAttachments({
       const allDocuments = [...direct, ...referenced]
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
+      setLoadFailed(false)
     } catch {
-      // Non-critical: silently ignore
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -279,9 +291,10 @@ export default function JournalEntryAttachments({
 
   if (loading) {
     return (
-      <div className="py-2 text-sm text-muted-foreground">
-        {t('loading')}
-      </div>
+      <LateReveal className="space-y-2 py-2" aria-label={t('loading')}>
+        <Skeleton className="h-4 w-56" />
+        <Skeleton className="h-4 w-40" />
+      </LateReveal>
     )
   }
 
@@ -304,18 +317,20 @@ export default function JournalEntryAttachments({
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            size="sm"
             onClick={() => setShowInboxPicker(true)}
+            disabled={!canWrite}
+            title={lockedTitle}
           >
-            <InboxIcon className="h-3 w-3 mr-1" />
+            <InboxIcon className="h-3 w-3" />
             {t('choose_from_inbox')}
           </Button>
           <Button
             variant="outline"
-            size="sm"
             onClick={handleAddClick}
+            disabled={!canWrite}
+            title={lockedTitle}
           >
-            <PlusIcon className="h-3 w-3 mr-1" />
+            <PlusIcon className="h-3 w-3" />
             {t('add')}
           </Button>
         </div>
@@ -329,11 +344,14 @@ export default function JournalEntryAttachments({
           onFilesChange={setUploadFiles}
           journalEntryId={journalEntryId}
           fileInputRef={addFileInputRef}
+          disabled={!canWrite}
           compact
         />
       </div>
 
-      {documents.length === 0 && !showUpload ? (
+      {loadFailed && documents.length === 0 ? (
+        <LoadError title={t('load_failed')} onRetry={() => void fetchDocuments()} />
+      ) : documents.length === 0 && !showUpload ? (
         !embedded && (
           <p className="text-sm text-muted-foreground py-1">
             {t('empty')}
@@ -392,11 +410,12 @@ export default function JournalEntryAttachments({
                     <>
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         className="shrink-0"
                         onClick={() => handleOpenReplacePicker(doc.id)}
                         loading={isReplacing}
-                        title={t('replace')}
+                        disabled={!canWrite}
+                        title={lockedTitle ?? t('replace')}
                         aria-label={t('replace')}
                       >
                         {!isReplacing && <ArrowPathIcon className="h-3 w-3" />}
@@ -404,10 +423,11 @@ export default function JournalEntryAttachments({
 
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         className="shrink-0"
                         onClick={() => handleRequestRemove(doc)}
-                        title={t('remove')}
+                        disabled={!canWrite}
+                        title={lockedTitle ?? t('remove')}
                         aria-label={t('remove')}
                       >
                         <TrashIcon className="h-3 w-3" />
@@ -417,7 +437,7 @@ export default function JournalEntryAttachments({
 
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     className="shrink-0"
                     onClick={() => handleDownload(doc.id)}
                     title={t('download')}
@@ -433,7 +453,7 @@ export default function JournalEntryAttachments({
                       src={`/api/documents/${doc.id}/inline`}
                       kind={kind}
                       label={doc.file_name}
-                      className="h-[60vh] w-full rounded-lg border"
+                      className="h-[60vh] w-full rounded-lg bg-control shadow-raised"
                       imageClassName="max-h-48 rounded-lg object-contain"
                       fallback={
                         <button
@@ -472,7 +492,7 @@ export default function JournalEntryAttachments({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+          <div className="rounded-lg p-3 text-sm bg-control shadow-raised">
             <div className="flex items-start gap-2">
               <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-muted-foreground">

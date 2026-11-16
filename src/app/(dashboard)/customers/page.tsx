@@ -1,21 +1,24 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import { useState, useMemo, useCallback, Suspense } from 'react'
 import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
+import { AttnLine } from '@/components/ui/attn-line'
+import { ListPageSkeleton } from '@/components/common/ListPageSkeleton'
 import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { LockClosedIcon, PlusIcon, UsersIcon } from '@/components/icons'
-import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
+import { EmptyCustomers, EmptyState, LoadError } from '@/components/ui/empty-state'
 import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
@@ -83,8 +86,12 @@ function CustomersPageInner() {
   // masks the personnummer column server-side (see the note that used to sit
   // on fetchCustomers), the list is shared with every customer picker, and
   // a revisit renders from cache. Skeleton only on the very first load.
-  const { customers, isLoading: customersLoading, error: customersError } = useCustomers()
+  const { customers, isLoading: customersLoading, error: customersError, refresh: refreshCustomers } = useCustomers()
   const isLoading = customersLoading && customers.length === 0
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(customersError) && customers.length === 0
+  const refreshFailed = Boolean(customersError) && customers.length > 0
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -98,6 +105,8 @@ function CustomersPageInner() {
   const companyDefaultTerms = companySettings ? invoiceTermsFor(undefined, companySettings.invoice_default_days) : null
   const { toast } = useToast()
   const t = useTranslations('customers')
+  const tCommon = useTranslations('common')
+  const tEmpty = useTranslations('empty')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
@@ -108,15 +117,6 @@ function CustomersPageInner() {
     'name',
     resetVisible,
   )
-
-  useEffect(() => {
-    if (!customersError) return
-    toast({
-      title: t('load_failed_title'),
-      description: t('load_failed_description'),
-      variant: 'destructive',
-    })
-  }, [customersError, toast, t])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreating(true)
@@ -230,45 +230,50 @@ function CustomersPageInner() {
     <div className="space-y-8">
       {/* Page header (concept scene 25): title + import/export menu + Ny kund */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <h1 className="page-header-title">{t('title')}</h1>
+        <PageHeaderActions className="flex flex-wrap items-center justify-end gap-2">
           <RegisterActionsMenu entity="customers" />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                size="sm"
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                ) : (
-                  <LockClosedIcon className="mr-2 h-4 w-4" />
-                )}
-                {t('new_customer')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_customer')}</DialogTitle>
-              </DialogHeader>
-              <CustomerForm
-                onSubmit={handleCreateCustomer}
-                isLoading={isCreating}
-                initialData={
-                  companyDefaultTerms !== null
-                    ? { default_payment_terms: companyDefaultTerms }
-                    : undefined
-                }
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setIsDialogOpen(true)}
+          >
+            {canWrite ? (
+              <PlusIcon className="h-4 w-4" />
+            ) : (
+              <LockClosedIcon className="h-4 w-4" />
+            )}
+            {t('new_customer')}
+          </Button>
+          {/* A small record is created in a drawer over its list (V7 creation
+              forms): the list stays in place behind it. */}
+          <CreateDrawer
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            title={t('new_customer')}
+            formId="create-customer-form"
+            submitLabel={t('create_submit')}
+            submitting={isCreating}
+          >
+            <CustomerForm
+              onSubmit={handleCreateCustomer}
+              isLoading={isCreating}
+              initialData={
+                companyDefaultTerms !== null
+                  ? { default_payment_terms: companyDefaultTerms }
+                  : undefined
+              }
+              formId="create-customer-form"
+            />
+          </CreateDrawer>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: search (concept) */}
+      {/* Toolbar: search at the right end (V7 list toolbars) */}
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
@@ -278,25 +283,44 @@ function CustomersPageInner() {
         />
       </div>
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshCustomers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-28 lg:block" />
+              <Skeleton className="hidden h-3.5 w-40 md:block" />
+              <Skeleton className="hidden h-3.5 w-20 sm:block" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshCustomers()} />
       ) : sortedCustomers.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={UsersIcon}
-            title={t('no_search_results_title')}
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : (
-          <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
+          canWrite ? (
+            <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
+          ) : (
+            // A read-only member gets the same empty state without the create action.
+            <EmptyState icon={UsersIcon} title={tEmpty('preset_customers_title')} description={tEmpty('preset_customers_description')} />
+          )
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -352,12 +376,13 @@ function CustomersPageInner() {
                           <Link
                             href={`/customers/${customer.id}`}
                             className="min-w-0 truncate hover:underline"
+                            title={customer.name}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {customer.name}
                           </Link>
                           {typeSuffix && CUSTOMER_TYPE_LABEL_KEYS[typeSuffix] && (
-                            <span className="shrink-0 text-[12.5px] text-muted-foreground">
+                            <span className="shrink-0 text-xs text-muted-foreground">
                               {t(CUSTOMER_TYPE_LABEL_KEYS[typeSuffix])}
                             </span>
                           )}
@@ -366,7 +391,7 @@ function CustomersPageInner() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
                         {identifier || ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')} title={customer.email || undefined}>
                         {customer.email || ''}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
@@ -397,21 +422,7 @@ function CustomersPageInner() {
 
 export default function CustomersPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="space-y-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <Skeleton className="h-9 w-40" />
-            <Skeleton className="h-10 w-32" />
-          </div>
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<ListPageSkeleton />}>
       <CustomersPageInner />
     </Suspense>
   )

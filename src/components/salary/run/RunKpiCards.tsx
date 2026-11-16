@@ -64,13 +64,13 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
     <div className="flex flex-wrap gap-x-10 gap-y-4">
       {cards.map(({ label, value, accent, note }) => (
         <div key={label} className="min-w-0">
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
           <p
             className={`mt-1 font-display text-xl tabular-nums leading-none ${accent ? 'text-success' : ''}`}
           >
             {formatRunAmount(value)}
           </p>
-          {note && <div className="mt-2 text-[12.5px] tabular-nums text-muted-foreground">{note}</div>}
+          {note && <div className="mt-2 text-xs tabular-nums text-muted-foreground">{note}</div>}
         </div>
       ))}
     </div>

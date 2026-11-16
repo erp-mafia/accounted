@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -9,7 +10,9 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
@@ -66,6 +69,7 @@ export default function TransactionMatchPicker({
   onMatched,
 }: Props) {
   const { toast } = useToast()
+  const tCommon = useTranslations('common')
   const [search, setSearch] = useState('')
   const [matchingId, setMatchingId] = useState<string | null>(null)
 
@@ -75,6 +79,7 @@ export default function TransactionMatchPicker({
     ranked,
     loading,
     error: loadError,
+    retry: retryLoad,
     totalSek: receiptSek,
     amountMatchUnavailable,
   } = useUnderlagBankCandidates({ open, extractedData, search })
@@ -86,15 +91,6 @@ export default function TransactionMatchPicker({
   useEffect(() => {
     if (open) setSearch('')
   }, [open])
-
-  useEffect(() => {
-    if (!loadError) return
-    toast({
-      title: 'Kunde inte hämta transaktioner',
-      description: loadError,
-      variant: 'destructive',
-    })
-  }, [loadError, toast])
 
   const candidates = useMemo<CandidateTransaction[]>(
     () =>
@@ -155,7 +151,7 @@ export default function TransactionMatchPicker({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>Matcha mot transaktion</DialogTitle>
           <DialogDescription>
@@ -166,7 +162,7 @@ export default function TransactionMatchPicker({
         {/* Underlag reference: what we're matching against, so a currency or
             amount mismatch with a candidate is obvious at a glance. */}
         {(total != null || prominentAmounts.length > 0 || supplier) && (
-          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap">
+          <div className="rounded-lg px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap bg-control shadow-raised">
             <span className="text-muted-foreground shrink-0">Underlag</span>
             {supplier && <span className="font-medium truncate">{supplier}</span>}
             {total != null && (
@@ -194,7 +190,7 @@ export default function TransactionMatchPicker({
         )}
 
         {amountMatchUnavailable && (
-          <p className="text-[11px] text-muted-foreground -mt-1">
+          <p className="text-xs text-muted-foreground -mt-1">
             Växelkurs saknas för {receiptCurrency}: kandidaterna rankas på datum
             och leverantör, inte belopp.
           </p>
@@ -210,24 +206,32 @@ export default function TransactionMatchPicker({
           />
         </div>
 
-        <div className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
           <span>{hasSearchText ? 'Sökresultat' : 'Föreslagna matchningar'}</span>
           {!loading && <span className="tabular-nums">{filtered.length} st</span>}
         </div>
 
         <div className="max-h-[55vh] overflow-y-auto -mx-6 px-6 divide-y">
           {loading ? (
-            <div className="space-y-3 py-3">
+            <LateReveal className="space-y-3 py-3">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
-            </div>
+            </LateReveal>
+          ) : loadError ? (
+            // The list could not load: said in place of the rows, never a toast.
+            <LoadError title="Kunde inte hämta transaktioner" description={loadError} onRetry={retryLoad} />
           ) : filtered.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground text-center">
-              {hasSearchText
-                ? `Inga okategoriserade transaktioner matchar "${search.trim()}".`
-                : 'Inga okategoriserade transaktioner att matcha mot.'}
-            </p>
+            hasSearchText ? (
+              <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+                <span data-ph-mask="">{`Inga okategoriserade transaktioner matchar "${search.trim()}".`}</span>
+                <Button variant="link" onClick={() => setSearch('')}>
+                  {tCommon('clear_search')}
+                </Button>
+              </div>
+            ) : (
+              <p className="py-3 text-[13px] text-muted-foreground">Inga okategoriserade transaktioner att matcha mot.</p>
+            )
           ) : (
             filtered.map((c) => {
               // A strong match is the expected case, so it reads as muted
@@ -258,7 +262,7 @@ export default function TransactionMatchPicker({
                         {c.merchant_name ?? c.description ?? 'Okänd transaktion'}
                       </span>
                       {tier ? (
-                        <Badge variant={tier} className="shrink-0 text-[11px]">
+                        <Badge variant={tier} className="shrink-0 text-xs">
                           {tierLabel}
                         </Badge>
                       ) : (
@@ -280,7 +284,7 @@ export default function TransactionMatchPicker({
                       {formatCurrency(c.amount, c.currency)}
                     </p>
                     {c.amountSek != null && (
-                      <p className="text-[11px] text-muted-foreground tabular-nums">
+                      <p className="text-xs text-muted-foreground tabular-nums">
                         ≈ {formatCurrency(c.amountSek, 'SEK')}
                       </p>
                     )}

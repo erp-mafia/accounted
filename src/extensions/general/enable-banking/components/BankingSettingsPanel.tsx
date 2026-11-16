@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -68,6 +69,7 @@ interface ReusableSessionOffer {
  */
 export default function BankingSettingsPanel() {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   // Stable across renders so effects can list it as a dependency without
   // re-firing on every parent render (same reason as AccountPickerDialog).
   const supabase = useMemo(() => createClient(), [])
@@ -796,10 +798,10 @@ export default function BankingSettingsPanel() {
           och transaktioner är oförändrade.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => fetchConnections()}>
+          <Button variant="outline" onClick={() => fetchConnections()}>
             Försök igen
           </Button>
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="outline" asChild>
             <Link href="/import?mode=bank">Importera bankfil istället</Link>
           </Button>
         </div>
@@ -845,7 +847,7 @@ export default function BankingSettingsPanel() {
           if (!open) setSameBankIntercept(null)
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle data-ph-mask="">
               Du har redan en koppling till {sameBankIntercept?.bank.name}
@@ -914,7 +916,7 @@ export default function BankingSettingsPanel() {
       {/* The callback landed on a connection owned by another of the user's
           companies: one ochre line naming where it went (convention 6). */}
       {pickerCompanyMismatch && (
-        <p className="px-1 pt-6 text-[12.5px] leading-relaxed text-attn">
+        <p className="px-1 pt-6 text-xs leading-relaxed text-attn">
           Bankanslutningen slutfördes för {pickerCompanyMismatch}, inte för det bolag som är aktivt
           nu. Byt till {pickerCompanyMismatch} för att välja vilka konton som ska synka.
         </p>
@@ -925,7 +927,7 @@ export default function BankingSettingsPanel() {
       {showCsvFallback && (
         <div className="flex items-start gap-2 px-1 pt-6">
           <ArrowUpTrayIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             Har du problem med bankanslutningen? Du kan{' '}
             <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
               importera transaktioner manuellt via bankfil
@@ -938,7 +940,7 @@ export default function BankingSettingsPanel() {
       {/* The page's one attention sentence: the worst connection state, or
           nothing (convention 6). The rows themselves stay quiet. */}
       {pageAttention && (
-        <p className="px-1 pt-6 text-[12.5px] leading-relaxed text-attn">
+        <p className="px-1 pt-6 text-xs leading-relaxed text-attn">
           {buildPageAttentionSentence(pageAttention, stateNow)}
         </p>
       )}
@@ -1012,10 +1014,10 @@ export default function BankingSettingsPanel() {
               </SettingsRowNote>
               <SettingsRowEnd>
                 <Button
-                  variant="secondary"
-                  size="sm"
+                  variant="outline"
                   onClick={() => handleReuseConnection(offer)}
-                  disabled={!!attachingConnectionId}
+                  disabled={!canWrite || !!attachingConnectionId}
+                  title={lockedTitle}
                   loading={attachingConnectionId === offer.connection_id}
                 >
                   {attachingConnectionId === offer.connection_id ? 'Kopplar' : 'Återanvänd'}
@@ -1035,7 +1037,7 @@ export default function BankingSettingsPanel() {
           bankintegration (PSD2)" card lives on as group-level help. */}
       {!connectNewExpanded ? (
         <div className="px-1 pt-8">
-          <Button variant="outline" size="sm" onClick={() => setConnectNewOpen(true)}>
+          <Button variant="outline" onClick={() => setConnectNewOpen(true)} disabled={!canWrite} title={lockedTitle}>
             Anslut en bank till
           </Button>
         </div>
@@ -1090,14 +1092,15 @@ export default function BankingSettingsPanel() {
                   popover: the bank login that follows says nothing about which
                   set of books the accounts will land in. */}
               {company?.name && (
-                <p className="mb-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
                   Anslutningen görs för{' '}
                   <span className="font-medium text-foreground">{company.name}</span>.
                 </p>
               )}
               <BankSelector
                 offered={offeredBank}
-                onConnect={(bank) => handleConnectBank(bank, psuType)}
+                // A ?bank= deep link starts nothing for a read-only member.
+                onConnect={(bank) => (canWrite ? handleConnectBank(bank, psuType) : undefined)}
                 onPsuTypeDetected={setPsuType}
                 isConnecting={isConnecting}
                 connectingBankName={connectingBankName}

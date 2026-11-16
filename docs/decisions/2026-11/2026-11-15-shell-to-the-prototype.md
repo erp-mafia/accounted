@@ -1,0 +1,1 @@
+[2026-11-15] Amends 2026-11-14: the shell follows the prototype exactly (founder call): the sidebar is the page panel's left column, only the rail is on the frame, plus and search head the rail, one Inställningar row per area, no brand mark in the shell. Sidebar 220px, 320px from 1440px up.

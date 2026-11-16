@@ -43,7 +43,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
   const t = useTranslations('reports')
   // The budget rides in the same query, so the PDF and xlsx carry it too.
   const reportQs = `${reportQuery(periodId, dateRange, dimensionFilter)}${budgetId ? `&budget_id=${budgetId}` : ''}`
-  const { data, loading, error } = useReportData<ResultatrapportReport>(
+  const { data, loading, error, refetch } = useReportData<ResultatrapportReport>(
     `/api/reports/resultatrapport?${reportQs}`,
     'Kunde inte hämta resultatrapport',
   )
@@ -54,7 +54,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data || data.groups.length === 0) {
@@ -89,11 +89,11 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
       </div>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr className="border-b text-xs text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
                   <th
@@ -126,7 +126,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={colCount} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+                      <td colSpan={colCount} className="px-4 py-2 text-xs font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -166,7 +166,7 @@ export default function ResultatrapportView({ periodId, dateRange, dimensionFilt
       </Card>
 
       <Card>
-        <CardContent className="p-6">
+        <CardContent>
           <div className={`grid gap-x-3 sm:gap-x-6 items-baseline ${hasBudget ? 'grid-cols-[1fr_auto_auto_auto]' : 'grid-cols-[1fr_auto_auto]'}`}>
             <span className="text-sm font-medium">Beräknat resultat</span>
             <span className={`font-display text-xl tabular-nums sm:w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>

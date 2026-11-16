@@ -6,7 +6,9 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { StepBar } from '@/components/ui/step-bar'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
   Dialog,
@@ -169,7 +171,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   })
 
   async function loadRun() {
-    const res = await fetch(`/api/salary/runs/${id}`)
+    const res = await fetch(`/api/salary/runs/${id}`).catch(() => null) // unreachable: the !res branch below
+    if (!res) {
+      // The request never reached the server: not "not found" either.
+      setRunError(tCommon('load_error_hint'))
+      return
+    }
     if (res.ok) {
       setRunError(null)
       const { data } = await res.json()
@@ -199,7 +206,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       // Any other failure is not "not found": show what the server said, so
       // a timeout or a refused read does not read as a missing run.
       const body = (await res.json().catch(() => null)) as { error?: string } | null
-      setRunError(getErrorMessage(body, { locale: errorLocale, fallback: t('load_failed') }))
+      setRunError(getErrorMessage(body, { locale: errorLocale, fallback: tCommon('load_error_hint') }))
     } else {
       setRunError(null)
     }
@@ -914,18 +921,31 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <LateReveal className="space-y-6">
         <Skeleton className="h-9 w-60" />
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_280px] gap-8 space-y-6 lg:space-y-0">
           <Skeleton className="rounded-lg h-48" />
           <Skeleton className="rounded-lg h-64 hidden lg:block" />
         </div>
-      </div>
+      </LateReveal>
+    )
+  }
+
+  if (!run && runError) {
+    return (
+      <LoadError
+        title={t('load_failed_title')}
+        description={runError}
+        onRetry={() => {
+          setLoading(true)
+          void loadRun().finally(() => setLoading(false))
+        }}
+      />
     )
   }
 
   if (!run) {
-    return <p className="text-muted-foreground">{runError ?? t('not_found')}</p>
+    return <EmptyState title={t('not_found')} />
   }
 
   const periodLabel = periodLabelOf(run)
@@ -1208,7 +1228,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         actionLoading={actionLoading}
         employeeCount={employees.length}
         isCalculated={isCalculated}
-        primaryAction={primaryAction}
+        // The run is a guided sequence: its one next step sits in the fixed
+        // bar at the bottom of the page (V7 long processes), not in the top bar.
+        primaryAction={null}
         onMarkPaid={run.status === 'approved' && !noPayout && primaryAction?.key !== 'paid' ? handleMarkPaid : null}
         onPreview={handlePreview}
         onRevert={() => handleAction('revert')}
@@ -1226,7 +1248,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       {/* The one attention sentence on the page (the two never coincide: a
           nollkörning is a current calculation). A stale calculation: say why
           the figures are gone and Godkänn is not offered; Beräkna om is the
-          header's primary action. An empty declaration will be filed for the
+          step bar's primary action. An empty declaration will be filed for the
           period, which should be deliberate. */}
       {isStale && <AttnLine>{t('calculation_stale')}</AttnLine>}
       {isNollkorning && (
@@ -1273,6 +1295,21 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       {!payIsCurrent && payPanels}
 
+      {/* The step's bar: the one next step for the run's status (Beräkna,
+          Till granskning, Godkänn, Betala, Bokför, Lämna in AGI), fixed to
+          the bottom. Everything else stays in the top bar's menu. */}
+      {primaryAction && (
+        <StepBar>
+          <Button
+            onClick={primaryAction.onClick}
+            disabled={!!actionLoading}
+            loading={actionLoading === primaryAction.key}
+          >
+            {primaryAction.label}
+          </Button>
+        </StepBar>
+      )}
+
       <SalaryBankPaymentDialog
         salaryRunId={id}
         fileAccount={runFileAccount}
@@ -1293,7 +1330,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             </DialogDescription>
           </DialogHeader>
           {approveOverride && approveOverride.length > 0 && (
-            <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
+            <div className="flex items-start gap-2 rounded-lg p-3 text-xs bg-control shadow-raised">
               <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <ul className="space-y-1">
                 {approveOverride.map((reason, i) => (

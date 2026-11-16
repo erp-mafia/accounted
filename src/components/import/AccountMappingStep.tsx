@@ -432,7 +432,6 @@ export default function AccountMappingStep({
               />
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => fileInputRef.current?.click()}
               >
                 {/* Keyed to the same thing as the line beside it: a file
@@ -507,7 +506,7 @@ export default function AccountMappingStep({
           </div>
 
           {/* Mapping table */}
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden">
             {/* Under table-fixed the header widths ARE the layout: cells never
                 grow them. The budget is ~990px so the table fits a laptop
                 content column at 100 % zoom (#2125: 1216px overflowed, with
@@ -523,7 +522,7 @@ export default function AccountMappingStep({
                   <TableHead className="w-56">{tStep('col_target_account')}</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-24">{tStep('col_confidence')}</TableHead>
-                  <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
+                  <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l-hairline bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
                       <InfoTooltip content={t('vat_treatment_confirm_help')} side="left" />
@@ -692,7 +691,7 @@ export default function AccountMappingStep({
                     </TableCell>
                     <TableCell
                       className={cn(
-                        'sticky right-0 z-10 w-28 min-w-28 border-l border-border text-right transition-colors',
+                        'sticky right-0 z-10 w-28 min-w-28 border-l-hairline text-right transition-colors',
                         mapping.targetAccount ? 'bg-background' : 'bg-destructive/5',
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
@@ -714,7 +713,7 @@ export default function AccountMappingStep({
                             <Button
                               type="button"
                               variant="outline"
-                              size="icon-sm"
+                              size="icon"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
                               onClick={() => handleVatTreatmentChange(
                                 mapping.sourceAccount,
@@ -732,9 +731,17 @@ export default function AccountMappingStep({
                   </TableRow>
                 ))}
                 {paginatedMappings.length === 0 && (
+                  // No hits: one muted line in the list, not a centred block.
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                      {tStep('no_matches')}
+                    <TableCell colSpan={7} className="py-3 text-[13px] text-muted-foreground">
+                      <span className="flex flex-wrap items-center gap-x-3">
+                        <span>{tStep('no_matches')}</span>
+                        {searchTerm && (
+                          <Button variant="link" onClick={() => handleSearchChange('')}>
+                            {tCommon('clear_search')}
+                          </Button>
+                        )}
+                      </span>
                     </TableCell>
                   </TableRow>
                 )}
@@ -755,7 +762,6 @@ export default function AccountMappingStep({
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={currentPage === 1}
                 >
@@ -766,7 +772,6 @@ export default function AccountMappingStep({
                 </div>
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                   disabled={currentPage === totalPages}
                 >
@@ -789,7 +794,7 @@ export default function AccountMappingStep({
               variant="outline"
               onClick={onConfirmAllVatTreatments}
             >
-              <CheckCircleIcon className="mr-2 h-4 w-4" />
+              <CheckCircleIcon className="h-4 w-4" />
               {t('vat_review_confirm_all', { count: stats.vatReview })}
             </Button>
           )}
@@ -799,7 +804,7 @@ export default function AccountMappingStep({
               : stats.unmapped > 0
                 ? tStep('unmapped_remaining', { count: stats.unmapped })
                 : tStep('vat_review_remaining', { count: stats.vatReview })}
-            <ArrowRightIcon className="ml-2 h-4 w-4" />
+            <ArrowRightIcon className="h-4 w-4" />
           </Button>
         </div>
       </div>

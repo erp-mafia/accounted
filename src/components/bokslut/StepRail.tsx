@@ -88,7 +88,7 @@ export function StepRail({
                 <span className="leading-tight">
                   <span
                     className={cn(
-                      'block text-[12.5px] transition-colors duration-150',
+                      'block text-xs transition-colors duration-150',
                       step.state === 'current'
                         ? 'font-medium'
                         : cn('text-muted-foreground', selectable && 'group-hover:text-foreground'),
@@ -99,7 +99,7 @@ export function StepRail({
                   {step.sub && (
                     <span
                       className={cn(
-                        'block text-[11px] tabular-nums',
+                        'block text-xs tabular-nums',
                         step.warn ? 'text-attn' : 'text-muted-foreground',
                       )}
                     >

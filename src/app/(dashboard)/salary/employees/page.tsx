@@ -5,15 +5,16 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { PlusIcon, UserCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatRowAmount } from '@/lib/utils'
 import { useEmployees } from '@/lib/reference-data/hooks'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 
@@ -35,12 +36,17 @@ const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
  */
 export default function EmployeesPage() {
   const t = useTranslations('employees')
+  const tCommon = useTranslations('common')
   // The whole register, inactive rows included, filtered here: the page has
   // to know that inactive employees exist to offer the way back to them.
   // Before, "Inaktivera" made the person vanish with nothing on the page
   // saying where they went (crm#1133). The session cache (lib/reference-data)
   // refetches after a create, edit or deactivation anywhere.
-  const { employees, isLoading: loading } = useEmployees({ includeInactive: true })
+  const { employees, isLoading: loading, error: employeesError, refresh: refreshEmployees } = useEmployees({ includeInactive: true })
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(employeesError) && employees.length === 0
+  const refreshFailed = Boolean(employeesError) && employees.length > 0
   const { canWrite } = useCanWrite()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -48,7 +54,8 @@ export default function EmployeesPage() {
   // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
   // point (the header button and the empty state) opens the same dialog, and
   // the browser back button closes it. Same pattern as /invoices.
-  const showNewEmployee = searchParams.has('new')
+  // A viewer creates nothing, so the link opens nothing for one (use-can-write.ts).
+  const showNewEmployee = canWrite && searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
   const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })
 
@@ -64,10 +71,10 @@ export default function EmployeesPage() {
     <div className="space-y-8">
       {/* Page header (concept scene 28) */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <h1 className="page-header-title">{t('title')}</h1>
         {canWrite && (
-          <Button size="sm" onClick={openNewEmployee}>
-            <PlusIcon className="mr-2 h-4 w-4" />
+          <Button size="toolbar" onClick={openNewEmployee}>
+            <PlusIcon className="h-4 w-4" />
             {t('new_employee')}
           </Button>
         )}
@@ -88,12 +95,24 @@ export default function EmployeesPage() {
         </div>
       )}
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshEmployees() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-3">
+        <LateReveal>
           {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-10 rounded-lg" />
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="hidden h-3.5 w-28 md:block" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshEmployees()} />
       ) : visibleEmployees.length === 0 ? (
         <EmptyState
           icon={UserCircleIcon}
@@ -104,7 +123,7 @@ export default function EmployeesPage() {
         />
       ) : (
         <div>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -154,8 +173,8 @@ export default function EmployeesPage() {
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                       {emp.salary_type === 'hourly'
-                        ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
-                        : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '-'}
+                        ? emp.hourly_rate ? `${formatRowAmount(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
+                        : emp.monthly_salary ? formatRowAmount(emp.monthly_salary) : '-'}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell')}>
                       {emp.employment_degree}%

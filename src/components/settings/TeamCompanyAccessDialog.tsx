@@ -51,7 +51,7 @@ export function TeamCompanyAccessDialog({
   const t = useTranslations('settings_team_panel')
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('access_dialog_title')}</DialogTitle>
           <DialogDescription data-ph-mask="">{description}</DialogDescription>
@@ -109,7 +109,7 @@ function AccessForm({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4 border-b border-border px-1 pb-3">
+      <div className="flex items-center justify-between gap-4 border-b-hairline px-1 pb-3">
         <label htmlFor="team-access-all" className="cursor-pointer text-sm">
           {t('access_all_switch')}
         </label>
@@ -125,7 +125,7 @@ function AccessForm({
               <label
                 key={company.id}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg border border-border p-2 transition-colors duration-150',
+                  'flex items-center gap-2 rounded-lg p-2 transition-colors duration-150 bg-control shadow-raised',
                   checked ? 'bg-secondary' : 'hover:bg-secondary/60',
                   isLocked ? 'cursor-default' : 'cursor-pointer',
                 )}

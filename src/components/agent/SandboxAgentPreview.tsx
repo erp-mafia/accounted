@@ -35,7 +35,7 @@ export default function SandboxAgentPreview({
     <div className="flex-1 flex flex-col">
       <div className="flex-1 overflow-y-auto px-5 py-8">
         <div className="mx-auto max-w-md space-y-6">
-          <div className="rounded-lg border border-border bg-secondary/40 p-5">
+          <div className="rounded-lg bg-secondary/40 p-5 bg-control shadow-raised">
             <div className="flex items-center gap-2 text-sm font-medium">
               <SparklesIcon className="h-4 w-4" />
               Förhandsvisning i sandlådan
@@ -79,7 +79,7 @@ export default function SandboxAgentPreview({
         </div>
       </div>
 
-      <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+      <div className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -87,10 +87,10 @@ export default function SandboxAgentPreview({
             onClick={handleCreateAccount}
           >
             Skapa konto för att använda {name}
-            <ArrowRightIcon className="ml-1.5 h-4 w-4" />
+            <ArrowRightIcon className="h-4 w-4" />
           </Button>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           Sandlådedata raderas efter 24 timmar.{' '}
           <Link href="/register" className="underline underline-offset-2 hover:text-foreground">
             Skapa konto

@@ -155,7 +155,6 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           <Button
             type="button"
             variant="outline"
-            size="sm"
             onClick={() => setExpanded((v) => !v)}
             disabled={props.disabled}
           >
@@ -224,12 +223,11 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           </SettingsRow>
 
           <div className="flex flex-wrap gap-2 pt-3">
-            <Button size="sm" onClick={handleSave} disabled={fieldDisabled} loading={saving}>
+            <Button onClick={handleSave} disabled={fieldDisabled} loading={saving}>
               {t('save')}
             </Button>
             {hasOverride && (
               <Button
-                size="sm"
                 variant="outline"
                 onClick={handleClear}
                 disabled={fieldDisabled}

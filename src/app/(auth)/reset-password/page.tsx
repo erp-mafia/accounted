@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { KeyIcon } from '@/components/icons'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
@@ -45,6 +46,9 @@ function ResetPasswordInner() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // A failed step says so in the form, under the heading, never in a toast
+  // that leaves the page looking untouched.
+  const [formError, setFormError] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
 
@@ -65,16 +69,13 @@ function ResetPasswordInner() {
   }, [])
 
   const verifyFailed = (description: string) => {
-    toast({
-      title: t('verify_failed_title'),
-      description,
-      variant: 'destructive',
-    })
+    setFormError(description)
   }
 
   const handleConfirmLink = async () => {
     if (!tokenHash) return
     setIsLoading(true)
+    setFormError(null)
     const { error } = await verifyOtp({
       token_hash: tokenHash,
       type: 'recovery',
@@ -93,6 +94,7 @@ function ResetPasswordInner() {
   const handleVerifyCode = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError(null)
     const { error } = await verifyOtp({
       email: email.trim(),
       token: code.trim(),
@@ -109,6 +111,7 @@ function ResetPasswordInner() {
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError(null)
 
     const strong = password.length >= 8
       && /[a-z]/.test(password)
@@ -117,21 +120,13 @@ function ResetPasswordInner() {
       && /[^a-zA-Z0-9]/.test(password)
 
     if (!strong) {
-      toast({
-        title: t('weak_title'),
-        description: t('weak_description'),
-        variant: 'destructive',
-      })
+      setFormError(t('weak_description'))
       setIsLoading(false)
       return
     }
 
     if (password !== confirmPassword) {
-      toast({
-        title: t('mismatch_title'),
-        description: t('mismatch_description'),
-        variant: 'destructive',
-      })
+      setFormError(`${t('mismatch_title')}. ${t('mismatch_description')}`)
       setIsLoading(false)
       return
     }
@@ -150,11 +145,12 @@ function ResetPasswordInner() {
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
-        toast({
-          title: t('save_failed_title'),
-          description: getErrorMessage(body, { locale: errorLocale, fallback: t('save_failed_description') }),
-          variant: 'destructive',
-        })
+        setFormError(
+          getErrorMessage(body, {
+            locale: errorLocale,
+            fallback: `${t('save_failed_title')}. ${t('save_failed_description')}`,
+          }),
+        )
         return
       }
 
@@ -198,11 +194,7 @@ function ResetPasswordInner() {
       router.push('/')
       router.refresh()
     } catch {
-      toast({
-        title: t('save_failed_title'),
-        description: t('save_failed_description'),
-        variant: 'destructive',
-      })
+      setFormError(`${t('save_failed_title')}. ${t('save_failed_description')}`)
     } finally {
       setIsLoading(false)
     }
@@ -216,21 +208,12 @@ function ResetPasswordInner() {
         : t('subtitle')
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <KeyIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="text-2xl tracking-tight">{t('title')}</h1>
-          <p className="text-muted-foreground text-sm mt-2">{subtitle}</p>
-        </div>
-
-        <div className="rounded-lg border bg-card p-6">
+    <StandalonePage>
+        <StandaloneHeading title={t('title')} sub={subtitle} />
+        <StandaloneStack>
+          {formError && <AuthFormError message={formError} />}
           {mode === 'loading' && (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-3" aria-busy="true">
               <Skeleton className="h-4 w-1/3" />
               <Skeleton className="h-11 w-full" />
               <Skeleton className="h-11 w-full" />
@@ -238,7 +221,7 @@ function ResetPasswordInner() {
           )}
 
           {mode === 'confirm-link' && (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-3">
               <Button
                 type="button"
                 size="lg" className="w-full"
@@ -251,14 +234,14 @@ function ResetPasswordInner() {
                   t('confirm_button')
                 )}
               </Button>
-              <p className="text-xs text-muted-foreground text-center">
+              <p className="text-xs text-muted-foreground">
                 {t('confirm_hint')}
               </p>
             </div>
           )}
 
           {mode === 'enter-code' && (
-            <form onSubmit={handleVerifyCode} className="space-y-5">
+            <form onSubmit={handleVerifyCode} className="flex flex-col gap-3">
               <div className="space-y-2">
                 <Label htmlFor="email">{t('email_label')}</Label>
                 <Input
@@ -296,14 +279,14 @@ function ResetPasswordInner() {
                   t('code_button')
                 )}
               </Button>
-              <p className="text-xs text-muted-foreground text-center">
+              <p className="text-xs text-muted-foreground">
                 {t('code_hint')}
               </p>
             </form>
           )}
 
           {mode === 'set-password' && (
-            <form onSubmit={handleResetPassword} className="space-y-5">
+            <form onSubmit={handleResetPassword} className="flex flex-col gap-3">
               <div className="space-y-2">
                 <Label htmlFor="password">{t('new_password_label')}</Label>
                 <Input
@@ -343,9 +326,8 @@ function ResetPasswordInner() {
               </Button>
             </form>
           )}
-        </div>
-      </div>
-    </div>
+        </StandaloneStack>
+    </StandalonePage>
   )
 }
 

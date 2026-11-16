@@ -233,7 +233,7 @@ export function TemplateForm({
           {lines.map((line, i) => {
             const showRatioInput = showRatio && shareLines.includes(line)
             return (
-            <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
+            <div key={i} className="rounded-lg p-2 space-y-1.5 bg-control shadow-raised">
               <div className="flex items-center gap-2">
                 <Input
                   value={line.account}
@@ -251,7 +251,7 @@ export function TemplateForm({
                 <Button
                   type="button"
                   variant="outline"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => removeLine(i)}
                   disabled={lines.length <= 2}
                   aria-label={tCommon('delete')}
@@ -316,15 +316,15 @@ export function TemplateForm({
               </div>
             </div>
           )})}
-          <Button type="button" variant="outline" size="sm" onClick={addLine}>
-            <PlusIcon className="h-3 w-3 mr-1" />
+          <Button type="button" variant="outline" onClick={addLine}>
+            <PlusIcon className="h-3 w-3" />
             {t('add_line')}
           </Button>
         </div>
       </div>
 
       {ratioSumOff && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('ratio_sum_warning')}
           </p>
@@ -339,7 +339,7 @@ export function TemplateForm({
       )}
 
       {nameCollision && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('duplicate_name_warning')}
           </p>
@@ -347,7 +347,7 @@ export function TemplateForm({
       )}
 
       {!isConvertible && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('unconvertible_hint')}
           </p>

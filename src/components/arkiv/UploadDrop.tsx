@@ -150,7 +150,7 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
       >
         <span className="text-[13px] font-medium">{t('upload_title')}</span>
         <span className="max-w-md text-xs text-muted-foreground">{t('upload_hint')}</span>
-        <Button size="sm" variant="outline" type="button" onClick={(e) => e.stopPropagation()} asChild>
+        <Button variant="outline" type="button" onClick={(e) => e.stopPropagation()} asChild>
           <label className="cursor-pointer">
             {t('upload_pick')}
             <input
@@ -178,7 +178,7 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
               <li
                 key={r.key}
                 className={cn(
-                  'flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-4 py-3 text-[13px] motion-safe:transition-[transform,opacity] motion-safe:duration-300',
+                  'flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg px-4 py-3 text-[13px] motion-safe:transition-[transform,opacity] motion-safe:duration-300 bg-control shadow-raised',
                   r.leaving && 'motion-safe:translate-x-6 motion-safe:opacity-0',
                 )}
               >
@@ -190,7 +190,7 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
                 {r.failed ? (
                   <span className="text-attn">{r.failed}</span>
                 ) : r.done && r.view?.landed ? (
-                  <Link href={r.view.landed.href} className="underline decoration-border underline-offset-4 hover:text-foreground">
+                  <Link href={r.view.landed.href} className="underline decoration-foreground/25 underline-offset-4 hover:text-foreground">
                     → {line}
                   </Link>
                 ) : (

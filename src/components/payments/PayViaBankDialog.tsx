@@ -11,7 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
@@ -240,7 +240,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   }
 
   const closeButton = (
-    <Button variant="secondary" onClick={() => close(false)}>
+    <Button variant="outline" onClick={() => close(false)}>
       {phase === 'sign' && signingStage === 'done' ? t('close') : t('cancel')}
     </Button>
   )
@@ -261,7 +261,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     if (!lookup || !lookup.enabled || !giro) return null
     if (!lookup.available || !lookup.creditor_name) {
       return (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {lookup.reason === 'not_found' ? t('registered_name_not_found') : t('registered_name_unavailable')}
         </p>
       )
@@ -270,7 +270,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     return (
       <>
         {creditorNameMatches(name, order.payee_name) ? (
-          <p className="text-[12.5px] text-muted-foreground">{t(giro.type === 'bankgiro' ? 'registered_name_bankgiro' : 'registered_name_plusgiro', { name })}</p>
+          <p className="text-xs text-muted-foreground">{t(giro.type === 'bankgiro' ? 'registered_name_bankgiro' : 'registered_name_plusgiro', { name })}</p>
         ) : (
           <AttnLine>{t('registered_name_differs', { name, supplier: order.payee_name })}</AttnLine>
         )}
@@ -357,7 +357,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                     }
                     dateExtra={
                       lines[0].date_moved_from && (
-                        <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(lines[0].date_moved_from) })}</span>
+                        <span className="block text-xs text-muted-foreground">{t('date_moved', { from: formatDate(lines[0].date_moved_from) })}</span>
                       )
                     }
                   />
@@ -366,7 +366,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                 <div className={previewing ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
                   <table className="w-full border-collapse text-[13px]">
                     <thead>
-                      <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                      <tr className="border-b-hairline text-left text-xs text-muted-foreground">
                         <th className="py-2 pr-3 font-medium">{t('th_supplier')}</th>
                         <th className="py-2 pr-3 font-medium">{t('th_payee')}</th>
                         <th className="py-2 pr-3 font-medium">{t('th_date')}</th>
@@ -378,12 +378,12 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                         const label = invoiceLabelById?.get(line.supplier_invoice_id) ?? line.supplier_invoice_number
                         const payment = paymentByKey.get(line.supplier_invoice_id)
                         return (
-                          <tr key={line.supplier_invoice_id} className="border-b border-border align-middle">
+                          <tr key={line.supplier_invoice_id} className="border-b-hairline align-middle">
                             <td className="w-1/3 max-w-0 py-2 pr-3">
                               <div className="flex items-center gap-1">
                                 <div className="min-w-0 flex-1">
                                   <span className="block truncate">{line.supplier_name}</span>
-                                  <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">{label}</span>
                                 </div>
                                 {payment && <InvoiceDocumentButton payment={payment} onOpen={setDocumentKey} />}
                               </div>
@@ -404,18 +404,18 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                                   {t('unattested')}
                                 </Badge>
                               )}
-                              <span className="block text-[11px] text-muted-foreground">
+                              <span className="block text-xs text-muted-foreground">
                                 {line.reference.type === 'ocr' ? `OCR ${line.reference.value}` : line.reference.value}
                               </span>
                               {payment && <DocumentCheckLine payment={payment} className="whitespace-normal" />}
                             </td>
-                            <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
+                            <td className="whitespace-nowrap py-2 pr-3 date-figures">
                               {formatDate(line.requested_execution_date)}
                               {line.date_moved_from && (
-                                <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(line.date_moved_from) })}</span>
+                                <span className="block text-xs text-muted-foreground">{t('date_moved', { from: formatDate(line.date_moved_from) })}</span>
                               )}
                             </td>
-                            <td className="whitespace-nowrap py-2 text-right tabular-nums">{formatCurrency(Number(line.amount), line.currency)}</td>
+                            <td className="whitespace-nowrap py-2 text-right tabular-nums">{formatRowAmount(Number(line.amount), line.currency)}</td>
                           </tr>
                         )
                       })}
@@ -437,7 +437,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
               ) : null}
 
               {skipped.length > 0 && (
-                <div className="space-y-1 text-[12.5px] text-muted-foreground">
+                <div className="space-y-1 text-xs text-muted-foreground">
                   {lines.length > 0 && <p>{t('skipped_title', { count: skipped.length })}</p>}
                   <ul className="space-y-1">
                     {skipped.map((s) => (
@@ -461,9 +461,9 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
               <InvoiceDocumentSheet payment={documentKey ? (paymentByKey.get(documentKey) ?? null) : null} onClose={() => setDocumentKey(null)} />
 
               {preview && preview.replaces_drafts > 0 && (
-                <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
+                <p className="text-xs text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
               )}
-              {lines.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>}
+              {lines.length > 0 && <p className="text-xs text-muted-foreground">{t('sign_hint')}</p>}
               {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest onIncluded={raiseIncluded} />}
             </BankPaymentAccountGate>
             <DialogFooter>
@@ -482,7 +482,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
         {phase === 'confirm' && (
           <div className="space-y-4">
-            <p className="text-[12.5px] text-muted-foreground">{t('confirm_payees_intro')}</p>
+            <p className="text-xs text-muted-foreground">{t('confirm_payees_intro')}</p>
             {toReview.map((order) => {
               const invoiceId = order.supplier_invoice_id as string
               return (

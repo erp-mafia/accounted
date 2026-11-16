@@ -85,7 +85,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
     return (
       <div className="space-y-6">
         <Card>
-          <CardContent className="pt-8 pb-8">
+          <CardContent>
             <div className="flex flex-col items-center text-center space-y-6">
               <SpinnerIcon className="h-10 w-10 text-primary animate-spin" />
               <div className="space-y-1">
@@ -169,7 +169,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
           {/* Rejected file type (client-side, before upload) */}
           {fileTypeError && (
-            <div className="mt-4 p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
+            <div className="bg-destructive/8 mt-4 p-4 rounded-lg flex gap-3">
               <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
               <div className="space-y-1.5 min-w-0">
                 <p className="font-medium text-destructive">{t('file_unusable')}</p>
@@ -184,7 +184,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               <div className={`p-4 rounded-lg flex gap-3 ${
                 errorType === 'duplicate' || errorType === 'duplicate_period'
                   ? 'bg-muted/30 border border-border'
-                  : 'bg-destructive/10 border border-destructive/20'
+                  : 'bg-destructive/8'
               }`}>
                 <ExclamationCircleIcon className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
                   errorType === 'duplicate' || errorType === 'duplicate_period'
@@ -202,14 +202,13 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <p className="text-sm text-muted-foreground">{error}</p>
 
                   {/* Actionable guidance */}
-                  <div className="text-sm text-muted-foreground pt-1 border-t border-border mt-2">
+                  <div className="text-sm text-muted-foreground pt-1 border-t-hairline mt-2">
                     {(errorType === 'duplicate' || errorType === 'duplicate_period') && (
                       <div className="space-y-2">
                         <p>{t('duplicate_help')}</p>
                         {duplicateImportId && onReplace && (
                           <Button
                             variant="outline"
-                            size="sm"
                             className="border-border text-warning hover:bg-secondary/60"
                             loading={isReplacing}
                             onClick={(e) => {
@@ -220,7 +219,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                             {isReplacing ? (
                               t('replacing')
                             ) : (
-                              <><ArrowPathIcon className="h-4 w-4 mr-2" />{t('replace')}</>
+                              <><ArrowPathIcon className="h-4 w-4" />{t('replace')}</>
                             )}
                           </Button>
                         )}
@@ -241,7 +240,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
               {/* Validation errors list */}
               {validationErrors && validationErrors.length > 0 && (
-                <div className="p-4 bg-destructive/5 border border-destructive/15 rounded-lg space-y-2">
+                <div className="bg-destructive/8 p-4 rounded-lg space-y-2">
                   <p className="text-sm font-medium text-destructive">{t('blocking_errors', { count: validationErrors.length })}</p>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto">
                     {validationErrors.map((err, i) => (
@@ -256,7 +255,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
               {/* Validation warnings list */}
               {validationWarnings && validationWarnings.length > 0 && (
-                <div className="p-4 bg-muted/30 border border-border rounded-lg space-y-2">
+                <div className="p-4 rounded-lg space-y-2 bg-control shadow-raised">
                   <p className="text-sm font-medium text-warning">{t('warnings', { count: validationWarnings.length })}</p>
                   <div className="space-y-1.5 max-h-32 overflow-y-auto">
                     {validationWarnings.map((warn, i) => (

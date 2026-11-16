@@ -12,7 +12,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import type { SalaryBankList } from '@/lib/salary/payment/bank-list'
 import type { OverpaidEmployee } from '@/lib/salary/payment/payable'
 import { salaryBankListUrl, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 
 interface PaymentBankListProps {
   salaryRunId: string
@@ -127,7 +127,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
     return (
       <>
         <DefRow label={t('bank_list_label')}>
-          <span className="text-[12.5px] text-muted-foreground">{tc('nothing_to_pay')}</span>
+          <span className="text-xs text-muted-foreground">{tc('nothing_to_pay')}</span>
         </DefRow>
         {error.overpaid.length > 0 && (
           <AttnLine>{tc('overpaid', { list: overpaidList(error.overpaid), count: error.overpaid.length })}</AttnLine>
@@ -144,7 +144,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
     return (
       <>
         <DefRow label={t('bank_list_label')}>
-          <span className="text-[12.5px] text-muted-foreground">{t('bank_list_unavailable', { reason: '' }).trim()}</span>
+          <span className="text-xs text-muted-foreground">{t('bank_list_unavailable', { reason: '' }).trim()}</span>
         </DefRow>
         <AttnLine
           action={
@@ -164,7 +164,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
   if (error || !data) {
     return (
       <DefRow label={t('bank_list_label')}>
-        <span className="text-[12.5px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {t('bank_list_unavailable', { reason: error?.message ?? '' })}
         </span>
       </DefRow>
@@ -183,7 +183,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
-            className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             aria-expanded={open}
           >
             <ChevronDownIcon className={cn('h-3 w-3 transition-transform duration-150', open && 'rotate-180')} />
@@ -198,7 +198,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
             {t('bank_list_pdf')}
           </a>
         </div>
-        {data.correction && <div className="mt-1 text-[12.5px] text-muted-foreground">{tc('difference_only')}</div>}
+        {data.correction && <div className="mt-1 text-xs text-muted-foreground">{tc('difference_only')}</div>}
       </DefRow>
       {/* Never paid, never deducted: the person handles it (one sentence, every name and amount). */}
       {overpaid.length > 0 && <AttnLine>{tc('overpaid', { list: overpaidList(overpaid), count: overpaid.length })}</AttnLine>}
@@ -223,7 +223,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
                     {payee.reference}
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>
-                    {formatCurrency(payee.amount)}
+                    {formatRowAmount(payee.amount)}
                   </td>
                 </tr>
               ))}

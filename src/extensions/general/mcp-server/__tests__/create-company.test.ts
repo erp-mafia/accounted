@@ -280,7 +280,7 @@ describe('gnubok_create_company: which company the connection uses next', () => 
     const { result } = await create([OTHER_COMPANY], { type: 'api_key', allowedCompanyIds: [OTHER_COMPANY] })
 
     expect(result.message).toContain('does not reach it')
-    expect(result.message).toContain('Settings > API & MCP')
+    expect(result.message).toContain('Agents > Connect an agent')
     expect(result.next.args).toEqual({ slug: 'onboarding' })
   })
 })

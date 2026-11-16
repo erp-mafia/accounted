@@ -21,7 +21,7 @@ describe('GET /.well-known/oauth-authorization-server', () => {
   })
 
   it('names a registered byrå domain as issuer and endpoint host when fetched there', async () => {
-    // Settings > API och MCP on a brand domain hands out a connector URL on
+    // Agenter > Koppla en agent on a brand domain hands out a connector URL on
     // that domain; a canonical issuer here made clients refuse the mismatch.
     const res = await GET(
       new Request('https://byra.example.test/.well-known/oauth-authorization-server', {

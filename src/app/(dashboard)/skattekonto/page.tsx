@@ -10,9 +10,9 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -30,13 +30,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { ToastAction } from '@/components/ui/toast'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { cn } from '@/lib/utils'
+import { cn, formatRowAmount } from '@/lib/utils'
 import {
   formatCurrency,
   formatDate,
@@ -51,7 +52,7 @@ import {
   skvStatusNeedsReconnect,
   type SkvStatusLike,
 } from '@/lib/notices/predicates'
-import { ArrowPathIcon, ExclamationCircleIcon, Square2StackIcon } from '@/components/icons'
+import { ArrowPathIcon, Square2StackIcon } from '@/components/icons'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { createClient } from '@/lib/supabase/client'
 import { SKATTEKONTO_PAYMENT_COVER_STATUSES, skattekontoPaymentsCovering, type SkattekontoPaymentOrderCover } from '@/lib/payments/orders/skattekonto-underway'
@@ -114,6 +115,7 @@ interface TransaktionerEnvelope {
 
 export default function SkattekontoPage() {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('skattekonto')
   const errorLocale = useLocale() as ErrorLocale
   const tStart = useTranslations('start_cards')
@@ -720,16 +722,11 @@ export default function SkattekontoPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
-        <EmptyState
-          icon={ExclamationCircleIcon}
+        <LoadError
           title="Kunde inte hämta skattekontot"
           description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
-        >
-          <Button variant="outline" onClick={() => void reload()}>
-            <ArrowPathIcon className="mr-2 h-4 w-4" />
-            Försök igen
-          </Button>
-        </EmptyState>
+          onRetry={() => void reload()}
+        />
       </div>
     )
   }
@@ -748,7 +745,7 @@ export default function SkattekontoPage() {
         help={helpNode}
         action={
           notConnected ? (
-            <Button size="sm"
+            <Button size="toolbar"
               variant="ghost"
               asChild
               className="text-muted-foreground hover:text-foreground"
@@ -758,18 +755,18 @@ export default function SkattekontoPage() {
           ) : showReconnect ? (
             // The same connect flow the reconnect line used to link; the
             // reason (the server's own, when a sync just failed) in the tooltip.
-            <Button size="sm" variant="outline" asChild>
+            <Button size="toolbar" variant="outline" asChild>
               <Link href="/settings/skatteverket" title={reconnectBody}>
                 {t('attn_reconnect_action')}
               </Link>
             </Button>
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
-            <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
-              <Button size="sm"
+            <span title={lockedTitle ?? (!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined)}>
+              <Button size="toolbar"
                 variant="ghost"
                 onClick={syncNow}
-                disabled={syncing || !hasSkvCapability}
+                disabled={!canWrite || syncing || !hasSkvCapability}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <ArrowPathIcon className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
@@ -787,14 +784,14 @@ export default function SkattekontoPage() {
         // Rows the imported books already hold win over the connect hint:
         // without the link they read as unbooked and invite a second booking.
         showShortfall ? (
-          <p className="text-[12.5px] leading-5 text-muted-foreground">
+          <p className="text-xs leading-5 text-muted-foreground">
             {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}{' '}
-            <button type="button" onClick={() => setLinkAllOpen(true)} className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+            <button type="button" onClick={() => setLinkAllOpen(true)} disabled={!canWrite} title={lockedTitle} className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
               {t('ledger_attn_cta')}
             </button>
           </p>
         ) : (
-          <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
+          <AttnLine action={canWrite ? { label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) } : undefined}>
             {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}
           </AttnLine>
         )
@@ -816,10 +813,10 @@ export default function SkattekontoPage() {
       {!notConnected && (
       <section className="space-y-4">
         {loading && !data ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <LateReveal className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Skeleton className="h-28 w-full rounded-lg" />
             <Skeleton className="h-28 w-full rounded-lg" />
-          </div>
+          </LateReveal>
         ) : !data ? (
           // With a reconnect pending the header holds Anslut igen, not the
           // sync button this sentence names: say why there is no saldo instead.
@@ -829,7 +826,7 @@ export default function SkattekontoPage() {
         ) : (
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-lg border border-border p-4">
+              <div className="rounded-lg p-4 bg-control shadow-raised">
                 <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
                 <p
                   className={cn(
@@ -870,7 +867,7 @@ export default function SkattekontoPage() {
                 )}
               </div>
 
-              <div className="rounded-lg border border-border p-4">
+              <div className="rounded-lg p-4 bg-control shadow-raised">
                 <p className="text-xs text-muted-foreground">Nästa dragning</p>
                 {nextCharge ? (
                   <>
@@ -944,11 +941,11 @@ export default function SkattekontoPage() {
         selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
         clearLabel={t('bulk_clear')}
       >
-        <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
+        <Button onClick={() => void ignoreSelected([...activeSelectedIds])}>
           {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
         </Button>
         {canMatchSelection && (
-          <Button size="sm" variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
+          <Button variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
             {t('bulk_match_cta')}
           </Button>
         )}
@@ -1039,9 +1036,9 @@ export default function SkattekontoPage() {
       />
 
       <Dialog open={showPayment} onOpenChange={setShowPayment}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
-            <DialogTitle className="font-display text-lg tracking-tight">
+            <DialogTitle className="text-lg">
               {t('payment_title')}
             </DialogTitle>
             {nextCharge && (
@@ -1084,6 +1081,8 @@ export default function SkattekontoPage() {
           {bankPaymentsAvailable && (
             <DialogFooter>
               <Button
+                disabled={!canWrite}
+                title={lockedTitle}
                 onClick={() => {
                   setShowPayment(false)
                   setShowBankPayment(true)
@@ -1177,9 +1176,7 @@ function SkattekontoTable({
 
   if (sections.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        {t('no_transactions')}
-      </p>
+      <EmptyState title={t('no_transactions')} />
     )
   }
 
@@ -1190,7 +1187,7 @@ function SkattekontoTable({
     // panel padding (MainContainer px-4, md:px-6): more scrolls the page
     // sideways on a phone.
     <div
-      className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6"
+      className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4"
       role="region"
       aria-label="Skattekontohändelser"
     >
@@ -1210,7 +1207,7 @@ function SkattekontoTable({
               <tr className="bg-muted/30">
                 <td
                   colSpan={5}
-                  className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                  className="px-4 py-2 text-xs font-semibold text-muted-foreground"
                 >
                   {section.label}
                   {section.key === 'booked' && section.rows.some((r) => !r.journal_entry_id) && (
@@ -1269,7 +1266,8 @@ function SkattekontoRow({
   const amount = Number(row.belopp_skatteverket)
   const isBooked = !!row.journal_entry_id
   const isIgnoredSection = section === 'ignored'
-  const selectable = !isBooked && !isIgnoredSection
+  const { canWrite, lockedTitle } = useViewerLock()
+  const selectable = canWrite && !isBooked && !isIgnoredSection
   const displayDate = rowDisplayDate(row, section)
 
   return (
@@ -1296,7 +1294,7 @@ function SkattekontoRow({
           />
         )}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(displayDate)}
       </td>
       <td className={TD_CLASS}>
@@ -1306,7 +1304,7 @@ function SkattekontoRow({
               identical apart from ränteberäkningsdatum. Without this the rows
               read as duplicates from the automatic hämtning. */}
           {showInterestDate && row.ranteberakningsdatum && (
-            <span className="text-[12.5px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {t('interest_from', { date: formatDate(row.ranteberakningsdatum) })}
             </span>
           )}
@@ -1329,7 +1327,7 @@ function SkattekontoRow({
             ) : (
               /* Plain fact, not an exception: quiet text, and the band
                  header carries the count once. */
-              <span className="text-[11px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
+              <span className="text-xs text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
             )
           )}
         </span>
@@ -1341,7 +1339,7 @@ function SkattekontoRow({
           amount > 0 && 'text-success',
         )}
       >
-        {amount > 0 ? `+${formatCurrency(amount)}` : formatCurrency(amount)}
+        {amount > 0 ? `+${formatRowAmount(amount)}` : formatRowAmount(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
         {isIgnoredSection ? (
@@ -1349,6 +1347,8 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onUnignore(row)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('action_unignore')}
@@ -1369,6 +1369,8 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onIgnore(row)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('ignore_action')}
@@ -1376,14 +1378,17 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onMatch(row)}
+              disabled={!canWrite}
               className={QUIET_LINK_CLASS}
-              title="Koppla till befintligt verifikat"
+              title={lockedTitle ?? 'Koppla till befintligt verifikat'}
             >
               {t('action_match')}
             </button>
             <button
               type="button"
               onClick={() => onBokfor(row.id)}
+              disabled={!canWrite}
+              title={lockedTitle}
               className={QUIET_LINK_CLASS}
             >
               {t('action_book')}

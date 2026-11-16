@@ -6,6 +6,7 @@ import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
@@ -48,15 +49,16 @@ function PdfToggleRow({
   checked: boolean
   onCheckedChange: (value: boolean) => void
 }) {
+  const { canWrite, lockedTitle } = useViewerLock()
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border px-1 py-3">
+    <div className="flex items-center justify-between gap-3 border-b-hairline px-1 py-3">
       <span className="flex min-w-0 items-center gap-2">
         <label htmlFor={id} className="truncate text-sm">
           {label}
         </label>
         {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
       </span>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={!canWrite} title={lockedTitle} />
     </div>
   )
 }
@@ -106,7 +108,7 @@ export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
             </span>
             <span className="min-w-0">
               <span className="block text-[13px] text-foreground">{option.label}</span>
-              <span className="block text-[12.5px] text-muted-foreground">{option.hint}</span>
+              <span className="block text-xs text-muted-foreground">{option.hint}</span>
             </span>
           </button>
         )

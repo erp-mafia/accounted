@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { CHECKBOX_REVEAL_CLASS, QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { AutogiroSection } from './AutogiroSection'
 import { BLOCKER_KEY } from './labels'
 import type { DueAutogiroInvoice } from './types'
@@ -57,7 +57,7 @@ export function AutogiroDueSection({
       {due.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('due_empty')}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -103,13 +103,13 @@ export function AutogiroDueSection({
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{row.payer_number}</td>
                     <td
-                      className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}
+                      className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}
                       title={moved ? t('debit_date_moved', { due: formatDate(row.due_date) }) : undefined}
                     >
                       {formatDate(row.debit_date)}
                       {moved && <span className="ml-1 text-muted-foreground" aria-hidden="true">*</span>}
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatCurrency(row.amount)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatRowAmount(row.amount)}</td>
                     {anyBlocked && (
                       <td className={cn(TD_CLASS, 'max-w-[20rem]')}>
                         {row.blocker && (

@@ -4,20 +4,22 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { PlusIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { parseAmountInput, roundOre } from '@/lib/money'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 import { K3_RELIEF_RULES, type K3ReliefRule } from '@/lib/bokslut/k3-transition/transition'
 import type {
   K3TransitionPreview,
@@ -53,6 +55,7 @@ function adjustmentDraft(): AdjustmentDraft {
 export function K3TransitionCard({ periodId }: { periodId: string }) {
   const t = useTranslations('k3_transition')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [state, setState] = useState<State | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -138,7 +141,15 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
     }
   }
 
-  if (loading) return <Skeleton className="h-24 w-full" />
+  if (loading) {
+    return (
+      <LateReveal>
+        <Skeleton className="h-24 w-full" />
+      </LateReveal>
+    )
+  }
+  // The first load failed: say so in place with a retry instead of rendering nothing.
+  if (!state && error) return <LoadError title={error} onRetry={() => void load()} />
   if (!state?.year || state.year.framework !== 'k3') return null
 
   const transition = state.transition
@@ -168,9 +179,9 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
           <p className="text-sm text-muted-foreground">{t('intro')}</p>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button
-            size="sm"
             variant="outline"
-            disabled={!state.year.open}
+            disabled={!canWrite || !state.year.open}
+            title={lockedTitle}
             loading={busy}
             onClick={async () => {
               if (await call('/api/bookkeeping/k3-transition', 'POST', { fiscal_period_id: periodId })) await load()
@@ -220,11 +231,11 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
                 {state.assets.map((asset) => (
                   <TableRow key={asset.asset_id}>
                     <TableCell>{asset.name}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(asset.carrying_amount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(asset.carrying_amount)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{statusText(asset)}</TableCell>
                     <TableCell className="text-right">
                       {(asset.status === 'plain' || asset.status === 'split') && (
-                        <Button size="sm" variant="ghost" onClick={() => setSplitting(asset)}>
+                        <Button variant="ghost" onClick={() => setSplitting(asset)} disabled={!canWrite} title={lockedTitle}>
                           {asset.status === 'split' ? t('edit_split') : t('split')}
                         </Button>
                       )}
@@ -320,7 +331,7 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => setAdjustments((rows) => rows.filter((candidate) => candidate.key !== row.key))}
                   aria-label={t('adjustment_remove', { account: row.account || '' })}
                 >
@@ -329,8 +340,8 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
               </div>
             </div>
           ))}
-          <Button type="button" variant="outline" size="sm" onClick={() => setAdjustments((rows) => [...rows, adjustmentDraft()])}>
-            <PlusIcon className="mr-1 h-4 w-4" /> {t('adjustment_add')}
+          <Button type="button" variant="outline" onClick={() => setAdjustments((rows) => [...rows, adjustmentDraft()])}>
+            <PlusIcon className="h-4 w-4" /> {t('adjustment_add')}
           </Button>
         </section>
 
@@ -363,9 +374,10 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
             />
           </div>
           <Button
-            size="sm"
             variant="outline"
             loading={busy}
+            disabled={!canWrite}
+            title={lockedTitle}
             onClick={async () => {
               const saved = await call('/api/bookkeeping/k3-transition', 'PATCH', {
                 relief_rules: reliefRules,
@@ -394,7 +406,7 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
               />
             )}
             {preview.warnings.map((warning) => (
-              <p key={warning} className="text-[12.5px] text-muted-foreground">
+              <p key={warning} className="text-xs text-muted-foreground">
                 {warning}
               </p>
             ))}
@@ -404,9 +416,9 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <Button
-            size="sm"
             variant="ghost"
-            disabled={busy || state.assets.some((asset) => asset.status === 'split')}
+            disabled={!canWrite || busy || state.assets.some((asset) => asset.status === 'split')}
+            title={lockedTitle}
             onClick={async () => {
               if (await call('/api/bookkeeping/k3-transition', 'DELETE')) await load()
             }}
@@ -414,7 +426,6 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
             {t('delete')}
           </Button>
           <Button
-            size="sm"
             variant="outline"
             loading={busy}
             onClick={async () => {
@@ -426,7 +437,7 @@ export function K3TransitionCard({ periodId }: { periodId: string }) {
           >
             {t('preview')}
           </Button>
-          <Button size="sm" disabled={!preview || busy} onClick={() => setConfirming(true)}>
+          <Button disabled={!canWrite || !preview || busy} title={lockedTitle} onClick={() => setConfirming(true)}>
             {t('commit')}
           </Button>
         </div>

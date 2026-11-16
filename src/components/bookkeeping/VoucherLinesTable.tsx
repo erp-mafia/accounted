@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { AccountNumber } from '@/components/ui/account-number'
-import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
+import { TOTAL_TD_CLASS, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import type { VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { roundOre } from '@/lib/money'
@@ -25,6 +25,8 @@ interface VoucherLinesTableProps {
   lines: readonly VoucherTableLine[]
   /** A Summa row under the lines (struck rows are left out of it). */
   showTotals?: boolean
+  /** What the Summa row says in place of "Summa", e.g. a preview's balance (Balanserar, Skiljer 12,50 kr). */
+  totalLabel?: ReactNode
   /** Texts a line description adds nothing to besides the account name, e.g. the verifikat's own description. */
   redundantTexts?: ReadonlyArray<string | null | undefined>
   /** Render at most this many rows, then a "+ N more rows" row. */
@@ -85,6 +87,7 @@ export function lineTextAddsSomething(
 export function VoucherLinesTable({
   lines,
   showTotals = false,
+  totalLabel,
   redundantTexts = [],
   maxRows,
   accountNames,
@@ -103,77 +106,77 @@ export function VoucherLinesTable({
   const money = (amount: number) => (withCurrency ? formatCurrency(amount, 'SEK') : formatAmount(amount))
 
   return (
-    <table className={cn('w-full border-collapse text-[12.5px]', className)} aria-label={ariaLabel}>
-      <thead>
-        <tr>
-          {/* No fixed width and no nowrap on Konto: a long account name
-              wraps instead of pushing Debet and Kredit out of a narrow
-              review panel behind a hidden sideways scroll (crm#1232). Where
-              there is room the column still sizes to the name on one line. */}
-          <th className={VTH_CLASS}>{head('account')}</th>
-          <th className={VTH_CLASS}>{head('description')}</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>{head('debit')}</th>
-          <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{head('credit')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {shown.map((line, i) => {
-          const debit = amountOf(line.debit_amount)
-          const credit = amountOf(line.credit_amount)
-          const text = line.description?.trim() ?? ''
-          const givenName = line.account_name || accountNames?.[line.account_number] || null
-          const accountName = givenName || (accountNames ? null : getAccountDescription(line.account_number)?.name)
-          const showText = lineTextAddsSomething(text, accountName, redundantTexts)
-          const strike = line.struck ? 'line-through decoration-muted-foreground/70' : undefined
-          const amountCell = (amount: number) =>
-            amount > 0 ? (
-              <>
-                <span className={strike}>{money(amount)}</span>
-                {line.foreignAmount && (
-                  <span className="block text-xs text-muted-foreground tabular-nums">{line.foreignAmount}</span>
-                )}
-              </>
-            ) : null
-          return (
-            <tr key={line.key ?? i} className={line.struck ? 'text-muted-foreground' : undefined}>
-              <td className={cn(VTD_CLASS, strike)}>
-                {accountNames ? (
-                  <>
-                    <span className="font-mono text-sm">{line.account_number}</span>
-                    {givenName && <span className="ml-1">{givenName}</span>}
-                  </>
-                ) : (
-                  <AccountNumber number={line.account_number} name={givenName || undefined} showName />
-                )}
+    // Its own scroller: four columns can outgrow a phone, and the page must
+    // not move sideways (relative keeps hidden helpers inside it too).
+    <div className="relative overflow-x-auto">
+      <table className={cn('w-full border-collapse text-[13px]', className)} aria-label={ariaLabel}>
+        <thead>
+          <tr>
+            {/* No fixed width and no nowrap on Konto: a long account name
+                wraps instead of pushing Debet and Kredit out of a narrow
+                review panel behind a hidden sideways scroll (crm#1232). Where
+                there is room the column still sizes to the name on one line. */}
+            <th className={VTH_CLASS}>{head('account')}</th>
+            <th className={VTH_CLASS}>{head('description')}</th>
+            <th className={cn(VTH_CLASS, 'text-right')}>{head('debit')}</th>
+            <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{head('credit')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((line, i) => {
+            const debit = amountOf(line.debit_amount)
+            const credit = amountOf(line.credit_amount)
+            const text = line.description?.trim() ?? ''
+            const givenName = line.account_name || accountNames?.[line.account_number] || null
+            const accountName = givenName || (accountNames ? null : getAccountDescription(line.account_number)?.name)
+            const showText = lineTextAddsSomething(text, accountName, redundantTexts)
+            const strike = line.struck ? 'line-through decoration-foreground/25' : undefined
+            const amountCell = (amount: number) =>
+              amount > 0 ? (
+                <>
+                  <span className={strike}>{money(amount)}</span>
+                  {line.foreignAmount && (
+                    <span className="block text-xs text-muted-foreground tabular-nums">{line.foreignAmount}</span>
+                  )}
+                </>
+              ) : null
+            return (
+              <tr key={line.key ?? i} className={line.struck ? 'text-muted-foreground' : undefined}>
+                <td className={cn(VTD_CLASS, strike)}>
+                  {accountNames ? (
+                    <>
+                      <span className="font-mono text-sm">{line.account_number}</span>
+                      {givenName && <span className="ml-1">{givenName}</span>}
+                    </>
+                  ) : (
+                    <AccountNumber number={line.account_number} name={givenName || undefined} showName />
+                  )}
+                </td>
+                <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+                  {showText && <span className={strike}>{text}</span>}
+                  {line.extra && <span className={cn(showText && 'ml-2')}>{line.extra}</span>}
+                </td>
+                <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>{amountCell(debit)}</td>
+                <td className={cn(VTD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap')}>{amountCell(credit)}</td>
+              </tr>
+            )
+          })}
+          {hidden > 0 && (
+            <tr>
+              <td colSpan={4} className={cn(VTD_CLASS, 'pr-0 text-center text-muted-foreground')}>
+                {moreRows(hidden)}
               </td>
-              <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
-                {showText && <span className={strike}>{text}</span>}
-                {line.extra && <span className={cn(showText && 'ml-2')}>{line.extra}</span>}
-              </td>
-              <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>{amountCell(debit)}</td>
-              <td className={cn(VTD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap')}>{amountCell(credit)}</td>
             </tr>
-          )
-        })}
-        {hidden > 0 && (
-          <tr>
-            <td colSpan={4} className={cn(VTD_CLASS, 'pr-0 text-center text-muted-foreground')}>
-              {moreRows(hidden)}
-            </td>
-          </tr>
-        )}
-        {showTotals && (
-          <tr>
-            <td colSpan={2} className="py-[7px] pr-4 font-medium">{head('total')}</td>
-            <td className="py-[7px] pr-4 text-right tabular-nums font-medium whitespace-nowrap">
-              {money(totals.debit)}
-            </td>
-            <td className="py-[7px] text-right tabular-nums font-medium whitespace-nowrap">
-              {money(totals.credit)}
-            </td>
-          </tr>
-        )}
-      </tbody>
-    </table>
+          )}
+          {showTotals && (
+            <tr>
+              <td colSpan={2} className={TOTAL_TD_CLASS}>{totalLabel ?? head('total')}</td>
+              <td className={cn(TOTAL_TD_CLASS, 'text-right whitespace-nowrap')}>{money(totals.debit)}</td>
+              <td className={cn(TOTAL_TD_CLASS, 'pr-0 text-right whitespace-nowrap')}>{money(totals.credit)}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   )
 }

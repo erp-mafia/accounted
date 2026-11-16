@@ -24,7 +24,7 @@ import type { BankConnectionRow } from './use-open-payments-connections'
 export function BankTile({ bankName }: { bankName: string | null }) {
   const src = bankLogoUrl(bankName)
   return (
-    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg border border-border bg-white">
+    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden bg-white">
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" className="h-5 w-5 object-contain" />
@@ -112,18 +112,18 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
         {canWrite && (
           <SettingsRowEnd>
             {canRenew && awaitingAccounts && (
-              <Button size="sm" onClick={() => flow.open('resume', { connectionId: connection.id })}>
+              <Button onClick={() => flow.open('resume', { connectionId: connection.id })}>
                 {t('choose_accounts')}
               </Button>
             )}
             {canRenew && !awaitingAccounts && (
-              <Button variant="outline" size="sm" onClick={() => flow.open('renew', { bank: { bic: '', name: bankName }, replaceConnectionId: connection.id })}>
+              <Button variant="outline" onClick={() => flow.open('renew', { bank: { bic: '', name: bankName }, replaceConnectionId: connection.id })}>
                 {t('renew')}
               </Button>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                <Button variant="outline" size="icon" aria-label={t('more_actions')}>
                   <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                 </Button>
               </DropdownMenuTrigger>

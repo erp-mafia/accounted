@@ -234,7 +234,7 @@ export function SupplierInvoiceReviewContent({
       {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b text-left">
               <th className="py-2 w-20">{t('col_account')}</th>
               <th className="py-2">{t('col_description')}</th>
@@ -282,7 +282,7 @@ export function SupplierInvoiceReviewContent({
         {items.map((item, index) => {
           const { vatRate: displayRate, vatAmount } = itemTotals[index]
           return (
-            <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
+            <div key={index} className="rounded-lg p-3 text-sm space-y-1.5 bg-control shadow-raised">
               <div className="flex items-center justify-between">
                 <p className="font-medium">{item.description}</p>
                 <AccountNumber number={item.account_number} size="sm" />
@@ -343,7 +343,7 @@ export function SupplierInvoiceReviewContent({
 
       {/* Verifikation preview */}
       {showsVoucher ? (
-        <div className="bg-muted/50 border rounded-lg p-3 sm:p-4 space-y-2">
+        <div className="rounded-lg p-3 sm:p-4 space-y-2 bg-control shadow-raised">
           <p className="text-sm font-semibold text-muted-foreground">
             {t('review_voucher_preview_title')}
             {showingSek && (

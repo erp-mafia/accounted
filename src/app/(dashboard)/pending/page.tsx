@@ -1,18 +1,26 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef, type ComponentProps, type ComponentType } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef, type ComponentProps, type ComponentType } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
+import Link from 'next/link'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { LateReveal } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { RowSelectCheckbox, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { RowSelectCheckbox, HOVER_REVEAL_CLASS, LIST_BLEED_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import {
   SlideOver,
@@ -41,20 +49,16 @@ import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { refreshWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import {
   ArrowsUpDownIcon,
-  BellAlertIcon,
   ChatBubbleLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   ClipboardDocumentCheckIcon,
-  CpuChipIcon,
   ExclamationTriangleIcon,
   LockClosedIcon,
-  ScaleIcon,
   SpinnerIcon,
-  XMarkIcon,
-  type Icon,
 } from '@/components/icons'
 import type {
   PendingOperation,
@@ -77,6 +81,30 @@ import {
   REJECTION_CATEGORY_LABELS,
   rejectionCategoryLabel,
 } from '@/components/pending-operations/vocabulary'
+import { pickSpotCheck, SPOT_CHECK_SIZE, type SpotCheckReason } from '@/components/pending-operations/spot-check'
+import {
+  ProposalReviewDrawerBody,
+  ReviewActionButtons,
+  ReviewRisk,
+  ReviewWalk,
+  ReviewWalkLoading,
+  useReviewGate,
+  type ReviewPrimary,
+} from '@/components/pending-operations/ProposalReview'
+import { headlineAmount, isAutoExpired, missingFields, stepAfterLeaving, stepPosition } from '@/components/pending-operations/review-model'
+import { factLabelText } from '@/components/pending-operations/preview-parts'
+import {
+  NO_APPROVAL_RESULTS,
+  clearFailure,
+  failedIds,
+  failureKindOf,
+  failureOf,
+  parseStoredResults,
+  recordFailure,
+  recordFailures,
+  type ApprovalFailure,
+  type ApprovalResults,
+} from '@/components/pending-operations/approval-results'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 import { useAttribution, type ActorRef } from '@/lib/attribution/use-attribution'
 import type { AttributionOptions } from '@/lib/attribution/format-actor'
@@ -92,11 +120,10 @@ import { fixableRefusalFor } from '@/lib/pending-operations/fixable-refusals'
 import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
-import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { BATCH_REVIEW_QUERY, batchRowKey, runItems, wantsBatchReview } from '@/lib/collections/batch-dialog'
 import { capitalizeFirst } from '@/components/collections/collections-client'
-import { ReminderBatchDialog } from '@/components/reminders/ReminderBatchDialog'
+import type { ReminderBatchDialog as ReminderBatchDialogType } from '@/components/reminders/ReminderBatchDialog'
 import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
 import { reminderRunItems, wantsReminderBatchReview } from '@/lib/reminders/batch-dialog'
 import { dailyBatchTypeOf, pendingDailyBatchTypeOf, type DailyBatchType } from '@/lib/pending-operations/daily-batches'
@@ -159,24 +186,30 @@ function bulkActionKeyLabel(key: string, t: (key: string) => string): string {
   return (Object.values(REGISTER_BOOKED_BULK_KEYS) as string[]).includes(key) ? t(`type_${key}`) : operationLabel(key, t)
 }
 
+/** How many of the operations each bulkActionKey has, in the order the keys first appear. */
+function countByActionKey(ops: PendingOperation[]): Array<[string, number]> {
+  const counts = new Map<string, number>()
+  for (const op of ops) counts.set(bulkActionKey(op), (counts.get(bulkActionKey(op)) ?? 0) + 1)
+  return Array.from(counts.entries())
+}
+
 function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
-  return `${count} × ${operationLabel(operationType, t)}`
+  return `${count} × ${operationLabel(operationType, t)}.`
 }
 
 // The daily batches (lib/pending-operations/daily-batches) on a pending row:
-// the mark beside it and what its approve button says (it opens the batch's
-// review dialog, it does not approve).
-const DAILY_BATCH_ICON: Record<DailyBatchType, Icon> = {
-  collections_daily_batch: ScaleIcon,
-  reminder_daily_batch: BellAlertIcon,
-}
+// what its approve button says (it opens the batch's review dialog, it does
+// not approve).
 const DAILY_BATCH_REVIEW_LABEL_KEY: Record<DailyBatchType, string> = {
   collections_daily_batch: 'review_collections_batch',
   reminder_daily_batch: 'review_reminder_batch',
 }
-const DAILY_BATCH_DIALOG: Record<DailyBatchType, ComponentType<ComponentProps<typeof ReminderBatchDialog>>> = {
+// The two review dialogs open on a click ("Granska"): loaded then, not with the list.
+const HandoverBatchDialog = dynamic(() => import('@/components/collections/HandoverBatchDialog').then((m) => m.HandoverBatchDialog))
+const ReminderBatchDialog = dynamic(() => import('@/components/reminders/ReminderBatchDialog').then((m) => m.ReminderBatchDialog))
+const DAILY_BATCH_DIALOG: Record<DailyBatchType, ComponentType<ComponentProps<typeof ReminderBatchDialogType>>> = {
   collections_daily_batch: HandoverBatchDialog,
   reminder_daily_batch: ReminderBatchDialog,
 }
@@ -207,9 +240,12 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
  * and not high risk unless it belongs to a group one acknowledgment covers
  * (lib/pending-operations/shared-acknowledgment.ts, crm#1489). The bulk
  * dialog asks for that acknowledgment; without it those rows are left out.
+ * A proposal that lacks a required field is approved nowhere (the review
+ * template's rule, review-model.ts missingFields), so it joins no bulk either.
  */
 function isBulkSelectable(op: PendingOperation): boolean {
   if (op.status !== 'pending') return false
+  if (missingFields(op).length > 0) return false
   if (op.risk_level === 'high' && sharedAcknowledgmentGroup(op) == null) return false
   const period = getPeriodStatus(op)
   return !(period && period.status !== 'open')
@@ -231,6 +267,8 @@ interface BulkItemResult {
 }
 
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
+const APPROVAL_RESULTS_STORAGE_KEY = 'pending.approvalResults'
+const SHOW_PROPOSAL_EVENT = 'pending:show-proposal'
 // Operations per page of a status stream, and the most the list API returns
 // per request (PendingOperationsQuerySchema).
 const LIST_PAGE_SIZE = 50
@@ -269,11 +307,6 @@ function originLabel(
 }
 
 /**
- * Rows the expiry cron auto-rejected (app/api/pending-operations/expire/cron).
- * Strict on reason === 'expired' so commit-time auto-rejects (404/409, where
- * reason is the error text) do NOT read as "expired".
- */
-/**
  * failed_partial rows (issue #842): the executor posted an irreversible
  * voucher/credit note and then failed a later step. The dispatcher persisted
  * the ids of what WAS posted in result_data.posted_ids; render them so the
@@ -286,23 +319,17 @@ function failedPartialPostedIds(op: PendingOperation): string | null {
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ')
 }
 
-function isAutoExpired(op: PendingOperation): boolean {
-  const rd = op.result_data as { auto_rejected?: boolean; reason?: string } | null
-  return op.status === 'rejected' && rd?.auto_rejected === true && rd?.reason === 'expired'
-}
-
-function formatRelativeTime(dateStr: string): string {
+function formatRelativeTime(dateStr: string, t: (key: string, values?: Record<string, number>) => string): string {
   const now = new Date()
   const date = new Date(dateStr)
   const diffMs = now.getTime() - date.getTime()
   const diffMin = Math.floor(diffMs / 60000)
 
-  if (diffMin < 1) return 'just nu'
-  if (diffMin < 60) return `${diffMin} min sedan`
+  if (diffMin < 1) return t('time_just_now')
+  if (diffMin < 60) return t('time_minutes_ago', { count: diffMin })
   const diffHours = Math.floor(diffMin / 60)
-  if (diffHours < 24) return `${diffHours} tim sedan`
-  const diffDays = Math.floor(diffHours / 24)
-  return `${diffDays} dagar sedan`
+  if (diffHours < 24) return t('time_hours_ago', { count: diffHours })
+  return t('time_days_ago', { count: Math.floor(diffHours / 24) })
 }
 
 /**
@@ -327,39 +354,67 @@ function formatRelativeTime(dateStr: string): string {
  * goes to the periods management page where unlocking is possible.
  */
 function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
+  const t = useTranslations('pending')
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
-      <LockClosedIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-      <div className="flex-1">
-        <p className="font-medium text-destructive">
+    <div className="flex items-start gap-2 text-[13px]" role="note">
+      <LockClosedIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-strong">
           {period.status === 'closed'
-            ? 'Perioden är stängd permanent (BFL): kan inte ändras.'
-            : `Perioden är låst${lockedThrough ? ` t.o.m. ${lockedThrough}` : ''}.`}
+            ? t('period_closed_title')
+            : lockedThrough
+              ? t('period_locked_through', { date: lockedThrough })
+              : t('period_locked_title')}
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {period.status === 'closed'
-            ? 'Använd en omprövning i en öppen period i stället.'
-            : 'Lås upp perioden via Bokföring → Räkenskapsperioder, ändra entry-datum, eller avvisa.'}
+        <p className="text-xs text-muted-foreground">
+          {period.status === 'closed' ? t('period_closed_help') : t('period_locked_help')}
         </p>
       </div>
     </div>
   )
 }
 
-type SourceFilter = 'all' | 'agent' | 'high_risk'
+/**
+ * The amount a proposal names, in the list's amount column: plain figures as
+ * in every list row (no "kr"), another currency with its code. An empty cell
+ * of the same width where it names none, so the columns stay in line.
+ */
+function RowAmount({ op }: { op: PendingOperation }) {
+  const amount = headlineAmount(op)
+  return (
+    <span className="w-28 shrink-0 whitespace-nowrap text-right text-[13px] tabular-nums text-strong max-sm:w-auto" data-ph-mask="">
+      {amount
+        ? amount.currency && !isLedgerCurrency(amount.currency)
+          ? formatCurrency(amount.value, amount.currency)
+          : formatAmount(amount.value)
+        : null}
+    </span>
+  )
+}
 
-const sourceFilterLabels = (
-  t: (key: string) => string,
-): Record<SourceFilter, string> => ({
-  all: t('tab_all'),
-  agent: t('tab_agent'),
-  high_risk: t('tab_high_risk'),
-})
+type SourceFilter = 'all' | 'agent' | 'high_risk'
 
 // Concept scene 11: two views. Historik merges committed + rejected,
 // distinguished per row by a status chip.
 type ViewTab = 'pending' | 'history'
+
+// The spot check before "Godkänn alla" (Att göra V8): /pending?vy=stickprov.
+const SPOT_CHECK_QUERY = 'vy'
+const SPOT_CHECK_VALUE = 'stickprov'
+const SPOT_CHECK_REASON_KEY: Record<SpotCheckReason, string> = {
+  warning: 'spot_reason_warning',
+  largest: 'spot_reason_largest',
+  raised_risk: 'spot_reason_raised_risk',
+  random: 'spot_reason_random',
+}
+
+/** The calendar day a proposal was staged (its run), yyyy-MM-dd in local time. */
+function stagedDay(op: PendingOperation): string {
+  const d = new Date(op.created_at)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
@@ -368,12 +423,18 @@ export default function PendingOperationsPage() {
   const tSkills = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   const tSigning = useTranslations('skv_signing')
+  // A read-only member reads the queue; every approve and reject control is locked.
+  const { canWrite, lockedTitle } = useViewerLock()
   const { format: attribute } = useAttribution()
   const complianceWarningText = useComplianceWarningText()
   const router = useRouter()
   const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last fetch failed: 'initial' when no rows of this tab are on screen
+  // (the list says so in their place), 'refresh' when this tab's rows stay
+  // and one line above them says the refresh failed.
+  const [loadError, setLoadError] = useState<'initial' | 'refresh' | null>(null)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   // Queue order. Newest first by default; a bokslut batch is approved oldest
@@ -400,10 +461,48 @@ export default function PendingOperationsPage() {
   }
   const [conversationFilter, setConversationFilter] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState<number | null>(null)
+  // The spot check (Rutin, Att göra V8): "Godkänn N förslag" first shows a few
+  // of them to look at; the approval of all opens once the person says they
+  // have looked. The approval itself is the bulk dialog below, unchanged.
+  const [spotCheck, setSpotCheckState] = useState(false)
+  const [spotChecked, setSpotChecked] = useState(false)
+  const setSpotCheck = (on: boolean) => {
+    setSpotCheckState(on)
+    setSpotChecked(false)
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    if (on) url.searchParams.set(SPOT_CHECK_QUERY, SPOT_CHECK_VALUE)
+    else url.searchParams.delete(SPOT_CHECK_QUERY)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+  }
   // Detail slide-over (convention 13): id rather than the row object, so the
   // panel tracks realtime refetches and closes itself when the op leaves the
   // current list (approved elsewhere, tab switch, filter change).
   const [detailOpId, setDetailOpId] = useState<string | null>(null)
+  // The full-page review of one proposal (/pending/[id]): this same page,
+  // walking the queue one proposal at a time on the review template. The
+  // step is state, mirrored into the address with replaceState: a route
+  // change would remount the page and drop the approvals still in its queue.
+  const routeParams = useParams<{ id?: string }>()
+  const reviewMode = typeof routeParams?.id === 'string'
+  const [reviewId, setReviewId] = useState<string | null>(routeParams?.id ?? null)
+  // The linked proposal is not waiting any more (approved or rejected elsewhere).
+  const [reviewGone, setReviewGone] = useState(false)
+  // The queue's order while the proposal on screen was still in it: where
+  // the walk goes once it leaves.
+  const reviewOrderRef = useRef<string[]>([])
+  // The address follows the step. replaceState with no state of its own is
+  // the call the router listens to (handing back history.state, which
+  // carries the router's own marks, is taken for one of its own calls and
+  // ignored): otherwise the next router.refresh() puts back the address of
+  // the proposal that was just resolved. An effect on the path, so a refresh
+  // already under way when the step moved cannot leave the old address.
+  const pathname = usePathname()
+  useEffect(() => {
+    if (!reviewMode || !reviewId || typeof window === 'undefined') return
+    const wanted = `/pending/${reviewId}`
+    if (pathname !== wanted) window.history.replaceState(null, '', `${wanted}${window.location.search}`)
+  }, [reviewMode, reviewId, pathname])
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
@@ -446,8 +545,6 @@ export default function PendingOperationsPage() {
   // ?review=<type> to open one.
   const [batchReview, setBatchReview] = useState<{ id: string; type: DailyBatchType } | null>(null)
   const batchReviewRequested = useRef<DailyBatchType | null>(null)
-  const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
-  const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   // An approved Skatteverket filing is locked there, not filed: its BankID
   // signing link opens in a dialog right after the approval (crm#1478).
@@ -457,6 +554,57 @@ export default function PendingOperationsPage() {
   // code) until the approval goes through; a create_voucher refused for its
   // booking-time warnings shows them for the person to confirm.
   const [fixNotes, setFixNotes] = useState<Record<string, string>>({})
+  // Approvals that did not go through, per proposal (approval-results.ts):
+  // the proposal still waits, and its row, its place in the queue and the
+  // review's bar say what the server answered. It is said once to a screen
+  // reader by the toast (a live region that names the proposal and the
+  // sentence), which lives outside this page and so outlasts its remounts.
+  const [approvalResults, setApprovalResults] = useState<ApprovalResults>(NO_APPROVAL_RESULTS)
+  // Kept for the tab: the list and the review are two mounts of this page,
+  // and a refusal must still be on its proposal after going from one to the other.
+  useEffect(() => {
+    try {
+      const kept = parseStoredResults(window.sessionStorage.getItem(APPROVAL_RESULTS_STORAGE_KEY))
+      if (Object.keys(kept).length > 0) setApprovalResults((prev) => ({ ...kept, ...prev }))
+    } catch {
+      // Storage blocked: the record lives for this mount only.
+    }
+  }, [])
+  const approvalResultsRead = useRef(false)
+  useEffect(() => {
+    // Not on the first pass: it would write the empty start over what the tab kept.
+    if (!approvalResultsRead.current) {
+      approvalResultsRead.current = true
+      return
+    }
+    try {
+      window.sessionStorage.setItem(APPROVAL_RESULTS_STORAGE_KEY, JSON.stringify(approvalResults))
+    } catch {
+      // Storage blocked.
+    }
+  }, [approvalResults])
+  function noteFailure(op: Pick<PendingOperation, 'id' | 'title'>, failure: ApprovalFailure) {
+    setApprovalResults((prev) => recordFailure(prev, op.id, failure))
+  }
+  // The toast's way to the proposal: the walk steps to it, the list opens the
+  // walk on it. Asked for through an event, not a closure: the walk's step to
+  // the next proposal can remount this page while the toast is still up, and
+  // the toast must reach the page that is mounted when it is pressed.
+  useEffect(() => {
+    const onShow = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail
+      if (typeof id !== 'string') return
+      if (reviewMode) {
+        setReviewGone(false)
+        setReviewId(id)
+      } else {
+        router.push(`/pending/${id}`)
+      }
+    }
+    window.addEventListener(SHOW_PROPOSAL_EVENT, onShow)
+    return () => window.removeEventListener(SHOW_PROPOSAL_EVENT, onShow)
+  }, [reviewMode, router])
+  const showInWalk = (id: string) => window.dispatchEvent(new CustomEvent(SHOW_PROPOSAL_EVENT, { detail: id }))
   // One dialog at a time, in the order the approvals answered: the queue can
   // bring a second one while the first is being read.
   const [voucherConfirms, setVoucherConfirms] = useState<Array<{ op: PendingOperation; warnings: VoucherWarning[] }>>([])
@@ -479,6 +627,7 @@ export default function PendingOperationsPage() {
     const url = new URL(window.location.href)
     const conv = url.searchParams.get('conversation')
     if (conv) setConversationFilter(conv)
+    if (url.searchParams.get(SPOT_CHECK_QUERY) === SPOT_CHECK_VALUE) setSpotCheckState(true)
     const review = wantsBatchReview(url.search)
       ? COLLECTIONS_BATCH_TYPE
       : wantsReminderBatchReview(url.search)
@@ -584,21 +733,20 @@ export default function PendingOperationsPage() {
         setHasMore(moreThanLoaded(committed) || moreThanLoaded(rejected))
         loadedTabRef.current = 'history'
       }
+      setLoadError(null)
     } catch {
       if (!isCurrent()) return
-      toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
       // The rows on screen belong to another tab (or no load has succeeded
-      // yet): dropping the loading state here would render those foreign rows
-      // under this tab's header as if they were its content. Hold the loading
-      // state instead; the toast says why, and the next tab switch or
-      // realtime echo retries.
-      if (loadedTabRef.current !== activeTab) return
+      // yet): those foreign rows must not render under this tab's header as
+      // if they were its content, so the load error takes their place.
+      // Otherwise this tab's rows stay and a line above them says so.
+      setLoadError(loadedTabRef.current !== activeTab ? 'initial' : 'refresh')
     }
     if (!isCurrent()) return
     setIsLoading(false)
     setIsRefreshing(false)
     setIsLoadingMore(false)
-  }, [activeTab, sortOrder, windowSize, toast])
+  }, [activeTab, sortOrder, windowSize])
 
   useEffect(() => {
     fetchOperations()
@@ -740,6 +888,7 @@ export default function PendingOperationsPage() {
       // "Misslyckades", and let the row go.
       if (res.status === 409 && code === 'PENDING_OPERATION_NOT_PENDING') {
         toast({ title: t('already_resolved'), description: getErrorMessage(json, { statusCode: res.status }) })
+        setApprovalResults((prev) => clearFailure(prev, op.id))
         dropFromList(op.id)
         return
       }
@@ -767,12 +916,23 @@ export default function PendingOperationsPage() {
       // still needs a BankID signature opens its signing step instead.
       const signingUrl = signingUrlOf(json.data)
       if (signingUrl) setSigningPrompt({ title: op.title, url: signingUrl })
+      setApprovalResults((prev) => clearFailure(prev, op.id))
       dropFromList(op.id)
     } catch (err) {
+      // The proposal still waits. What the server answered (or that no
+      // answer came) stays on it, and the toast leads to it.
+      const kind = failureKindOf(err)
+      const message = kind === 'network' ? t('bulk_request_failed') : err instanceof Error ? getErrorMessage(err) : 'Okänt fel'
+      noteFailure(op, { kind, message })
       toast({
         title: t('approve_failed', { title: op.title }),
-        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
+        description: message,
         variant: 'destructive',
+        action: (
+          <ToastAction altText={t('refused_show')} onClick={() => showInWalk(op.id)}>
+            {t('refused_show')}
+          </ToastAction>
+        ),
       })
     }
   }
@@ -883,6 +1043,16 @@ export default function PendingOperationsPage() {
 
     const undone = results.filter((r) => r.status !== 'committed')
     if (undone.length > 0) {
+      // A row the server tried and refused still waits: it carries the reason.
+      // One that was never tried (skipped) is not marked as refused.
+      setApprovalResults((prev) =>
+        recordFailures(
+          prev,
+          undone
+            .filter((r) => r.status === 'failed' && r.error)
+            .map((r) => ({ id: r.id, failure: { kind: 'refused' as const, message: r.error as string } })),
+        ),
+      )
       const titles = new Map(operations.map((op) => [op.id, op.title]))
       setBulkOutcome({
         summary: parts.join(', '),
@@ -911,6 +1081,8 @@ export default function PendingOperationsPage() {
 
     setShowBulkDialog(false)
     selection.clear()
+    // The spot check led here: the approval is given, back to the list.
+    if (spotCheck) setSpotCheck(false)
     afterResolve()
     setIsBulkCommitting(false)
   }
@@ -942,6 +1114,7 @@ export default function PendingOperationsPage() {
     const copy = FIXABLE_REFUSAL_COPY[refusal.code]
     if (!copy) return false
     setFixNotes((prev) => ({ ...prev, [op.id]: refusal.code as string }))
+    noteFailure(op, { kind: 'refused', message: copy.noteInToast ? t(copy.note) : refusal.message, fixCode: refusal.code })
     toast({
       title: t('refusal_fix_title'),
       description: copy.noteInToast ? t(copy.note) : refusal.message,
@@ -960,19 +1133,12 @@ export default function PendingOperationsPage() {
 
   function openRejectDialog(target: PendingOperation | 'bulk') {
     setRejectTarget(target)
-    setRejectCategory('')
-    setRejectReason('')
   }
 
-  async function handleReject() {
-    if (!rejectTarget || !rejectCategory) return
+  async function handleReject(feedback: RejectFeedback) {
+    if (!rejectTarget) return
     setIsRejecting(true)
     try {
-      const feedback = {
-        rejection_category: rejectCategory,
-        ...(rejectReason.trim() ? { rejection_reason: rejectReason.trim() } : {}),
-      }
-
       if (rejectTarget === 'bulk') {
         // Same 100-id cap as bulk approval (crm#1488): send request-sized
         // chunks and add up their summaries.
@@ -1033,7 +1199,7 @@ export default function PendingOperationsPage() {
     setIsRejecting(false)
   }
 
-  const filteredOperations = operations.filter((op) => {
+  const matchingOperations = operations.filter((op) => {
     // Approved on the click: gone until the server says otherwise.
     if (approvingIds.has(op.id)) return false
     if (conversationFilter && op.agent_metadata?.conversation_id !== conversationFilter) {
@@ -1057,21 +1223,47 @@ export default function PendingOperationsPage() {
     }
   })
 
+  // Väntar reads per run: the proposals one source staged on one day sit
+  // together under a band with their count. Runs keep the order their first
+  // proposal has in the chosen sort; within a run the sort order stands.
+  // Everything below (selection ranges, the bulk order) follows this order.
+  // Who staged a proposal, when it was not the person: the attribution line,
+  // else the actor's own label (originOf), else its bare type (stagerOf).
+  const originOf = (op: PendingOperation) =>
+    op.actor_type && op.actor_type !== 'user' ? (originLabel(op, t, attribute) ?? op.actor_label ?? null) : null
+  const stagerOf = (op: PendingOperation) => originOf(op) ?? (op.actor_type && op.actor_type !== 'user' ? op.actor_type : null)
+  const runKeyOf = (op: PendingOperation) => `${stagerOf(op) ?? ''}|${stagedDay(op)}`
+  /** A run's band: who staged it and which day. */
+  const runLabel = (first: PendingOperation) =>
+    `${originOf(first) ?? t('run_manual')}${stagedDay(first) ? `, ${formatDate(stagedDay(first))}` : ''}`
+  const runs: Array<{ key: string; ops: PendingOperation[] }> = []
+  if (activeTab === 'pending') {
+    const byKey = new Map<string, PendingOperation[]>()
+    for (const op of matchingOperations) {
+      const key = runKeyOf(op)
+      const run = byKey.get(key)
+      if (run) run.push(op)
+      else {
+        const ops = [op]
+        byKey.set(key, ops)
+        runs.push({ key, ops })
+      }
+    }
+  }
+  const filteredOperations = activeTab === 'pending' ? runs.flatMap((run) => run.ops) : matchingOperations
+  const runStarts = new Map(runs.map((run) => [run.ops[0].id, run]))
+
   const showBulkControls = activeTab === 'pending'
   // Pending ops that meet two criteria: not high risk (bar the groups one
   // acknowledgment covers) AND the period covering them is open. We exclude
   // locked/closed periods from bulk because they will be rejected at commit
   // time anyway: silently letting the user "select all" and watching some
   // fail is a worse UX than excluding them up front.
-  const bulkEligible = useMemo(
-    () => filteredOperations.filter(isBulkSelectable),
-    [filteredOperations]
-  )
-  const bulkEligibleIds = useMemo(() => bulkEligible.map((op) => op.id), [bulkEligible])
+  const bulkEligible = filteredOperations.filter(isBulkSelectable)
   // The selection holds only bulk-eligible operations of the current view: a
   // tab, filter or refetch that hides one (approved elsewhere, its period
   // locked) drops it, so the bar and the bulk calls never carry it.
-  const selection = useBulkSelection(bulkEligibleIds)
+  const selection = useBulkSelection(bulkEligible.map((op) => op.id))
   const selectedIds = selection.selectedIds
 
   const pendingTotal = filteredOperations.filter((op) => op.status === 'pending').length
@@ -1082,51 +1274,39 @@ export default function PendingOperationsPage() {
     selection.selectOnly(bulkEligible.filter((op) => bulkActionKey(op) === key).map((op) => op.id))
   }
 
-  // Group counts for type-quick-action buttons (only show if 2+ of same type pending)
-  const typeCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const op of bulkEligible) {
-      const key = bulkActionKey(op)
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-    return Array.from(counts.entries()).filter(([, count]) => count >= 2)
-  }, [bulkEligible])
+  // What approving everything does, from the proposals a bulk approval
+  // takes (never from the selection); the quick "all of this type" links
+  // show for a type with two or more.
+  const eligibleBreakdown = countByActionKey(bulkEligible)
+  const typeCounts = eligibleBreakdown.filter(([, count]) => count >= 2)
 
   const selectedCount = selectedIds.size
 
+  const spotCheckOpen = spotCheck && activeTab === 'pending' && bulkEligible.length > 0
+  // The spot check's sample, from the same proposals.
+  const spotSample = spotCheckOpen ? pickSpotCheck(bulkEligible, (op) => complianceWarningOf(op) != null) : []
+  function openApproveAll() {
+    selection.selectAll()
+    setGroupAcknowledged(false)
+    setShowBulkDialog(true)
+  }
+
   // Selected high-risk operations that join only under the dialog's one
   // acknowledgment (crm#1489), and what that acknowledgment approves.
-  const selectedGroupOps = useMemo(
-    () => bulkEligible.filter((op) => selectedIds.has(op.id) && op.risk_level === 'high'),
-    [bulkEligible, selectedIds],
-  )
-  const groupSummary = useMemo(() => summarizeSharedAcknowledgment(selectedGroupOps), [selectedGroupOps])
+  const selectedOps = bulkEligible.filter((op) => selectedIds.has(op.id))
+  const selectedGroupOps = selectedOps.filter((op) => op.risk_level === 'high')
+  const groupSummary = summarizeSharedAcknowledgment(selectedGroupOps)
   // What the acknowledgment names: bank samlingsverifikat, webshop orders, or both.
-  const groupKind = useMemo<keyof typeof SHARED_ACK_LABEL_KEYS>(() => {
-    const groups = new Set(selectedGroupOps.map(sharedAcknowledgmentGroup))
-    if (groups.size !== 1) return 'mixed'
-    return groups.has('webshop_order_book') ? 'webshop' : 'bank'
-  }, [selectedGroupOps])
+  const ackGroups = new Set(selectedGroupOps.map(sharedAcknowledgmentGroup))
+  const groupKind: keyof typeof SHARED_ACK_LABEL_KEYS = ackGroups.size !== 1 ? 'mixed' : ackGroups.has('webshop_order_book') ? 'webshop' : 'bank'
   const bulkConfirmCount = selectedCount - (groupAcknowledged ? 0 : selectedGroupOps.length)
 
-  const selectedBreakdown = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const op of bulkEligible) {
-      if (selectedIds.has(op.id) && op.risk_level !== 'high') {
-        const key = bulkActionKey(op)
-        counts.set(key, (counts.get(key) ?? 0) + 1)
-      }
-    }
-    return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
-  }, [bulkEligible, selectedIds])
+  const selectedBreakdown = countByActionKey(selectedOps.filter((op) => op.risk_level !== 'high'))
 
   // Selected operations that carry a compliance warning. The bulk
   // confirmation says how many, so "Godkänn alla" cannot carry a warning past
   // an approver who never scrolled to its row (crm#1003).
-  const selectedWarnedCount = useMemo(
-    () => bulkEligible.filter((op) => selectedIds.has(op.id) && complianceWarningOf(op) != null).length,
-    [bulkEligible, selectedIds],
-  )
+  const selectedWarnedCount = selectedOps.filter((op) => complianceWarningOf(op) != null).length
 
   // The instructions the agent retrieved, by the names the Instruktioner page uses: never raw slugs or uuids.
   const retrievedNames = (slugs: readonly string[]) => [...new Set(describeRetrievedSkills(slugs).map((item) => {
@@ -1138,17 +1318,15 @@ export default function PendingOperationsPage() {
 
   // Source/kicker line for a row and the detail panel: operation type,
   // origin (when an agent staged it) and relative age.
-  const sourceLine = (op: PendingOperation) => {
-    const isAgent = op.actor_type && op.actor_type !== 'user'
-    return [
+  const sourceLine = (op: PendingOperation) =>
+    [
       operationLabel(op.operation_type, t, op.params),
-      isAgent ? (originLabel(op, t, attribute) ?? op.actor_label ?? op.actor_type) : null,
+      stagerOf(op),
       op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: retrievedNames(op.agent_metadata.skills_loaded) }) : null,
-      formatRelativeTime(op.created_at),
+      formatRelativeTime(op.created_at, t),
     ]
       .filter(Boolean)
       .join(' · ')
-  }
 
   const detailOp = detailOpId
     ? filteredOperations.find((op) => op.id === detailOpId) ?? null
@@ -1159,33 +1337,264 @@ export default function PendingOperationsPage() {
   // The open daily batch's own review dialog (the same props for each).
   const BatchReviewDialog = batchReview ? DAILY_BATCH_DIALOG[batchReview.type] : null
 
-  const SEG_TABS: Array<{ tab: ViewTab; labelKey: string }> = [
-    { tab: 'pending', labelKey: 'tab_pending' },
-    { tab: 'history', labelKey: 'tab_history' },
-  ]
+  // What the review template needs of a proposal, in this page's words: who
+  // staged it, the instructions the agent retrieved, and what its primary
+  // does. The approval is the drawer's own: a daily batch opens its review
+  // dialog, high risk its confirmation, the rest are approved on the click.
+  const retrievedOf = (op: PendingOperation) =>
+    op.agent_metadata?.skills_loaded?.length ? retrievedNames(op.agent_metadata.skills_loaded) : null
+  const consequenceOf = (op: PendingOperation | null) =>
+    op && op.status === 'pending' ? singleActionWarning(op.operation_type, op.params, t) : ''
+  // The proposals that wait and are on screen (one on its way to the server
+  // is not among them), and the ones whose last approval did not go through.
+  const waitingIds = new Set(filteredOperations.filter((op) => op.status === 'pending').map((op) => op.id))
+  const refusedIds = failedIds(approvalResults, waitingIds)
+  // A refusal is the server's sentence after "Nekades"; a request that got
+  // no answer was not refused, and says only that it did not get there.
+  const failureText = (failure: ApprovalFailure) =>
+    failure.kind === 'network' ? failure.message : t('refused_row', { message: failure.message })
+  const queueMarks = new Map(
+    [...refusedIds].map((id) => [id, t(approvalResults[id].kind === 'network' ? 'refused_marker_network' : 'refused_marker')]),
+  )
+  /** A failed approval as the bar and the drawer footer state it: the sentence, and where to fix it when the refusal names a place. */
+  const failureNoteOf = (op: PendingOperation | null) => {
+    const failure = failureOf(approvalResults, op?.id, waitingIds)
+    if (!op || !failure) return null
+    const fixHref = failure.fixCode ? fixableRefusalFor(op.operation_type, failure.fixCode)?.fixHref : undefined
+    const copy = failure.fixCode ? FIXABLE_REFUSAL_COPY[failure.fixCode] : undefined
+    return {
+      message: failureText(failure),
+      action:
+        fixHref && copy ? (
+          <Link href={fixHref} className="underline underline-offset-2">
+            {t(copy.link)}
+          </Link>
+        ) : undefined,
+    }
+  }
+  const reviewPrimaryOf = (op: PendingOperation): ReviewPrimary => {
+    const batchType = dailyBatchTypeOf(op.operation_type)
+    const period = getPeriodStatus(op)
+    const locked = period != null && period.status !== 'open'
+    return {
+      // After a request that got no answer, the same approval is a retry.
+      label: batchType
+        ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType])
+        : failureOf(approvalResults, op.id, waitingIds)?.kind === 'network'
+          ? tCommon('retry')
+          : t('approve'),
+      disabled: locked || isCommitting,
+      title: locked ? t('period_locked_short') : undefined,
+      onClick: () => {
+        if (batchType) {
+          setDetailOpId(null)
+          setBatchReview({ id: op.id, type: batchType })
+        } else if (op.risk_level === 'high') {
+          setSelectedOp(op)
+          setShowCommitDialog(true)
+        } else {
+          void queueApproval(op)
+        }
+      },
+    }
+  }
+  const detailGate = useReviewGate(detailOp, consequenceOf(detailOp))
+  const detailFailure = failureNoteOf(detailOp)
+
+  // The walk (/pending/[id]): the queue is the list's own order, run by run.
+  const reviewQueueKey = reviewMode ? filteredOperations.map((op) => op.id).join(',') : ''
+  const reviewOp = reviewMode && reviewId ? filteredOperations.find((op) => op.id === reviewId) ?? null : null
+  const reviewPosition = stepPosition(reviewQueueKey ? reviewQueueKey.split(',') : [], reviewOp?.id ?? null)
+  const reviewPeriod = reviewOp ? getPeriodStatus(reviewOp) : null
+  const reviewGate = useReviewGate(reviewOp, consequenceOf(reviewOp))
+  // A locked or closed period stops the approval: the bar says so in place of
+  // the consequence sentence, which would promise a booking that cannot happen.
+  const reviewLocked = reviewPeriod != null && reviewPeriod.status !== 'open'
+  const detailLocked = detailPeriodLocked && detailOp?.status === 'pending'
+  const reviewConversationId = reviewOp?.agent_metadata?.conversation_id ?? null
+  // The proposal on screen left the queue (approved, rejected, handled
+  // elsewhere): on to the next one that is still waiting. A proposal linked
+  // to but not loaded yet is looked for in the older pages first.
+  useEffect(() => {
+    if (!reviewMode || !reviewId || isLoading || loadError === 'initial') return
+    const ids = reviewQueueKey ? reviewQueueKey.split(',') : []
+    if (ids.includes(reviewId)) {
+      reviewOrderRef.current = ids
+      return
+    }
+    if (reviewOrderRef.current.includes(reviewId)) {
+      setReviewId(stepAfterLeaving(reviewOrderRef.current, reviewId, new Set(ids)))
+    } else if (hasMore) {
+      if (!isLoadingMore) {
+        setIsLoadingMore(true)
+        setListWindow((current) => ({ viewKey, size: (current.viewKey === viewKey ? current.size : LIST_PAGE_SIZE) + LIST_PAGE_SIZE }))
+      }
+    } else if (approvingIds.size === 0) {
+      setReviewGone(true)
+    }
+  }, [reviewMode, reviewId, reviewQueueKey, isLoading, loadError, hasMore, isLoadingMore, viewKey, approvingIds])
+
+  // Proposals still waiting: the server's count less the approvals on their way.
+  const waitingCount = Math.max(0, (pendingCount ?? 0) - approvingIds.size)
+  const sourceFilters: Record<SourceFilter, string> = { all: t('tab_all'), agent: t('tab_agent'), high_risk: t('tab_high_risk') }
 
   return (
     <AccountNamesContext.Provider value={accountNames}>
     <div className="space-y-8">
-      {/* Page header (concept scene 11): title + Godkänn alla */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        {activeTab === 'pending' && bulkEligible.length > 0 && (
-          <Button size="sm"
-            disabled={isBulkCommitting || isRejecting}
-            onClick={() => {
-              selection.selectAll()
-              setGroupAcknowledged(false)
-              setShowBulkDialog(true)
-            }}
-          >
-            {t('approve_all', { count: bulkEligible.length })}
-          </Button>
-        )}
-      </div>
+      {reviewMode ? (
+        <>
+          <PageHeader title={t('review_title')} parent={{ label: t('title_rutin'), href: '/pending' }} />
+          {isLoading || (reviewId && !reviewOp && !reviewGone && loadError !== 'initial') ? (
+            <ReviewWalkLoading />
+          ) : loadError === 'initial' ? (
+            <LoadError title={t('load_failed_title')} onRetry={() => void fetchOperations()} />
+          ) : (
+            <ReviewWalk
+              groups={runs.map((run) => ({ key: run.key, label: runLabel(run.ops[0]), ops: run.ops }))}
+              op={reviewOp}
+              // "N av M" counts every proposal that waits, not only the page
+              // of the queue that is loaded (the place is the same in both).
+              position={
+                sourceFilter === 'all' && !conversationFilter
+                  ? { ...reviewPosition, count: Math.max(reviewPosition.count, waitingCount) }
+                  : reviewPosition
+              }
+              kicker={reviewOp ? sourceLine(reviewOp) : ''}
+              origin={reviewOp ? originOf(reviewOp) : null}
+              retrieved={reviewOp ? retrievedOf(reviewOp) : null}
+              banner={
+                reviewPeriod && reviewPeriod.status !== 'open' ? <PeriodLockBanner period={reviewPeriod} /> : undefined
+              }
+              historyTrailing={
+                reviewConversationId ? (
+                  <Link href={`/pending?conversation=${reviewConversationId}`} className={QUIET_LINK_CLASS}>
+                    {t('show_conversation')}
+                  </Link>
+                ) : undefined
+              }
+              note={reviewLocked ? t('period_locked_short') : reviewGate.note}
+              failure={reviewLocked || reviewGate.blocked ? null : failureNoteOf(reviewOp)}
+              queueMarks={queueMarks}
+              blocked={reviewGate.blocked || reviewLocked}
+              primary={reviewOp ? reviewPrimaryOf(reviewOp) : null}
+              onReject={() => reviewOp && openRejectDialog(reviewOp)}
+              rejectDisabled={isRejecting}
+              onStep={setReviewId}
+              remaining={filteredOperations.length}
+              gone={reviewGone}
+            />
+          )}
+        </>
+      ) : (
+        <>
+      {/* The top bar: Rutin and its one primary. From the list it leads to the
+          spot check (when there are more proposals than the sample holds);
+          in the spot check it approves all, once the person has looked. */}
+      {spotCheckOpen ? (
+        <PageHeader
+          title={t('spot_title')}
+          parent={{ label: t('title_rutin'), href: '/pending' }}
+          action={
+            <Button size="toolbar" disabled={!canWrite || !spotChecked || isBulkCommitting || isRejecting} title={lockedTitle} onClick={openApproveAll}>
+              {t('approve_all_count', { count: bulkEligible.length })}
+            </Button>
+          }
+        />
+      ) : (
+        <PageHeader
+          title={t('title_rutin')}
+          action={
+            activeTab === 'pending' && filteredOperations.length > 0 ? (
+              <span className="flex items-center gap-2">
+                {/* The walk through the queue, one proposal on the review template at a time. */}
+                <Button size="toolbar" variant="outline" asChild>
+                  <Link href={`/pending/${filteredOperations[0].id}`}>{t('review_one_by_one')}</Link>
+                </Button>
+                {bulkEligible.length > 0 && (
+                  <Button
+                    size="toolbar"
+                    disabled={!canWrite || isBulkCommitting || isRejecting}
+                    title={lockedTitle}
+                    onClick={() => {
+                      if (bulkEligible.length > SPOT_CHECK_SIZE) setSpotCheck(true)
+                      else openApproveAll()
+                    }}
+                  >
+                    {t('approve_proposals', { count: bulkEligible.length })}
+                  </Button>
+                )}
+              </span>
+            ) : undefined
+          }
+        />
+      )}
 
-      {conversationFilter && (
-        <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+      {spotCheckOpen && (
+        <section className="stagger-enter" aria-label={t('spot_title')}>
+          <h2 className="text-xl text-strong">
+            {t('spot_headline', { sample: spotSample.length, count: bulkEligible.length })}
+          </h2>
+          <p className="mt-1 text-[13px] text-muted-foreground">
+            {eligibleBreakdown.map(([type, count]) => bulkActionLabel(type, count, t)).join(' ')}
+          </p>
+          <div className={cn(LIST_BLEED_CLASS, 'mt-4 border-t-hairline')}>
+            {spotSample.map(({ op, reason }) => {
+              const warning = complianceWarningOf(op)
+              return (
+                <div key={op.id} className="border-b-hairline px-2 py-3">
+                  <div className="flex min-w-0 items-baseline gap-3">
+                    {/* data-ph-mask: the title carries counterparty and amount. */}
+                    <p className="min-w-0 flex-1 break-words text-[13px] font-medium text-strong" data-ph-mask="">
+                      {pendingDailyBatchTypeOf(op) ? dailyBatchRow(pendingDailyBatchTypeOf(op)!, op).title : op.title}
+                    </p>
+                    {!pendingDailyBatchTypeOf(op) && <ReviewRisk op={op} quiet />}
+                    <RowAmount op={op} />
+                  </div>
+                  <p className="mt-0.5 break-words text-xs text-muted-foreground">
+                    {t(SPOT_CHECK_REASON_KEY[reason])} · {sourceLine(op)}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <p className="min-w-0 flex-1 basis-64 break-words text-[13px]" data-ph-mask="">
+                      {warning ? complianceWarningText(warning) : (op.agent_reason ?? '')}
+                    </p>
+                    <span className="-mr-2 flex shrink-0 items-center gap-1">
+                      {/* The full-page review; a daily batch keeps its own dialog. */}
+                      {pendingDailyBatchTypeOf(op) ? (
+                        <Button variant="ghost" onClick={() => openReview(op)}>
+                          {tCommon('open')}
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" asChild>
+                          <Link href={`/pending/${op.id}`}>{tCommon('open')}</Link>
+                        </Button>
+                      )}
+                      <Button variant="ghost" disabled={!canWrite || isRejecting} title={lockedTitle} onClick={() => openRejectDialog(op)}>
+                        {t('spot_looks_wrong')}
+                      </Button>
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">{t('spot_note', { sample: spotSample.length })}</p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button variant="outline" disabled={spotChecked} onClick={() => setSpotChecked(true)}>
+              {t('spot_confirm', { sample: spotSample.length })}
+            </Button>
+            <Button variant="ghost" onClick={() => setSpotCheck(false)}>
+              {t('spot_back')}
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {!spotCheckOpen && activeTab === 'pending' && !isLoading && loadError !== 'initial' && waitingCount > 0 && (
+        <h2 className="text-xl text-strong">{t('rutin_headline', { count: waitingCount })}</h2>
+      )}
+
+      {!spotCheckOpen && conversationFilter && (
+        <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
           <div className="flex items-center gap-2">
             <ChatBubbleLeftIcon className="h-4 w-4 text-muted-foreground" />
             <span>
@@ -1194,7 +1603,6 @@ export default function PendingOperationsPage() {
             </span>
           </div>
           <Button
-            size="sm"
             variant="ghost"
             onClick={() => {
               setConversationFilter(null)
@@ -1212,19 +1620,18 @@ export default function PendingOperationsPage() {
 
       {/* Toolbar (concept): status seg left, source picker (convention 8)
           far right. The count chip rides only on Väntar: it is the queue. */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className={cn('flex flex-wrap items-center gap-2', spotCheckOpen && 'hidden')}>
         <SegmentedControl
           value={activeTab}
           onChange={setActiveTab}
-          options={SEG_TABS.map(({ tab, labelKey }) => ({
-            value: tab,
-            label: t(labelKey),
-            count: tab === 'pending' ? Math.max(0, (pendingCount ?? 0) - approvingIds.size) : undefined,
-          }))}
+          options={[
+            { value: 'pending', label: t('tab_pending'), count: waitingCount },
+            { value: 'history', label: t('tab_history') },
+          ]}
         />
         {activeTab === 'pending' && (
           <Button
-            size="sm"
+            size="toolbar"
             variant="ghost"
             className="gap-1.5 text-muted-foreground"
             onClick={toggleSortOrder}
@@ -1247,17 +1654,13 @@ export default function PendingOperationsPage() {
           <ContextPicker
             value={sourceFilter}
             onChange={(id) => setSourceFilter(id as SourceFilter)}
-            triggerLabel={sourceFilterLabels(t)[sourceFilter]}
-            items={[
-              { id: 'all', label: t('tab_all') },
-              { id: 'agent', label: t('tab_agent') },
-              { id: 'high_risk', label: t('tab_high_risk') },
-            ]}
+            triggerLabel={sourceFilters[sourceFilter]}
+            items={Object.entries(sourceFilters).map(([id, label]) => ({ id, label }))}
           />
         </div>
       </div>
 
-      <div>
+      <div className={cn(spotCheckOpen && 'hidden')}>
         {/* Bulkbar (concept): hidden until at least one operation is selected
             via the hover checkboxes, then it pops in with the count, the batch
             actions, and the selection shortcuts as quiet links. */}
@@ -1270,8 +1673,8 @@ export default function PendingOperationsPage() {
             clearLabel={t('deselect')}
           >
             <Button
-              size="sm"
-              disabled={isBulkCommitting || isRejecting}
+              disabled={!canWrite || isBulkCommitting || isRejecting}
+              title={lockedTitle}
               onClick={() => {
                 setGroupAcknowledged(false)
                 setShowBulkDialog(true)
@@ -1280,44 +1683,61 @@ export default function PendingOperationsPage() {
               {t('approve_count', { count: selectedCount })}
             </Button>
             <Button
-              size="sm"
               variant="outline"
-              disabled={isRejecting || isBulkCommitting}
+              disabled={!canWrite || isRejecting || isBulkCommitting}
+              title={lockedTitle}
               onClick={() => openRejectDialog('bulk')}
             >
               {t('reject_count', { count: selectedCount })}
             </Button>
-            {typeCounts.length >= 2 &&
-              typeCounts.map(([type, count]) => (
-                <button
-                  key={type}
-                  type="button"
-                  className={QUIET_LINK_CLASS}
-                  onClick={() => selectAllOfType(type)}
-                >
-                  {bulkActionKeyLabel(type, t)} ({count})
-                </button>
-              ))}
-            {excludedFromBulk > 0 && (
-              <span className="text-muted-foreground">
-                {t('bulk_excluded_note', { count: excludedFromBulk })}
-              </span>
+            {/* One menu for the per-type picks and the note on what a bulk
+                cannot take, so the bar stays one short row at any count of types. */}
+            {(typeCounts.length >= 2 || excludedFromBulk > 0) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" className={QUIET_LINK_CLASS}>
+                    {t('select_by_type')}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" side="top">
+                  {typeCounts.length >= 2 &&
+                    typeCounts.map(([type, count]) => (
+                      <DropdownMenuItem key={type} onSelect={() => selectAllOfType(type)}>
+                        {bulkActionKeyLabel(type, t)} ({count})
+                      </DropdownMenuItem>
+                    ))}
+                  {excludedFromBulk > 0 && (
+                    <DropdownMenuLabel className="font-normal text-muted-foreground">
+                      {t('bulk_excluded_note', { count: excludedFromBulk })}
+                    </DropdownMenuLabel>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </BulkSelectionBar>
         )}
 
+        {loadError === 'refresh' && !isLoading && (
+          <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void fetchOperations() }}>
+            {tCommon('refresh_failed')}
+          </AttnLine>
+        )}
+
         {isLoading ? (
-          <DataListLoading />
+          <LateReveal>
+            <DataListLoading />
+          </LateReveal>
+        ) : loadError === 'initial' ? (
+          <LoadError title={t('load_failed_title')} onRetry={() => void fetchOperations()} />
         ) : filteredOperations.length === 0 ? (
           activeTab === 'pending' ? (
             /* Concept empty state: the queue is the good news. */
-            <div className="flex flex-col items-center px-6 py-16 text-center">
-              <CheckIcon className="h-9 w-9 text-success" strokeWidth={2} aria-hidden />
-              <p className="mt-3 font-display text-xl">{t('empty_pending_title')}</p>
-              <p className="mt-1.5 max-w-[44ch] text-[13px] text-muted-foreground">
-                {t('empty_pending_description')}
-              </p>
-            </div>
+            <EmptyState
+              tone="done"
+              icon={CheckIcon}
+              title={t('empty_pending_title')}
+              description={t('empty_pending_description')}
+            />
           ) : (
             <DataListEmpty
               icon={<ClipboardDocumentCheckIcon className="h-6 w-6" />}
@@ -1330,6 +1750,8 @@ export default function PendingOperationsPage() {
             {filteredOperations.map((op) => {
               const period = getPeriodStatus(op)
               const periodLocked = period != null && period.status !== 'open'
+              // The same stop as the review's Godkänn: a required field is missing.
+              const rowMissing = missingFields(op).map((label) => factLabelText(label, t))
               const canBulkSelect = showBulkControls && isBulkSelectable(op)
               const isSelected = selectedIds.has(op.id)
               const batchType = dailyBatchTypeOf(op.operation_type)
@@ -1340,7 +1762,6 @@ export default function PendingOperationsPage() {
               const runType = pendingDailyBatchTypeOf(op)
               const isRun = runType !== null
               const runRow = runType ? dailyBatchRow(runType, op) : null
-              const isAgent = op.actor_type && op.actor_type !== 'user' && !batchType
               // High risk, and a registration of an already-booked invoice
               // (it cannot be undone): the consent sentence the approval
               // confirms in a dialog.
@@ -1351,7 +1772,7 @@ export default function PendingOperationsPage() {
                 // Historik row (concept k-row): status chip + text + sub line.
                 const resolvedAt = op.resolved_at ?? op.created_at
                 const sub = [
-                  formatRelativeTime(resolvedAt),
+                  formatRelativeTime(resolvedAt, t),
                   operationLabel(op.operation_type, t, op.params),
                   originLabel(op, t, attribute),
                 ]
@@ -1371,18 +1792,10 @@ export default function PendingOperationsPage() {
                       }
                     }}
                     className={cn(
-                      'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-3 transition-colors duration-150',
+                      'group flex cursor-pointer items-start gap-3 border-b-hairline px-1 py-3 transition-colors duration-150',
                       detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     )}
                   >
-                    {/* Same actor mark as the pending rows, minus the curved
-                        op-thread (it points at an action row history lacks). */}
-                    <span
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
-                      aria-hidden
-                    >
-                      {isAgent ? <CpuChipIcon className="h-3.5 w-3.5" /> : <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />}
-                    </span>
                     {/* Chips mark exceptions: an approved operation is the
                         normal outcome and reads as muted text. */}
                     {op.status === 'committed' && signingUrlOf(op.result_data) ? (
@@ -1462,10 +1875,20 @@ export default function PendingOperationsPage() {
               // kicker (type, origin, retrieved instructions) and the consent
               // sentence live in the slide-over the row opens.
               const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
-              const BatchIcon = batchType ? DAILY_BATCH_ICON[batchType] : null
+              // The first proposal of a run carries the run's band: who
+              // staged them, which day, and how many.
+              const run = runStarts.get(op.id)
               return (
+                <Fragment key={op.id}>
+                {run && (
+                  <p className="flex items-end gap-2 border-b-hairline px-1 pb-1.5 pt-4 text-xs font-medium text-muted-foreground first:pt-0">
+                    <span className="min-w-0 truncate" data-ph-mask="">
+                      {runLabel(op)}
+                    </span>
+                    <span className="shrink-0 font-normal tabular-nums">{t('run_count', { count: run.ops.length })}</span>
+                  </p>
+                )}
                 <div
-                  key={op.id}
                   role="button"
                   tabIndex={0}
                   aria-label={op.title}
@@ -1480,7 +1903,7 @@ export default function PendingOperationsPage() {
                     }
                   }}
                   className={cn(
-                    'group flex cursor-pointer items-center gap-3 border-b border-border px-1 py-2 transition-colors duration-150',
+                    'group flex min-h-11 cursor-pointer items-center gap-3 border-b-hairline px-1 py-2 transition-colors duration-150',
                     detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     isSelected && 'bg-secondary/40',
                   )}
@@ -1501,23 +1924,11 @@ export default function PendingOperationsPage() {
                       />
                     )}
                   </span>
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
-                    aria-hidden
-                  >
-                    {BatchIcon ? (
-                      <BatchIcon className="h-3.5 w-3.5" />
-                    ) : isAgent ? (
-                      <CpuChipIcon className="h-3.5 w-3.5" />
-                    ) : (
-                      <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />
-                    )}
-                  </span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="flex min-w-0 items-center gap-2 text-[13px]">
                       {/* A daily batch reads in its own words, with what it
                           does as the hover text. */}
-                      <span className="min-w-0 truncate" title={runRow?.detail}>
+                      <span className="min-w-0 text-strong max-sm:line-clamp-2 max-sm:break-words sm:truncate" title={runRow?.detail} data-ph-mask="">
                         {runRow?.title ?? op.title}
                       </span>
                       {/* The staged compliance warning stays on the row, as a
@@ -1526,11 +1937,11 @@ export default function PendingOperationsPage() {
                           The slide-over has it in full. */}
                       {complianceWarning && !isRun && (
                         <span
-                          className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
+                          className="flex items-center gap-1 text-xs text-attn max-sm:shrink-0 sm:min-w-[35%] sm:flex-1"
                           title={complianceWarningText(complianceWarning)}
                         >
                           <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
-                          <span className="min-w-0 truncate">{complianceWarningText(complianceWarning)}</span>
+                          <span className="min-w-0 truncate max-sm:sr-only">{complianceWarningText(complianceWarning)}</span>
                         </span>
                       )}
                     </span>
@@ -1546,8 +1957,18 @@ export default function PendingOperationsPage() {
                     {/* The last approval was refused for something fixed
                         around the proposal: what, and where. The proposal is
                         still pending; Godkänn works once it is fixed. */}
+                    {/* Any other approval that did not go through: the
+                        server's sentence stays on the row while it waits. */}
+                    {refusedIds.has(op.id) && !FIXABLE_REFUSAL_COPY[fixNotes[op.id]] && (
+                      <span className="flex min-w-0 items-center gap-1 text-xs text-attn" data-refused="">
+                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
+                        <span className="min-w-0 truncate" title={approvalResults[op.id].message}>
+                          {failureText(approvalResults[op.id])}
+                        </span>
+                      </span>
+                    )}
                     {FIXABLE_REFUSAL_COPY[fixNotes[op.id]] && (
-                      <span className="flex min-w-0 items-center gap-1 text-[12.5px] text-attn">
+                      <span className="flex min-w-0 items-center gap-1 text-xs text-attn">
                         <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
                         <span className="min-w-0 truncate" title={t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}>
                           {t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}
@@ -1564,30 +1985,32 @@ export default function PendingOperationsPage() {
                       </span>
                     )}
                   </span>
-                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {formatRelativeTime(op.created_at)}
+                  {/* Risk, exceptions only: low risk says nothing, medium is
+                      muted text, the chip is for high risk. */}
+                  {!isRun && <ReviewRisk op={op} quiet />}
+                  <span className="w-24 shrink-0 text-right text-xs text-muted-foreground max-md:hidden">
+                    {formatRelativeTime(op.created_at, t)}
                   </span>
-                  {/* Risk chip (concept op-risk), exceptions only: low risk is
-                      the normal case and a chip on every row said nothing. */}
-                  {op.risk_level !== 'low' && !isRun && (
-                    <Badge
-                      variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
-                      className="shrink-0 font-normal"
-                    >
-                      {op.risk_level === 'high' ? t('badge_high_risk') : t('badge_medium_risk')}
-                    </Badge>
-                  )}
-                  <span className={cn('flex shrink-0 items-center gap-1', HOVER_REVEAL_CLASS)}>
+                  <RowAmount op={op} />
+                  {/* The two decisions as quiet row actions, always in the
+                      same place (text at rest, their surface on row hover:
+                      convention 4's row actions). On a phone the row opens
+                      the review, where both sit in the fixed footer. */}
+                  <span className="flex shrink-0 items-center justify-end gap-1 max-sm:hidden">
                     <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="text-success hover:text-success"
-                      aria-label={approveLabel}
-                      title={periodLocked ? t('period_locked_short') : approveLabel}
-                      disabled={periodLocked || isBulkCommitting}
+                      variant="row-primary"
+                      title={
+                        lockedTitle ??
+                        (periodLocked
+                          ? t('period_locked_short')
+                          : rowMissing.length > 0
+                            ? t('review_missing_named', { fields: rowMissing.join(', ') })
+                            : undefined)
+                      }
+                      disabled={!canWrite || periodLocked || rowMissing.length > 0 || isBulkCommitting}
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (periodLocked) return
+                        if (periodLocked || rowMissing.length > 0) return
                         if (batchType) {
                           setBatchReview({ id: op.id, type: batchType })
                         } else if (op.risk_level === 'high' || rowConsent) {
@@ -1603,24 +2026,22 @@ export default function PendingOperationsPage() {
                         }
                       }}
                     >
-                      <CheckIcon className="h-4 w-4" />
+                      {approveLabel}
                     </Button>
                     <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="text-destructive hover:text-destructive"
-                      aria-label={t('reject')}
-                      title={t('reject')}
-                      disabled={isRejecting}
+                      variant="row"
+                      title={lockedTitle}
+                      disabled={!canWrite || isRejecting}
                       onClick={(e) => {
                         e.stopPropagation()
                         openRejectDialog(op)
                       }}
                     >
-                      <XMarkIcon className="h-4 w-4" />
+                      {t('reject')}
                     </Button>
                   </span>
                 </div>
+                </Fragment>
               )
             })}
           </div>
@@ -1637,6 +2058,9 @@ export default function PendingOperationsPage() {
         )}
       </div>
 
+        </>
+      )}
+
       {/* Detail slide-over (convention 13): the review surface. Derived from
           the live list, so a realtime refetch that resolves the op closes it. */}
       <SlideOver
@@ -1652,128 +2076,92 @@ export default function PendingOperationsPage() {
           {detailOp && (
             <>
               <SlideOverHeader kicker={sourceLine(detailOp)} title={detailOp.title} />
-              <SlideOverBody className="space-y-4">
-                {detailPeriodLocked && detailPeriod && detailOp.status === 'pending' && (
-                  <PeriodLockBanner period={detailPeriod} />
-                )}
-                {/* The operation itself in its own box (concept): what the
-                    agent is about to do, clearly framed. `detail`: this is
-                    the review surface, where a preview may also show the
-                    objects involved (the verifikat's lines, the document). */}
-                <div className="rounded-lg border border-border p-4">
-                  <OperationPreview op={detailOp} detail />
-                </div>
-                {/* Why the agent proposes it, in its own words (the `reason`
-                    it staged with): secondary to what it does, so no box.
-                    data-ph-mask: free text, may name people. */}
-                {detailOp.agent_reason && (
-                  <div data-ph-mask="">
-                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                      {t('agent_reason_label')}
-                    </p>
-                    <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px] leading-snug text-muted-foreground">
-                      {detailOp.agent_reason}
-                    </p>
-                  </div>
-                )}
-                {/* The agent's audit-trail note for this operation (the
-                    `notes` tool input): the approver should read why, not
-                    only what. */}
-                {typeof detailOp.params?.notes === 'string' && detailOp.params.notes.trim() !== '' && (
-                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
-                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                      {t('note_label')}
-                    </p>
-                    <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-snug">{detailOp.params.notes}</p>
-                  </div>
-                )}
-                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params, t) && (
-                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
-                    <p className="text-xs leading-snug text-muted-foreground">
-                      {singleActionWarning(detailOp.operation_type, detailOp.params, t)}
-                    </p>
-                  </div>
-                )}
-                {isHandledElsewhere(detailOp) && (
-                  <p className="text-xs text-muted-foreground">{t('handled_elsewhere_detail')}</p>
-                )}
-                {detailOp.status === 'rejected' && detailOp.rejection_category && detailOp.rejection_category !== 'expired' && !isHandledElsewhere(detailOp) && (
-                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
-                    <p className="text-xs leading-snug text-muted-foreground">
-                      Avvisad: {rejectionCategoryLabel(detailOp.rejection_category)}
-                      {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
-                    </p>
-                  </div>
-                )}
-                {detailOp.status === 'committed' && signingUrlOf(detailOp.result_data) && (
-                  <SigningStep url={signingUrlOf(detailOp.result_data)!} afterwards />
-                )}
-                {isAutoExpired(detailOp) && (
-                  <p className="text-xs text-muted-foreground">{t('auto_expired_detail')}</p>
-                )}
-                {detailOp.status === 'failed_partial' && (
-                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
-                    <p className="text-xs leading-snug text-muted-foreground">
-                      {t('failed_partial_detail')}
-                      {failedPartialPostedIds(detailOp) && (
-                        <span className="font-mono"> ({failedPartialPostedIds(detailOp)})</span>
-                      )}
-                    </p>
-                  </div>
-                )}
-                {detailOp.status === 'unknown' && (
-                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
-                    <p className="text-xs leading-snug text-muted-foreground">{t('unknown_detail')}</p>
-                  </div>
-                )}
-              </SlideOverBody>
-              <SlideOverFooter>
-                {detailConversationId && (
-                  <button
-                    type="button"
-                    className={cn(QUIET_LINK_CLASS, 'mr-auto')}
-                    onClick={() => {
-                      setConversationFilter(detailConversationId)
-                      setDetailOpId(null)
-                    }}
-                  >
-                    {t('show_conversation')}
-                  </button>
-                )}
-                {detailOp.status === 'pending' && (
-                  <>
-                    <Button
-                      variant="outline"
-                      onClick={() => openRejectDialog(detailOp)}
-                      disabled={isRejecting}
-                    >
-                      {t('reject')}
-                    </Button>
-                    <Button
-                      disabled={detailPeriodLocked || isCommitting}
-                      title={detailPeriodLocked ? 'Perioden är låst' : undefined}
-                      onClick={() => {
-                        // Same risk gate as the review-row pill: the detail
-                        // panel already shows the full preview, so low/medium
-                        // commit directly; only high risk keeps the dialog.
-                        // A daily batch has its own review dialog.
-                        const detailBatchType = dailyBatchTypeOf(detailOp.operation_type)
-                        if (detailBatchType) {
+              {/* The fixed review template (ProposalReview): the amount, the
+                  one attention line, the proposal as typed fields and the
+                  verifikat it posts, the underlag as the file, how a resolved
+                  proposal ended, and the history behind a disclosure. */}
+              <SlideOverBody>
+                <ProposalReviewDrawerBody
+                  key={detailOp.id}
+                  op={detailOp}
+                  origin={originOf(detailOp)}
+                  retrieved={retrievedOf(detailOp)}
+                  banner={
+                    detailPeriodLocked && detailPeriod && detailOp.status === 'pending' ? (
+                      <PeriodLockBanner period={detailPeriod} />
+                    ) : undefined
+                  }
+                  historyTrailing={
+                    detailConversationId ? (
+                      <button
+                        type="button"
+                        className={QUIET_LINK_CLASS}
+                        onClick={() => {
+                          setConversationFilter(detailConversationId)
                           setDetailOpId(null)
-                          setBatchReview({ id: detailOp.id, type: detailBatchType })
-                        } else if (detailOp.risk_level === 'high') {
-                          setSelectedOp(detailOp)
-                          setShowCommitDialog(true)
-                        } else {
-                          void queueApproval(detailOp)
-                        }
-                      }}
-                    >
-                      {t('approve')}
-                    </Button>
-                  </>
-                )}
-              </SlideOverFooter>
+                        }}
+                      >
+                        {t('show_conversation')}
+                      </button>
+                    ) : undefined
+                  }
+                  outcome={
+                    detailOp.status === 'pending' ? undefined : (
+                      <div className="space-y-2 text-[13px]">
+                        {isHandledElsewhere(detailOp) && (
+                          <p className="text-muted-foreground">{t('handled_elsewhere_detail')}</p>
+                        )}
+                        {detailOp.status === 'rejected' && detailOp.rejection_category && detailOp.rejection_category !== 'expired' && !isHandledElsewhere(detailOp) && (
+                          <p className="break-words text-muted-foreground" data-ph-mask="">
+                            Avvisad: {rejectionCategoryLabel(detailOp.rejection_category)}
+                            {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
+                          </p>
+                        )}
+                        {detailOp.status === 'committed' && signingUrlOf(detailOp.result_data) && (
+                          <SigningStep url={signingUrlOf(detailOp.result_data)!} afterwards />
+                        )}
+                        {isAutoExpired(detailOp) && (
+                          <p className="text-muted-foreground">{t('auto_expired_detail')}</p>
+                        )}
+                        {detailOp.status === 'failed_partial' && (
+                          <p className="text-muted-foreground">
+                            {t('failed_partial_detail')}
+                            {failedPartialPostedIds(detailOp) && (
+                              <span className="font-mono"> ({failedPartialPostedIds(detailOp)})</span>
+                            )}
+                          </p>
+                        )}
+                        {detailOp.status === 'unknown' && (
+                          <p className="text-muted-foreground">{t('unknown_detail')}</p>
+                        )}
+                      </div>
+                    )
+                  }
+                />
+              </SlideOverBody>
+              {/* The fixed footer: what the approval does (or which required
+                  field is missing), "Ser fel ut" and the one primary. */}
+              {detailOp.status === 'pending' && (
+                <SlideOverFooter className="flex-wrap">
+                  {detailFailure && !detailLocked && !detailGate.blocked ? (
+                    <p className="mr-auto min-w-0 flex-1 basis-full break-words text-xs text-attn sm:basis-48" data-ph-mask="">
+                      {detailFailure.message} {detailFailure.action}
+                    </p>
+                  ) : (
+                    (detailLocked || detailGate.note) && (
+                      <p className={cn('mr-auto min-w-0 flex-1 basis-full text-xs sm:basis-48', detailLocked || detailGate.blocked ? 'text-attn' : 'text-muted-foreground')}>
+                        {detailLocked ? t('period_locked_short') : detailGate.note}
+                      </p>
+                    )
+                  )}
+                  <ReviewActionButtons
+                    primary={reviewPrimaryOf(detailOp)}
+                    blocked={detailGate.blocked}
+                    onReject={() => openRejectDialog(detailOp)}
+                    rejectDisabled={isRejecting}
+                  />
+                </SlideOverFooter>
+              )}
             </>
           )}
         </SlideOverContent>
@@ -1796,7 +2184,7 @@ export default function PendingOperationsPage() {
       {/* After approving a Skatteverket filing: the declaration is locked
           there and filed only once someone signs with BankID (crm#1478). */}
       <Dialog open={signingPrompt != null} onOpenChange={(open) => { if (!open) setSigningPrompt(null) }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{tSigning('sign_action')}</DialogTitle>
             <DialogDescription data-ph-mask="">{signingPrompt?.title}</DialogDescription>
@@ -1886,11 +2274,10 @@ export default function PendingOperationsPage() {
         <div className="space-y-3 text-sm">
           <p>{t('bulk_confirm_intro')}</p>
           {selectedBreakdown.length > 0 && (
-            <ul className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2">
-              {selectedBreakdown.map(({ type, count }) => (
-                <li key={type} className="flex justify-between font-mono tabular-nums">
-                  <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
-                  <span className="text-muted-foreground">{count}</span>
+            <ul className="border-t-hairline">
+              {selectedBreakdown.map(([type, count]) => (
+                <li key={type} className="border-b-hairline py-2 text-[13px]">
+                  <span className="break-words">{bulkActionLabel(type, count, t)}</span>
                 </li>
               ))}
             </ul>
@@ -1898,8 +2285,8 @@ export default function PendingOperationsPage() {
           {/* Routine high-risk rows (crm#1489): one acknowledgment for the
               whole group, stating what it posts, instead of one per row. */}
           {selectedGroupOps.length > 0 && (
-            <div className="space-y-2 rounded-lg border bg-muted/30 px-3 py-2">
-              <p className="font-medium">
+            <div className="space-y-2">
+              <p className="font-medium text-strong">
                 {t(SHARED_ACK_LABEL_KEYS[groupKind].title, { count: groupSummary.count })}
               </p>
               <p className="text-xs text-muted-foreground">{t('shared_ack_body')}</p>
@@ -1930,7 +2317,7 @@ export default function PendingOperationsPage() {
               {groupSummary.accounts.length > 0 && (
                 <table className="w-full text-xs tabular-nums">
                   <thead>
-                    <tr className="text-[11px] text-muted-foreground">
+                    <tr className="text-xs text-muted-foreground">
                       <th className="py-1 text-left font-normal">{t('shared_ack_account')}</th>
                       <th className="py-1 text-right font-normal">{t('shared_ack_debit')}</th>
                       <th className="py-1 text-right font-normal">{t('shared_ack_credit')}</th>
@@ -1966,80 +2353,25 @@ export default function PendingOperationsPage() {
         </div>
       </ConfirmationDialog>
 
-      {/* Reject dialog: a required category plus an optional free-text reason,
-          so every rejection a person makes says what was wrong. Doubles as the
-          bulk-reject confirmation; the feedback then applies to every selected op. */}
-      <Dialog open={rejectTarget != null} onOpenChange={(open) => { if (!open) setRejectTarget(null) }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {rejectTarget === 'bulk'
-                ? t('reject_bulk_title', { count: selectedCount })
-                : t('reject_title')}
-            </DialogTitle>
-            {/* data-ph-mask: the operation title carries counterparty and amount */}
-            <DialogDescription data-ph-mask="">
-              {rejectTarget === 'bulk'
-                ? t('reject_bulk_description')
-                : rejectTarget?.title}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="reject-category">
-                {t('reject_category_label')}
-              </label>
-              <Select
-                value={rejectCategory}
-                onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
-              >
-                <SelectTrigger id="reject-category">
-                  <SelectValue placeholder={t('reject_category_placeholder')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
-                    <SelectItem key={cat} value={cat}>{REJECTION_CATEGORY_LABELS[cat]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium" htmlFor="reject-reason">
-                {t('reject_note_label')}
-              </label>
-              <Textarea
-                id="reject-reason"
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                placeholder={t('reject_note_placeholder')}
-                rows={3}
-                maxLength={2000}
-              />
-              <p className="text-xs text-muted-foreground">{t('reject_note_help')}</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
-              {tCommon('cancel')}
-            </Button>
-            <Button variant="destructive" onClick={handleReject} loading={isRejecting} disabled={!rejectCategory}>
-              {rejectTarget === 'bulk' ? t('reject_count', { count: selectedCount }) : t('reject')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RejectDialog
+        target={rejectTarget}
+        selectedCount={selectedCount}
+        busy={isRejecting}
+        onClose={() => setRejectTarget(null)}
+        onReject={handleReject}
+      />
 
       {/* What a bulk approval left undone, one line per operation with the
           reason (crm#1488): the footer of the confirmation promises it. */}
       <Dialog open={bulkOutcome != null} onOpenChange={(open) => { if (!open) setBulkOutcome(null) }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('bulk_outcome_title')}</DialogTitle>
             <DialogDescription>{bulkOutcome?.summary}</DialogDescription>
           </DialogHeader>
           <ul className="max-h-[50vh] space-y-2 overflow-y-auto text-[13px]">
             {bulkOutcome?.items.map((item) => (
-              <li key={item.id} className="border-b border-border pb-2 last:border-b-0">
+              <li key={item.id} className="border-b-hairline pb-2 last:border-b-0">
                 <p data-ph-mask="" className="break-words">{item.title}</p>
                 <p className="text-xs text-muted-foreground">{item.reason ?? t('bulk_outcome_no_reason')}</p>
               </li>
@@ -2055,5 +2387,96 @@ export default function PendingOperationsPage() {
       </Dialog>
     </div>
     </AccountNamesContext.Provider>
+  )
+}
+
+type RejectFeedback = { rejection_category: PendingOperationRejectionCategory; rejection_reason?: string }
+
+/**
+ * The reject dialog: a required category plus an optional free-text reason,
+ * so every rejection a person makes says what was wrong. Doubles as the
+ * bulk-reject confirmation; the feedback then applies to every selected op.
+ * The fields are its own state, so typing the reason redraws the dialog and
+ * not the list behind it; they start empty each time it opens.
+ */
+function RejectDialog({
+  target,
+  selectedCount,
+  busy,
+  onClose,
+  onReject,
+}: {
+  target: PendingOperation | 'bulk' | null
+  selectedCount: number
+  busy: boolean
+  onClose: () => void
+  onReject: (feedback: RejectFeedback) => void
+}) {
+  const t = useTranslations('pending')
+  const tCommon = useTranslations('common')
+  const [category, setCategory] = useState<PendingOperationRejectionCategory | ''>('')
+  const [reason, setReason] = useState('')
+  const [shownTarget, setShownTarget] = useState(target)
+  if (target !== shownTarget) {
+    setShownTarget(target)
+    if (target) {
+      setCategory('')
+      setReason('')
+    }
+  }
+  return (
+    <Dialog open={target != null} onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent size="confirm">
+        <DialogHeader>
+          <DialogTitle>{target === 'bulk' ? t('reject_bulk_title', { count: selectedCount }) : t('reject_title')}</DialogTitle>
+          {/* data-ph-mask: the operation title carries counterparty and amount */}
+          <DialogDescription data-ph-mask="">{target === 'bulk' ? t('reject_bulk_description') : target?.title}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium" htmlFor="reject-category">
+              {t('reject_category_label')}
+            </label>
+            <Select value={category} onValueChange={(v) => setCategory(v as PendingOperationRejectionCategory)}>
+              <SelectTrigger id="reject-category">
+                <SelectValue placeholder={t('reject_category_placeholder')} />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
+                  <SelectItem key={cat} value={cat}>{REJECTION_CATEGORY_LABELS[cat]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium" htmlFor="reject-reason">
+              {t('reject_note_label')}
+            </label>
+            <Textarea
+              id="reject-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={t('reject_note_placeholder')}
+              rows={3}
+              maxLength={2000}
+            />
+            <p className="text-xs text-muted-foreground">{t('reject_note_help')}</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            {tCommon('cancel')}
+          </Button>
+          <Button
+            variant="destructive"
+            loading={busy}
+            disabled={!category}
+            onClick={() => category && onReject({ rejection_category: category, ...(reason.trim() ? { rejection_reason: reason.trim() } : {}) })}
+          >
+            {target === 'bulk' ? t('reject_count', { count: selectedCount }) : t('reject')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

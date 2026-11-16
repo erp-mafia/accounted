@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
@@ -156,18 +157,26 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
   }
 
   if (loadError === 'no_brand') {
-    return <p className="text-sm text-muted-foreground">{t('access_no_brand')}</p>
+    return <EmptyState title={t('access_no_brand')} />
   }
   if (loadError === 'failed') {
-    return <p className="text-sm text-muted-foreground">{t('access_load_failed')}</p>
+    return (
+      <LoadError
+        title={t('access_load_failed')}
+        onRetry={() => {
+          setLoadError(null)
+          void load()
+        }}
+      />
+    )
   }
   if (!data) {
     return (
-      <div className="space-y-4">
+      <LateReveal className="space-y-4">
         <Skeleton className="h-10 w-full" />
         <Skeleton className="h-10 w-2/3" />
         <Skeleton className="h-24 w-full" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -175,9 +184,10 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
 
   return (
     <div className="space-y-8">
-      <div className="rounded-lg border border-border p-6 space-y-1">
+      {/* A flat row over a hairline, as every settings toggle: no box inside the panel. */}
+      <div className="space-y-1 border-b-hairline pb-4">
         <div className="flex items-center justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-medium">
               {t('access_mode_label', { domain: data.brand.domain })}
             </p>
@@ -198,7 +208,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
       </div>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-sm font-medium text-muted-foreground">
           {t('access_list_heading')}
         </h2>
 
@@ -229,7 +239,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
               />
             </div>
             <Button type="submit" disabled={!email.trim()} loading={adding}>
-              {!adding && <PlusIcon className="mr-2 h-4 w-4" />}
+              {!adding && <PlusIcon className="h-4 w-4" />}
               {t('access_add')}
             </Button>
           </form>
@@ -238,7 +248,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
         {data.entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('access_empty')}</p>
         ) : (
-          <table className="w-full border-collapse text-[13px]">
+          <table className="-mx-2 w-[calc(100%+1rem)] border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={TH_CLASS}>{t('access_col_email')}</th>

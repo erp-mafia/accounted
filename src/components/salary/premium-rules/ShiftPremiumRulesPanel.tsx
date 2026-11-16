@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -131,27 +132,33 @@ export function ShiftPremiumRulesPanel() {
 
   return (
     <SettingsGroup label={t('heading')} help={t('help')}>
-      {loadFailed ? (
+      {/* Nothing loaded yet: the error takes the rows' place. Rules already
+          on screen stay, with one line above them. */}
+      {loadFailed && rules.length > 0 ? (
         <div className="py-3">
           <AttnLine action={{ label: t('retry'), onClick: () => void reload() }}>{t('load_failed')}</AttnLine>
         </div>
       ) : null}
-      <ShiftPremiumRulesList
-        rules={rules}
-        loading={loading}
-        canWrite={canWrite && !loadFailed}
-        today={today}
-        onNew={() => {
-          setServerError(null)
-          setEditing({ id: null, draft: emptyPremiumRuleDraft(today) })
-        }}
-        onEdit={(rule) => {
-          setServerError(null)
-          setEditing({ id: rule.id, draft: draftFromRule(rule) })
-        }}
-        onToggleActive={(rule) => void handleToggleActive(rule)}
-        onDelete={(rule) => void handleDelete(rule)}
-      />
+      {loadFailed && rules.length === 0 && !loading ? (
+        <LoadError title={t('load_failed')} onRetry={() => void reload()} />
+      ) : (
+        <ShiftPremiumRulesList
+          rules={rules}
+          loading={loading}
+          canWrite={canWrite && !loadFailed}
+          today={today}
+          onNew={() => {
+            setServerError(null)
+            setEditing({ id: null, draft: emptyPremiumRuleDraft(today) })
+          }}
+          onEdit={(rule) => {
+            setServerError(null)
+            setEditing({ id: rule.id, draft: draftFromRule(rule) })
+          }}
+          onToggleActive={(rule) => void handleToggleActive(rule)}
+          onDelete={(rule) => void handleDelete(rule)}
+        />
+      )}
       <ShiftPremiumRuleDialog
         open={editing !== null}
         editing={Boolean(editing?.id)}

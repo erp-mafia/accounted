@@ -12,7 +12,7 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatDate, formatRowAmount, formatCurrency } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 
 interface FileOpeningBalance {
@@ -112,7 +112,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
   }
 
   return <>
-    <Button variant="outline" size="sm" onClick={openDialog}>{t('ib_review_action')}</Button>
+    <Button variant="outline" onClick={openDialog}>{t('ib_review_action')}</Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
       <DialogContent>
         <DialogHeader>
@@ -126,7 +126,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
         </div>}
         {derived && file && <div className="space-y-3">
           <p className="text-sm text-muted-foreground">{t('ib_review_file_intro', { filename: file.filename ?? '' })}</p>
-          <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
+          <div className="max-h-64 overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -138,8 +138,8 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
               <TableBody>
                 {file.lines.map(line => <TableRow key={line.account_number}>
                   <TableCell className="tabular-nums">{line.account_number}</TableCell>
-                  <TableCell className="text-right tabular-nums">{line.debit_amount ? formatCurrency(line.debit_amount) : ''}</TableCell>
-                  <TableCell className="text-right tabular-nums">{line.credit_amount ? formatCurrency(line.credit_amount) : ''}</TableCell>
+                  <TableCell className="text-right tabular-nums">{line.debit_amount ? formatRowAmount(line.debit_amount) : ''}</TableCell>
+                  <TableCell className="text-right tabular-nums">{line.credit_amount ? formatRowAmount(line.credit_amount) : ''}</TableCell>
                 </TableRow>)}
                 <TableRow>
                   <TableCell className="font-medium">{t('ib_review_col_total')}</TableCell>

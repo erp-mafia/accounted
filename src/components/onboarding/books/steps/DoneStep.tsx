@@ -145,7 +145,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
       {error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>
             {t('ai_handoff_retry')}
           </Button>
         </p>
@@ -164,7 +164,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <Button variant="outline" size="sm" disabled={leaving} onClick={() => onLeave('done', aiTaskHref(task.category, worklist?.inboxHref))}>
+                    <Button variant="outline" disabled={leaving} onClick={() => onLeave('done', aiTaskHref(task.category, worklist?.inboxHref))}>
                       {t('task_open')}
                     </Button>
                     <AiTaskAction
@@ -184,7 +184,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (founder direction 2026-09-14). */}
       <div className="done-door">
-        <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
+        <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}
           <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
         </Button>

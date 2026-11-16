@@ -68,7 +68,7 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
+            size="icon"
             className="shrink-0"
             aria-label={t('vat_rate_presets_aria')}
           >

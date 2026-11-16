@@ -41,12 +41,16 @@ export interface NavGateContext {
   /** The company is in the Bolaget rollout (lib/env/commitments-switch.ts): Avtal och åtaganden. Absent reads as off. */
   commitmentsEnabled?: boolean
   agentsEnabled: boolean
+  /** Arkiv reads the company's documents here (lib/arkiv/flag.ts): the Fakta view of the wiki. Absent reads as off. */
+  arkivBrainEnabled?: boolean
   /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
   inkorgV2Enabled: boolean
   /** The company is in the Autogiro rollout (lib/invoices/autogiro/flag.ts). */
   autogiroEnabled: boolean
   /** The company is in the Bolaget rollout (lib/env/bolaget-switch.ts). Absent reads as off. */
   bolagetEnabled?: boolean
+  /** The MCP server extension is built in (ENABLED_EXTENSION_IDS): the Koppla en agent row. Absent reads as off. */
+  mcpExtensionEnabled?: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
   /**
@@ -57,6 +61,14 @@ export interface NavGateContext {
    */
   role?: string | null
 }
+
+/**
+ * What the dashboard layout resolves for the gates and hands to the sidebar
+ * and the command palette, which add what the browser knows: the company's
+ * capabilities, the caller's role, the brand's hidden pages and the build's
+ * extensions.
+ */
+export type ShellNavGate = Omit<NavGateContext, 'capabilities' | 'hiddenNavHrefs' | 'role' | 'mcpExtensionEnabled'>
 
 /** `entityOnly` accepts one form or a list of forms. */
 function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: EntityType): boolean {
@@ -71,7 +83,9 @@ export function menuShowsModule(surface: CapabilitySurface, moduleId: ModuleId):
 /** One gate for every navigation: a surface hides for the same reason everywhere. */
 export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean {
   if (item.hidden) return false
-  if (ctx.hiddenNavHrefs.has(item.href)) return false
+  // A row that opens one view of a page (/?vy=gjort) or a create link that
+  // opens its drawer (/salary/employees?new) is hidden with the page.
+  if (ctx.hiddenNavHrefs.has(item.href) || ctx.hiddenNavHrefs.has(item.href.split(/[?#]/)[0])) return false
   if (isInvoicerRole(ctx.role) && !isInvoicerPagePath(item.href)) return false
   // The resolved capabilities: a module whose package is switched off or not
   // in the company's country is hidden, as its tools are in MCP's
@@ -103,8 +117,16 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // half is open; outside both the /bolaget pages 404. The same form rule
   // as the pages' gate (lib/bolaget/gate.ts).
   if (item.requiresBolagetHub && !ctx.commitmentsEnabled && !(ctx.bolagetEnabled && keepsShareRegister(ctx.entityType))) return false
+  // The two halves of Bolaget, for a row that opens one of them (the new
+  // shell's Företaget area): the same rule as the tab bar (lib/bolaget/hub.ts).
+  if (item.requiresBolagetRegisters && !(ctx.bolagetEnabled && keepsShareRegister(ctx.entityType))) return false
+  if (item.requiresCommitments && !ctx.commitmentsEnabled) return false
+  if (item.requiresMcpExtension && !ctx.mcpExtensionEnabled) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
+  if (item.hiddenWithAgents && ctx.agentsEnabled) return false
+  // Fakta exists only where Arkiv reads the documents; elsewhere the view is not offered.
+  if (item.requiresArkivBrain && !ctx.arkivBrainEnabled) return false
   // The new Inkorg page rolls out per company, and Underlag under Inköp
   // hides for the same companies: the inbox has one place either way.
   if (item.requiresInkorgV2 && !ctx.inkorgV2Enabled) return false

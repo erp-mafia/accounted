@@ -12,14 +12,21 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import {
-  ArrowLeftIcon,
   ArrowTopRightOnSquareIcon,
   CheckIcon,
   EnvelopeIcon,
   EyeIcon,
   EyeSlashIcon,
 } from '@/components/icons'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import {
+  STANDALONE_LINK_CLASS,
+  StandaloneHeading,
+  StandaloneOr,
+  StandalonePage,
+  StandaloneBelowLine,
+  StandaloneStack,
+} from '@/components/standalone/StandalonePage'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -490,98 +497,56 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const canonicalRegisterHref = `${branding.appUrl.replace(/\/+$/, '')}/register`
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <EnvelopeIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">
-              {t('invite_only_title', { appName: branding.appName })}
-            </h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t('invite_only_body', { appName: branding.appName })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('invite_only_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Button className="w-full" asChild>
-              <a href={canonicalRegisterHref}>
-                {t('invite_only_cta')}
-                <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
-              </a>
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => setInviteOnlyBlocked(false)}
-            >
-              <ArrowLeftIcon className="mr-2 h-4 w-4" />
-              {t('back')}
-            </Button>
-          </div>
-        </div>
-      </div>
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('invite_only_title', { appName: branding.appName })}
+          sub={t('invite_only_body', { appName: branding.appName })}
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('invite_only_hint')}</p>
+          <Button size="lg" className="w-full" asChild>
+            <a href={canonicalRegisterHref}>
+              {t('invite_only_cta')}
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            </a>
+          </Button>
+          <Button variant="ghost" size="lg" className="w-full" onClick={() => setInviteOnlyBlocked(false)}>
+            {t('back')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <EnvelopeIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{t('duplicate_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('duplicate_title')}
+          sub={
+            <>
               {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('duplicate_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {/*
-              Plain /login, no `email` parameter: app/(auth)/login/page.tsx
-              reads only `error`, `flow` and `next`, so the address was
-              travelling in the URL (browser history, Referer, every proxy
-              access log) and arriving nowhere. The address is already on
-              screen above, so nothing is lost by dropping it.
-            */}
-            <Button className="w-full" asChild>
-              <Link href={loginHref}>
-                {t('sign_in')}
-              </Link>
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => setDuplicateEmail(null)}
-            >
-              <ArrowLeftIcon className="mr-2 h-4 w-4" />
-              {t('back')}
-            </Button>
-          </div>
-        </div>
-      </div>
+            </>
+          }
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('duplicate_hint')}</p>
+          {/*
+            Plain /login, no `email` parameter: app/(auth)/login/page.tsx
+            reads only `error`, `flow` and `next`, so the address was
+            travelling in the URL (browser history, Referer, every proxy
+            access log) and arriving nowhere. The address is already on
+            screen above, so nothing is lost by dropping it.
+          */}
+          <Button size="lg" className="w-full" asChild>
+            <Link href={loginHref}>{t('sign_in')}</Link>
+          </Button>
+          <Button variant="ghost" size="lg" className="w-full" onClick={() => setDuplicateEmail(null)}>
+            {t('back')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
@@ -589,62 +554,69 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <EnvelopeIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{t('confirm_email_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t.rich('confirm_email_body', {
-                email,
-                strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-              })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {t('confirm_email_hint')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {webmailHint && (
-              <Button className="w-full" asChild>
-                <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
-                  {t(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
-                    provider: webmailHint.name,
-                  })}
-                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
-                </a>
-              </Button>
-            )}
-            <Button variant="ghost" className="w-full text-muted-foreground" asChild>
-              <Link href="/login">
-                <ArrowLeftIcon className="mr-2 h-4 w-4" />
-                {t('back_to_login')}
-              </Link>
+      <StandalonePage>
+        <StandaloneHeading
+          title={t('confirm_email_title')}
+          sub={t.rich('confirm_email_body', {
+            email,
+            strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+          })}
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">{t('confirm_email_hint')}</p>
+          {webmailHint && (
+            <Button variant="outline" size="lg" className="w-full" asChild>
+              <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
+                {t(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
+                  provider: webmailHint.name,
+                })}
+                <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              </a>
             </Button>
-          </div>
-        </div>
-      </div>
+          )}
+          <Button variant="ghost" size="lg" className="w-full" asChild>
+            <Link href="/login">{t('back_to_login')}</Link>
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <header className="text-center mb-8">
-          <h1 className="sr-only">{t('create_account')}</h1>
-          <BrandWordmark size="hero" />
-        </header>
+    <StandalonePage
+      hero
+      below={
+        <>
+        <StandaloneBelowLine>
+          {t('already_have_account')}{' '}
+          <Link href={loginHref} className={STANDALONE_LINK_CLASS}>
+            {t('sign_in')}
+          </Link>
+        </StandaloneBelowLine>
 
-        <div className="rounded-xl border border-border bg-background p-6">
+        <StandaloneBelowLine>
+          {t('terms_prefix')}{' '}
+          {/* The in-app legal pages (host-relative for branded domains).
+              Creating the account accepts the terms and the DPA: both signup
+              routes record it in legal_acceptances (method 'signup'). */}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('terms_link')}
+          </a>{' '}
+          {t('terms_and')}{' '}
+          <a href="/dpa" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('dpa_link')}
+          </a>
+          . {t('privacy_prefix')}{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {t('privacy_link')}
+          </a>
+          .
+        </StandaloneBelowLine>
+          <SourceCodeFooter />
+        </>
+      }
+    >
+          <StandaloneHeading title={t('create_account')} hidden />
           {bankIdUnavailable && !bankIdUser && (
             <p className="mb-4 text-[13px] leading-5 text-muted-foreground">
               {t('bankid_unavailable_body')}
@@ -670,8 +642,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           )}
 
           {bankIdUser ? (
-            <form onSubmit={handleBankIdSignup} className="space-y-4">
-              <div className="rounded-lg border bg-muted/30 p-3">
+            <form onSubmit={handleBankIdSignup} className="flex flex-col gap-3">
+              <div className="rounded-lg p-3 bg-control shadow-raised">
                 <p className="text-sm font-medium">
                   {bankIdUser.givenName} {bankIdUser.surname}
                 </p>
@@ -710,7 +682,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               <Button
                 type="button"
                 variant="ghost"
-                className="w-full text-muted-foreground"
+                size="lg"
+                className="w-full"
                 disabled={isLoading || isCancelling}
                 onClick={async () => {
                   // AWAIT the cancel before remounting BankIdAuth. The flow
@@ -742,7 +715,6 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   }
                 }}
               >
-                <ArrowLeftIcon className="mr-2 h-4 w-4" />
                 {t('back')}
               </Button>
             </form>
@@ -753,7 +725,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           ) : !passwordLoginEnabled ? (
             <p className="text-[13px] leading-5 text-muted-foreground">{t('password_signup_unavailable')}</p>
           ) : (
-          <form onSubmit={handleRegister} className="space-y-4">
+          <form onSubmit={handleRegister} className="flex flex-col gap-3">
             <div className="space-y-2">
               <Label htmlFor="email">{t('email_label')}</Label>
               <Input
@@ -903,21 +875,15 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
 
           {!bankIdUser && chipCount > 0 && (
             <>
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-background px-3 text-xs text-muted-foreground">
-                    {tAuth('or_divider')}
-                  </span>
-                </div>
+              <div className="my-3">
+                <StandaloneOr>{tAuth('or_divider')}</StandaloneOr>
               </div>
               <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                 {showBankIdChip && (
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
@@ -928,7 +894,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                       height={18}
                       className="dark:invert"
                     />
-                    BankID
+                    {chipCount === 2 ? 'BankID' : tAuth('continue_with_provider', { provider: 'BankID' })}
                   </Button>
                 )}
                 {providers.map((provider) => (
@@ -944,6 +910,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
@@ -954,52 +921,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               </div>
             </>
           )}
-        </div>
 
-        <p className="mt-6 text-center text-[13px] text-muted-foreground">
-          {t('already_have_account')}{' '}
-          <Link
-            href={loginHref}
-            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-          >
-            {t('sign_in')}
-          </Link>
-        </p>
-
-        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
-          {t('terms_prefix')}{' '}
-          {/* The in-app legal pages (host-relative for branded domains).
-              Creating the account accepts the terms and the DPA: both signup
-              routes record it in legal_acceptances (method 'signup'). */}
-          <a
-            href="/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {t('terms_link')}
-          </a>{' '}
-          {t('terms_and')}{' '}
-          <a
-            href="/dpa"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {t('dpa_link')}
-          </a>
-          . {t('privacy_prefix')}{' '}
-          <a
-            href="/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {t('privacy_link')}
-          </a>
-          .
-        </p>
-      </div>
-    </div>
+    </StandalonePage>
   )
 }

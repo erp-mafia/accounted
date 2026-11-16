@@ -182,7 +182,7 @@ export function PosSalesSettingsContent() {
                 <SettingsRow label={t('venues_label')}>
                   <SettingsRowNote>{venuesError}</SettingsRowNote>
                   <SettingsRowEnd>
-                    <Button variant="outline" size="sm" onClick={() => void load()}>
+                    <Button variant="outline" onClick={() => void load()}>
                       {t('retry')}
                     </Button>
                   </SettingsRowEnd>
@@ -211,7 +211,6 @@ export function PosSalesSettingsContent() {
                       <SettingsRowEnd>
                         <Button
                           variant="outline"
-                          size="sm"
                           disabled={!canWrite || !venue.available || !syncFrom}
                           loading={connecting === venue.venueRef}
                           onClick={() => void connect(venue)}
@@ -340,7 +339,7 @@ function ConnectionSettings({
         <SettingsRow label={`${connection.venue_name} (${connection.provider_name})`}>
           <SettingsRowNote className={connection.health === 'ok' ? undefined : 'text-attn'}>{state}</SettingsRowNote>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" disabled={!canWrite} onClick={onDisconnect}>
+            <Button variant="outline" disabled={!canWrite} onClick={onDisconnect}>
               {t('disconnect_button')}
             </Button>
           </SettingsRowEnd>
@@ -381,11 +380,11 @@ function ConnectionSettings({
       </SettingsGroup>
 
       {dirty ? (
-        <div className="sticky bottom-[var(--bottom-nav-h)] flex items-center gap-4 border-t border-border bg-background px-1 pb-3 pt-4">
-          <Button size="sm" loading={saving} disabled={!canWrite} onClick={() => void save()}>
+        <div className="sticky bottom-[var(--bottom-nav-h)] flex items-center gap-4 border-t-hairline bg-background px-1 pb-3 pt-4">
+          <Button loading={saving} disabled={!canWrite} onClick={() => void save()}>
             {t('save')}
           </Button>
-          <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(connection.resolved_settings)}>
+          <Button variant="ghost" disabled={saving} onClick={() => setDraft(connection.resolved_settings)}>
             {t('discard')}
           </Button>
         </div>

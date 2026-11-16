@@ -9,9 +9,10 @@ import BulkTagWorkbench from '@/components/dimensions/BulkTagWorkbench'
  */
 export default async function DimensionTaggingPage() {
   const t = await getTranslations('dimensions')
+  const tNav = await getTranslations('nav')
   return (
     <div className="space-y-8">
-      <PageHeader title={t('tag_history')} />
+      <PageHeader title={t('tag_history')} parent={{ label: tNav('v3_vouchers'), href: '/bookkeeping' }} />
       <BulkTagWorkbench />
     </div>
   )

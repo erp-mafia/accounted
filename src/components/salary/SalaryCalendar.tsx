@@ -370,13 +370,12 @@ export function SalaryCalendar({
   }
 
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="rounded-lg bg-control shadow-raised">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => setVisibleMonth(prev => addDays(startOfMonth(prev), -1))}
             aria-label={t('prev_month')}
           >
@@ -387,7 +386,6 @@ export function SalaryCalendar({
           </span>
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => setVisibleMonth(prev => addDays(endOfMonth(prev), 1))}
             aria-label={t('next_month')}
           >
@@ -398,19 +396,18 @@ export function SalaryCalendar({
         {canEnterWorked && !readOnly && (
           <Button
             variant="outline"
-            size="sm"
             onClick={handleFillWeekdays}
             className="text-xs"
             title={t('fill_weekdays_title')}
           >
-            <CalendarIcon className="mr-1 h-3.5 w-3.5" />
+            <CalendarIcon className="h-3.5 w-3.5" />
             {t('fill_weekdays')}
           </Button>
         )}
       </div>
 
       {/* Weekday header */}
-      <div className="grid grid-cols-7 border-b bg-muted/40 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="grid grid-cols-7 border-b bg-muted/40 text-xs font-medium text-muted-foreground">
         {(['wd_mon', 'wd_tue', 'wd_wed', 'wd_thu', 'wd_fri', 'wd_sat', 'wd_sun'] as const).map(d => (
           <div key={d} className="px-2 py-1.5 text-center">{t(d)}</div>
         ))}
@@ -440,7 +437,7 @@ export function SalaryCalendar({
                 'relative flex min-h-[5.5rem] flex-col items-start gap-0.5 border-b border-r p-1.5 text-left text-xs transition-colors',
                 !readOnly && 'hover:bg-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 readOnly && 'cursor-default',
-                !inMonth && 'bg-muted/30 text-muted-foreground/60',
+                !inMonth && 'bg-muted/30 text-muted-foreground',
                 !inPeriod && inMonth && 'bg-muted/10',
                 isWeekend && inMonth && !hasContent && 'bg-muted/20',
                 today && 'ring-1 ring-inset ring-primary/40',
@@ -453,7 +450,7 @@ export function SalaryCalendar({
               </span>
               <div className="mt-auto flex flex-col items-start gap-0.5">
                 {w && (
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[11px] font-medium text-secondary-foreground">
+                  <span className="inline-flex items-center gap-0.5 rounded-md bg-secondary px-1.5 py-px text-xs font-medium text-secondary-foreground">
                     <ClockIcon className="h-2.5 w-2.5" aria-hidden />
                     <span className="tabular-nums">{w.hours}h</span>
                   </span>
@@ -466,7 +463,7 @@ export function SalaryCalendar({
                         <span
                           key={a.id}
                           className={cn(
-                            'inline-flex items-center gap-0.5 rounded-full px-1 py-px text-[11px] font-medium',
+                            'inline-flex items-center gap-0.5 rounded-md px-1 py-px text-xs font-medium',
                             meta.pillClass,
                           )}
                           title={t('pill_title', { label: t(meta.labelKey), hours: String(a.hours) })}
@@ -484,7 +481,7 @@ export function SalaryCalendar({
       </div>
 
       {/* Summary + hint */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
         <span>
           {canEnterWorked && (
             <>
@@ -504,7 +501,7 @@ export function SalaryCalendar({
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-3 py-2 text-xs text-muted-foreground">
         {isHourly && (
           <span className="inline-flex items-center gap-1">
             <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-secondary">
@@ -538,24 +535,23 @@ export function SalaryCalendar({
             {t('days_selected', { count: selected.size })}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={clearSelection} disabled={deleting}>
-              <XMarkIcon className="mr-1 h-3.5 w-3.5" />
+            <Button variant="ghost" onClick={clearSelection} disabled={deleting}>
+              <XMarkIcon className="h-3.5 w-3.5" />
               {t('clear_selection')}
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={handleBulkDelete}
               loading={deleting}
             >
-              {!deleting && <TrashIcon className="mr-1 h-3.5 w-3.5" />}
+              {!deleting && <TrashIcon className="h-3.5 w-3.5" />}
               {t('delete')}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setBulkMode('absence')} disabled={deleting}>
+            <Button variant="outline" onClick={() => setBulkMode('absence')} disabled={deleting}>
               {t('absence_action')}
             </Button>
             {canEnterWorked && (
-              <Button size="sm" onClick={() => setBulkMode('worked')} disabled={deleting}>
+              <Button onClick={() => setBulkMode('worked')} disabled={deleting}>
                 {t('worked_hours_action')}
               </Button>
             )}
@@ -704,7 +700,7 @@ function BulkWorkedDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('bulk_worked_title')}</DialogTitle>
           <DialogDescription>
@@ -728,7 +724,7 @@ function BulkWorkedDialog({
               autoFocus
               className="tabular-nums"
             />
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t('hours_zero_hint')}
             </p>
           </div>
@@ -746,7 +742,7 @@ function BulkWorkedDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+            <div className="space-y-1 rounded-lg p-2 text-xs bg-control shadow-raised">
               <div className="font-medium text-attn">
                 {t('conflicts_worked', { count: conflicts.length })}
               </div>
@@ -762,11 +758,11 @@ function BulkWorkedDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>{t('close')}</Button>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>{t('close')}</Button>
           {conflicts.length > 0 ? (
-            <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
+            <Button onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
-            <Button size="sm" onClick={handleSave} loading={submitting}>
+            <Button onClick={handleSave} loading={submitting}>
               {isClear ? t('delete') : t('save')}
             </Button>
           )}
@@ -854,7 +850,7 @@ function BulkAbsenceDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('bulk_absence_title')}</DialogTitle>
           <DialogDescription>
@@ -891,7 +887,7 @@ function BulkAbsenceDialog({
                 full day. The usual cause is typing a full-time day on a
                 part-time schedule. */}
             {parseFloat(hours) > scheduledDayHours && (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {t('hours_over_schedule_hint', { hours: String(scheduledDayHours) })}
               </p>
             )}
@@ -910,7 +906,7 @@ function BulkAbsenceDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+            <div className="space-y-1 rounded-lg p-2 text-xs bg-control shadow-raised">
               <div className="font-medium text-attn">
                 {t('conflicts_absence', { count: conflicts.length })}
               </div>
@@ -926,11 +922,11 @@ function BulkAbsenceDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>{t('close')}</Button>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>{t('close')}</Button>
           {conflicts.length > 0 ? (
-            <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
+            <Button onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
-            <Button size="sm" onClick={handleSave} loading={submitting}>
+            <Button onClick={handleSave} loading={submitting}>
               {t('save')}
             </Button>
           )}
@@ -1012,7 +1008,7 @@ function DayInspectorDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>
             {format(parseISO(date), 'd MMMM yyyy', { locale: dateLocale })}
@@ -1024,7 +1020,7 @@ function DayInspectorDialog({
 
         <div className="space-y-2">
           {isHourly && worked && (
-            <div className="flex items-center justify-between rounded-lg border bg-secondary/50 px-3 py-2">
+            <div className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 bg-control shadow-raised">
               <div className="flex items-center gap-2 text-sm">
                 <ClockIcon className="h-4 w-4 text-muted-foreground" />
                 <div>
@@ -1035,7 +1031,6 @@ function DayInspectorDialog({
               </div>
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={handleDeleteWorked}
                 disabled={busy !== null}
                 loading={busy === 'worked'}
@@ -1049,7 +1044,7 @@ function DayInspectorDialog({
           {absences.length > 0 && absences.map(a => {
             const meta = TYPE_META[a.absence_type]
             return (
-              <div key={a.id} className={cn('flex items-center justify-between rounded-lg border px-3 py-2', meta.pillClass)}>
+              <div key={a.id} className={cn('flex items-center justify-between rounded-lg px-3 py-2 bg-control shadow-raised', meta.pillClass)}>
                 <div className="flex items-center gap-2 text-sm">
                   <div>
                     <div className="font-medium">{t(meta.labelKey)}</div>
@@ -1059,7 +1054,6 @@ function DayInspectorDialog({
                 </div>
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => handleDeleteAbsence(a)}
                   disabled={busy !== null}
                   loading={busy === a.id}
@@ -1083,7 +1077,7 @@ function DayInspectorDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>{t('close')}</Button>
+          <Button variant="outline" onClick={onClose}>{t('close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

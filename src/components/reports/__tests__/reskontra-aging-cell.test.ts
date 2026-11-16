@@ -4,12 +4,15 @@
  * customer's row at 7 000 in 90+ with Totalt 2 000, and a footer of -5 000
  * under an empty column.
  */
-import { createElement } from 'react'
+import { createElement, type ComponentProps, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
 import { describe, expect, it, vi } from 'vitest'
+import sv from '@/messages/sv.json'
 
 const reportData = vi.hoisted(() => ({ value: null as unknown }))
-vi.mock('@/components/icons', () => ({
+vi.mock('@/components/icons', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/icons')>()),
   ChevronDownIcon: () => null,
   ChevronRightIcon: () => null,
   DocumentTextIcon: () => null,
@@ -41,6 +44,14 @@ function firstRow(html: string): string[] {
   return [...body.matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map((m) => m[1].replace(/\s/g, ' '))
 }
 
+const IntlProvider = NextIntlClientProvider as (
+  props: Omit<ComponentProps<typeof NextIntlClientProvider>, 'children'>,
+) => ReturnType<typeof NextIntlClientProvider>
+
+// The error state carries a translated "Försök igen", as in the app.
+const render = (element: ReactElement) =>
+  renderToStaticMarkup(createElement(IntlProvider, { locale: 'sv', messages: sv, timeZone: 'Europe/Stockholm' }, element))
+
 describe('agingCell', () => {
   it('is blank at zero only', () => {
     expect(agingCell(0)).toBe('')
@@ -55,7 +66,7 @@ describe('the row on the page', () => {
     ['leverantörsreskontran', SupplierLedgerView, { supplier_id: 's', supplier_name: 'Leverantör' }],
   ])('of %s shows a negative bucket, so it adds up', (_name, View, entry) => {
     reportData.value = { data: { ledger: ledger(entry), reconciliation: null }, loading: false, error: null, refetch: () => {} }
-    const cells = firstRow(renderToStaticMarkup(createElement(View, { periodId: 'p' })))
+    const cells = firstRow(render(createElement(View, { periodId: 'p' })))
     expect(cells).toEqual(expect.arrayContaining([expect.stringMatching(/^.5 000,00$/), '7 000,00', '2 000,00']))
   })
 
@@ -64,7 +75,7 @@ describe('the row on the page', () => {
     ['leverantörsreskontran', SupplierLedgerView],
   ])('of %s keeps the date field when the date is refused', (_name, View) => {
     reportData.value = { data: null, loading: false, error: 'Året måste ligga mellan 2000 och 2027.', refetch: () => {} }
-    const html = renderToStaticMarkup(createElement(View, { periodId: 'p' }))
+    const html = render(createElement(View, { periodId: 'p' }))
     expect(html).toContain('type="date"')
     expect(html).toContain('Året måste ligga')
   })

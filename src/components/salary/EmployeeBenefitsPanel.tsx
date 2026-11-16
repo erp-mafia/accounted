@@ -16,7 +16,8 @@ import {
 } from '@/components/ui/dialog'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -50,13 +51,16 @@ const BENEFIT_LABELS: Record<BenefitType, string> = {
 // values, the hairline underline darkening on hover (same idiom as the
 // invoice detail rows).
 const ROW_ACTION_CLASS =
-  'text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
+  'text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
 
 export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
   const t = useTranslations('salary_employee')
   const { toast } = useToast()
   const [benefits, setBenefits] = useState<EmployeeBenefit[]>([])
   const [loading, setLoading] = useState(true)
+  // The list could not be read: say so with "Försök igen" rather than
+  // "no benefits", which would be a claim about the employee.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -69,11 +73,12 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
 
   async function load() {
     setLoading(true)
-    const res = await fetch(`/api/salary/employees/${employeeId}/benefits`)
-    if (res.ok) {
+    const res = await fetch(`/api/salary/employees/${employeeId}/benefits`).catch(() => null) // unreachable: loadFailed
+    if (res?.ok) {
       const { data } = await res.json()
       setBenefits(data || [])
     }
+    setLoadFailed(!res?.ok)
     setLoading(false)
   }
 
@@ -157,17 +162,19 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
       help={<HelpPopover>{t('benefits_help')}</HelpPopover>}
       aside={
         canWrite ? (
-          <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
+          <Button type="button" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
             {t('benefits_add')}
           </Button>
         ) : undefined
       }
     >
       {loading ? (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && benefits.length === 0 ? (
+        <LoadError onRetry={() => void load()} />
       ) : benefits.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('benefits_empty')}</p>
       ) : (
@@ -215,7 +222,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
           if (!open && !submitting) reset()
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('benefits_add')}</DialogTitle>
             <DialogDescription>{t('benefits_help')}</DialogDescription>

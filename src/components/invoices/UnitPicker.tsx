@@ -28,7 +28,7 @@ const CELL_TRIGGER_CLASS =
 
 // Form-field trigger: the same box as Input and the Select trigger.
 const FIELD_TRIGGER_CLASS =
-  'flex h-10 w-full items-center justify-between gap-2 rounded-lg border border-input bg-card px-4 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/20 data-[invalid=true]:border-destructive disabled:cursor-not-allowed disabled:opacity-50'
+  'flex h-10 w-full items-center justify-between gap-2 rounded-lg px-4 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/20 data-[invalid=true]:border-destructive disabled:cursor-not-allowed disabled:opacity-50 bg-control shadow-raised'
 
 const ITEM_SELECTOR = '[role="menuitemradio"]'
 
@@ -180,7 +180,7 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
           }
           className={cn(variant === 'cell' ? CELL_TRIGGER_CLASS : FIELD_TRIGGER_CLASS, className)}
         >
-          <span className={cn('truncate', current === '' && 'text-muted-foreground/60')}>
+          <span className={cn('truncate', current === '' && 'text-muted-foreground')}>
             {current === '' ? t('empty') : current}
           </span>
           <ChevronDownIcon
@@ -266,7 +266,7 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
             }}
           />
           {draftInvalid && (
-            <p id={draftErrorId} className="px-1 pt-1 text-[12.5px] text-destructive">
+            <p id={draftErrorId} className="px-1 pt-1 text-xs text-destructive">
               {t('custom_too_long', { max: UNIT_MAX_LENGTH })}
             </p>
           )}

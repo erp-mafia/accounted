@@ -145,7 +145,7 @@ export default function SandboxPage() {
         </div>
 
         <div className="rounded-xl border bg-card p-6">
-          <p className="mb-6 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+          <p className="mb-6 rounded-lg bg-secondary/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground bg-control shadow-raised">
             AI-assistenten och externa tjänster (e-post, bankuppkoppling,
             valutakurser, Skatteverket) är avstängda i sandlådan: de
             kräver ett riktigt konto.
@@ -167,7 +167,7 @@ export default function SandboxPage() {
             {isLoading ? 'Startar...' : 'Starta sandbox'}
           </Button>
 
-          <p className="text-xs text-muted-foreground/70 text-center mt-3">
+          <p className="text-xs text-muted-foreground text-center mt-3">
             Dina data raderas automatiskt efter 24 timmar
           </p>
         </div>

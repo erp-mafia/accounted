@@ -154,7 +154,7 @@ export default function RotRutPayoutMatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
@@ -164,7 +164,7 @@ export default function RotRutPayoutMatchDialog({
 
         {transaction && requests.length > 0 && (
           <div className="space-y-4">
-            <div className="rounded-lg border p-4 space-y-2">
+            <div className="rounded-lg p-4 space-y-2 bg-control shadow-raised">
               <p className="text-sm font-medium text-muted-foreground">{t('transaction_label')}</p>
               <p className="font-medium">{transaction.description}</p>
               <div className="flex justify-between text-sm">
@@ -175,7 +175,7 @@ export default function RotRutPayoutMatchDialog({
               </div>
             </div>
 
-            <div className="rounded-lg border p-4 space-y-3">
+            <div className="rounded-lg p-4 space-y-3 bg-control shadow-raised">
               <p className="text-sm font-medium text-muted-foreground">
                 {isSet ? t('requests_label', { count: requests.length }) : t('request_label')}
               </p>
@@ -263,7 +263,7 @@ export default function RotRutPayoutMatchDialog({
             )}
 
             {!targetBlocked && (
-              <div className="rounded-lg border p-4 space-y-2">
+              <div className="rounded-lg p-4 space-y-2 bg-control shadow-raised">
                 <p className="text-sm font-medium">{t('booking_title')}</p>
                 <div className="text-sm space-y-1">
                   <div className="flex justify-between">

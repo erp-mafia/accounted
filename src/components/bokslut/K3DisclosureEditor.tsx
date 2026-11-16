@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Label } from '@/components/ui/label'
@@ -37,7 +38,7 @@ import {
 } from '@/lib/bokslut/arsredovisning/equity-kinds'
 import type { EquitySpecificationYear } from '@/lib/bokslut/arsredovisning/equity-specification'
 
-const SECTION_HEADING_CLASS = 'font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADING_CLASS = 'font-sans text-xs font-medium text-muted-foreground'
 
 interface K3DisclosureEditorProps {
   periodId: string
@@ -69,6 +70,7 @@ export function K3DisclosureEditor({
   onDirtyChange,
 }: K3DisclosureEditorProps) {
   const t = useTranslations('k3Disclosures')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Record<string, DisclosureAnswer | undefined>>(answers)
   const [draftOverrides, setDraftOverrides] = useState<Record<string, EquityMovementKind | undefined>>(equityOverrides)
@@ -133,7 +135,7 @@ export function K3DisclosureEditor({
   }
 
   return (
-    <div className="space-y-6 border-t border-border pt-4">
+    <div className="space-y-6 border-t-hairline pt-4">
       <div className="flex items-center gap-2">
         <h3 className={SECTION_HEADING_CLASS}>{t('title')}</h3>
         <HelpPopover>{t('help')}</HelpPopover>
@@ -163,9 +165,9 @@ export function K3DisclosureEditor({
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-sm font-medium">{e.title}</p>
                   {e.status === 'missing' && <Badge variant="warning">{t('status_missing')}</Badge>}
-                  <span className="text-[11px] text-muted-foreground">{e.sources.join(', ')}</span>
+                  <span className="text-xs text-muted-foreground">{e.sources.join(', ')}</span>
                 </div>
-                {e.hint && <p className="text-[12.5px] text-muted-foreground">{e.hint}</p>}
+                {e.hint && <p className="text-xs text-muted-foreground">{e.hint}</p>}
 
                 {e.applicability === 'ask' && e.question && (
                   <div className="space-y-2">
@@ -205,7 +207,7 @@ export function K3DisclosureEditor({
                         ))}
                       </SelectContent>
                     </Select>
-                    {choice?.text && <p className="text-[12.5px] text-muted-foreground">{choice.text}</p>}
+                    {choice?.text && <p className="text-xs text-muted-foreground">{choice.text}</p>}
                   </div>
                 )}
 
@@ -241,7 +243,7 @@ export function K3DisclosureEditor({
       {equityEntries.length > 0 && (
         <div className="space-y-3">
           <p className="text-sm font-medium">{t('equity_title')}</p>
-          <p className="text-[12.5px] text-muted-foreground">{t('equity_description')}</p>
+          <p className="text-xs text-muted-foreground">{t('equity_description')}</p>
           {equityEntries.map((entry) => (
             <div key={entry.journal_entry_id} className="grid gap-2 md:grid-cols-2 md:items-center">
               <p className="text-sm">
@@ -281,7 +283,7 @@ export function K3DisclosureEditor({
       </label>
 
       <div>
-        <Button type="button" size="sm" onClick={() => void save()} loading={saving} disabled={!dirty}>
+        <Button type="button" onClick={() => void save()} loading={saving} disabled={!canWrite || !dirty} title={lockedTitle}>
           {t('save')}
         </Button>
       </div>

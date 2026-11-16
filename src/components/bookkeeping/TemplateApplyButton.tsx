@@ -105,11 +105,10 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
       <Button
         type="button"
         variant="outline"
-        size="sm"
         disabled={disabled}
         onClick={(e) => (anchor ? close() : open(e.currentTarget))}
       >
-        <BookOpenIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+        <BookOpenIcon className="h-3.5 w-3.5" aria-hidden />
         {t('use_template')}
       </Button>
       {anchor && (
@@ -127,13 +126,13 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
             />
           </div>
           <form
-            className="flex items-center gap-2 border-t border-border bg-background px-3 py-2"
+            className="flex items-center gap-2 border-t-hairline bg-background px-3 py-2"
             onSubmit={(e) => {
               e.preventDefault()
               submit()
             }}
           >
-            <label htmlFor="template-apply-amount" className="shrink-0 text-[12.5px] text-muted-foreground">
+            <label htmlFor="template-apply-amount" className="shrink-0 text-xs text-muted-foreground">
               {t('amount_label')}
             </label>
             <Input
@@ -145,7 +144,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
               onChange={(e) => setAmount(e.target.value)}
               className="h-8 flex-1 tabular-nums"
             />
-            <Button type="submit" size="sm" disabled={!picked || applying || parseAmount(amount) <= 0}>
+            <Button type="submit" disabled={!picked || applying || parseAmount(amount) <= 0}>
               {t('apply')}
             </Button>
           </form>

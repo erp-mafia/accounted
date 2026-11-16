@@ -162,7 +162,7 @@ export function VatFilingStatusCard({
           {error && <span className="text-destructive">{` ${error}`}</span>}
         </p>
       ) : canWrite ? (
-        <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <Button variant="outline" onClick={() => setOpen(true)}>
           {t('vat_filing_mark')}
         </Button>
       ) : null}
@@ -175,7 +175,7 @@ export function VatFilingStatusCard({
           if (!next) setError(null)
         }}
       >
-        <DialogContent className="sm:max-w-[440px]">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('vat_filing_dialog_title', { period: periodLabel })}</DialogTitle>
             <DialogDescription>{t('vat_filing_dialog_body')}</DialogDescription>

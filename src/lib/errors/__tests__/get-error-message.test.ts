@@ -911,9 +911,9 @@ describe('getErrorMessage: the bank\'s organisationsnummer refusals (crm#1206)',
     const body = { error: { code, message: 'x', details: { field: 'org_number', reason: 'missing' } } }
     const sv = getErrorMessage(body)
     expect(sv).toContain('organisationsnummer saknas')
-    expect(sv).toContain('Inställningar, Företag, Allmänt')
+    expect(sv).toContain('Inställningar, Företaget, Företagsuppgifter')
     expect(sv).not.toBe(getErrorEntry('VALIDATION_ERROR')?.message_sv)
-    expect(getErrorMessage(body, { locale: 'en' })).toContain('Settings, Company, General')
+    expect(getErrorMessage(body, { locale: 'en' })).toContain('Settings, Company, Company details')
   })
 })
 

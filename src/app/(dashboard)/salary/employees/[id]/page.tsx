@@ -5,8 +5,11 @@ import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from "@/components/ui/skeleton"
+import { LateReveal, Skeleton } from "@/components/ui/skeleton"
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -73,7 +76,7 @@ const F_SKATT_LABELS: Record<string, string> = {
 
 // Section headers inside the edit dialog (same idiom as NewEmployeeDialog:
 // borderless sections split by hairline dividers, no per-section cards).
-const SECTION_HEADER = 'text-xs font-semibold uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADER = 'text-xs font-semibold text-muted-foreground'
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5">*</span>
@@ -82,12 +85,17 @@ function RequiredMark() {
 export default function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const t = useTranslations('salary_employee')
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
   const [employee, setEmployee] = useState<EmployeeMasked | null>(null)
   const [loading, setLoading] = useState(true)
+  // The employee could not be read (not a 404): the page says so with
+  // "Försök igen" instead of claiming the employee does not exist.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [saving, setSaving] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
   const [reactivating, setReactivating] = useState(false)
@@ -134,16 +142,17 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
   useEffect(() => {
     async function load() {
-      const res = await fetch(`/api/salary/employees/${id}`)
-      if (res.ok) {
+      const res = await fetch(`/api/salary/employees/${id}`).catch(() => null) // unreachable: loadFailed below
+      if (res?.ok) {
         const { data } = await res.json()
         setEmployee(data)
         syncFormState(data)
       }
+      setLoadFailed(!res || (!res.ok && res.status !== 404))
       setLoading(false)
     }
     load()
-  }, [id])
+  }, [id, loadAttempt])
 
   function setDimension(dimNo: string, code: string | null) {
     setDimensions((prev) => {
@@ -387,15 +396,26 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <LateReveal className="space-y-6">
         <Skeleton className="h-9 w-60" />
         <Skeleton className="rounded-lg h-64" />
-      </div>
+      </LateReveal>
+    )
+  }
+
+  if (!employee && loadFailed) {
+    return (
+      <LoadError
+        onRetry={() => {
+          setLoading(true)
+          setLoadAttempt((n) => n + 1)
+        }}
+      />
     )
   }
 
   if (!employee) {
-    return <p className="text-muted-foreground">{t('detail_not_found')}</p>
+    return <EmptyState title={t('detail_not_found')} />
   }
 
   const bankName = lookupBankByClearing(clearing)
@@ -437,42 +457,43 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     ? t('detail_f_skatt_verified', { date: new Date(employee.f_skatt_verified_at).toLocaleDateString('sv-SE') })
     : null
 
+  const employeeFacts = (
+    <>
+      <span className="tabular-nums">{employee.personnummer_masked}</span>
+      {' · '}
+      {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
+      {!employee.is_active && (
+        <>
+          {' · '}
+          <span className="text-foreground">{t('detail_inactive')}</span>
+        </>
+      )}
+    </>
+  )
+
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet personnummer/type kicker, quiet actions right */}
       <div>
         <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
-              {employee.first_name} {employee.last_name}
-            </h1>
-            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-              <span className="tabular-nums">{employee.personnummer_masked}</span>
-              {' · '}
-              {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
-              {!employee.is_active && (
-                <>
-                  {' · '}
-                  <span className="text-foreground">{t('detail_inactive')}</span>
-                </>
-              )}
-            </p>
+            <div className="flex items-center gap-2">
+              <PageHeaderParent label={tNav('employees')} href="/salary/employees" />
+              <h1 className="page-header-title">
+                {employee.first_name} {employee.last_name}
+              </h1>
+            </div>
+            {/* On a phone the bar has no room for this: it is the first line under the bar (PageHeaderBelow). */}
+            <p data-below="" className="page-header-meta mt-1 text-sm text-muted-foreground">{employeeFacts}</p>
           </div>
 
           {canWrite && (
-            <div className="page-header-action flex shrink-0 items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={openEdit}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {t('detail_edit')}
-              </Button>
+            <PageHeaderActions className="page-header-action flex shrink-0 items-center gap-2">
+              {/* The quiet one first, the page's main action last (V7). */}
               {employee.is_active ? (
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="toolbar"
                   onClick={handleDeactivate}
                   disabled={deactivating}
                   className="text-muted-foreground hover:text-destructive"
@@ -482,7 +503,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               ) : (
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="toolbar"
                   onClick={handleReactivate}
                   loading={reactivating}
                   className="text-muted-foreground hover:text-foreground"
@@ -490,9 +511,15 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                   {t('detail_reactivate')}
                 </Button>
               )}
-            </div>
+              <Button variant="outline" size="toolbar" onClick={openEdit}>
+                {t('detail_edit')}
+              </Button>
+            </PageHeaderActions>
           )}
         </div>
+        <PageHeaderBelow>
+          <p>{employeeFacts}</p>
+        </PageHeaderBelow>
       </div>
 
       <DetailSection kicker={t('form_personal_info')}>
@@ -608,7 +635,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         kicker={t('tax_title')}
         aside={
           fSkattVerifiedLabel ? (
-            <span className="text-[11px] tabular-nums text-muted-foreground">{fSkattVerifiedLabel}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">{fSkattVerifiedLabel}</span>
           ) : undefined
         }
       >
@@ -721,13 +748,13 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           explicit (header X or Avbryt), so a stray Escape never discards
           edits. A backdrop click never closes it. */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent
-          className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
-          onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, editFormEdited())}
-          onPointerDownOutside={(e) => e.preventDefault()}
-          onInteractOutside={(e) => e.preventDefault()}
-        >
-          <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
+        <DialogContent size="wide"
+ className="flex flex-col p-0 gap-0 overflow-hidden"
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, editFormEdited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
+          <DialogHeader className="border-b-hairline px-6 pb-4 pt-6">
             <DialogTitle>{t('detail_edit_dialog_title')}</DialogTitle>
           </DialogHeader>
           <form {...editFormProps} onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
@@ -1062,12 +1089,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
             {/* Solid footer outside the scroll area: always visible, never
                 overlaps content (the body above scrolls independently). */}
-            <div className="flex justify-end gap-3 border-t border-border bg-background px-6 py-4">
+            <div className="flex justify-end gap-3 border-t-hairline bg-background px-6 py-4">
               <Button type="button" variant="outline" onClick={() => setIsEditOpen(false)}>
                 {t('form_cancel')}
               </Button>
               <Button type="submit" disabled={saving || !canWrite}>
-                <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />
+                <ArrowDownOnSquareIcon className="h-4 w-4" />
                 {saving ? t('form_saving') : t('detail_save_changes')}
               </Button>
             </div>

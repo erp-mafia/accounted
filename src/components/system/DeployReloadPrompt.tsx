@@ -114,7 +114,6 @@ export function DeployReloadPrompt() {
       >
         <span className="text-foreground">{t('update_available')}</span>
         <Button
-          size="sm"
           loading={reloading}
           onClick={() => {
             if (reloading) return

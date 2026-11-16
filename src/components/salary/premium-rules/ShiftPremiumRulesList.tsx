@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { ShiftPremiumRule } from '@/types'
 
@@ -143,10 +143,10 @@ export function ShiftPremiumRulesList({
 
   if (loading) {
     return (
-      <div className="space-y-3 py-3">
+      <LateReveal className="space-y-3 py-3">
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-2/3" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -169,7 +169,7 @@ export function ShiftPremiumRulesList({
           const state = premiumRuleState(rule, today)
           const muted = state === 'off' || state === 'ended'
           return (
-            <li key={rule.id} className="flex min-h-10 items-center gap-3 border-b border-border py-2">
+            <li key={rule.id} className="flex min-h-10 items-center gap-3 border-b-hairline py-2">
               <span
                 className={cn('min-w-0 flex-1 truncate tabular-nums', muted && 'text-muted-foreground')}
                 title={premiumRuleSentence(rule, t, { today, lowerRest })}
@@ -184,7 +184,7 @@ export function ShiftPremiumRulesList({
               {canWrite ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-label={t('row_menu', { name: rule.name })}>
+                    <Button variant="ghost" size="icon" aria-label={t('row_menu', { name: rule.name })}>
                       <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -203,7 +203,7 @@ export function ShiftPremiumRulesList({
       </ul>
       {canWrite ? (
         <div className="flex justify-end pt-3">
-          <Button type="button" size="sm" onClick={onNew}>
+          <Button type="button" onClick={onNew}>
             {t('new')}
           </Button>
         </div>

@@ -675,8 +675,8 @@ describe('findMissingCompanyData: the check generation and staging share (crm#14
     expect(gap?.missingFields).toEqual(['organisationsnummer', 'telefon'])
     expect(gap?.message).toBe(
       'AGI kan inte genereras, följande uppgifter saknas: organisationsnummer, telefon. ' +
-        'Fyll i organisationsnummer under Inställningar → Allmänt; telefon under Inställningar → Moms och skatt → ' +
-        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt).',
+        'Fyll i organisationsnummer under Inställningar → Företagsuppgifter; telefon under Inställningar → Moms och skatt → ' +
+        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Företagsuppgifter).',
     )
   })
 })

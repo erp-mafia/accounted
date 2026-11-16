@@ -58,7 +58,7 @@ export function BankCheckResult({
           {bank.candidates.map((c) => {
             const isDismissed = c.dismissed || dismissed.includes(c.transactionId)
             return (
-              <li key={c.transactionId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[12.5px]">
+              <li key={c.transactionId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs">
                 <span className="tabular-nums text-muted-foreground">{formatDate(c.date)}</span>
                 <span className="tabular-nums">{formatKronor(c.amount)}</span>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{c.description}</span>
@@ -119,7 +119,6 @@ function SyncBankNow({ label, onSynced }: { label: string; onSynced: () => void 
   return (
     <Button
       type="button"
-      size="sm"
       variant="outline"
       loading={isBusy}
       onClick={async () => {

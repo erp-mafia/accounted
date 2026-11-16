@@ -219,7 +219,7 @@ describe('a filing identity fits the legal form (company-identity-12-digit)', ()
 
     const refusal = new FilingIdentityError()
     expect(refusal.message).toMatch(/kontakta supporten/)
-    expect(refusal.message).toContain('Inställningar → Allmänt')
+    expect(refusal.message).toContain('Inställningar → Företagsuppgifter')
     expect(refusal.message).not.toContain(stored)
     expect(findMissingCompanyData(agiCompany(stored, 'aktiebolag'))?.message).toBe(refusal.message)
   })

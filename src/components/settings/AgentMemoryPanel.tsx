@@ -263,12 +263,15 @@ export function AgentMemoryPanel() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
+        <div className="max-w-full overflow-x-auto rounded-lg">
+          <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        </div>
         <button
           type="button"
           onClick={() => setIncludeDismissed((v) => !v)}
           aria-pressed={includeDismissed}
-          className={cn(QUIET_LINK_CLASS, 'ml-1 text-[12.5px]')}
+          className={cn(QUIET_LINK_CLASS, 'ml-1 text-xs')}
         >
           {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
         </button>
@@ -278,15 +281,15 @@ export function AgentMemoryPanel() {
           samtal per tur.
         </HelpPopover>
         {canWrite && (
-          <Button size="sm" className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
-            <PlusIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          <Button className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
+            <PlusIcon className="h-3.5 w-3.5" aria-hidden />
             Lägg till minne
           </Button>
         )}
       </div>
 
       {canWrite && showAdd && (
-        <div className="space-y-3 border-b border-border pb-4">
+        <div className="space-y-3 border-b-hairline pb-4">
           <SettingsTextarea
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
@@ -307,10 +310,10 @@ export function AgentMemoryPanel() {
               </SettingsSelect>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
+              <Button variant="outline" onClick={() => { setShowAdd(false); setNewContent('') }}>
                 Avbryt
               </Button>
-              <Button size="sm" onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
+              <Button onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
                 Spara
               </Button>
             </div>
@@ -319,7 +322,7 @@ export function AgentMemoryPanel() {
       )}
 
       {rows && rows.length > 0 && (
-        <p className="text-[12.5px] tabular-nums text-muted-foreground">
+        <p className="text-xs tabular-nums text-muted-foreground">
           {counts.active} aktiva · {counts.pinned} fästa
           {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
         </p>
@@ -340,7 +343,7 @@ export function AgentMemoryPanel() {
       {rows === null && !loadError && (
         <div aria-busy>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2 border-b border-border py-3.5">
+            <div key={i} className="space-y-2 border-b-hairline py-3.5">
               <Skeleton className="h-3.5 w-3/4" />
               <Skeleton className="h-3 w-40" />
             </div>
@@ -364,7 +367,7 @@ export function AgentMemoryPanel() {
             const dimmed = !row.is_active
             const who = savedBy(row)
             return (
-              <li key={row.id} className={cn('group flex items-start gap-3 border-b border-border py-3.5', dimmed && 'opacity-60')}>
+              <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
                 {canWrite && row.is_active ? (
                   <button
                     type="button"
@@ -372,7 +375,7 @@ export function AgentMemoryPanel() {
                     disabled={isBusy}
                     className={cn(
                       'mt-0.5 shrink-0 rounded-sm p-1 transition-colors duration-150',
-                      row.is_pinned ? 'text-foreground' : 'text-muted-foreground/50 hover:text-foreground',
+                      row.is_pinned ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
                     )}
                     aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
                     title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
@@ -397,10 +400,10 @@ export function AgentMemoryPanel() {
                         className="w-full border-border"
                       />
                       <div className="flex items-center gap-2">
-                        <Button size="sm" onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
+                        <Button onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
                           Spara
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setEditingId(null)} disabled={isBusy}>
+                        <Button variant="outline" onClick={() => setEditingId(null)} disabled={isBusy}>
                           Avbryt
                         </Button>
                       </div>
@@ -408,7 +411,7 @@ export function AgentMemoryPanel() {
                   ) : (
                     <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{row.content}</p>
                   )}
-                  <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
                     {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
                     {who && ` · ${t('memory_saved_by', { who })}`}
                     {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
@@ -419,15 +422,15 @@ export function AgentMemoryPanel() {
                   <div className={cn('flex shrink-0 items-center gap-3 pt-0.5', HOVER_REVEAL_CLASS)}>
                     {row.is_active ? (
                       <>
-                        <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                        <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                           Redigera
                         </button>
-                        <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                        <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                           Dölj
                         </button>
                       </>
                     ) : (
-                      <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                      <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                         Återställ
                       </button>
                     )}

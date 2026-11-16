@@ -11,15 +11,17 @@ import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { Button } from '@/components/ui/button'
+import { PageHeader } from '@/components/ui/page-header'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { AttnLine } from '@/components/ui/attn-line'
 import { IntentLink } from '@/components/ui/intent-link'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { DataListEmpty } from '@/components/ui/data-list'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -30,7 +32,7 @@ import {
   ShowMoreFooter,
 } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
 import { useUiState } from '@/lib/hooks/use-ui-state'
@@ -38,7 +40,7 @@ import { resolveInitialMode } from '@/lib/ui-state/client'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { legacyListEditorHref, newEditorHref } from '@/lib/invoices/editor/new-editor-params'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatDate, formatRowAmount } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
@@ -53,6 +55,8 @@ import {
   parseQuoteListTab,
   segmentViewActive,
   statusPickerTabs,
+  invoiceListSegmentTabs,
+  QUOTE_LIST_SEGMENT_TABS,
   type AnyListTab,
   type InvoiceListTab,
   type QuoteListTab,
@@ -66,8 +70,7 @@ import {
   providerWords,
   useCollectionsAvailability,
 } from '@/components/collections/collections-client'
-import { BulkHandoverDialog } from '@/components/collections/BulkHandoverDialog'
-import { RemindersOfferRow, RemindersStatusButton, useInvoiceListReminders } from '@/components/reminders/InvoiceListReminders'
+import { RemindersOfferRow, useInvoiceListReminders } from '@/components/reminders/InvoiceListReminders'
 import { TurnOnRemindersSheet } from '@/components/reminders/TurnOnRemindersSheet'
 import { bulkSendable } from '@/lib/collections/bulk-handover'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -99,8 +102,9 @@ import {
 } from '@/lib/invoices/rot-rut-list-status'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import {
-  AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
+  BellAlertIcon,
+  ChevronDownIcon,
   DocumentArrowDownIcon,
   DocumentArrowUpIcon,
   DocumentIcon,
@@ -111,6 +115,9 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -126,6 +133,8 @@ import { todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 const RotRutPayoutDialog = dynamic(
   () => import('@/components/invoices/RotRutPayoutDialog'),
 )
+// "Skicka till inkasso (N)" opens on a click: loaded then, not with the list.
+const BulkHandoverDialog = dynamic(() => import('@/components/collections/BulkHandoverDialog').then((m) => m.BulkHandoverDialog))
 
 
 const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
@@ -312,6 +321,9 @@ export default function InvoicesPage() {
   const [showBulkBookConfirm, setShowBulkBookConfirm] = useState(false)
   const [isBulkBooking, setIsBulkBooking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no rows on screen the list says so in place
+  // of them; rows already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   // The newest thousand rows are on screen and the older ones are still
   // arriving ('loading': a register above one page, first load only), or
   // their read failed ('failed'): the list then says that it is partial and
@@ -339,12 +351,14 @@ export default function InvoicesPage() {
   )
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   // Fiscal-year scope (convention 8): null = all years.
-  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
-  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  // The year is app-wide context (the sidebar); "all years" lists everything.
+  const { period: fyPeriod } = useFiscalScope()
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
+  const tCommon = useTranslations('common')
   const tCollections = useTranslations('collections')
+  const tReminders = useTranslations('reminders_setup')
   const locale = useLocale()
   const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
@@ -591,6 +605,9 @@ export default function InvoicesPage() {
       })
     }
 
+    // Whether the newest page is on screen: a later failure is then the
+    // older rows' own line, not a failed list.
+    let partialShown = false
     try {
       if (factsResult.status === 'rejected') throw factsResult.reason
       const facts = factsResult.value
@@ -598,19 +615,20 @@ export default function InvoicesPage() {
       if (firstPage) {
         setInvoices(withDeductionFacts(firstPage, facts))
         setIsLoading(false)
+        setLoadFailed(false)
         setOlderRows('loading')
+        partialShown = true
       }
       const allRows = await allRowsPromise
       if (!isCurrent()) return
       setInvoices(withDeductionFacts(allRows, facts))
+      setLoadFailed(false)
       setOlderRows(null)
     } catch {
       if (!isCurrent()) return
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      // The list says it in place (LoadError, or one line above the rows
+      // already on screen) instead of a toast.
+      if (!partialShown) setLoadFailed(true)
       // Rows on screen that are only the newest page stay marked as partial.
       setOlderRows((state) => (state === 'loading' ? 'failed' : state))
     }
@@ -756,6 +774,12 @@ export default function InvoicesPage() {
   }, [searchScopedInvoices])
 
   const resetPaging = () => setVisibleCount(SHOW_MORE_STEP)
+  // Another year starts the list from the top (adjusting state during render).
+  const [shownYear, setShownYear] = useState(fyPeriod?.id ?? null)
+  if ((fyPeriod?.id ?? null) !== shownYear) {
+    setShownYear(fyPeriod?.id ?? null)
+    resetPaging()
+  }
   // Status sections bucket by invoice payment state, which a quote has none of.
   const groupModes: readonly GroupMode[] = isQuotesList
     ? GROUP_MODES.filter((mode) => mode !== 'status')
@@ -911,6 +935,21 @@ export default function InvoicesPage() {
     }
   }
 
+  // The toolbar's views: segments first, the rest behind the Status picker.
+  const segmentTabs: readonly ListTab[] = isQuotesList
+    ? QUOTE_LIST_SEGMENT_TABS
+    : invoiceListSegmentTabs(collectionsShown)
+  const pickerTabs: ListTab[] = isQuotesList
+    ? statusPickerTabs(listTabs, segmentTabs)
+    : statusPickerTabs<ListTab>(
+        visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab),
+        segmentTabs,
+      )
+        // "Hos inkasso" only once something is there (or it is the view in use).
+        .filter((tab) => tab !== 'collections' || inCollectionIds.size > 0 || collectionAttention.all.size > 0 || activeTab === 'collections')
+        // "Kundförlust" likewise only once an invoice is written off.
+        .filter((tab) => tab !== 'written_off' || tabCounts.written_off > 0 || activeTab === 'written_off')
+
   const createOptions: SplitButtonOption[] = [
     {
       key: 'faktura',
@@ -1005,40 +1044,16 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 15): title + invoice actions */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
-          {t(isQuotesList ? 'title_quotes' : 'title')}
-        </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {reminders.entry === 'status' && <RemindersStatusButton onOpen={reminders.openSheet} />}
-          {showRotRutAction && (
-            // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
-            // belopp) has its own page; the file dialog still opens from
-            // ?rot-rut=1 here for existing links and the Att göra rows.
-            <Button size="sm"
-              type="button"
-              variant="outline"
-              onClick={() => router.push('/invoices/rot-rut')}
-            >
-              <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
-              {t('rot_rut_payout_action')}
-            </Button>
-          )}
-          {showLateInterestAction && (
-            <Button size="sm" type="button" variant="outline" onClick={() => router.push('/invoices/late-payment-interest')}>
-              <PercentBadgeIcon className="mr-2 h-4 w-4" />
-              {t('late_interest_action')}
-            </Button>
-          )}
+      <PageHeader title={t(isQuotesList ? 'title_quotes' : 'title')} action={<>
           {isQuotesList ? (
             // One way to make a quote, so a plain button: no modes to remember.
-            <Button size="sm"
+            <Button size="toolbar"
               type="button"
               onClick={openNewQuote}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              <DocumentTextIcon className="mr-2 h-4 w-4" />
+              <PlusIcon className="h-4 w-4" />
               {t('create_quote')}
             </Button>
           ) : (
@@ -1049,40 +1064,47 @@ export default function InvoicesPage() {
               options={createOptions}
             />
           )}
-        </div>
-      </div>
+      </>} />
 
-      {/* Toolbar: one status chip-picker (founder direction: the status
-          views live behind a filter chip, not a seg), sök, FyPicker far
-          right. Counts ride as row annotations and on the trigger. */}
+      {/* Toolbar (V7 list toolbars): the view segments first (at most five,
+          Alla last), the remaining status views in the Status picker, then
+          the filters; sök and Mer at the right end. The year is the
+          sidebar's. A view has one door: segment or picker, never both. */}
       <div className="flex flex-wrap items-center gap-2">
-        <ContextPicker
-          value={activeTab}
-          onChange={(id) => updateTab(id as ListTab)}
-          ariaLabel={t('status_picker_aria')}
-          triggerLabel={
-            // Förfallna and Hos inkasso have one door each: the segmented control beside the picker.
-            segmentViewActive(activeTab, collectionsShown)
-              ? t('status_picker_label')
-              : tabCounts[activeTab] > 0
-                ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
-                : t(TAB_LABEL_KEYS[activeTab])
-          }
-          items={(isQuotesList
-            ? listTabs
-            : statusPickerTabs(visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab), collectionsShown).filter(
-                // "Hos inkasso" only once something is there (or it is the view in use).
-                (tab) => tab !== 'collections' || inCollectionIds.size > 0 || collectionAttention.all.size > 0 || activeTab === 'collections',
-              ).filter(
-                // "Kundförlust" likewise only once an invoice is written off.
-                (tab) => tab !== 'written_off' || tabCounts.written_off > 0 || activeTab === 'written_off',
-              )
-          ).map((tab) => ({
-            id: tab,
-            label: t(TAB_LABEL_KEYS[tab]),
-            annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
-          }))}
-        />
+        {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
+        <div className="max-w-full overflow-x-auto rounded-lg">
+          <SegmentedControl<ListTab>
+            aria-label={t('status_picker_aria')}
+            className="whitespace-nowrap"
+            // A picker view is active: no segment is selected.
+            value={activeTab}
+            onChange={(next) => updateTab(next)}
+            options={segmentTabs.map((tab) => ({
+              value: tab,
+              label: t(TAB_LABEL_KEYS[tab]),
+              count: tabCounts[tab],
+            }))}
+          />
+        </div>
+        {pickerTabs.length > 0 && (
+          <ContextPicker
+            value={activeTab}
+            onChange={(id) => updateTab(id as ListTab)}
+            ariaLabel={t('status_picker_aria')}
+            triggerLabel={
+              segmentViewActive(activeTab, segmentTabs)
+                ? t('status_picker_label')
+                : tabCounts[activeTab] > 0
+                  ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
+                  : t(TAB_LABEL_KEYS[activeTab])
+            }
+            items={pickerTabs.map((tab) => ({
+              id: tab,
+              label: t(TAB_LABEL_KEYS[tab]),
+              annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
+            }))}
+          />
+        )}
         {showRotRut && (
           <ContextPicker
             value={rotRutFilter}
@@ -1101,88 +1123,101 @@ export default function InvoicesPage() {
             }))}
           />
         )}
-        {/* Förfallna and Hos inkasso as visible views while collections is
-            in play (the status picker then leaves them out, so each has one
-            door). Pressing the active one again goes back to Alla. */}
-        {collectionsShown && (
-          <SegmentedControl<'overdue' | 'collections'>
-            aria-label={tCollections('views_aria')}
-            value={activeTab as 'overdue' | 'collections'}
-            onChange={(next) => updateTab(next === activeTab ? 'all' : next)}
-            options={[
-              { value: 'overdue', label: t(TAB_LABEL_KEYS.overdue), count: tabCounts.overdue },
-              { value: 'collections', label: t(TAB_LABEL_KEYS.collections), count: tabCounts.collections },
-            ]}
-          />
-        )}
         <ToolbarSearch
-          containerClassName="min-w-[190px]"
-          placeholder={t('search_placeholder')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+          placeholder={t(isQuotesList ? 'search_placeholder_quotes' : 'search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
             resetPaging()
           }}
         />
-        <div className="ml-auto">
-          <FyPicker
-            value={fyPeriodId}
-            onChange={(periodId, period) => {
-              setFyPeriodId(periodId)
-              setFyPeriod(period ?? null)
-              resetPaging()
-            }}
-            includeAllOption
-          />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={cn('text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
-                aria-label={t('group_picker_aria')}
-                title={t('group_by')}
-              >
-                <AdjustmentsHorizontalIcon className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
-                {groupModes.map((mode) => (
-                  <DropdownMenuRadioItem key={mode} value={mode}>
-                    {t(GROUP_LABEL_KEYS[mode])}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        {/* Mer: the rare ways out of the list (reminders, ROT/RUT payout,
+            late payment interest, recurring) and the row grouping. They used
+            to sit as outline buttons in the top bar beside the primary. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="toolbar" aria-label={t('group_picker_aria')}>
+              {tCommon('more')}
+              <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            {reminders.entry === 'status' && (
+              <DropdownMenuItem onSelect={reminders.openSheet}>
+                <BellAlertIcon className="h-4 w-4" />
+                {tReminders('status_control')}
+              </DropdownMenuItem>
+            )}
+            {!isQuotesList && recurringEnabled && (
+              <DropdownMenuItem onSelect={() => router.push('/invoices/recurring')}>
+                <ArrowPathRoundedSquareIcon className="h-4 w-4" />
+                {t('create_recurring')}
+              </DropdownMenuItem>
+            )}
+            {showRotRutAction && (
+              // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
+              // belopp) has its own page; the file dialog still opens from
+              // ?rot-rut=1 here for existing links and the Att göra rows.
+              <DropdownMenuItem onSelect={() => router.push('/invoices/rot-rut')}>
+                <DocumentArrowDownIcon className="h-4 w-4" />
+                {t('rot_rut_payout_action')}
+              </DropdownMenuItem>
+            )}
+            {showLateInterestAction && (
+              <DropdownMenuItem onSelect={() => router.push('/invoices/late-payment-interest')}>
+                <PercentBadgeIcon className="h-4 w-4" />
+                {t('late_interest_action')}
+              </DropdownMenuItem>
+            )}
+            {(reminders.entry === 'status' || (!isQuotesList && recurringEnabled) || showRotRutAction || showLateInterestAction) && (
+              <DropdownMenuSeparator />
+            )}
+            <DropdownMenuLabel>{t('group_by')}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
+              {groupModes.map((mode) => (
+                <DropdownMenuRadioItem key={mode} value={mode}>
+                  {t(GROUP_LABEL_KEYS[mode])}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Coverage boundary (convention 6: one page-domain attn line). Shown
           only when posted AR verifikat predate covers_from, the date from
           which the register is complete: the list is then silently
           incomplete for that period. */}
-      {registerCoverage.has_pre_register_invoices && registerCoverage.covers_from && (
-        <p className="attn text-[12.5px]">
-          {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}
-        </p>
+      {/* A failed refetch takes the place of the softer coverage line:
+          one attention line per page. */}
+      {loadFailed && invoices.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchInvoices() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      ) : (
+        registerCoverage.has_pre_register_invoices &&
+        registerCoverage.covers_from && (
+          <p className="attn text-xs">
+            {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}
+          </p>
+        )
       )}
 
       {/* The newest rows are usable at once; say that the counts and a
           search do not cover the older ones yet, or that they never came. */}
       {olderRows === 'loading' && (
-        <p className="text-[12.5px] text-muted-foreground" role="status">
+        <p className="text-xs text-muted-foreground" role="status">
           {t('loading_older', { count: invoices.length })}
         </p>
       )}
-      {olderRows === 'failed' && (
+      {olderRows === 'failed' && !loadFailed && (
         <AttnLine action={{ label: t('older_load_retry'), onClick: () => void fetchInvoices() }}>
           {t('older_load_failed', { count: invoices.length })}
         </AttnLine>
       )}
 
-      {reminders.offerShown && (
+      {reminders.offerShown && canWrite && (
         <RemindersOfferRow count={reminders.offerCount} onOpen={reminders.openSheet} onDismiss={reminders.dismiss} />
       )}
 
@@ -1195,11 +1230,11 @@ export default function InvoicesPage() {
         clearLabel={t('bulk_clear')}
       >
         {collectionsBulk ? (
-          <Button size="sm" onClick={() => setShowBulkHandover(true)}>
+          <Button onClick={() => setShowBulkHandover(true)}>
             {tCollections('bulk_send', { count: selectedIds.size })}
           </Button>
         ) : (
-          <Button size="sm" onClick={() => setShowBulkBookConfirm(true)}>
+          <Button onClick={() => setShowBulkBookConfirm(true)}>
             {bulkMode === 'issue'
               ? t('bulk_book_and_send_action', { count: selectedIds.size })
               : t('bulk_book_action', { count: selectedIds.size })}
@@ -1208,7 +1243,7 @@ export default function InvoicesPage() {
       </BulkSelectionBar>
 
       {activeTab === 'collections' && !isQuotesList && (
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 text-[12.5px] text-muted-foreground">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground">
           <span>
             {capitalizeFirst(
               tCollections(
@@ -1224,28 +1259,40 @@ export default function InvoicesPage() {
       )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <Skeleton className="h-4 w-16" />
-              <Skeleton className="h-4 w-48 flex-1" />
-              <Skeleton className="h-5 w-24" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-20 sm:block" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
             </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed && invoices.length === 0 ? (
+        <LoadError
+          title={t(isQuotesList ? 'quotes_load_failed_title' : 'load_failed_title')}
+          onRetry={() => void fetchInvoices()}
+        />
       ) : filteredInvoices.length === 0 ? (
         searchTerm ? (
-          <DataListEmpty
-            icon={<DocumentTextIcon className="h-6 w-6" />}
-            title={t('no_search_results_title')}
-            description={
-              <span data-ph-mask="">
-                {t(isQuotesList ? 'no_search_results_quotes_description' : 'no_search_results_description', {
-                  term: searchTerm,
-                })}
-              </span>
-            }
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">
+              {t(isQuotesList ? 'no_search_results_quotes_description' : 'no_search_results_description', {
+                term: searchTerm,
+              })}
+            </span>
+            <Button
+              variant="link"
+              onClick={() => {
+                setSearchTerm('')
+                resetPaging()
+              }}
+            >
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : invoices.length === 0 && !isQuotesList ? (
           <div className="animate-fade-in">
             <StartCard
@@ -1254,7 +1301,7 @@ export default function InvoicesPage() {
               title={tStart('invoices_title')}
               body={tStart('invoices_body')}
               primary={{ label: tStart('invoices_primary'), href: '/import?mode=migration' }}
-              secondary={{ label: tStart('invoices_secondary'), onClick: openNewInvoice }}
+              secondary={canWrite ? { label: tStart('invoices_secondary'), onClick: openNewInvoice } : undefined}
             />
           </div>
         ) : (
@@ -1277,7 +1324,7 @@ export default function InvoicesPage() {
           />
         )
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -1352,7 +1399,7 @@ export default function InvoicesPage() {
                       <td
                         colSpan={(showSelection ? 6 : 5) + (showRotRut ? 1 : 0)}
                         className={cn(
-                          'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+                          'border-b-hairline px-1 pb-1.5 text-xs font-medium text-muted-foreground',
                           index === 0 ? 'pt-4' : 'pt-6',
                         )}
                       >
@@ -1408,11 +1455,11 @@ export default function InvoicesPage() {
                       </IntentLink>
                     </td>
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                      <span className="block truncate">
+                      <span className="block truncate" title={(invoice.customer as { name: string })?.name ?? undefined}>
                         {(invoice.customer as { name: string })?.name ?? '-'}
                       </span>
                     </td>
-                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                       {docType === 'quote'
                         ? invoice.valid_until
                           ? formatDate(invoice.valid_until)
@@ -1429,11 +1476,11 @@ export default function InvoicesPage() {
                       )}
                       title={
                         invoice.currency !== 'SEK' && invoice.total_sek
-                          ? formatCurrency(Number(invoice.total_sek))
+                          ? formatRowAmount(Number(invoice.total_sek))
                           : undefined
                       }
                     >
-                      {formatCurrency(displayedTotal, invoice.currency)}
+                      {formatRowAmount(displayedTotal, invoice.currency)}
                     </td>
                     {showRotRut && (
                       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>

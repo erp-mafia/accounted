@@ -7,6 +7,7 @@ import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsRowNote } from '@/c
 import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -129,6 +130,7 @@ export function UsagePanel() {
 function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: boolean }) {
   const t = useTranslations('settings_billing')
   const { role } = useCompany()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { formatDateLong } = useFormat()
   const [requesting, setRequesting] = useState(false)
   const price = formatCurrency((line.unit_price_ore ?? 0) / 100)
@@ -147,7 +149,7 @@ function UsageChargeRow({ line, paying }: { line: CompanyUsageLine; paying: bool
       </SettingsRowNote>
       {canRequest && (
         <SettingsRowEnd>
-          <Button size="sm" variant="outline" onClick={() => setRequesting(true)}>
+          <Button variant="outline" onClick={() => setRequesting(true)} disabled={!canWrite} title={lockedTitle}>
             {t('usage_charge_request')}
           </Button>
         </SettingsRowEnd>

@@ -68,14 +68,18 @@ export function ExtensionSandboxLockState({
 
   const Icon = iconName ? resolveIcon(iconName) : undefined
 
+  // /e/* is a full-bleed route (MainContainer adds no padding there), so the
+  // state brings the page's own gutter.
   return (
-    <EmptyState icon={Icon} title={title} description={description}>
-      <div className="flex flex-col items-center gap-4">
-        <p className="max-w-sm text-sm text-muted-foreground text-balance">{note}</p>
-        <Button onClick={handleCreateAccount} disabled={isLeaving}>
-          {ctaLabel}
-        </Button>
-      </div>
-    </EmptyState>
+    <div className="px-4 pb-8 pt-4 md:px-6">
+      <EmptyState icon={Icon} title={title} description={description}>
+        <div className="flex flex-col items-start gap-3">
+          <p className="max-w-sm text-[13px] text-muted-foreground text-pretty">{note}</p>
+          <Button size="toolbar" onClick={handleCreateAccount} disabled={isLeaving}>
+            {ctaLabel}
+          </Button>
+        </div>
+      </EmptyState>
+    </div>
   )
 }

@@ -87,7 +87,7 @@ export default function SkattekontoFileUploadStep({
           </FileDropzone>
 
           {error && (
-            <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
+            <div className="bg-destructive/8 p-4 rounded-lg flex gap-3">
               <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-destructive">

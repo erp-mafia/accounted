@@ -15,7 +15,7 @@ export default function MigratedDeductionPointer() {
   const status = useMigratedDeductionStatus()
   if (!status?.applicable) return null
   return (
-    <p className="text-[12.5px] text-muted-foreground">
+    <p className="text-xs text-muted-foreground">
       {t.rich('pointer', {
         link: (chunks) => (
           <Link href="/import" className={QUIET_LINK_CLASS}>

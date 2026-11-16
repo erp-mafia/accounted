@@ -15,14 +15,15 @@ import {
   Square2StackIcon,
   StopIcon,
 } from '@/components/icons'
-import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { cn } from '@/lib/utils'
 import { useTranslations, useLocale } from 'next-intl'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
+import { MarkdownMessage, useMarkdownReady } from './lazy-markdown'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
@@ -36,63 +37,6 @@ import { useHoldSoftNavigation } from '@/lib/hooks/use-unsaved-changes'
 // used to fire 20 simultaneous 500ms slides.
 const MESSAGE_ENTER_CLASS =
   'animate-in fade-in-0 slide-in-from-bottom-2 duration-150 ease-emphasized'
-
-// Markdown parser loads separately from the chat surface: react-markdown +
-// remark-gfm pull in the whole unified/remark tree.
-//
-// It used to render `null` while the chunk loaded. That is invisible while a
-// reply streams (nobody reads that fast) but very visible on RESUME: every
-// assistant bubble in a hydrated conversation was an empty bordered card until
-// the chunk landed, then all the text appeared at once and reflowed the thread.
-// Two changes: the chunk is prefetched as soon as any chat surface mounts, and
-// until it resolves the raw text renders in place of nothing, so a bubble is
-// never blank.
-const MarkdownMessage = dynamic(() => import('./MarkdownMessage'), {
-  ssr: false,
-  loading: () => null,
-})
-
-// Module-scoped so the chunk is fetched once per page load and every later
-// chat surface (sheet, /chat, a resumed conversation) renders markdown on its
-// first frame instead of falling back to plain text again.
-let markdownReady = false
-let markdownPromise: Promise<unknown> | null = null
-
-/** Start the markdown chunk before anything needs to render with it. */
-function prefetchMarkdown(): Promise<unknown> {
-  if (!markdownPromise) {
-    markdownPromise = import('./MarkdownMessage')
-      .then((mod) => {
-        markdownReady = true
-        return mod
-      })
-      .catch(() => {
-        // A chunk can 404 after a deploy, or the network can blip. Clear the
-        // cached promise so a later surface retries, instead of every bubble
-        // for the rest of the session being stuck on the plain-text fallback,
-        // and swallow the rejection so it is not an unhandled one.
-        markdownPromise = null
-        return null
-      })
-  }
-  return markdownPromise
-}
-
-/** True once the markdown chunk is usable; triggers the fetch if it isn't. */
-function useMarkdownReady(): boolean {
-  const [ready, setReady] = useState(markdownReady)
-  useEffect(() => {
-    if (ready) return
-    let alive = true
-    void prefetchMarkdown().then(() => {
-      if (alive) setReady(true)
-    })
-    return () => {
-      alive = false
-    }
-  }, [ready])
-  return ready
-}
 
 // Reusable chat surface: used both inside the right-hand AgentSheet and on
 // the full-page /chat route. Owns:
@@ -258,6 +202,7 @@ export default function AgentChat({
   // resumed thread or a deep link: never fire an invoke that answers 503.
   const assistantAvailable = useAssistantAvailable()
   const tChat = useTranslations('agent_chat')
+  const { canWrite, lockedTitle } = useViewerLock()
   const errorLocale = useLocale() as ErrorLocale
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -898,7 +843,7 @@ export default function AgentChat({
         )}
 
         {errorMessage && (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg px-4 py-3 text-sm text-destructive">
             {errorMessage}
           </div>
         )}
@@ -908,7 +853,7 @@ export default function AgentChat({
         <button
           type="button"
           onClick={jumpToLatest}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-[var(--shadow-md)] hover:bg-secondary/60 transition-colors"
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-[var(--shadow-md)] hover:bg-secondary/60 transition-colors"
         >
           <ArrowDownIcon className="h-3 w-3" />
           Nytt svar
@@ -920,11 +865,12 @@ export default function AgentChat({
           user only approved some, clear the rest here instead of rejecting each
           one in Granskning. */}
       {conversationId && messages.some((m) => m.staged && m.staged.length > 0) && (
-        <div className="flex justify-end border-t border-border px-5 py-2">
+        <div className="flex justify-end border-t-hairline px-5 py-2">
           <button
             type="button"
             onClick={() => void handleClearProposals()}
-            disabled={clearingProposals}
+            disabled={!canWrite || clearingProposals}
+            title={lockedTitle}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
           >
             {clearingProposals ? 'Rensar…' : 'Rensa förslag som inte godkänts'}
@@ -936,14 +882,14 @@ export default function AgentChat({
           the composer with an upsell so an already-open conversation (or a
           deep link to /chat/*) never offers an input that can't send. */}
       {!hasAi ? (
-        <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+        <div className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
         </div>
       ) : !assistantAvailable ? (
         /* No tool-loop runtime on this deployment (#2204): same swap as the
            paywall, so a resumed or deep-linked thread never offers a send
            that answers 503. */
-        <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+        <div className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <p className="text-sm text-muted-foreground" role="status">
             {tChat('assistant_unavailable')}
           </p>
@@ -953,7 +899,7 @@ export default function AgentChat({
         // padding-bottom = base 1rem + safe-area-inset-bottom on phones so
         // the iOS home indicator / Android gesture bar doesn't overlap the
         // input.
-        className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
+        className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
         onSubmit={(e) => {
           e.preventDefault()
           void handleSend()
@@ -966,7 +912,7 @@ export default function AgentChat({
             onChange={(e) => setInput(e.target.value)}
             placeholder="Skriv din fråga…"
             rows={1}
-            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto"
+            className="flex-1 resize-none px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -998,7 +944,7 @@ export default function AgentChat({
             </Button>
           )}
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           Enter att skicka · Shift+Enter för ny rad
         </p>
       </form>
@@ -1052,7 +998,7 @@ function MessageBubble({
         {isUser ? (
           message.text || (streamingTail ? <Cursor /> : '')
         ) : message.text ? (
-          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
+          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-sans prose-headings:font-medium prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:tracking-wider [&_th]:text-xs [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
             {markdownLoaded ? (
               <MarkdownMessage text={message.text} />
             ) : (
@@ -1069,7 +1015,7 @@ function MessageBubble({
       )}
 
       {message.interrupted && (
-        <p className="text-[11px] text-muted-foreground border-t border-dashed border-border pt-1.5">
+        <p className="text-xs text-muted-foreground border-t border-dashed border-border pt-1.5">
           Avbrutet. Det som hann skrivas står kvar.
         </p>
       )}
@@ -1080,14 +1026,14 @@ function MessageBubble({
             <span
               key={tc.tool_use_id}
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] rounded-full border border-border px-2 py-0.5',
+                'inline-flex items-center gap-1.5 text-xs rounded-md border border-border px-2 py-0.5',
                 tc.completed
-                  ? 'text-muted-foreground/70 bg-card'
+                  ? 'text-muted-foreground bg-card'
                   : 'text-muted-foreground bg-secondary/40',
               )}
             >
               {tc.completed ? (
-                <CheckIcon className="h-2.5 w-2.5 text-muted-foreground/60" strokeWidth={2.25} />
+                <CheckIcon className="h-2.5 w-2.5 text-muted-foreground" strokeWidth={2.25} />
               ) : (
                 <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
               )}
@@ -1124,7 +1070,7 @@ function MessageBubble({
             ) : (
               <div
                 key={s.tool_use_id}
-                className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+                className="rounded-lg px-4 py-3 text-sm text-muted-foreground bg-control shadow-raised"
               >
                 Förslag stageat men ingen operation-id mottagen. Granska i accounted under <em>Förslag</em>.
               </div>
@@ -1195,7 +1141,7 @@ function MessageActions({
   }
 
   const btn =
-    'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors'
+    'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors'
 
   return (
     <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
@@ -1261,7 +1207,7 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         aria-expanded={show}
       >
         {active ? (
@@ -1272,7 +1218,7 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
         {active ? 'Tänker…' : show ? 'Dölj resonemang' : 'Visa resonemang'}
       </button>
       {show && (
-        <div className="mt-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground whitespace-pre-wrap">
+        <div className="mt-1.5 rounded-lg px-3 py-2 text-xs leading-5 text-muted-foreground whitespace-pre-wrap bg-control shadow-raised">
           {reasoning}
         </div>
       )}
@@ -1298,8 +1244,8 @@ function MemoryChip({ event }: { event: MemoryEvent }) {
     : null
   return (
     <Link
-      href="/agent-knowledge?view=memory"
-      className="group inline-flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+      href="/wiki?view=memory"
+      className="group inline-flex items-start gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground bg-control shadow-raised"
       title="Visa i Assistentens minne"
     >
       <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/70" />
@@ -1322,7 +1268,7 @@ function MemoryChip({ event }: { event: MemoryEvent }) {
 function SkeletonBubble() {
   return (
     <div className="flex flex-col gap-2 items-start animate-fade-in">
-      <div className="max-w-[85%] rounded-lg border border-border bg-card px-4 py-3 space-y-2 w-72">
+      <div className="max-w-[85%] rounded-lg px-4 py-3 space-y-2 w-72 bg-control shadow-raised">
         <Skeleton className="h-3 w-full" />
         <Skeleton className="h-3 w-[85%]" />
         <Skeleton className="h-3 w-[60%]" />

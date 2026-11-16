@@ -806,11 +806,11 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
     // Bookkeeping always stages; a few non-ledger writes (document uploads,
     // quote status) commit directly, so the line does not promise more.
     expect(html).toContain(
-      '<strong>Skriv:</strong> Claude förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Agentförslag. Enklare saker, som att ladda upp underlag, görs direkt.',
+      '<strong>Skriv:</strong> Claude förbereder bokföring som förslag som du godkänner under Att göra &rsaquo; Rutin. Enklare saker, som att ladda upp underlag, görs direkt.',
     )
     expect(html).toContain('<strong>Godkänn:</strong> Claude får godkänna sina egna förslag och då bokförs det utan din granskning.')
     expect(html).toContain(
-      'Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Inställningar &rsaquo; API och MCP och anslut igen.',
+      'Behörigheterna går inte att ändra på en befintlig anslutning, så koppla från under Agenter &rsaquo; Koppla en agent och anslut igen.',
     )
     expect(html).not.toMatch(/stagea/i)
     expect(html).not.toContain('Varje skrivoperation kräver ditt godkännande')

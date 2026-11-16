@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { useToast } from '@/components/ui/use-toast'
-import { chunk, cn, formatCurrency, formatDate } from '@/lib/utils'
+import { chunk, cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
@@ -57,6 +58,7 @@ const MAX_ROWS_PER_PAIR = 50
 
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
   const t = useTranslations('reconciliation')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [external, setExternal] = useState<ReconciliationItem[] | null>(null)
   const [ledger, setLedger] = useState<ReconciliationItem[] | null>(null)
@@ -287,33 +289,36 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     }
   }
 
-  if (loadError) {
-    return (
-      <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>{t('load_failed')}</AttnLine>
-    )
+  // Nothing on screen yet: the load failure says so in place of the rows.
+  if (loadError && (!external || !ledger)) {
+    return <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
   }
   if (!external || !ledger) {
     return (
-      <div className="grid gap-6 lg:grid-cols-2" aria-busy>
+      <LateReveal className="grid gap-6 lg:grid-cols-2">
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-64 w-full" />
-      </div>
+      </LateReveal>
     )
   }
 
   return (
     <div className="space-y-4">
+      {/* A failed refresh keeps the rows under one line. */}
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left: outside rows, multi-select. */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_external_skv' : 'bucket_unmatched_external_bank')}>
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
             {t(isSkv ? 'bucket_unmatched_external_skv' : 'bucket_unmatched_external_bank')}
-            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70">{external.length}</span>
+            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{external.length}</span>
           </h2>
           {external.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_left')}</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
@@ -348,12 +353,12 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                           aria-label={item.description}
                         />
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(item.date)}</td>
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <span className="block truncate" data-ph-mask title={item.description}>{item.description}</span>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                        {formatCurrency(item.amount, currency)}
+                        {formatRowAmount(item.amount, currency)}
                       </td>
                     </tr>
                   )
@@ -367,20 +372,20 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
         {/* Right: verifikat without an outside row. Single-select for N:1,
             multi-select while exactly one bank row is picked (1:N). */}
         <section aria-label={t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}>
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
             {t(isSkv ? 'bucket_unmatched_ledger_skv' : 'bucket_unmatched_ledger_bank')}
-            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70">{ledger.length}</span>
+            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{ledger.length}</span>
           </h2>
           {splitMode && ledger.length > 0 && (
-            <p className="mb-2 text-[12.5px] text-muted-foreground">{t('match_pick_vouchers')}</p>
+            <p className="mb-2 text-xs text-muted-foreground">{t('match_pick_vouchers')}</p>
           )}
           {ledgerOnlyMode && ledger.length > 0 && (
-            <p className="mb-2 text-[12.5px] text-muted-foreground">{t('match_pick_settle')}</p>
+            <p className="mb-2 text-xs text-muted-foreground">{t('match_pick_settle')}</p>
           )}
           {ledger.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('match_empty_right')}</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
@@ -420,7 +425,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                           />
                         )}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>{formatDate(item.date)}</td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')} data-ph-mask>
                         {item.voucher_number != null
                           ? formatVoucher({ voucher_series: item.voucher_series, voucher_number: item.voucher_number })
@@ -429,16 +434,16 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <span className="block truncate" data-ph-mask title={item.description}>{item.description}</span>
                         {item.partially_linked && (
-                          <span className="block truncate text-[11px] text-muted-foreground" data-ph-mask>
+                          <span className="block truncate text-xs text-muted-foreground" data-ph-mask>
                             {t('chip_remainder', {
-                              total: formatCurrency(item.partially_linked.entry_amount, currency),
+                              total: formatRowAmount(item.partially_linked.entry_amount, currency),
                               count: item.partially_linked.linked_count,
                             })}
                           </span>
                         )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                        {formatCurrency(item.amount, currency)}
+                        {formatRowAmount(item.amount, currency)}
                       </td>
                     </tr>
                   )
@@ -452,7 +457,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
 
       {/* Footer: the arithmetic of the selection, and the one button. Sticks
           above the mobile bottom nav (--bottom-nav-h), not behind it. */}
-      <div {...PAGE_BOTTOM_BAR_PROPS} className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-background py-3 text-[13px]">
+      <div {...PAGE_BOTTOM_BAR_PROPS} className="sticky bottom-[var(--bottom-nav-h)] flex flex-wrap items-center gap-x-6 gap-y-2 border-t-hairline bg-background py-3 text-[13px]">
         <span className="tabular-nums" data-ph-mask>
           {t('match_selected_external', { count: pickedExternal.size, amount: formatCurrency(externalSum, currency) })}
         </span>
@@ -478,17 +483,16 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
             (the engine refuses anything else), so the footer says so instead
             of offering a fee/interest booking against several verifikat. */}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && isSplit && (
-          <span className="text-[12.5px] text-muted-foreground">{t('match_hint_split')}</span>
+          <span className="text-xs text-muted-foreground">{t('match_hint_split')}</span>
         )}
         {Math.abs(difference) >= 0.005 && settleMode && (
-          <span className="text-[12.5px] text-muted-foreground">{t('match_hint_settle')}</span>
+          <span className="text-xs text-muted-foreground">{t('match_hint_settle')}</span>
         )}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry && (
           isSkv ? (
-            <span className="flex flex-wrap items-center gap-2 text-[12.5px]">
+            <span className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-muted-foreground">{t('match_hint_remainder_skv')}</span>
               <Button
-                size="sm"
                 variant="outline"
                 onClick={() => void link(true)}
                 disabled={!canLinkWithRemainder}
@@ -498,20 +502,20 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               </Button>
             </span>
           ) : (
-            <span className="flex flex-wrap items-center gap-2 text-[12.5px]">
+            <span className="flex flex-wrap items-center gap-2 text-xs">
               <label htmlFor="residual-kind" className="text-muted-foreground">{t('match_residual_label')}</label>
               <select
                 id="residual-kind"
                 value={residualKind}
                 onChange={(e) => setResidualKind(e.target.value as ResidualKind | '')}
-                className="h-8 rounded-lg border border-border bg-background px-2 text-[12.5px]"
+                className="h-8 rounded-lg px-2 text-xs bg-control shadow-raised"
               >
                 <option value="">{t('match_residual_pick')}</option>
                 {(difference < 0 ? ['bank_fee', 'interest_expense', 'rounding'] : ['interest_income', 'rounding']).map((k) => (
                   <option key={k} value={k}>{t(`residual_${k}`)}</option>
                 ))}
               </select>
-              <Button size="sm" variant="outline" onClick={() => void bookResidual()} disabled={!residualKind || busy} aria-busy={busy}>
+              <Button variant="outline" onClick={() => void bookResidual()} disabled={!residualKind || busy} aria-busy={busy}>
                 {t('match_residual_apply', { amount: formatCurrency(Math.abs(difference), currency) })}
               </Button>
             </span>
@@ -519,11 +523,11 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
         )}
         <span className="ml-auto">
           {settleMode ? (
-            <Button size="sm" onClick={() => void settle()} disabled={!canSettle} aria-busy={busy}>
+            <Button onClick={() => void settle()} disabled={!canSettle} aria-busy={busy}>
               {t('match_apply_settle', { count: entries.length })}
             </Button>
           ) : (
-            <Button size="sm" onClick={() => void link()} disabled={!canLink} aria-busy={busy}>
+            <Button onClick={() => void link()} disabled={!canLink} aria-busy={busy}>
               {isSplit ? t('match_apply_split', { count: entries.length }) : t('match_apply', { count: pickedExternal.size })}
             </Button>
           )}

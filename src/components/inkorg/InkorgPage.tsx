@@ -12,7 +12,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { cn } from '@/lib/utils'
-import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
 import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
@@ -32,7 +32,7 @@ import { useDoorName } from './door-icon'
 import { InkorgFocus, type FocusMotion } from './InkorgFocus'
 import { InkorgList } from './InkorgList'
 import { RemoveSeveralBar } from './RemoveSeveralBar'
-import { InkorgRail } from './InkorgRail'
+import { InkorgToolbar } from './InkorgToolbar'
 import { MissingFocusStage } from './MissingFocusStage'
 import { MissingUnderlagList } from './MissingUnderlagList'
 import { PortalLinkForm } from './PortalLinkForm'
@@ -40,7 +40,7 @@ import { addPortal, changePortal, removePortal } from './company-portals-client'
 import { FocusStage, type FinePrintOpen } from './FocusStage'
 import { FetchWithAiButton } from './FetchWithAiButton'
 import { followCompanion } from './follow-companion'
-import { CONTENT_COLUMN_CLASS, RAIL_COLUMN_CLASS, WORK_AREA_CLASS } from './frame'
+import { WORK_AREA_CLASS } from './frame'
 import { UploadButton } from './UploadButton'
 import { useAttachUnderlag } from './use-attach-underlag'
 import { PayInBankDialog, type PayInBankTarget } from './PayInBankDialog'
@@ -242,6 +242,22 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // When the queue changes under the focus view (an action finished, a
   // realtime refetch landed), the focused item stays while it is there;
   // otherwise the next one opens by itself, or the list comes back.
+  // A link from Att göra (a Börja step) asks for one document, or the first
+  // of the queue, in the focus view: opened once, when the list has loaded.
+  // One that is not waiting any more leaves the list as it is.
+  const wantedFocus = useRef<string | null>(searchParams.get(INKORG_FOCUS_QUERY))
+  useEffect(() => {
+    const wanted = wantedFocus.current
+    if (!wanted || itemsState !== 'ready' || view.kind !== 'need') return
+    wantedFocus.current = null
+    const id = wanted === INKORG_FOCUS_FIRST ? (queueIds[0] ?? null) : queueIds.includes(wanted) ? wanted : null
+    if (id) setFocusId(id)
+    // The address keeps no stale focus: a reload shows the list, as before.
+    const url = new URL(window.location.href)
+    url.searchParams.delete(INKORG_FOCUS_QUERY)
+    window.history.replaceState(window.history.state, '', url)
+  }, [itemsState, queueIds, view.kind])
+
   const previousQueue = useRef<string[]>(queueIds)
   useEffect(() => {
     const previous = previousQueue.current
@@ -632,6 +648,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
             if (!dragCarriesFiles(e.dataTransfer?.types)) return
             e.preventDefault()
             const files = Array.from(e.dataTransfer.files ?? [])
+            if (!canWrite) return
             if (focused && focusId) void attach(focusId, files)
             else toast({ title: t('missing_drop_on_row') })
           },
@@ -642,7 +659,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     <div {...missingDropGuard}>
       <PageHeader
         title={t('title')}
-        action={<UploadButton onUploaded={refresh} />}
+        // A viewer uploads nothing and adds no mailbox: neither button is offered.
+        action={canWrite ? <UploadButton onUploaded={refresh} /> : undefined}
         help={
           <HelpPopover>
             <p>{t('help_body')}</p>
@@ -660,19 +678,21 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
       />
 
       <div className={WORK_AREA_CLASS}>
-        <InkorgRail
-          className={cn(RAIL_COLUMN_CLASS, focused && 'hidden md:block')}
-          view={view}
-          onView={chooseView}
-          needCount={need}
-          missingCount={missingNeedCount}
-          doors={doors}
-          portals={portals}
-          mailProvider={mailProvider}
-          onAddMailbox={() => setAddOpen(true)}
-        />
+        {/* The list's toolbar; a review of one document has the page to itself. */}
+        {!focused && (
+          <InkorgToolbar
+            view={view}
+            onView={chooseView}
+            needCount={need}
+            missingCount={missingNeedCount}
+            doors={doors}
+            portals={portals}
+            mailProvider={mailProvider}
+            onAddMailbox={canWrite ? () => setAddOpen(true) : undefined}
+          />
+        )}
 
-        <div className={CONTENT_COLUMN_CLASS}>
+        <div className="min-w-0">
           {focused && focusId ? (
             <InkorgFocus
               ids={queueIds}
@@ -692,6 +712,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                       busy={busyId === purchase.id}
                       finishing={finishingId === purchase.id}
                       onFiles={(files) => void attach(purchase.id, files)}
+                      canWrite={canWrite}
                       onAddPortal={canWrite ? (url) => savePortal(purchase.id, url) : undefined}
                     />
                   ) : null
@@ -711,6 +732,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                     ownerAccount={ownerAccount}
                     onBack={back}
                     onBook={(body) => bookInOneClick(item, body)}
+                    canWrite={canWrite}
                     openEditor={editorRequest?.itemId === item.id ? editorRequest.nonce : null}
                   />
                 ) : null
@@ -722,6 +744,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                 id="inkorg-view-heading"
                 title={viewLabel}
                 lead={viewLead}
+                titleHidden={view.kind === 'need' || (view.kind === 'missing' && !view.portal)}
                 aside={
                   portal && portalUrl ? (
                     // The portal's two ways to the invoices, as each of its purchases offers them; a
@@ -737,14 +760,14 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                           {t('portal_edit')}
                         </button>
                       )}
-                      <Button asChild variant="secondary" size="sm">
+                      <Button asChild variant="outline">
                         <a href={portalUrl} target="_blank" rel="noopener noreferrer">
                           {t('action_open_portal', { vendor: portal })}
                           <ArrowTopRightOnSquareIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
                         </a>
                       </Button>
                       {missingContext.handoff && (
-                        <FetchWithAiButton clients={missingContext.handoff.clients} variant="secondary" size="sm" />
+                        <FetchWithAiButton clients={missingContext.handoff.clients} variant="outline" />
                       )}
                     </div>
                   ) : undefined
@@ -772,7 +795,10 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                   busyId={busyId}
                   lastOpenedId={lastOpenedId}
                   onOpen={open}
-                  onFiles={(purchaseId, files) => void attach(purchaseId, files)}
+                  onFiles={(purchaseId, files) => {
+                    // A drop from a read-only member attaches nothing.
+                    if (canWrite) void attach(purchaseId, files)
+                  }}
                   onRetry={() => void refresh()}
                 />
               ) : (
@@ -790,7 +816,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                   />
                   <RemoveSeveralBar selection={selection} selectableCount={removableIds.length} onRemoved={refresh} />
                   {itemsState === 'ready' && routedAway > 0 && (
-                    <p className="mt-4 text-[12.5px] leading-5 text-muted-foreground">
+                    <p className="mt-4 text-xs leading-5 text-muted-foreground">
                       {t('routed_away', { count: routedAway })}{' '}
                       <Link href="/arkiv" className={QUIET_LINK_CLASS}>
                         {t('routed_away_open')}

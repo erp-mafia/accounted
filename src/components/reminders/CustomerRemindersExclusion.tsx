@@ -54,7 +54,7 @@ function CustomerRemindersExclusionSwitch({ customerId, excluded, canWrite, onSa
       <label className="flex items-start justify-between gap-4 py-2 text-[13px]">
         <span className="min-w-0">
           <span className="block">{t('customer_excluded_label')}</span>
-          <span className="mt-1 block text-[12.5px] text-muted-foreground">{t('customer_excluded_help', { appName })}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{t('customer_excluded_help', { appName })}</span>
         </span>
         <Switch
           checked={excluded}

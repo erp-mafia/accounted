@@ -164,7 +164,7 @@ export default function SIEPreviewStep({
             end: preview.fiscalYearEnd ?? unknown,
           })}
           {fiscalYear && (fiscalYear.verdict === 'match' || fiscalYear.verdict === 'create') && (
-            <span className="block text-[12.5px] text-muted-foreground">
+            <span className="block text-xs text-muted-foreground">
               {fiscalYear.verdict === 'match'
                 ? t('fiscal_year_match')
                 : fiscalYear.replacesEmptyPeriodId
@@ -173,7 +173,7 @@ export default function SIEPreviewStep({
             </span>
           )}
           {fiscalYearRefused && (
-            <span className="block text-[12.5px] text-destructive">{fiscalYear.message}</span>
+            <span className="block text-xs text-destructive">{fiscalYear.message}</span>
           )}
         </DefRow>
         <DefRow label={t('sie_preview_contents_label')} labelWidth={180}>
@@ -277,7 +277,7 @@ export default function SIEPreviewStep({
           <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-destructive">
             {errors.map((issue, i) => (
               <li key={`error-${i}`}>
-                <span className="font-mono text-[11px] opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
+                <span className="font-mono text-xs opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
                 {issue.message}
               </li>
             ))}
@@ -302,9 +302,9 @@ export default function SIEPreviewStep({
             {tStep('imbalance_title', { amount: formatCurrency(Math.abs(ibDiff)) })}
           </AttnLine>
           {onOpenManualOpeningBalances && (
-            <Button type="button" variant="outline" size="sm" onClick={onOpenManualOpeningBalances}>
+            <Button type="button" variant="outline" onClick={onOpenManualOpeningBalances}>
               {tStep('manual_opening_balances')}
-              <ArrowRightIcon className="ml-2 h-4 w-4" />
+              <ArrowRightIcon className="h-4 w-4" />
             </Button>
           )}
           <label className="flex items-start gap-2 text-[13px] cursor-pointer">
@@ -419,7 +419,7 @@ export default function SIEPreviewStep({
           >
             {t('sie_preview_missing_accounts', { count: missingAccounts.length })}
           </AttnLine>
-          <Button size="sm" onClick={onCreateAccounts} loading={isCreatingAccounts}>
+          <Button onClick={onCreateAccounts} loading={isCreatingAccounts}>
             {isCreatingAccounts ? tStep('creating_accounts') : tStep('create_accounts', { count: missingAccounts.length })}
           </Button>
         </div>
@@ -437,7 +437,7 @@ export default function SIEPreviewStep({
           <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-muted-foreground">
             {warnings.map((issue, i) => (
               <li key={`warning-${i}`}>
-                <span className="font-mono text-[11px] opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
+                <span className="font-mono text-xs opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
                 {issue.message}
               </li>
             ))}
@@ -454,7 +454,7 @@ export default function SIEPreviewStep({
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
             ? tStep('review_mappings')
             : tStep('continue')}
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

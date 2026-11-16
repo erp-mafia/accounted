@@ -6,9 +6,10 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
 import { cn } from '@/lib/utils'
 import {
@@ -35,6 +36,9 @@ type ScheduleRow = RecurringInvoiceSchedule & {
 export default function RecurringInvoicesPage() {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no rows on screen the list says so in place
+  // of them; rows already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -44,12 +48,14 @@ export default function RecurringInvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('invoice_recurring')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
 
   // The "Nytt schema" modal is driven by the URL (?new=1) so every entry
   // point (the header button and the empty state) opens the same dialog, and
   // the browser back button closes it. Same pattern as /invoices.
-  const showNewSchedule = searchParams.has('new')
+  const showNewSchedule = canWrite && searchParams.has('new')
   const closeNewSchedule = () => router.replace('/invoices/recurring', { scroll: false })
   const openNewSchedule = () => router.push('/invoices/recurring?new=1', { scroll: false })
 
@@ -68,12 +74,9 @@ export default function RecurringInvoicesPage() {
       if (!res.ok) throw new Error('failed')
       const json = await res.json()
       setSchedules(json.data ?? [])
+      setLoadFailed(false)
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      setLoadFailed(true)
     }
     setIsLoading(false)
   }
@@ -187,28 +190,44 @@ export default function RecurringInvoicesPage() {
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v3_invoices'), href: '/invoices' }}
         title={t('title')}
         action={
           canWrite ? (
-            <Button size="sm" onClick={openNewSchedule}>
-              <PlusIcon className="mr-2 h-4 w-4" />
+            <Button size="toolbar" onClick={openNewSchedule}>
+              <PlusIcon className="h-4 w-4" />
               {t('new_schedule')}
             </Button>
           ) : (
-            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
+            <Button size="toolbar" disabled title={t('viewer_disabled_tooltip')}>
+              <LockClosedIcon className="h-4 w-4" />
               {t('new_schedule')}
             </Button>
           )
         }
       />
 
+      {loadFailed && schedules.length > 0 && !isLoading && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchSchedules() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-2">
+        <LateReveal>
           {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="h-3.5 w-32" />
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="ml-auto h-3.5 w-10" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed && schedules.length === 0 ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void fetchSchedules()} />
       ) : schedules.length === 0 ? (
         <EmptyState
           icon={ArrowPathRoundedSquareIcon}
@@ -218,7 +237,7 @@ export default function RecurringInvoicesPage() {
           onAction={canWrite ? openNewSchedule : undefined}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>

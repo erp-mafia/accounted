@@ -75,7 +75,7 @@ export function TaxPlanSection({
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-border p-4">
+    <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
       <div className="flex items-center gap-2">
         <p className="text-sm font-medium">{t('title')}</p>
         <HelpPopover>{building ? t('help_building') : t('help_land_improvement')}</HelpPopover>
@@ -118,7 +118,7 @@ export function TaxPlanSection({
       )}
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex justify-end">
-        <Button type="button" variant="outline" size="sm" onClick={() => void save()} loading={saving} disabled={disabled}>
+        <Button type="button" variant="outline" onClick={() => void save()} loading={saving} disabled={disabled}>
           {t('save')}
         </Button>
       </div>

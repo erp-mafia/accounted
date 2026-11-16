@@ -7,12 +7,12 @@ import { VTD_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { SetoffIneligibleReason } from '@/lib/invoices/counterparty-setoff/plan'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { fetchCounterpartyOpenItems, type CounterpartyOpenItems as OpenItems } from './counterparty-client'
 import { payableLabel, SetoffDialog } from './SetoffDialog'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{children}</h2>
+  return <h2 className="text-sm font-medium text-muted-foreground">{children}</h2>
 }
 
 /**
@@ -73,7 +73,7 @@ export function CounterpartyOpenItems({
       <div className="flex items-center justify-between gap-2">
         <SectionTitle>{t('section_open_items')}</SectionTitle>
         {canSetOff ? (
-          <Button type="button" size="sm" variant="outline" onClick={() => setDialogOpen(true)}>
+          <Button type="button" variant="outline" onClick={() => setDialogOpen(true)}>
             {t('setoff_action')}
           </Button>
         ) : null}
@@ -111,7 +111,7 @@ export function CounterpartyOpenItems({
                   {r.number ?? ''}
                   {r.ineligible_reason ? <span className="text-muted-foreground"> · {reasonText(r.ineligible_reason)}</span> : null}
                 </td>
-                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatCurrency(r.remaining_amount, r.currency)}</td>
+                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatRowAmount(r.remaining_amount, r.currency)}</td>
               </tr>
             ))}
           </tbody>
@@ -129,7 +129,7 @@ export function CounterpartyOpenItems({
                   {payableLabel(p, arrivalWord)}
                   {p.ineligible_reason ? <span className="text-muted-foreground"> · {reasonText(p.ineligible_reason)}</span> : null}
                 </td>
-                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatCurrency(p.remaining_amount, p.currency)}</td>
+                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatRowAmount(p.remaining_amount, p.currency)}</td>
               </tr>
             ))}
           </tbody>
@@ -147,7 +147,7 @@ export function CounterpartyOpenItems({
                   {t('setoff_history_row')}
                   {s.status === 'reversed' ? <span className="text-muted-foreground"> · {t('setoff_reversed')}</span> : null}
                 </td>
-                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatCurrency(s.amount)}</td>
+                <td className={`${VTD_CLASS} text-right tabular-nums`}>{formatRowAmount(s.amount)}</td>
               </tr>
             ))}
           </tbody>

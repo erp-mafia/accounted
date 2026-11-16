@@ -263,7 +263,7 @@ export default function ImportReviewStep({
     return (
       <div className="space-y-6">
         <Card>
-          <CardContent className="pt-8 pb-8">
+          <CardContent>
             {theaterModel ? (
               <div className="space-y-6">
                 <ImportTheater model={theaterModel} preview={preview} elapsed={elapsed} />
@@ -554,7 +554,7 @@ export default function ImportReviewStep({
 
       {/* Warnings */}
       {!preview.trialBalance.isBalanced && (
-        <Card className="border-border bg-muted/30">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <ExclamationCircleIcon className="h-5 w-5" />
@@ -592,7 +592,7 @@ export default function ImportReviewStep({
       )}
 
       {error && (
-        <div role="alert" className="p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
+        <div role="alert" className="bg-destructive/8 p-4 rounded-lg flex gap-3">
           <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
           <div className="space-y-1.5 min-w-0">
             <p className="font-medium text-destructive">{t('execute_rejected_title')}</p>
@@ -611,9 +611,9 @@ export default function ImportReviewStep({
           disabled={!canWrite || isLoading || blocked || (orgMismatch && !orgConfirmed)}
           title={!canWrite ? tStep('read_only') : undefined}
         >
-          {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+          {!canWrite && <LockClosedIcon className="h-4 w-4" />}
           {tStep('start_import')}
-          {canWrite && <ArrowRightIcon className="ml-2 h-4 w-4" />}
+          {canWrite && <ArrowRightIcon className="h-4 w-4" />}
         </Button>
       </div>
     </div>

@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import {
@@ -88,6 +90,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
   const kind = props.kind ?? 'customer'
   const isSupplier = kind === 'supplier'
   const t = useTranslations('tx_invoice_picker')
+  const tCommon = useTranslations('common')
   const tInvoices = useTranslations('invoices')
   const tSupplierInvoices = useTranslations('supplier_invoices')
   const { company } = useCompany()
@@ -101,6 +104,10 @@ export default function InvoicePicker(props: InvoicePickerProps) {
   const [hasOpenInvoices, setHasOpenInvoices] = useState(false)
   const [rotRutRequests, setRotRutRequests] = useState<PotentialRotRutPayoutRequest[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The invoices could not be read: said in place of the rows (never "no
+  // open invoices"), with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [isSearching, setIsSearching] = useState(false)
   const [search, setSearch] = useState('')
   // The term the database was asked for, trailing the input by a short pause.
@@ -146,10 +153,12 @@ export default function InvoicePicker(props: InvoicePickerProps) {
         setInvoices(rows)
         setCapped(full)
         if (!appliedSearch) setHasOpenInvoices(rows.length > 0)
+        setLoadFailed(false)
       } catch {
         if (cancelled) return
         setInvoices([])
         setCapped(false)
+        setLoadFailed(true)
       } finally {
         if (!cancelled) {
           setIsLoading(false)
@@ -161,7 +170,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
     return () => {
       cancelled = true
     }
-  }, [company, supabase, appliedSearch, kind])
+  }, [company, supabase, appliedSearch, kind, attempt])
 
   useEffect(() => {
     // Open ROT/RUT begäran: the manual fallback when the SKV payout got no
@@ -215,10 +224,11 @@ export default function InvoicePicker(props: InvoicePickerProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8 text-muted-foreground">
-        <SpinnerIcon className="h-5 w-5 animate-spin mr-2" />
-        {isSupplier ? t('loading_supplier') : t('loading')}
-      </div>
+      <LateReveal aria-label={isSupplier ? t('loading_supplier') : t('loading')} className="space-y-2 py-2">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+        ))}
+      </LateReveal>
     )
   }
 
@@ -253,7 +263,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
   const rotRutSection =
     onSelectRotRutPayout && !isSupplier && txIsSek && rotRutRequests.length > 0 ? (
       <div className="space-y-1.5">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <p className="text-xs font-medium text-muted-foreground">
           {t('rot_rut_section_title')}
         </p>
         {rotRutRequests.map((request) => {
@@ -264,9 +274,9 @@ export default function InvoicePicker(props: InvoicePickerProps) {
             <div
               key={request.id}
               className={cn(
-                'flex items-stretch rounded-lg border transition-colors',
-                exact && 'border-success/50 bg-success/5',
-                picked && 'border-primary/40 bg-secondary/40',
+                'flex items-stretch rounded-lg transition-colors bg-control shadow-raised',
+                exact && 'bg-success/9',
+                picked && 'ring-1 ring-foreground/40 bg-secondary/40',
               )}
             >
               <label className="flex cursor-pointer items-center pl-3 pr-1">
@@ -301,7 +311,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                     <p className={cn('text-sm font-medium tabular-nums', exact && 'text-success')}>
                       {formatCurrency(expected, DOMESTIC_CURRENCY)}
                     </p>
-                    {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
+                    {exact && <p className="text-xs text-success">{t('exact_match')}</p>}
                   </div>
                 </div>
               </button>
@@ -323,7 +333,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                 </p>
               )}
             </div>
-            <Button type="button" size="sm" onClick={handOverPicked}>
+            <Button type="button" onClick={handOverPicked}>
               {t('rot_rut_match_picked', { count: pickedRequests.length })}
             </Button>
           </div>
@@ -364,13 +374,20 @@ export default function InvoicePicker(props: InvoicePickerProps) {
     onSelectSeveral(invoicePlan.allocations)
   }
 
+  if (loadFailed && !hasOpenInvoices) {
+    return (
+      <div className="space-y-3">
+        {rotRutSection}
+        <LoadError onRetry={() => setAttempt((n) => n + 1)} />
+      </div>
+    )
+  }
+
   if (!hasOpenInvoices) {
     return (
       <div className="space-y-3">
         {rotRutSection}
-        <div className="text-center py-8 text-muted-foreground">
-          <p className="text-sm">{isSupplier ? t('empty_supplier') : t('empty')}</p>
-        </div>
+        <EmptyState title={isSupplier ? t('empty_supplier') : t('empty')} />
       </div>
     )
   }
@@ -429,12 +446,12 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                     {rowNumber(invoice) ?? t('no_number')}
                   </span>
                   {statusDisplay?.chip && (
-                    <span className={cn('text-[11px] uppercase tracking-wide', statusChipTextClass(statusDisplay.chip))}>
+                    <span className={cn('text-xs', statusChipTextClass(statusDisplay.chip))}>
                       {isSupplier ? tSupplierInvoices(statusDisplay.labelKey) : tInvoices(statusDisplay.labelKey)}
                     </span>
                   )}
                   {foreignCurrency && (
-                    <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <span className="text-xs text-muted-foreground">
                       {invoiceCurrency}
                     </span>
                   )}
@@ -453,9 +470,9 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                 >
                   {formatCurrency(remaining, invoiceCurrency)}
                 </p>
-                {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
+                {exact && <p className="text-xs text-success">{t('exact_match')}</p>}
                 {candidateSek != null && (
-                  <p className="text-[11px] text-muted-foreground tabular-nums">
+                  <p className="text-xs text-muted-foreground tabular-nums">
                     ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
                   </p>
                 )}
@@ -470,10 +487,10 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                 type="button"
                 onClick={selectRow}
                 className={cn(
-                  'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
+                  'w-full text-left rounded-lg px-3 py-2.5 transition-colors bg-control shadow-raised',
                   'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  exact && 'border-success/50 bg-success/5',
-                  close && 'border-primary/30'
+                  exact && 'bg-success/9',
+                  close && 'ring-1 ring-foreground/30'
                 )}
               >
                 {rowContent}
@@ -485,10 +502,10 @@ export default function InvoicePicker(props: InvoicePickerProps) {
             <div
               key={invoice.id}
               className={cn(
-                'flex items-stretch rounded-lg border transition-colors',
-                exact && 'border-success/50 bg-success/5',
-                close && 'border-primary/30',
-                picked && 'border-primary/40 bg-secondary/40',
+                'flex items-stretch rounded-lg transition-colors bg-control shadow-raised',
+                exact && 'bg-success/9',
+                close && 'ring-1 ring-foreground/30',
+                picked && 'ring-1 ring-foreground/40 bg-secondary/40',
               )}
             >
               <label className="flex cursor-pointer items-center pl-3 pr-1">
@@ -511,11 +528,18 @@ export default function InvoicePicker(props: InvoicePickerProps) {
             </div>
           )
         })}
-        {sorted.length === 0 && (
-          <p className="text-center text-sm text-muted-foreground py-4">
-            {t('no_search_results', { term: appliedSearch })}
-          </p>
-        )}
+        {sorted.length === 0 &&
+          (loadFailed ? (
+            <LoadError onRetry={() => setAttempt((n) => n + 1)} />
+          ) : (
+            // No hits: one muted line in the list.
+            <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+              <span data-ph-mask="">{t('no_search_results', { term: appliedSearch })}</span>
+              <Button variant="link" onClick={() => setSearch('')}>
+                {tCommon('clear_search')}
+              </Button>
+            </div>
+          ))}
         {capped && (
           <p className="text-center text-xs text-muted-foreground py-2">
             {appliedSearch
@@ -546,7 +570,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
               {invoicePlanLine}
             </p>
           </div>
-          <Button type="button" size="sm" onClick={handOverInvoices} disabled={invoiceHandOverBlocked}>
+          <Button type="button" onClick={handOverInvoices} disabled={invoiceHandOverBlocked}>
             {t('invoices_match_picked', { count: invoicePicked.length })}
           </Button>
         </div>

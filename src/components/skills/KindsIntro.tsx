@@ -44,7 +44,7 @@ export function KindsIntro({ companyId }: { companyId: string }) {
     <Dialog open={!seen} onOpenChange={(open) => { if (!open) close() }}>
       <DialogContent className={`sm:max-w-[520px] ${styles.kindsIntro}`}>
         <DialogHeader>
-          <DialogTitle className="font-display text-xl tracking-tight">{t('intro_label')}</DialogTitle>
+          <DialogTitle className="text-xl">{t('intro_label')}</DialogTitle>
           <DialogDescription className="text-[13px] leading-relaxed">{t('intro_together')}</DialogDescription>
         </DialogHeader>
         <ul className={styles.introRows}>

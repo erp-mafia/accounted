@@ -12,7 +12,6 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
-  ArrowLeftIcon,
   ArrowTopRightOnSquareIcon,
   EnvelopeIcon,
   ExclamationCircleIcon,
@@ -20,11 +19,18 @@ import {
   EyeSlashIcon,
   KeyIcon,
 } from '@/components/icons'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import {
+  STANDALONE_LINK_CLASS,
+  StandaloneHeading,
+  StandaloneOr,
+  StandalonePage,
+  StandaloneBelowLine,
+  StandaloneStack,
+} from '@/components/standalone/StandalonePage'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { useBranding } from '@/lib/branding/brand-context'
-import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
@@ -132,7 +138,6 @@ export function LoginClient({
   // values on default hosts, brand values on branded hosts.
   const branding = useBranding()
   const tAuth = useTranslations('auth')
-  const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
 
@@ -481,82 +486,58 @@ export function LoginClient({
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up space-y-8">
-          <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <EnvelopeIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-
-          <div className="text-center space-y-2">
-            <h1 className="text-2xl tracking-tight">{tAuth('email_sent_title')}</h1>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {showResetPassword
-                ? tAuth.rich('email_sent_body_reset', {
-                    email,
-                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-                  })
-                : tAuth.rich('email_sent_body_login', {
-                    email,
-                    strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
-                  })}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {webmailHint && (
-              <Button className="w-full" asChild>
-                <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
-                  {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
-                    provider: webmailHint.name,
-                  })}
-                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
-                </a>
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => {
-                setIsEmailSent(false)
-                setShowResetPassword(false)
-              }}
-            >
-              <ArrowLeftIcon className="mr-2 h-4 w-4" />
-              {tCommon('back')}
+      <StandalonePage>
+        <StandaloneHeading
+          title={tAuth('email_sent_title')}
+          sub={
+            showResetPassword
+              ? tAuth.rich('email_sent_body_reset', {
+                  email,
+                  strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                })
+              : tAuth.rich('email_sent_body_login', {
+                  email,
+                  strong: (chunks) => <span className="font-medium text-foreground">{chunks}</span>,
+                })
+          }
+        />
+        <StandaloneStack>
+          <p className="text-sm text-foreground">
+            {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
+          </p>
+          {webmailHint && (
+            <Button variant="outline" size="lg" className="w-full" asChild>
+              <a href={webmailHint.url} target="_blank" rel="noopener noreferrer">
+                {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
+                  provider: webmailHint.name,
+                })}
+                <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              </a>
             </Button>
-          </div>
-        </div>
-      </div>
+          )}
+          <Button
+            variant="ghost"
+            size="lg"
+            className="w-full"
+            onClick={() => {
+              setIsEmailSent(false)
+              setShowResetPassword(false)
+            }}
+          >
+            {tAuth('back_to_login')}
+          </Button>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   // Reset password form
   if (showResetPassword) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up">
-          <div className="text-center mb-10">
-            <div className="flex justify-center mb-4">
-              <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-                <KeyIcon className="h-7 w-7 text-primary" />
-              </div>
-            </div>
-            <h1 className="text-2xl tracking-tight">{tAuth('reset_title')}</h1>
-            <p className="text-muted-foreground text-sm mt-2">
-              {tAuth('reset_subtitle')}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-background p-6">
-            <form onSubmit={handleResetPassword} className="space-y-4">
+      <StandalonePage>
+        <StandaloneHeading title={tAuth('reset_title')} sub={tAuth('reset_subtitle')} />
+        <StandaloneStack>
+            <form onSubmit={handleResetPassword} className="flex flex-col gap-3">
               {formError && <AuthFormError message={formError.message} />}
               <div className="space-y-2">
                 <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -597,18 +578,11 @@ export function LoginClient({
                 )}
               </Button>
             </form>
-          </div>
-
-          <Button
-            variant="ghost"
-            className="w-full mt-4 text-muted-foreground"
-            onClick={closeResetForm}
-          >
-            <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <Button variant="ghost" size="lg" className="w-full" onClick={closeResetForm}>
             {tAuth('back_to_login')}
           </Button>
-        </div>
-      </div>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
@@ -623,14 +597,37 @@ export function LoginClient({
   const hasSecondaryMethods = chipCount > 0
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <header className="text-center mb-8">
-          <h1 className="sr-only">{tAuth('login_title')}</h1>
-          <BrandWordmark size="hero" />
-        </header>
+    <StandalonePage
+      hero
+      below={
+        <>
+        {passwordLoginEnabled && registrationEnabled && (
+          <StandaloneBelowLine>
+            {tAuth('login_new_here')}{' '}
+            <Link href={registerHref} className={STANDALONE_LINK_CLASS}>
+              {tAuth('no_account')}
+            </Link>
+          </StandaloneBelowLine>
+        )}
 
-        <div className="rounded-xl border border-border bg-background p-6">
+        <StandaloneBelowLine>
+          {tAuth('terms_prefix')}{' '}
+          {/* The in-app legal pages (host-relative, so they work on branded
+              byrå domains too). New tab: don't lose login state. */}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {tAuth('terms_link')}
+          </a>{' '}
+          {tAuth('terms_and')}{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className={STANDALONE_LINK_CLASS}>
+            {tAuth('privacy_link')}
+          </a>
+          .
+        </StandaloneBelowLine>
+          <SourceCodeFooter />
+        </>
+      }
+    >
+          <StandaloneHeading title={tAuth('login_title')} hidden />
           {timeoutReason && (
             <div role="alert" className="mb-4">
               <AttnLine>
@@ -708,7 +705,7 @@ export function LoginClient({
             {method === 'bankid' && bankIdEnabled ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
             ) : method === 'email' && passwordLoginEnabled ? (
-              <form onSubmit={handlePasswordLogin} className="space-y-4">
+              <form onSubmit={handlePasswordLogin} className="flex flex-col gap-3">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
                   <Input
@@ -727,16 +724,7 @@ export function LoginClient({
                   />
                 </div>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">{tAuth('password_label')}</Label>
-                    <button
-                      type="button"
-                      onClick={openResetForm}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
-                    >
-                      {tAuth('forgot_password')}
-                    </button>
-                  </div>
+                  <Label htmlFor="password">{tAuth('password_label')}</Label>
                   <div className="relative">
                     <Input
                       ref={passwordInputRef}
@@ -789,6 +777,13 @@ export function LoginClient({
                       </span>
                     </div>
                   )}
+                  {/* The way forward sits under the field and its error, in
+                      the same place whether or not the sign-in failed. */}
+                  <p className="text-xs">
+                    <button type="button" onClick={openResetForm} className={STANDALONE_LINK_CLASS}>
+                      {tAuth('forgot_password')}
+                    </button>
+                  </p>
                 </div>
                 <TurnstileChallenge
                   ref={passwordTurnstileRef}
@@ -826,7 +821,7 @@ export function LoginClient({
                       loading={isLoading}
                     >
                       {!isLoading && (
-                        <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                        <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                       )}
                       {tAuth('continue_with_provider', { provider: 'SAML' })}
                     </Button>
@@ -842,7 +837,7 @@ export function LoginClient({
                   loading={isLoading}
                 >
                   {!isLoading && (
-                    <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   )}
                   {tAuth('continue_with_provider', { provider: 'SAML' })}
                 </Button>
@@ -856,21 +851,15 @@ export function LoginClient({
 
           {hasPrimaryMethod && hasSecondaryMethods && (
             <>
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-background px-3 text-xs text-muted-foreground">
-                    {tAuth('or_divider')}
-                  </span>
-                </div>
+              <div className="my-3">
+                <StandaloneOr>{tAuth('or_divider')}</StandaloneOr>
               </div>
               <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                 {showBankIdChip && (
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
@@ -881,7 +870,7 @@ export function LoginClient({
                       height={18}
                       className="dark:invert"
                     />
-                    BankID
+                    {chipCount === 2 ? 'BankID' : tAuth('continue_with_provider', { provider: 'BankID' })}
                   </Button>
                 )}
                 {providers.map((provider) => (
@@ -897,6 +886,7 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
@@ -908,12 +898,13 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
+                    size="lg"
                     className="w-full"
                     onClick={handleSamlLogin}
                     loading={isLoading}
                   >
                     {!isLoading && (
-                      <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      <KeyIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     )}
                     {tAuth('continue_with_provider', { provider: 'SAML' })}
                   </Button>
@@ -921,48 +912,7 @@ export function LoginClient({
               </div>
             </>
           )}
-        </div>
 
-        {passwordLoginEnabled && registrationEnabled && (
-          <p className="mt-6 text-center text-[13px] text-muted-foreground">
-            {tAuth('login_new_here')}{' '}
-            <Link
-              href={registerHref}
-              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
-            >
-              {tAuth('no_account')}
-            </Link>
-          </p>
-        )}
-
-        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
-          {tAuth('terms_prefix')}{' '}
-          {/* The in-app legal pages (host-relative, so they work on branded
-              byrå domains too). New tab: don't lose login state. */}
-          <a
-            href="/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {tAuth('terms_link')}
-          </a>{' '}
-          {tAuth('terms_and')}{' '}
-          <a
-            href="/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            {tAuth('privacy_link')}
-          </a>
-          .
-        </p>
-
-        {/* AGPL section 13 source offer (WL-06): renders on both default and
-            branded hosts; never gate this on a brand. */}
-        <SourceCodeFooter className="mt-4" />
-      </div>
-    </div>
+    </StandalonePage>
   )
 }

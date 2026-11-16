@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
 import { PlusIcon } from '@/components/icons'
@@ -18,11 +18,7 @@ import {
   customerPickerSecondary,
   type SearchableCustomer,
 } from '@/lib/customers/search'
-import {
-  computeDropdownPosition,
-  isSameDropdownPosition,
-  type DropdownPosition,
-} from '@/components/bookkeeping/account-combobox-position'
+import { useAnchoredDropdown } from '@/components/bookkeeping/use-anchored-dropdown'
 
 /**
  * The one customer picker every form uses (invoice editor, recurring
@@ -39,12 +35,6 @@ import {
  * customer" row). The text in the field is display state only: the selected
  * customer's name until the user types, then the query.
  */
-
-// Shared by every portaled panel instance: only stops propagation so the
-// browser's default scrolling still runs on the panel itself.
-function stopScrollPropagation(e: Event) {
-  e.stopPropagation()
-}
 
 /** Keyboard-row sentinel for the optional "no customer" row. */
 const NONE_ROW = '__none__'
@@ -112,10 +102,16 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const [queryActive, setQueryActive] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-  // The portaled dropdown panel. It is not a DOM descendant of containerRef,
-  // so outside-click detection must check it separately.
-  const portalPanelRef = useRef<HTMLDivElement | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
+  // The portaled dropdown panel, glued to the trigger. It is not a DOM
+  // descendant of containerRef, so outside-click detection must check it
+  // separately. Flush with the trigger (preferredWidth 0): a customer row
+  // fits the field's own width, and a wider panel would hang out of a dialog.
+  const {
+    pos: dropdownPos,
+    style: portalPanelStyle,
+    panelRef: portalPanelRef,
+    attachPanel: attachPortalPanel,
+  } = useAnchoredDropdown(containerRef, isOpen, 0)
   const listId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted row after an actual interaction: a
@@ -141,53 +137,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const showNoneRow = Boolean(noneLabel) && !queryActive
   // Keyboard order: the optional "no customer" row first, then the matches.
   const rowCount = items.length + (showNoneRow ? 1 : 0)
-
-  // Keep the portaled dropdown glued to the trigger: measure off containerRef
-  // when it opens and re-measure while anything scrolls or the window resizes
-  // underneath it. Flush with the trigger (preferredWidth 0): a customer row
-  // fits the field's own width, and a wider panel would hang out of a dialog.
-  const updateDropdownPosition = useCallback(() => {
-    if (!containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    const next = computeDropdownPosition(
-      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-      { width: window.innerWidth, height: window.innerHeight },
-      { preferredWidth: 0 },
-    )
-    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
-  }, [])
-
-  useLayoutEffect(() => {
-    if (!isOpen) return
-    updateDropdownPosition()
-    const handleScroll = (e: Event) => {
-      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
-      updateDropdownPosition()
-    }
-    window.addEventListener('scroll', handleScroll, true)
-    window.addEventListener('resize', updateDropdownPosition)
-    return () => {
-      window.removeEventListener('scroll', handleScroll, true)
-      window.removeEventListener('resize', updateDropdownPosition)
-    }
-  }, [isOpen, updateDropdownPosition])
-
-  // react-remove-scroll (active inside every modal dialog) preventDefaults
-  // wheel/touchmove events that reach document from outside the dialog's DOM
-  // tree, and the portaled panel lives outside that tree. Stopping the events
-  // at the panel lets the browser scroll it natively.
-  const attachPortalPanel = useCallback((el: HTMLDivElement | null) => {
-    const prev = portalPanelRef.current
-    if (prev) {
-      prev.removeEventListener('wheel', stopScrollPropagation)
-      prev.removeEventListener('touchmove', stopScrollPropagation)
-    }
-    portalPanelRef.current = el
-    if (el) {
-      el.addEventListener('wheel', stopScrollPropagation)
-      el.addEventListener('touchmove', stopScrollPropagation)
-    }
-  }, [])
 
   // Closing also abandons the query, so the field shows the selection again.
   const close = useCallback(() => {
@@ -276,14 +225,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const showList = isOpen && !disabled && rowCount > 0
   const showEmpty = isOpen && !disabled && rowCount === 0 && (hasNoCustomers || noMatch)
 
-  const portalPanelStyle: React.CSSProperties | undefined = dropdownPos
-    ? {
-        left: dropdownPos.left,
-        width: dropdownPos.width,
-        maxHeight: dropdownPos.maxHeight,
-        ...(dropdownPos.top !== undefined ? { top: dropdownPos.top } : { bottom: dropdownPos.bottom }),
-      }
-    : undefined
   const panelClass = cn(
     'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto',
     POPOVER_SURFACE_CLASS,
@@ -365,7 +306,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
             <span className="flex items-baseline gap-2">
               <span className="min-w-0 flex-1 truncate">{customer.name}</span>
               {customer.archived_at && (
-                <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                   {t('archived')}
                 </span>
               )}

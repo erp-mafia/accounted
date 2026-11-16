@@ -41,12 +41,14 @@ export function FileDropzone({ onFile, accept, disabled = false, label, invalid 
       aria-label={label}
       aria-disabled={disabled || undefined}
       className={cn(
-        'rounded-lg border-2 border-dashed transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+        // Stil v3: a single object on the panel, so a thin dashed outline in
+        // the ink, the wash while a file hovers over it.
+        'rounded-lg border border-dashed transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2',
         dragging
-          ? 'border-primary bg-primary/5'
+          ? 'border-foreground/40 bg-secondary/60'
           : invalid
-            ? 'border-destructive bg-destructive/5'
-            : 'border-muted-foreground/25 hover:border-primary/50',
+            ? 'bg-destructive/8'
+            : 'border-foreground/20 hover:border-foreground/35 hover:bg-secondary/35',
         disabled ? 'pointer-events-none opacity-60' : 'cursor-pointer',
         className,
       )}

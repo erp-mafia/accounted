@@ -151,13 +151,13 @@ export function PaymentPreviewLinesCard({
   const { validation } = editor
 
   return (
-    <div className="rounded-lg border p-4 space-y-3">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{t('booking_title')}</p>
         {canEdit && (
           <div className="flex gap-2">
             {editor.isEditing && (
-              <Button variant="ghost" size="sm" onClick={editor.reset} disabled={disabled}>
+              <Button variant="ghost" onClick={editor.reset} disabled={disabled}>
                 {t('booking_reset')}
               </Button>
             )}
@@ -165,7 +165,6 @@ export function PaymentPreviewLinesCard({
                 below says what is wrong. */}
             <Button
               variant="outline"
-              size="sm"
               onClick={editor.toggleEditing}
               disabled={disabled || (editor.isEditing && !validation.isValid)}
             >
@@ -173,7 +172,7 @@ export function PaymentPreviewLinesCard({
                 t('booking_done_editing')
               ) : (
                 <>
-                  <PencilIcon className="h-3 w-3 mr-1" />
+                  <PencilIcon className="h-3 w-3" />
                   {t('booking_edit')}
                 </>
               )}
@@ -212,7 +211,7 @@ export function PaymentPreviewLinesCard({
                 placeholder={t('booking_description_placeholder')}
               />
               {/* Side toggle: picking a side keeps the amount. */}
-              <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
+              <div className="inline-flex overflow-hidden h-9">
                 <button
                   type="button"
                   onClick={() => editor.updateLine(i, { side: 'debit' })}
@@ -249,7 +248,7 @@ export function PaymentPreviewLinesCard({
               />
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 onClick={() => editor.removeLine(i)}
                 disabled={editor.lines.length <= 2}
                 aria-label={t('booking_remove_line')}
@@ -260,8 +259,8 @@ export function PaymentPreviewLinesCard({
           ))}
 
           <div className="flex items-center justify-between pt-1">
-            <Button variant="ghost" size="sm" onClick={editor.addLine}>
-              <PlusIcon className="h-3 w-3 mr-1" />
+            <Button variant="ghost" onClick={editor.addLine}>
+              <PlusIcon className="h-3 w-3" />
               {t('booking_add_line')}
             </Button>
             <div className="text-xs tabular-nums text-muted-foreground">

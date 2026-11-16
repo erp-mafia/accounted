@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowDownTrayIcon,
@@ -104,23 +105,15 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
   const expenseRutor = ['R5', 'R6', 'R7', 'R8', 'R9', 'R10'] as const
 
   if (error) {
-    return (
-      <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
-        <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
-        <span className="text-sm">{error}</span>
-        <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-          Försök igen
-        </Button>
-      </div>
-    )
+    return <LoadError title={error} onRetry={() => setRetryKey((k) => k + 1)} />
   }
 
   if (loading && !data) {
     return (
-      <div className="space-y-4">
+      <LateReveal className="space-y-4">
         <Skeleton className="h-5 w-48" />
         <Skeleton className="h-64" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -138,13 +131,12 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
           warning below. */}
       <ReportExportMenu>
         <Button
-          size="sm"
           variant="outline"
           onClick={downloadSRU}
           loading={downloading}
           disabled={data.sruBlockers.length > 0}
         >
-          {!downloading && <ArrowDownTrayIcon className="h-4 w-4 mr-2" />}
+          {!downloading && <ArrowDownTrayIcon className="h-4 w-4" />}
           Ladda ner SRU-fil
         </Button>
       </ReportExportMenu>
@@ -160,12 +152,12 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
         <div className="flex items-start gap-2 px-1">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
           <div className="space-y-1">
-            <p className="text-[12.5px] font-medium leading-5 text-attn">
+            <p className="text-xs font-medium leading-5 text-attn">
               {data.warnings.length}{' '}
               {data.warnings.length === 1 ? 'varning' : 'varningar'}
             </p>
             {data.warnings.map((warning, i) => (
-              <p key={i} className="text-[12.5px] leading-5 text-muted-foreground">{warning}</p>
+              <p key={i} className="text-xs leading-5 text-muted-foreground">{warning}</p>
             ))}
           </div>
         </div>
@@ -174,7 +166,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
       {/* Revenue section */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Intäkter</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Intäkter</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <div className="px-1 pt-2">
@@ -213,7 +205,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
       {/* Expenses section */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Kostnader</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Kostnader</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <div className="px-1 pt-2">

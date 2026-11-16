@@ -23,7 +23,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile, saveBlobToDisk } from '@/lib/browser/download-file'
@@ -150,6 +151,8 @@ export default function RotRutPayoutDialog({
   const [selectedYear, setSelectedYear] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
+  // Why the list could not be read: said in place of the list, with "Försök igen".
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -177,7 +180,7 @@ export default function RotRutPayoutDialog({
           setOtherTypeCounts({})
           setRequests([])
           setSelectedYear('')
-          toast({ title: t('rot_rut_load_failed_title'), description, variant: 'destructive' })
+          setLoadError(description)
           return
         }
 
@@ -204,6 +207,7 @@ export default function RotRutPayoutDialog({
         setOtherTypeCounts(eligibleBody.data.other_type_counts ?? {})
         setRequests(requestsBody.data)
         setSelectedYear(focused ? focused.betalnings_datum.slice(0, 4) : (years[0] ?? ''))
+        setLoadError(null)
       } catch (error) {
         if (sequence !== loadSequence.current) return
         setEligible([])
@@ -211,16 +215,12 @@ export default function RotRutPayoutDialog({
         setOtherTypeCounts({})
         setRequests([])
         setSelectedYear('')
-        toast({
-          title: t('rot_rut_load_failed_title'),
-          description: getErrorMessage(error, { context: 'invoice', locale }),
-          variant: 'destructive',
-        })
+        setLoadError(getErrorMessage(error, { context: 'invoice', locale }))
       } finally {
         if (sequence === loadSequence.current) setLoading(false)
       }
     },
-    [focusInvoiceId, locale, t, toast],
+    [focusInvoiceId, locale],
   )
 
   useEffect(() => {
@@ -400,7 +400,7 @@ export default function RotRutPayoutDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent size="wide">
         <DialogHeader className="pr-8">
           <DialogTitle>{t('rot_rut_payout_title')}</DialogTitle>
           <DialogDescription>
@@ -432,11 +432,13 @@ export default function RotRutPayoutDialog({
         </div>
 
         {loading ? (
-          <div className="space-y-3 py-2" role="status" aria-label={t('rot_rut_loading')}>
+          <LateReveal className="space-y-3 py-2" role="status" aria-label={t('rot_rut_loading')}>
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-16 w-full" />
-          </div>
+          </LateReveal>
+        ) : loadError !== null ? (
+          <LoadError title={t('rot_rut_load_failed_title')} description={loadError} onRetry={() => void load(type)} />
         ) : (
           <div className="space-y-6">
             <section className="space-y-3" aria-labelledby="rot-rut-candidates-title">
@@ -458,7 +460,7 @@ export default function RotRutPayoutDialog({
                   </p>
                 </div>
                 {!isGronTeknik && visibleCandidates.length > 0 && (
-                  <Button type="button" variant="ghost" size="sm" onClick={selectAllVisible}>
+                  <Button type="button" variant="ghost" onClick={selectAllVisible}>
                     {visibleCandidates
                       .slice(0, MAX_CASES_PER_FILE)
                       .every((candidate) => selectedIds.has(candidate.invoice_id))
@@ -469,43 +471,37 @@ export default function RotRutPayoutDialog({
               </div>
 
               {visibleCandidates.length === 0 ? (
-                <div className="rounded-lg border border-dashed p-5 text-center">
-                  <p className="text-sm font-medium">{t('rot_rut_no_eligible_title')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {isGronTeknik ? t('gron_teknik_no_eligible_description') : t('rot_rut_no_eligible_description')}
-                  </p>
-                  {gronTeknikElsewhereCount > 0 && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t('gron_teknik_other_type_hint', { count: gronTeknikElsewhereCount })}
-                    </p>
-                  )}
-                  {husElsewhereCount > 0 && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t('gron_teknik_hus_other_hint', { count: husElsewhereCount })}
-                    </p>
-                  )}
-                  {/* NO_DEDUCTION_OF_TYPE only comes from the ROT and RUT
-                      lists (grön teknik counts the HUS kinds instead), so
-                      the other list is the other HUS kind. */}
-                  {!isGronTeknik && otherTypeBlockedCount > 0 && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t('rot_rut_other_type_hint', {
-                        count: otherTypeBlockedCount,
-                        type: t(DEDUCTION_TYPE_LABEL_KEYS[type === 'rot' ? 'rut' : 'rot']),
-                      })}
-                    </p>
-                  )}
-                  {otherBlockedCount > 0 && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t('rot_rut_blocked_below_hint', { count: otherBlockedCount })}
-                    </p>
-                  )}
-                </div>
+                <EmptyState
+                  title={t('rot_rut_no_eligible_title')}
+                  description={
+                    <div className="space-y-1">
+                      <p>
+                        {isGronTeknik ? t('gron_teknik_no_eligible_description') : t('rot_rut_no_eligible_description')}
+                      </p>
+                      {gronTeknikElsewhereCount > 0 && (
+                        <p>{t('gron_teknik_other_type_hint', { count: gronTeknikElsewhereCount })}</p>
+                      )}
+                      {husElsewhereCount > 0 && <p>{t('gron_teknik_hus_other_hint', { count: husElsewhereCount })}</p>}
+                      {/* NO_DEDUCTION_OF_TYPE only comes from the ROT and RUT
+                          lists (grön teknik counts the HUS kinds instead), so
+                          the other list is the other HUS kind. */}
+                      {!isGronTeknik && otherTypeBlockedCount > 0 && (
+                        <p>
+                          {t('rot_rut_other_type_hint', {
+                            count: otherTypeBlockedCount,
+                            type: t(DEDUCTION_TYPE_LABEL_KEYS[type === 'rot' ? 'rut' : 'rot']),
+                          })}
+                        </p>
+                      )}
+                      {otherBlockedCount > 0 && <p>{t('rot_rut_blocked_below_hint', { count: otherBlockedCount })}</p>}
+                    </div>
+                  }
+                />
               ) : isGronTeknik ? (
                 // No file and no selection yet: each row opens what the
                 // e-tjänst asks for, one line per installation type (each
                 // is its own ärende at Skatteverket).
-                <div className="max-h-64 divide-y overflow-y-auto rounded-lg border">
+                <div className="max-h-64 divide-y overflow-y-auto">
                   {visibleCandidates.map((candidate) => (
                     <details
                       key={candidate.invoice_id}
@@ -573,7 +569,7 @@ export default function RotRutPayoutDialog({
                   ))}
                 </div>
               ) : (
-                <div className="max-h-64 divide-y overflow-y-auto rounded-lg border">
+                <div className="max-h-64 divide-y overflow-y-auto">
                   {visibleCandidates.map((candidate) => {
                     const checkboxId = `rot-rut-${candidate.invoice_id}`
                     const checked = selectedIds.has(candidate.invoice_id)
@@ -611,7 +607,7 @@ export default function RotRutPayoutDialog({
               )}
 
               {!isGronTeknik && visibleCandidates.length > MAX_CASES_PER_FILE && (
-                <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
                   <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
                   <span>{t('rot_rut_max_cases_help', { count: MAX_CASES_PER_FILE })}</span>
                 </div>
@@ -636,7 +632,7 @@ export default function RotRutPayoutDialog({
                     loading={generating}
                     title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                   >
-                    {!generating && <DocumentArrowDownIcon className="mr-2 h-4 w-4" />}
+                    {!generating && <DocumentArrowDownIcon className="h-4 w-4" />}
                     {t(generating ? 'rot_rut_generating_file' : 'rot_rut_generate_file')}
                   </Button>
                 </div>
@@ -692,7 +688,7 @@ export default function RotRutPayoutDialog({
                       const isUpdating = updatingId === request.id
                       const isDownloading = downloadingId === request.id
                       return (
-                        <div key={request.id} className="rounded-lg border p-3">
+                        <div key={request.id} className="rounded-lg p-3 bg-control shadow-raised">
                           <div className="flex flex-wrap items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
@@ -721,12 +717,11 @@ export default function RotRutPayoutDialog({
                               {request.file_document_id && (
                                 <Button
                                   type="button"
-                                  size="sm"
                                   variant="ghost"
                                   loading={isDownloading}
                                   onClick={() => void downloadArchivedFile(request)}
                                 >
-                                  {!isDownloading && <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" />}
+                                  {!isDownloading && <ArrowDownTrayIcon className="h-3.5 w-3.5" />}
                                   {t('rot_rut_download_again')}
                                 </Button>
                               )}
@@ -734,7 +729,6 @@ export default function RotRutPayoutDialog({
                                 <>
                                   <Button
                                     type="button"
-                                    size="sm"
                                     variant="outline"
                                     disabled={isUpdating}
                                     onClick={() => void updateRequest(request.id, 'cancelled')}
@@ -743,11 +737,10 @@ export default function RotRutPayoutDialog({
                                   </Button>
                                   <Button
                                     type="button"
-                                    size="sm"
                                     loading={isUpdating}
                                     onClick={() => void updateRequest(request.id, 'submitted')}
                                   >
-                                    {!isUpdating && <CheckCircleIcon className="mr-1.5 h-3.5 w-3.5" />}
+                                    {!isUpdating && <CheckCircleIcon className="h-3.5 w-3.5" />}
                                     {t('rot_rut_mark_uploaded')}
                                   </Button>
                                 </>

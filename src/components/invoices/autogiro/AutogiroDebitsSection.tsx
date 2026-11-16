@@ -11,7 +11,7 @@ import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { AutogiroSection } from './AutogiroSection'
 import { jsonRequest, requestAutogiro } from './client'
 import { DEBIT_STATUS_VARIANT } from './labels'
@@ -75,7 +75,7 @@ export function AutogiroDebitsSection({
       }
       action={
         canWrite && settleable ? (
-          <Button type="button" size="sm" variant="outline" loading={settling} onClick={() => void settle()}>
+          <Button type="button" variant="outline" loading={settling} onClick={() => void settle()}>
             {t('settle_action')}
           </Button>
         ) : undefined
@@ -99,7 +99,7 @@ export function AutogiroDebitsSection({
       {debits.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('debits_empty')}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -124,8 +124,8 @@ export function AutogiroDebitsSection({
                     <td className={cn(TD_CLASS, 'max-w-[16rem]')}>
                       <span className="block truncate">{debit.customer_name ?? '-'}</span>
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(debit.debit_date)}</td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatCurrency(debit.amount)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(debit.debit_date)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatRowAmount(debit.amount)}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       {variant ? (
                         <Badge variant={variant} className="font-normal">
@@ -137,7 +137,7 @@ export function AutogiroDebitsSection({
                     </td>
                     <td className={cn(TD_CLASS, 'max-w-0')}>
                       {debit.status_text && (
-                        <span className="block truncate text-[12.5px] text-muted-foreground" title={debit.status_text}>
+                        <span className="block truncate text-xs text-muted-foreground" title={debit.status_text}>
                           {debit.status_text}
                         </span>
                       )}

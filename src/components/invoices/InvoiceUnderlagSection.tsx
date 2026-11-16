@@ -237,7 +237,7 @@ export function InvoiceUnderlagSection({ invoiceId, canWrite }: { invoiceId: str
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   aria-label={t('remove', { name: row.file_name })}
                   title={t('remove', { name: row.file_name })}
                   className="shrink-0"
@@ -263,12 +263,12 @@ export function InvoiceUnderlagSection({ invoiceId, canWrite }: { invoiceId: str
 
       {canWrite && (
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)} disabled={loading || busy}>
-            <ArchiveBoxIcon className="mr-2 h-4 w-4" />
+          <Button type="button" variant="outline" onClick={() => setPickerOpen(true)} disabled={loading || busy}>
+            <ArchiveBoxIcon className="h-4 w-4" />
             {t('choose_from_archive')}
           </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()} disabled={loading || busy}>
-            <PaperClipIcon className="mr-2 h-4 w-4" />
+          <Button type="button" variant="outline" onClick={() => inputRef.current?.click()} disabled={loading || busy}>
+            <PaperClipIcon className="h-4 w-4" />
             {t('upload')}
           </Button>
           <input

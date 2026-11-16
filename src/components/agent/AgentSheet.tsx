@@ -8,11 +8,13 @@ import {
   ChevronDoubleRightIcon,
   ChevronLeftIcon,
   ClockIcon,
-  SpinnerIcon,
   ViewColumnsIcon,
   WindowIcon,
   XMarkIcon,
 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import AgentChat, {
   attachStagedOperations,
   normalizeStoredMessages,
@@ -142,7 +144,12 @@ function useNavWidth(): number {
     update()
     const mo = new MutationObserver(update)
     mo.observe(shell, { attributes: true, attributeFilter: ['style'] })
-    return () => mo.disconnect()
+    // The sidebar is wider from a 1440px window up (globals.css), so a resize can move it too.
+    window.addEventListener('resize', update)
+    return () => {
+      mo.disconnect()
+      window.removeEventListener('resize', update)
+    }
   }, [])
   return w
 }
@@ -240,6 +247,8 @@ export default function AgentSheet({
   // and would create a stray conversation before the restore replaced it.
   const [loadingConversation, setLoadingConversation] = useState(!!resumeConversationId)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // The conversation whose open failed, for "Försök igen".
+  const [failedConversationId, setFailedConversationId] = useState<string | null>(null)
   // Enlarge the panel IN PLACE (no navigation): the user stays on the current
   // page (e.g. /bookkeeping) with a wider reading/verifying surface. Transient
   // focus mode, deliberately not persisted (unlike the dock width below).
@@ -521,6 +530,7 @@ export default function AgentSheet({
     } catch {
       if (seq === selectSeqRef.current) {
         setLoadError('Kunde inte öppna konversationen.')
+        setFailedConversationId(id)
         // A thread that no longer opens must not be retried on every reload.
         clearAgentSheetSession()
       }
@@ -576,8 +586,8 @@ export default function AgentSheet({
         floating
           ? // Undocked window: free rect from inline styles; overlay chrome
             // (rounded, hairline border, shadow) like every other overlay.
-            'overflow-hidden rounded-lg border border-border shadow-[var(--shadow-lg)]'
-          : 'inset-y-0 right-0 w-full border-l border-border shadow-[var(--shadow-lg)] transition-[max-width] duration-300 ease-drawer',
+            'overflow-hidden shadow-[var(--shadow-lg)]'
+          : 'inset-y-0 right-0 w-full border-l-hairline shadow-[var(--shadow-lg)] transition-[max-width] duration-300 ease-drawer',
         // Arrive along the same edge, on the same curve and duration, as the
         // page panel that animates its margin to make room (layout.tsx). Gated
         // on first mount only: the panel stays mounted while collapsed, and
@@ -654,7 +664,7 @@ export default function AgentSheet({
         <header
           onPointerDown={floating ? onFloatMoveStart : undefined}
           className={cn(
-            'flex items-center gap-3 border-b border-border px-5 py-4',
+            'flex items-center gap-3 border-b-hairline px-5 py-4',
             floating && 'cursor-move touch-none select-none',
           )}
         >
@@ -666,7 +676,7 @@ export default function AgentSheet({
           >
             <ChevronLeftIcon className="h-4 w-4" />
           </button>
-          <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
+          <h2 className="text-lg truncate">Konversationer</h2>
           <button
             onClick={onClose}
             className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
@@ -682,7 +692,7 @@ export default function AgentSheet({
           // (buttons excluded inside onFloatMoveStart).
           onPointerDown={floating ? onFloatMoveStart : undefined}
           className={cn(
-            'flex items-center gap-2 border-b border-border px-4 py-4',
+            'flex items-center gap-2 border-b-hairline px-4 py-4',
             floating && 'cursor-move touch-none select-none',
           )}
         >
@@ -698,7 +708,7 @@ export default function AgentSheet({
           )}
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
           <div className="min-w-0 flex-1">
-            <h2 className="font-display text-lg leading-tight tracking-tight truncate">
+            <h2 className="text-lg leading-tight truncate">
               {displayTitle}
             </h2>
             {/* What this conversation is anchored to. context_ref has been
@@ -785,18 +795,23 @@ export default function AgentSheet({
           onSelect={handleSelectConversation}
         />
       ) : loadingConversation ? (
-        <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <SpinnerIcon className="h-4 w-4 animate-spin" /> Öppnar konversation…
-        </div>
+        // The thread's shape while it opens: a few message bubbles.
+        <LateReveal aria-label="Öppnar konversation" className="flex flex-1 flex-col gap-4 p-5">
+          <Skeleton className="h-10 w-2/3 rounded-lg" />
+          <Skeleton className="ml-auto h-10 w-1/2 rounded-lg" />
+          <Skeleton className="h-16 w-3/4 rounded-lg" />
+        </LateReveal>
       ) : loadError ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">
-          <p className="text-destructive">{loadError}</p>
-          <button
-            onClick={() => setView('list')}
-            className="text-xs font-medium text-foreground hover:underline"
-          >
+        <div className="flex-1 px-5">
+          <LoadError
+            title={loadError}
+            onRetry={() => {
+              if (failedConversationId) void loadConversation(failedConversationId)
+            }}
+          />
+          <Button variant="link" onClick={() => setView('list')}>
             Tillbaka till konversationer
-          </button>
+          </Button>
         </div>
       ) : loaded ? (
         loaded.intentId === CHAT_INTENT_ID ? (

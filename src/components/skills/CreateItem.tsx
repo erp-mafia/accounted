@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ClipboardEvent } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import useSWR, { useSWRConfig } from 'swr'
@@ -93,6 +92,8 @@ export function CreateItem({ backHref, edit }: { backHref: string; edit?: EditTa
 
 function Create({ companyId, companyName, backHref, edit }: { companyId: string; companyName: string; backHref: string; edit?: EditTarget }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Kompetens).
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const { mutate } = useSWRConfig()
   const { canWrite } = useCanWrite()
@@ -321,10 +322,9 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
   )
   return (
     <div className={styles.apage}>
-      <PageHeader title={t('title')} />
-      {edit
-        ? <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('edit_back')}</button>
-        : <Link href={back} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>}
+      <PageHeader title={edit ? t('edit') : t('create_manual')} parent={{ label: tNav('v3_skills'), href: back }} />
+      {/* Leaving an edit goes back to the item, not to the list, so it keeps its own way back. */}
+      {edit && <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('edit_back')}</button>}
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={edit ? t('edit') : t('create_manual')}>

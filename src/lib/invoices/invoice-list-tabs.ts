@@ -43,21 +43,26 @@ export type QuoteListTab = (typeof QUOTE_LIST_TABS)[number]
 export type AnyListTab = InvoiceListTab | QuoteListTab
 
 /**
- * The views the invoice list shows as a visible segmented control while
- * collections is in play (Förfallna, Hos inkasso). The status picker then
- * leaves them out, so each view has one door, and while one of them is
- * active the picker shows its neutral label with nothing checked.
+ * The views each list shows as visible segments, first in the toolbar (V7
+ * list toolbars: at most five view segments, the rest in the status picker).
+ * "Alla" stays the default view and sits last. While collections is in play
+ * "Hos inkasso" takes the place of "Osända", which then lives in the picker.
+ * A view has one door: the status picker leaves the segment views out, and
+ * while one of them is active the picker shows its neutral label with nothing
+ * checked.
  */
-export const COLLECTIONS_SEGMENT_TABS = ['overdue', 'collections'] as const
+export function invoiceListSegmentTabs(collectionsShown: boolean): InvoiceListTab[] {
+  return ['unpaid', 'overdue', collectionsShown ? 'collections' : 'unsent', 'draft', 'all']
+}
+export const QUOTE_LIST_SEGMENT_TABS: readonly QuoteListTab[] = ['open', 'accepted', 'declined', 'expired', 'all']
 
-export function statusPickerTabs<T extends string>(tabs: readonly T[], segmentShown: boolean): T[] {
-  if (!segmentShown) return [...tabs]
-  return tabs.filter((tab) => !(COLLECTIONS_SEGMENT_TABS as readonly string[]).includes(tab))
+export function statusPickerTabs<T extends string>(tabs: readonly T[], segmentTabs: readonly string[]): T[] {
+  return tabs.filter((tab) => !segmentTabs.includes(tab))
 }
 
 /** Whether the active view belongs to the segmented control rather than the status picker. */
-export function segmentViewActive(tab: string, segmentShown: boolean): boolean {
-  return segmentShown && (COLLECTIONS_SEGMENT_TABS as readonly string[]).includes(tab)
+export function segmentViewActive(tab: string, segmentTabs: readonly string[]): boolean {
+  return segmentTabs.includes(tab)
 }
 
 /** ?status= values that are not tab ids: older bookmarks and the words users

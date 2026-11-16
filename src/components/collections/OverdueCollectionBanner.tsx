@@ -94,7 +94,7 @@ export function OverdueCollectionBanner({
   return (
     <section
       aria-label={tp('menu_send')}
-      className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-3 rounded-lg px-4 py-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised"
     >
       <div className="min-w-0 space-y-1">
         <p className="text-[13px]">
@@ -107,17 +107,17 @@ export function OverdueCollectionBanner({
           )}
         </p>
         {check && (
-          <p className={cn('text-[12.5px]', bannerCheckNeedsLook(check) ? 'text-attn' : 'text-muted-foreground')}>
+          <p className={cn('text-xs', bannerCheckNeedsLook(check) ? 'text-attn' : 'text-muted-foreground')}>
             {checkLineText(check, tp)}
           </p>
         )}
         {banner.kind === 'activate' && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {banner.canActivate ? tp('banner_activate_hint') : tp('banner_activate_ask')}
           </p>
         )}
         {banner.kind === 'batch' && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {tp(banner.labelKey)}{' '}
             <Link href={BATCH_REVIEW_HREF} className="text-foreground underline underline-offset-2">
               {tp('banner_in_batch_link')}

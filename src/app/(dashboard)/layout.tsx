@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
+import DashboardLoading from './loading'
 import { navRollouts } from '@/lib/navigation/nav-rollouts'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
@@ -26,6 +27,7 @@ import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
+import { FiscalScopeProvider } from '@/components/providers/FiscalScopeProvider'
 import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
@@ -73,19 +75,26 @@ import {
   getDashboardOpenObligations,
 } from './request-context'
 
+// The segment's loading fallback (./loading.tsx) is a sibling of the pages,
+// so the top bar it draws was bundled for it and again for each page. Naming
+// it here puts it in this layout's chunk group, which the pages reuse
+// (scripts/perf/README.md, "Page budgets").
+void DashboardLoading
+
 /**
- * Frame layout: on desktop the page is a rounded panel floating on the
- * warm-toned frame (bg-frame on the wrapper div), with its own inner
- * scroll. 10px margin against the frame; height is the remaining
- * viewport. The sidebar (fixed, --nav-w wide) sits borderless on the
- * frame, so the panel starts at ml-[var(--nav-w)]. On mobile the panel dissolves: full-width
- * document flow with the bottom nav, exactly as before.
+ * Frame layout: on desktop the window is the warm frame (bg-frame), a column
+ * of the banners (sandbox, system notice) and under them the shell
+ * (DashboardNav): the icon rail on the frame and ONE rounded panel, 10px
+ * from the frame's edges, that holds the area sidebar and the page. The
+ * frame is exactly the window (h-dvh), so a banner takes its height from the
+ * panel instead of pushing it out of view. The page (<main>) is the panel's
+ * right column and its own scroll container. On mobile the panel dissolves:
+ * full-width document flow with the bottom nav.
  */
+const SHELL_FRAME_CLASS = 'min-h-dvh bg-frame md:flex md:h-dvh md:flex-col md:overflow-hidden'
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
-  'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
-  'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
-  'md:transition-[margin-left,margin-right] md:duration-300 md:ease-drawer'
+  'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'
 
 /**
  * The browser tab names the active company (crm#1279): a byrå with several
@@ -283,17 +292,15 @@ export default async function DashboardLayout({
       >
         <SessionTimeoutController />
         <BrowserSessionGuard />
+        <FiscalScopeProvider>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-dvh bg-frame md:flex md:flex-col">
+          <div className={SHELL_FRAME_CLASS}>
             {systemNoticeBanner}
             <DashboardNav
-              companyName={getBranding().appName.toLowerCase()}
-              entityType="enskild_firma"
-              capabilitySurface={capabilitySurfaceWithoutCompany('enskild_firma')}
-              isSandbox={false}
+              navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
-            />
+            >
             <main
               id="main-content"
               className={MAIN_PANEL_CLASS}
@@ -303,6 +310,7 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
+            </DashboardNav>
             <SettingsHotkey />
           <Suspense fallback={null}>
             <SupportDialogHost />
@@ -310,6 +318,7 @@ export default async function DashboardLayout({
           <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
+        </FiscalScopeProvider>
       </CompanyProvider>
       </AllMessagesProvider>
     )
@@ -409,11 +418,6 @@ export default async function DashboardLayout({
     // when it fails, so the membership join above never carries the column.
     readStoredProfile(supabase, companyId),
   ])
-  const hasWebshop = navFlags.hasWebshop
-  const hasMileageTrips = navFlags.hasMileageTrips
-  const hasExpenseClaims = navFlags.hasExpenseClaims
-  const hasPosSales = navFlags.hasPosSales
-
   const canonicalDomain = (() => {
     try {
       return new URL(getBranding().appUrl).hostname
@@ -474,22 +478,21 @@ export default async function DashboardLayout({
       <CompanyProvider value={companyContextValue}>
         <SessionTimeoutController />
         <BrowserSessionGuard />
+        <FiscalScopeProvider>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-dvh bg-frame md:flex md:flex-col">
+          <div className={SHELL_FRAME_CLASS}>
             {systemNoticeBanner}
             <DashboardNav
-              companyName={getBranding().appName.toLowerCase()}
-              entityType="enskild_firma"
-              capabilitySurface={capabilitySurfaceWithoutCompany('enskild_firma')}
-              isSandbox={false}
+              navGate={{ entityType: 'enskild_firma', surface: capabilitySurfaceWithoutCompany('enskild_firma') }}
               extensionNavItems={getExtensionNavItems()}
-            />
+            >
             <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
               <MainContainer companyId={null}>
                 {children}
               </MainContainer>
             </main>
+            </DashboardNav>
             <SettingsHotkey />
             <Suspense fallback={null}>
               <SupportDialogHost />
@@ -497,6 +500,7 @@ export default async function DashboardLayout({
             <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
+        </FiscalScopeProvider>
       </CompanyProvider>
       </AllMessagesProvider>
     )
@@ -525,7 +529,7 @@ export default async function DashboardLayout({
   const quotesEnabled = settings?.quotes_enabled ?? true
   // Körjournal visibility: the settings toggle is the normal way in, existing
   // trips force the row on so already-created data stays reachable.
-  const hasMileage = (settings?.mileage_enabled ?? false) || hasMileageTrips
+  const hasMileage = (settings?.mileage_enabled ?? false) || navFlags.hasMileageTrips
   const companyWithName = {
     ...companyRow,
     name: displayName,
@@ -556,7 +560,20 @@ export default async function DashboardLayout({
       openObligations: await getDashboardOpenObligations(switchedOff.join(',')),
     })
   }
-  const navCapabilitySurface = capabilitySurface(navCapabilities)
+  // The menu's gates, resolved once: the sidebar and the command palette are
+  // handed the same object, so the two list the same pages.
+  const navGate = {
+    entityType,
+    surface: capabilitySurface(navCapabilities),
+    dimensionsEnabled,
+    salesOrdersEnabled,
+    quotesEnabled,
+    hasWebshop: navFlags.hasWebshop,
+    hasMileage,
+    hasExpenseClaims: navFlags.hasExpenseClaims,
+    hasPosSales: navFlags.hasPosSales,
+    ...navRollouts(companyId),
+  }
 
   const isSandbox = settings?.is_sandbox === true
 
@@ -674,6 +691,7 @@ export default async function DashboardLayout({
       >
       <SessionTimeoutController />
       <BrowserSessionGuard />
+      <FiscalScopeProvider>
       <DashboardRouteShell
         onboarding={
           <div className="relative min-h-dvh bg-background">
@@ -703,7 +721,7 @@ export default async function DashboardLayout({
         <CompanyTabSync />
         <div
           id="dash-shell"
-          className="min-h-dvh bg-frame md:flex md:flex-col"
+          className={SHELL_FRAME_CLASS}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -716,23 +734,13 @@ export default async function DashboardLayout({
           {isSandbox && <SandboxBanner />}
           {systemNoticeBanner}
           <DashboardNav
-            companyName={settings?.company_name || 'Min verksamhet'}
-            entityType={entityType}
-            capabilitySurface={navCapabilitySurface}
-            dimensionsEnabled={dimensionsEnabled}
-            salesOrdersEnabled={salesOrdersEnabled}
-            quotesEnabled={quotesEnabled}
-            hasWebshop={hasWebshop}
-            hasMileage={hasMileage}
-            hasExpenseClaims={hasExpenseClaims}
-            hasPosSales={hasPosSales}
-            {...navRollouts(companyId)}
+            navGate={navGate}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
             showDiscordInvite={showDiscordInvite}
-          />
+          >
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>
               {showSignpost ? (
@@ -749,6 +757,7 @@ export default async function DashboardLayout({
               )}
             </MainContainer>
           </main>
+          </DashboardNav>
           {/* One-time post-trial invitation. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate
               lives here where both flags are known. Acknowledgement persists
@@ -761,8 +770,8 @@ export default async function DashboardLayout({
               initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
             />
           )}
-          {/* The palette's inbox entry goes where the menu puts the inbox (lib/inkorg/flag.ts). */}
-          <LazyCommandPalette inkorgV2Enabled={navRollouts(companyId).inkorgV2Enabled} />
+          {/* The palette lists the shell's own rows, gated as the sidebar gates them. */}
+          <LazyCommandPalette navGate={navGate} />
           <SettingsHotkey />
           {/* ?support=1, the link in the "we have answered" mail. Every shell
               mounts it: this one lacked it, so the link opened nothing for
@@ -806,6 +815,7 @@ export default async function DashboardLayout({
         )}
       </AgentSheetProvider>
       </DashboardRouteShell>
+      </FiscalScopeProvider>
       </ReferenceDataSeed>
     </CompanyProvider>
     </AllMessagesProvider>

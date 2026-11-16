@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { AutogiroSection } from './AutogiroSection'
 import { requestAutogiro, saveAnswerFile } from './client'
 import { fileKindLabel, MANDATE_STATUS_VARIANT, REPORT_OUTCOME_VARIANT, type AutogiroT } from './labels'
@@ -96,17 +96,17 @@ export function AutogiroReportUpload({ canWrite, onApplied }: { canWrite: boolea
           <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-[13px]">
             <DocumentArrowUpIcon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
             <p>{t('upload_drop')}</p>
-            <p className="max-w-xl text-[12.5px] text-muted-foreground">{t('upload_or_settle')}</p>
+            <p className="max-w-xl text-xs text-muted-foreground">{t('upload_or_settle')}</p>
           </div>
         </FileDropzone>
       ) : (
-        <div className="space-y-4 rounded-lg border border-border p-6">
+        <div className="space-y-4 rounded-lg p-6 bg-control shadow-raised">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <p className="font-display text-xl">
+            <p className="text-[15px] font-medium leading-[22px] text-strong">
               {shown ? fileKindLabel(shown.kind, t) : t('upload_reading')}
               {result && <span className="ml-2 text-[13px] text-muted-foreground">{t('upload_applied')}</span>}
             </p>
-            <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+            <p data-ph-mask="" className="text-xs text-muted-foreground">
               {file.name}
             </p>
           </div>
@@ -119,7 +119,7 @@ export function AutogiroReportUpload({ canWrite, onApplied }: { canWrite: boolea
           )}
 
           {error && (
-            <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+            <div className="bg-destructive/8 flex gap-3 rounded-lg p-4">
               <ExclamationCircleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" aria-hidden="true" />
               <div>
                 <p className="font-medium text-destructive">{t('upload_failed')}</p>
@@ -201,7 +201,7 @@ function Issues({ issues, t }: { issues: ReportResponse['issues']; t: AutogiroT 
 
 function DebitLines({ lines, t }: { lines: ReportDebitLine[]; t: AutogiroT }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="-mx-2 overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
@@ -220,8 +220,8 @@ function DebitLines({ lines, t }: { lines: ReportDebitLine[]; t: AutogiroT }) {
               <tr key={`${line.payer_number}-${line.reference}-${index}`} className="transition-colors duration-150 hover:bg-secondary/35">
                 <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{line.payer_number ?? '-'}</td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{line.invoice_number ?? '-'}</td>
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{line.date ? formatDate(line.date) : '-'}</td>
-                <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatCurrency(line.amount)}</td>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{line.date ? formatDate(line.date) : '-'}</td>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatRowAmount(line.amount)}</td>
                 <td className={cn(TD_CLASS, 'max-w-0')}>
                   <span className="flex min-w-0 items-baseline gap-2">
                     {variant ? (
@@ -232,7 +232,7 @@ function DebitLines({ lines, t }: { lines: ReportDebitLine[]; t: AutogiroT }) {
                       <span className="shrink-0 text-muted-foreground">{label}</span>
                     )}
                     {(line.status_text || line.outcome === 'unknown') && (
-                      <span className="truncate text-[12.5px] text-muted-foreground" title={line.status_text ?? t('outcome_unknown_hint')}>
+                      <span className="truncate text-xs text-muted-foreground" title={line.status_text ?? t('outcome_unknown_hint')}>
                         {line.status_text ?? t('outcome_unknown_hint')}
                       </span>
                     )}
@@ -263,7 +263,7 @@ function MandateLines({
   t: AutogiroT
 }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="-mx-2 overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
@@ -288,7 +288,7 @@ function MandateLines({
                 ) : (
                   <span className="text-attn">{t('customer_not_linked')}</span>
                 )}
-                {line.linked && <span className="ml-2 text-[12.5px] text-muted-foreground">{applied ? t('linked_done') : t('linked_will')}</span>}
+                {line.linked && <span className="ml-2 text-xs text-muted-foreground">{applied ? t('linked_done') : t('linked_will')}</span>}
               </td>
               <td className={cn(TD_CLASS, 'max-w-0')}>
                 {internetBank ? (
@@ -297,7 +297,7 @@ function MandateLines({
                   <span className="flex min-w-0 items-baseline gap-2">
                     <MandateStatusLabel status={line.status} t={t} />
                     {line.status_text && (
-                      <span className="truncate text-[12.5px] text-muted-foreground" title={line.status_text}>
+                      <span className="truncate text-xs text-muted-foreground" title={line.status_text}>
                         {line.status_text}
                       </span>
                     )}
@@ -385,8 +385,8 @@ function ResultNotes({ result, t }: { result: ReportResponse; t: AutogiroT }) {
       {result.answer_file && (
         <div className="flex flex-wrap items-center gap-3">
           <p>{t('answer_file_saved')}</p>
-          <Button type="button" size="sm" variant="ghost" onClick={() => saveAnswerFile(result.answer_file!)}>
-            <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+          <Button type="button" variant="ghost" onClick={() => saveAnswerFile(result.answer_file!)}>
+            <ArrowDownTrayIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('answer_file_again')}
           </Button>
         </div>

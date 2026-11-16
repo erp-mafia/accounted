@@ -11,7 +11,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "Calendar",
           "dataPattern": "core",
           "description": "Synka deadlines och fakturornas förfallodagar med Apple Calendar, Google Calendar eller Outlook",
-          "longDescription": "Prenumerera på deadlines och fakturornas förfallodagar i Apple Calendar, Google Calendar eller Outlook. Länken skapar du under Inställningar, Profil.",
+          "longDescription": "Prenumerera på deadlines och fakturornas förfallodagar i Apple Calendar, Google Calendar eller Outlook. Länken skapar du under Inställningar, Ditt konto.",
           "readsCoreTables": [
                 "invoices",
                 "deadlines",

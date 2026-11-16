@@ -5,10 +5,9 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowsRightLeftIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { LIST_BLEED_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
@@ -106,7 +105,7 @@ export default function DimensionCrossView({ periodId, dateRange }: { periodId: 
   }
 
   // Race-safe when the axes, the measure or the window change mid-flight.
-  const { data, loading, error } = useReportData<DimensionCrossReport>(
+  const { data, loading, error, refetch } = useReportData<DimensionCrossReport>(
     query ? `/api/reports/dimension-cross?${query}` : null,
     t('dimension_cross_load_error'),
   )
@@ -162,7 +161,7 @@ export default function DimensionCrossView({ periodId, dateRange }: { periodId: 
       <Button
         type="button"
         variant="outline"
-        size="icon-sm"
+        size="icon-toolbar"
         aria-label={t('dimension_cross_swap')}
         title={t('dimension_cross_swap')}
         onClick={() => setPicked({ a: axes.b, b: axes.a })}
@@ -217,13 +216,13 @@ export default function DimensionCrossView({ periodId, dateRange }: { periodId: 
 
   let body: React.ReactNode
   if (rangeIncomplete) {
-    body = <p className="text-[12.5px] text-muted-foreground">
+    body = <p className="text-sm text-muted-foreground">
         {t('dimension_cross_range_hint', { first: RESULTATKONTO_FIRST, last: RESULTATKONTO_LAST })}
       </p>
   } else if (loading) {
     body = <ReportLoadingCard />
   } else if (error) {
-    body = <ReportErrorCard message={error} />
+    body = <ReportErrorCard message={error} onRetry={refetch} />
   } else if (
     !data ||
     data.rows.length === 0 ||
@@ -243,11 +242,7 @@ export default function DimensionCrossView({ periodId, dateRange }: { periodId: 
           {t('date_range_label')}:{' '}
           {t('date_range_custom_summary', { from: formatDate(data.period.start), to: formatDate(data.period.end) })}
         </p>
-        <Card>
-          <CardContent className="p-0">
-            <CrossMatrix data={data} valueLabel={valueLabel} onOpen={setOpenCell} />
-          </CardContent>
-        </Card>
+        <CrossMatrix data={data} valueLabel={valueLabel} onOpen={setOpenCell} />
       </div>
     )
   }
@@ -278,66 +273,73 @@ function CrossMatrix({
   onOpen: (cell: OpenCell) => void
 }) {
   const t = useTranslations('reports')
-  const amountCell = 'px-4 py-1.5 text-right tabular-nums whitespace-nowrap'
+  // A report table (board Rapporter-v3, as ReportSectionTable): cells 8px in
+  // with the list's 8px bleed, amounts without "kr", the Totalt row over the
+  // strong rule and the grand total as the headline number.
+  const cell = 'h-9 px-2 py-2 align-top border-b-hairline'
+  const amountCell = cn(cell, 'text-right tabular-nums whitespace-nowrap')
+  const totalCell = 'px-2 pb-2 pt-3 align-baseline border-t-total text-right tabular-nums whitespace-nowrap'
 
   return (
-    <Table className="text-[13px]">
-      <TableHeader>
-        <TableRow>
-          {/* data-ph-mask: dimension names and values are user data. */}
-          <TableHead data-ph-mask="" className="h-auto px-4 py-2 text-left">
-            {data.dim_a.name} / {data.dim_b.name}
-          </TableHead>
-          {data.columns.map((c, j) => (
-            <TableHead key={j} data-ph-mask="" className="h-auto px-4 py-2 text-right whitespace-nowrap">
-              {valueLabel(c)}
-            </TableHead>
+    <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr>
+            {/* data-ph-mask: dimension names and values are user data. */}
+            <th data-ph-mask="" className={TH_CLASS}>
+              {data.dim_a.name} / {data.dim_b.name}
+            </th>
+            {data.columns.map((c, j) => (
+              <th key={j} data-ph-mask="" className={cn(TH_CLASS, 'text-right')}>
+                {valueLabel(c)}
+              </th>
+            ))}
+            <th className={cn(TH_CLASS, 'text-right')}>{t('dimension_cross_total')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, i) => (
+            <tr key={i}>
+              <td data-ph-mask="" className={cn(cell, 'whitespace-nowrap')}>
+                {valueLabel(row)}
+                {row.name && <span className="ml-2 text-muted-foreground">{row.name}</span>}
+              </td>
+              {data.cells[i]!.map((amount, j) => {
+                const column = data.columns[j]!
+                return (
+                  <td key={j} className={amountCell}>
+                    {Math.abs(amount) >= 0.005 ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpen({ row, column, amount })}
+                        aria-label={t('dimension_cross_cell_open', { row: valueLabel(row), column: valueLabel(column) })}
+                        className="rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
+                        {formatAmount(amount)}
+                      </button>
+                    ) : (
+                      ''
+                    )}
+                  </td>
+                )
+              })}
+              <td className={cn(amountCell, 'font-medium text-strong')}>{formatAmount(data.row_totals[i]!)}</td>
+            </tr>
           ))}
-          <TableHead className="h-auto px-4 py-2 text-right">{t('dimension_cross_total')}</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {data.rows.map((row, i) => (
-          <TableRow key={i}>
-            <TableCell data-ph-mask="" className="px-4 py-1.5 whitespace-nowrap">
-              {valueLabel(row)}
-              {row.name && <span className="ml-2 text-muted-foreground">{row.name}</span>}
-            </TableCell>
-            {data.cells[i]!.map((amount, j) => {
-              const column = data.columns[j]!
-              return (
-                <TableCell key={j} className={amountCell}>
-                  {Math.abs(amount) >= 0.005 ? (
-                    <button
-                      type="button"
-                      onClick={() => onOpen({ row, column, amount })}
-                      aria-label={t('dimension_cross_cell_open', { row: valueLabel(row), column: valueLabel(column) })}
-                      className="rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    >
-                      {formatAmount(amount)}
-                    </button>
-                  ) : (
-                    ''
-                  )}
-                </TableCell>
-              )
-            })}
-            <TableCell className={cn(amountCell, 'font-medium')}>{formatAmount(data.row_totals[i]!)}</TableCell>
-          </TableRow>
-        ))}
-        <TableRow className="border-t font-medium hover:bg-transparent">
-          <TableCell className="px-4 py-2">{t('dimension_cross_total')}</TableCell>
-          {data.column_totals.map((v, j) => (
-            <TableCell key={j} className={cn(amountCell, 'py-2')}>{formatAmount(v)}</TableCell>
-          ))}
-          <TableCell
-            className={cn(amountCell, 'py-2 font-display text-[15px]', data.total >= 0 ? 'text-success' : 'text-destructive')}
-          >
-            {formatAmount(data.total)}
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td className={cn(totalCell, 'text-left font-medium text-strong')}>{t('dimension_cross_total')}</td>
+            {data.column_totals.map((v, j) => (
+              <td key={j} className={cn(totalCell, 'font-medium text-strong')}>{formatAmount(v)}</td>
+            ))}
+            <td className={cn(totalCell, 'font-display text-3xl', data.total >= 0 ? 'text-success' : 'text-destructive')}>
+              {formatAmount(data.total)} kr
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
   )
 }
 
@@ -354,6 +356,7 @@ function CellLines({
   onClose: () => void
 }) {
   const t = useTranslations('reports')
+  const tCommon = useTranslations('common')
   const first = useMemo(() => {
     const params = new URLSearchParams(query)
     // A null code is the "(Utan dimension)" row or column: left out.
@@ -362,7 +365,7 @@ function CellLines({
     return `/api/reports/dimension-cross/lines?${params.toString()}`
   }, [query, cell])
 
-  const { pages, loading, error, hasMore, loadMore } = useReportPages<DimensionCrossLinesPage>(
+  const { pages, loading, error, hasMore, loadMore, retry } = useReportPages<DimensionCrossLinesPage>(
     first,
     t('dimension_cross_lines_error'),
     (page) =>
@@ -392,56 +395,62 @@ function CellLines({
           }
         />
         <SlideOverBody className="px-0">
+          {/* The table runs to the drawer's edges; everything else sits on its 20px inset. */}
           {error && lines.length === 0 ? (
-            <p className="px-6 text-[13px] text-destructive">{error}</p>
+            <div className="px-5">
+              <ReportErrorCard message={error} onRetry={retry} />
+            </div>
           ) : loading && lines.length === 0 ? (
-            <div className="space-y-2 px-6">
-              {[1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-4 w-full" />
-              ))}
+            <div className="px-5">
+              <ReportLoadingCard />
             </div>
           ) : lines.length === 0 ? (
-            <p className="px-6 text-[13px] text-muted-foreground">{t('dimension_cross_lines_empty')}</p>
+            <p className="px-5 text-sm text-muted-foreground">{t('dimension_cross_lines_empty')}</p>
           ) : (
             <div className="space-y-3">
-              <Table className="text-[13px]">
+              <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="h-auto px-4 py-2">{t('dimension_cross_col_date')}</TableHead>
-                    <TableHead className="h-auto px-2 py-2">{t('dimension_cross_col_voucher')}</TableHead>
-                    <TableHead className="h-auto px-2 py-2">{t('dimension_cross_col_account')}</TableHead>
-                    <TableHead className="h-auto px-2 py-2">{t('dimension_cross_col_text')}</TableHead>
-                    <TableHead className="h-auto px-4 py-2 text-right">{t('dimension_cross_col_amount')}</TableHead>
+                    <TableHead className="pl-5 pr-2">{t('dimension_cross_col_date')}</TableHead>
+                    <TableHead className="px-2">{t('dimension_cross_col_voucher')}</TableHead>
+                    <TableHead className="px-2">{t('dimension_cross_col_account')}</TableHead>
+                    <TableHead className="px-2">{t('dimension_cross_col_text')}</TableHead>
+                    <TableHead className="pl-2 pr-5 text-right">{t('dimension_cross_col_amount')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="stagger-enter">
                   {lines.map((line) => (
                     <TableRow key={line.line_id}>
-                      <TableCell className="px-4 py-1.5 tabular-nums whitespace-nowrap">{formatDate(line.entry_date)}</TableCell>
-                      <TableCell className="px-2 py-1.5 tabular-nums whitespace-nowrap">
+                      <TableCell className="date-figures pl-5 pr-2 whitespace-nowrap">{formatDate(line.entry_date)}</TableCell>
+                      <TableCell className="px-2 tabular-nums whitespace-nowrap">
                         <Link href={`/bookkeeping/${line.journal_entry_id}`} className="underline-offset-4 hover:underline">
                           {formatVoucher(line)}
                         </Link>
                       </TableCell>
-                      <TableCell className="px-2 py-1.5 tabular-nums">{line.account_number}</TableCell>
-                      <TableCell data-ph-mask="" className="max-w-[160px] truncate px-2 py-1.5">
+                      <TableCell className="px-2 tabular-nums">{line.account_number}</TableCell>
+                      <TableCell data-ph-mask="" className="max-w-[160px] truncate px-2">
                         {line.line_description || line.description || ''}
                       </TableCell>
-                      <TableCell className="px-4 py-1.5 text-right tabular-nums whitespace-nowrap">
+                      <TableCell className="pl-2 pr-5 text-right tabular-nums whitespace-nowrap">
                         {formatAmount(line.credit_amount - line.debit_amount)}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              {(hasMore || (loading && lines.length > 0)) && (
-                <div className="px-6">
-                  <Button type="button" variant="outline" size="sm" loading={loading} onClick={loadMore}>
+              {/* A page that failed keeps the rows above and says so in one line. */}
+              {error ? (
+                <div className="flex items-center gap-3 px-5 text-sm">
+                  <span className="text-destructive">{error}</span>
+                  <Button variant="link" onClick={retry}>{tCommon('retry')}</Button>
+                </div>
+              ) : (hasMore || loading) && (
+                <div className="px-5">
+                  <Button type="button" variant="outline" loading={loading} onClick={loadMore}>
                     {t('dimension_cross_show_more')}
                   </Button>
                 </div>
               )}
-              {error && lines.length > 0 && <p className="px-6 text-[13px] text-destructive">{error}</p>}
             </div>
           )}
         </SlideOverBody>

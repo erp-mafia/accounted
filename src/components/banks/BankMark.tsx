@@ -12,7 +12,7 @@ export function BankMark({ bankName, size = 20, className }: { bankName: string 
   if (!src) return null
   return (
     <span
-      className={cn('inline-grid shrink-0 place-items-center overflow-hidden rounded-lg border border-border bg-white align-middle', className)}
+      className={cn('inline-grid shrink-0 place-items-center overflow-hidden bg-white align-middle', className)}
       style={{ width: size, height: size }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}

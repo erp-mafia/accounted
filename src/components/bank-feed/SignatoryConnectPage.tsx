@@ -4,9 +4,18 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { StatusGlyph } from '@/components/ui/status-glyph'
+import { useBranding } from '@/lib/branding/brand-context'
+import {
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneOutcome,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { BankMark } from '@/components/banks/BankMark'
 import { BANK_CONNECT_SIGNATORY_TARGET } from '@/lib/bank-feed/return-url'
 import { FlowHelp, FlowSteps, flowPosition, flowShowsBankMark, flowTitle } from './BankConnectSteps'
@@ -52,10 +61,15 @@ interface ReturnedFrom {
  */
 export function SignatoryConnectPage(props: SignatoryConnectPageProps) {
   const t = useTranslations('koppla')
+  const tSigning = useTranslations('signing_page')
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
   const backend = useMemo(() => createSignatoryBackend(props.token, { offerPayments: props.offerPayments }), [props.token, props.offerPayments])
   const [banks, setBanks] = useState<OpenPaymentsBank[] | null>(null)
   const [banksFailed, setBanksFailed] = useState(false)
+  // Bumped by "Försök igen": asks for the bank list again. The failure stays
+  // until the new answer, so the open flow does not reset while it waits.
+  const [banksAttempt, setBanksAttempt] = useState(0)
   // The return parameters are read once and dropped from the URL: a reload
   // after that opens the link afresh, never the bank's answer a second time.
   const [returnedFrom] = useState<ReturnedFrom | null>(() => {
@@ -72,8 +86,10 @@ export function SignatoryConnectPage(props: SignatoryConnectPageProps) {
       .fetchAvailability()
       .then((availability) => {
         if (cancelled) return
-        if (availability.available) setBanks(availability.banks)
-        else setBanksFailed(true)
+        if (availability.available) {
+          setBanks(availability.banks)
+          setBanksFailed(false)
+        } else setBanksFailed(true)
       })
       .catch(() => {
         if (!cancelled) setBanksFailed(true)
@@ -81,7 +97,7 @@ export function SignatoryConnectPage(props: SignatoryConnectPageProps) {
     return () => {
       cancelled = true
     }
-  }, [backend])
+  }, [backend, banksAttempt])
 
   // Back from the bank's page: resume the connection at its BankID step. From
   // the link itself: the link names the bank by BIC alone and the list gives
@@ -102,29 +118,26 @@ export function SignatoryConnectPage(props: SignatoryConnectPageProps) {
   }, [returnedFrom, props.bic, props.mode, props.replace, banks, banksFailed])
 
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-md space-y-6">
-        <header className="space-y-1">
-          <p className="text-[12.5px] uppercase tracking-wider text-muted-foreground">{t('eyebrow')}</p>
-          <h1 className="font-display text-2xl tracking-tight" data-ph-mask="">
-            {props.companyName}
-          </h1>
-          <p className="text-[13px] text-muted-foreground" data-ph-mask="">
-            {t('requested_by', { requester: props.requester })}
-          </p>
-        </header>
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={props.companyName} via={tSigning('via', { platform: appName })} />
+      <StandaloneHeading
+        className="mt-5"
+        title={t('eyebrow')}
+        sub={<span data-ph-mask="">{t('requested_by', { requester: props.requester })}</span>}
+      />
+      <div className="mt-5">
         {session ? (
-          <SignatoryFlow key={session.key} token={props.token} session={session} backend={backend} banks={banks} banksFailed={banksFailed} soleTrader={props.soleTrader} />
+          <SignatoryFlow key={session.key} token={props.token} session={session} backend={backend} banks={banks} banksFailed={banksFailed} onRetryBanks={() => setBanksAttempt((n) => n + 1)} soleTrader={props.soleTrader} />
         ) : (
-          <div className="space-y-3 rounded-lg border border-border p-6">
+          <LateReveal className="space-y-3">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
-          </div>
+          </LateReveal>
         )}
-        <p className="text-[12.5px] text-muted-foreground">{t('footer_provider')}</p>
       </div>
-    </main>
+      <StandaloneSmall>{t('footer_provider')}</StandaloneSmall>
+    </StandalonePage>
   )
 }
 
@@ -134,6 +147,7 @@ function SignatoryFlow({
   backend,
   banks,
   banksFailed,
+  onRetryBanks,
   soleTrader,
 }: {
   token: string
@@ -141,6 +155,7 @@ function SignatoryFlow({
   backend: ReturnType<typeof createSignatoryBackend>
   banks: OpenPaymentsBank[] | null
   banksFailed: boolean
+  onRetryBanks: () => void
   soleTrader: boolean
 }) {
   const t = useTranslations('koppla')
@@ -175,10 +190,13 @@ function SignatoryFlow({
 
   if (outcome !== 'open') {
     return (
-      <section className="space-y-2 rounded-lg border border-border p-6">
-        <h2 className="font-display text-xl tracking-tight">{t(outcome === 'finished' ? 'finished_title' : 'cancelled_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">{t(outcome === 'finished' ? 'finished_body' : 'cancelled_body')}</p>
-      </section>
+      <StandaloneOutcome
+        className="border-t-hairline pt-4"
+        mark={outcome === 'finished' ? <StatusGlyph tone="ok" size={16} /> : undefined}
+        title={t(outcome === 'finished' ? 'finished_title' : 'cancelled_title')}
+      >
+        {t(outcome === 'finished' ? 'finished_body' : 'cancelled_body')}
+      </StandaloneOutcome>
     )
   }
 
@@ -187,23 +205,25 @@ function SignatoryFlow({
   const titleMark = flowShowsBankMark(state, titleBank)
   const title = flowTitle(state, titleBank, tFlow)
   const cancelButton = (
-    <Button variant="secondary" onClick={requestCancel}>
+    <Button variant="outline" onClick={requestCancel}>
       {tFlow('cancel')}
     </Button>
   )
 
   return (
     <>
-      <section className="space-y-4 rounded-lg border border-border p-6">
+      {/* The flow's footer bleeds 20px (a dialog's inset): on a phone the
+          panel's inset is 16px, so the section adds the missing 4px. */}
+      <section className="space-y-4 border-t-hairline pt-4 max-sm:px-1">
         <div className="space-y-1">
           {position && (
-            <p className="text-[12.5px] tabular-nums text-muted-foreground" data-ph-unmask="">
+            <p className="text-xs tabular-nums text-muted-foreground" data-ph-unmask="">
               {tFlow('step_of', { n: position.n, total: position.total })}
             </p>
           )}
           <div className="flex items-center gap-2">
             {titleMark && <BankMark bankName={titleBank} size={24} />}
-            <h2 className="font-display text-xl tracking-tight" data-ph-mask={titleMark ? '' : undefined}>
+            <h2 className="text-[15px] leading-[22px] text-strong" data-ph-mask={titleMark ? '' : undefined}>
               {title}
             </h2>
             {state.step !== 'done' && (
@@ -221,6 +241,7 @@ function SignatoryFlow({
           session={session}
           banks={banks}
           banksFailed={banksFailed}
+          onRetryBanks={onRetryBanks}
           soleTrader={soleTrader}
           closeButton={cancelButton}
           onClose={() => setOutcome('finished')}

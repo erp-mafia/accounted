@@ -142,10 +142,10 @@ export default function AgentOnboarding({
   return (
     <div className="w-full">
       <header className="mb-10 text-center">
-        <p className="text-sm uppercase tracking-wider text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {firstName ? `${firstName}, ` : ''}ett ögonblick
         </p>
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight mt-2">
+        <h1 className="text-3xl md:text-4xl mt-2">
           Vi bygger din bokföringsassistent
         </h1>
         <p className="text-muted-foreground mt-3 text-balance">
@@ -153,8 +153,8 @@ export default function AgentOnboarding({
         </p>
       </header>
 
-      <Card className="border-border">
-        <CardContent className="p-6 md:p-8">
+      <Card>
+        <CardContent>
           <ol className="space-y-4">
             {STEPS.map((step) => (
               <StepRow key={step.id} step={step} status={statuses[step.id]} />
@@ -162,14 +162,13 @@ export default function AgentOnboarding({
           </ol>
 
           {errorMessage && (
-            <div className="mt-6 flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm">
+            <div className="bg-destructive/8 mt-6 flex items-start gap-3 rounded-lg px-4 py-3 text-sm">
               <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
               <div>
                 <p className="font-medium">Något gick fel</p>
                 <p className="text-muted-foreground mt-1">{errorMessage}</p>
                 <Button
                   variant="outline"
-                  size="sm"
                   className="mt-3"
                   onClick={() => window.location.reload()}
                 >
@@ -192,7 +191,7 @@ function StepRow({ step, status }: { step: StepConfig; status: StepStatus }) {
         {status === 'success' && <CheckIcon className="h-4 w-4 text-success" />}
         {status === 'fallback' && <CheckIcon className="h-4 w-4 text-warning" />}
         {status === 'in_progress' && <SpinnerIcon className="h-4 w-4 animate-spin text-foreground" />}
-        {status === 'pending' && <CircleIcon className="h-4 w-4 text-muted-foreground/50" />}
+        {status === 'pending' && <CircleIcon className="h-4 w-4 text-muted-foreground" />}
         {status === 'error' && <ExclamationTriangleIcon className="h-4 w-4 text-destructive" />}
       </span>
       <span

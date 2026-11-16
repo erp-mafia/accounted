@@ -13,21 +13,28 @@
  * Class tokens are read from string literals in the TypeScript AST (JSX
  * attributes, cn() arguments, constants), never from comments.
  *
- * Rules:
+ * Rules (Stil v3 since 2026-11-01):
  *   button-height-override  a <Button> whose className sets a height (h-*,
- *                           min-h-*, py-*). Pick a size: sm (h-8, the toolbar
- *                           height), default (h-9), lg (h-11), icon (h-10).
+ *                           min-h-*, py-*). Pick a size: default (h-7, rows,
+ *                           lists, dialogs), toolbar (h-8, the toolbar
+ *                           height), lg (h-11), icon (h-7), icon-toolbar (h-8).
  *   toolbar-button-size     a <Button> in a toolbar position that is not
- *                           size="sm" / "icon-sm": beside a 32px toolbar
- *                           control (pickers, ToolbarSearch,
+ *                           size="toolbar" / "icon-toolbar": beside a 32px
+ *                           toolbar control (pickers, ToolbarSearch,
  *                           SegmentedControl) or in the top bar (PageHeader
- *                           action, or a hand-rolled .page-header). A 36px
- *                           button next to a 32px picker was the visible
- *                           symptom (KPI "Anpassa", 2026-09-24).
+ *                           action, or a hand-rolled .page-header). A button
+ *                           shorter or taller than the picker beside it was
+ *                           the visible symptom (KPI "Anpassa", 2026-09-24).
+ *   pill-button             rounded-full on a <Button>: buttons are 6px
+ *                           rectangles, set once in components/ui/button.tsx.
+ *   small-caps-label        `uppercase` beside tracking or a label size: every
+ *                           label is 12px in sentence case (Stil v3), never
+ *                           tracked capitals.
  *   button-spinner          a SpinnerIcon rendered inside a <Button>. Pass
  *                           loading={...}; the button owns the spinner.
- *   off-token-duration      a duration other than 150 (state changes) or 300
- *                           (layout changes), or an arbitrary duration-[..].
+ *   off-token-duration      a duration other than 100 (the press), 150 (state
+ *                           changes) or 300 (layout changes), or an arbitrary
+ *                           duration-[..].
  *   literal-easing          ease-[cubic-bezier(...)]. Use ease-out,
  *                           ease-emphasized or ease-drawer.
  *   transition-all          animates layout properties by accident; name the
@@ -45,7 +52,8 @@
  *                           useDestructiveConfirm() from destructive-confirm-dialog.
  *   focus-not-visible       focus:ring-*. Rings are keyboard-only:
  *                           focus-visible:ring-*.
- *   off-scale-text          text-[Npx] outside the scale 11 / 12.5 / 13 / 15.
+ *   off-scale-text          text-[Npx] outside the scale 11 (count and key
+ *                           tiles only) / 12 / 13 / 15 / 20.
  *   decorative-animation    animate-bounce, animate-ping, animate-scale-in.
  *   icon-in-paragraph       an icon (a tag named *Icon or Icon) inside a <p>.
  *                           Every icon from @/components/icons renders a
@@ -64,8 +72,8 @@ const IGNORE_DIRS = new Set(['node_modules', '.next', '__tests__'])
 // The button primitive defines its own hover states.
 const HOVER_TINT_EXEMPT = new Set(['components/ui/button.tsx'])
 
-const TEXT_SCALE = new Set(['11', '12.5', '13', '15'])
-const DURATIONS = new Set(['0', '150', '300'])
+const TEXT_SCALE = new Set(['11', '12', '13', '15', '20'])
+const DURATIONS = new Set(['0', '100', '150', '300'])
 const ALLOWED_HOVER_TINTS = new Set(['secondary/35', 'secondary/60'])
 
 const PALETTE =
@@ -92,6 +100,16 @@ function splitVariants(token) {
     }
   }
   return { variants: parts, utility: token.slice(start).replace(/^!/, '') }
+}
+
+// A label set in tracked capitals: `uppercase` beside tracking or a label
+// size. An input that uppercases what is typed (a registration number) is
+// not a label and passes.
+const LABEL_SIZE_RE = /^text-(?:xs|\[(?:9|10|10\.5|11|11\.5|12|12\.5)px\])$/
+export function isSmallCapsLabel(tokens) {
+  const utilities = tokens.map((t) => splitVariants(t).utility)
+  if (!utilities.includes('uppercase')) return false
+  return utilities.some((u) => u.startsWith('tracking-') || LABEL_SIZE_RE.test(u))
 }
 
 /** Rules that judge a single class token. Returns a rule name or null. */
@@ -128,7 +146,12 @@ export function classifyToken(token, file) {
 // not part of the row they are opened from.
 const TOOLBAR_CONTROLS = new Set(['FyPicker', 'ContextPicker', 'ToolbarSearch', 'SegmentedControl', 'ReportDateRange', 'FiscalYearSelector'])
 const OVERLAY_CONTENT = new Set(['Dialog', 'DialogContent', 'SheetContent', 'AlertDialogContent', 'DropdownMenuContent', 'PopoverContent', 'SlideOver'])
-const TOOLBAR_SIZES = new Set(['sm', 'icon-sm'])
+const TOOLBAR_SIZES = new Set(['toolbar', 'icon-toolbar'])
+// Wrappers a toolbar button sits in without leaving the row: a menu or popover
+// trigger, a tooltip, or the plain box that pushes it to the row's end (ml-auto;
+// any other box may be a block below the row, so it does not count).
+const TOOLBAR_WRAPPERS = new Set(['DropdownMenu', 'DropdownMenuTrigger', 'Popover', 'PopoverTrigger', 'Tooltip', 'TooltipTrigger'])
+const ROW_PUSHER_RE = /(?:^|[\s"'`])ml-auto(?:[\s"'`]|$)/
 const PAGE_HEADER_CLASS_RE = /(?:^|[\s"'`])page-header(?:[\s"'`]|$)/
 
 const HEIGHT_TOKEN_RE = /^(?:min-h|h|py)-(?!auto$)/
@@ -168,6 +191,13 @@ function jsxChildren(el) {
   }
   el.children.forEach(visit)
   return out
+}
+
+// A plain <div>/<span> whose class list pushes it to the end of a row.
+function isRowPusher(el) {
+  if (!['div', 'span'].includes(jsxTag(el))) return false
+  const attrs = (ts.isJsxElement(el) ? el.openingElement : el).attributes.properties
+  return attrs.some((a) => ts.isJsxAttribute(a) && a.name.getText() === 'className' && a.initializer && ROW_PUSHER_RE.test(a.initializer.getText()))
 }
 
 // Every <Button> under `node`, not descending into overlays.
@@ -226,7 +256,10 @@ export function findInSource(file, text) {
     if (ts.isJsxElement(node)) {
       const kids = jsxChildren(node)
       if (kids.some((k) => TOOLBAR_CONTROLS.has(jsxTag(k)))) {
-        for (const k of kids) if (jsxTag(k) === 'Button') markToolbar(ts.isJsxElement(k) ? k.openingElement : k)
+        for (const k of kids) {
+          if (jsxTag(k) === 'Button') markToolbar(ts.isJsxElement(k) ? k.openingElement : k)
+          else if (TOOLBAR_WRAPPERS.has(jsxTag(k)) || isRowPusher(k)) buttonsWithin(k).forEach(markToolbar)
+        }
       }
       const cls = node.openingElement.attributes.properties.find((a) => ts.isJsxAttribute(a) && a.name.getText(sf) === 'className')
       if (cls && PAGE_HEADER_CLASS_RE.test(cls.getText(sf))) buttonsWithin(node).forEach(markToolbar)
@@ -239,11 +272,12 @@ export function findInSource(file, text) {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
       // Import specifiers and object keys are not class lists.
       if (!ts.isImportDeclaration(node.parent) && !ts.isExportDeclaration(node.parent)) {
-        for (const token of node.text.split(/\s+/)) {
-          if (!token) continue
+        const tokens = node.text.split(/\s+/).filter(Boolean)
+        for (const token of tokens) {
           const rule = classifyToken(token, file)
           if (rule) push(node, rule, token)
         }
+        if (isSmallCapsLabel(tokens)) push(node, 'small-caps-label', 'uppercase')
       }
     }
 
@@ -262,6 +296,9 @@ export function findInSource(file, text) {
           for (const token of s.split(/\s+/)) {
             if (token && HEIGHT_TOKEN_RE.test(splitVariants(token).utility)) {
               push(attr, 'button-height-override', token)
+            }
+            if (token && splitVariants(token).utility === 'rounded-full') {
+              push(attr, 'pill-button', token)
             }
           }
         }
@@ -318,10 +355,12 @@ export function findUiUniformityFindings(sourceRoot) {
 }
 
 export const UI_UNIFORMITY_HINTS = {
-  'button-height-override': 'pick a Button size: sm (h-8 toolbar), default (h-9), lg (h-11), icon (h-10)',
-  'toolbar-button-size': 'a button in a toolbar or the top bar takes the toolbar height: size="sm" (or "icon-sm")',
+  'button-height-override': 'pick a Button size: default (h-7), toolbar (h-8), lg (h-11), icon (h-7), icon-toolbar (h-8)',
+  'toolbar-button-size': 'a button in a toolbar or the top bar takes the toolbar height: size="toolbar" (or "icon-toolbar")',
+  'pill-button': 'buttons are 6px rectangles: drop rounded-full, the radius lives in components/ui/button.tsx',
+  'small-caps-label': 'labels are 12px/500 in sentence case: drop uppercase (and its tracking), use text-xs font-medium',
   'button-spinner': 'pass loading={busy} to <Button>; it renders and spaces the spinner itself',
-  'off-token-duration': 'use duration-150 for state changes, duration-300 for layout changes',
+  'off-token-duration': 'use duration-100 for the press, duration-150 for state changes, duration-300 for layout changes',
   'literal-easing': 'use ease-out, ease-emphasized or ease-drawer',
   'transition-all': 'name the animated properties: transition-colors, transition-opacity, transition-transform, ...',
   'tailwind-shadow': 'use POPOVER_SURFACE_CLASS (components/ui/popover-surface.ts) or shadow-[var(--shadow-md)] (or -sm, -lg) on overlays',
@@ -330,7 +369,7 @@ export const UI_UNIFORMITY_HINTS = {
   'raw-palette': 'use theme tokens (foreground, muted-foreground, destructive, warning, success, ...)',
   'native-dialog': 'use useDestructiveConfirm() from components/ui/destructive-confirm-dialog',
   'focus-not-visible': 'use focus-visible:ring-* so rings only show for keyboard focus',
-  'off-scale-text': 'use the text scale: 11 (labels, chips), 12.5 (meta, attn), 13 (body, tables), 15 (lead)',
+  'off-scale-text': 'use the text scale: text-xs 12 (labels, meta), text-sm 13 (body, rows), text-base 15 (titles), text-xl 20 (rare heading); text-[11px] only in count and key tiles',
   'decorative-animation': 'motion is functional: use animate-fade-in, stagger-enter or animate-typing-dot',
   'icon-in-paragraph': 'make the text block a <div>: an icon renders a <div>, which a <p> cannot hold (hydration mismatch)',
 }

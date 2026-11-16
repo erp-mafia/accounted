@@ -19,6 +19,8 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { useBranding } from '@/lib/branding/brand-context'
+import { DEFAULT_LOGO_PATH } from '@/lib/branding/service'
+import { cn } from '@/lib/utils'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
@@ -30,7 +32,7 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
   const byraTeam = useCompanyOptional()?.byraTeam
   const homeHref = byraTeam ? '/byra' : '/'
   return (
-    <Link href={homeHref} aria-label={appName} className="flex min-w-0 items-center gap-2 rounded-lg">
+    <Link href={homeHref} aria-label={appName} className="flex min-w-0 items-center gap-2 rounded-md">
       {logoUrl ? (
         <Image
           src={logoUrl}
@@ -56,9 +58,12 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
         <Image
           src={logoPath}
           alt=""
-          width={26}
-          height={26}
-          className="h-[26px] w-[26px] rounded-lg"
+          width={20}
+          height={20}
+          // Stil v3 sidebar: a 20px mark with the 6px radius of the controls.
+          // The built-in mark is a dark tile: it inverts on the dark frame, as
+          // the dark boards draw it (a deployment's own logo is left as it is).
+          className={cn('h-5 w-5 rounded-md', logoPath === DEFAULT_LOGO_PATH && 'dark:invert')}
         />
       )}
       {showLabel && label && (

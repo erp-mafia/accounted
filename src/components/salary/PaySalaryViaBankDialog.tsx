@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { BankIdSigningFlow, type SigningFlowStage } from '@/components/payments/BankIdSigningFlow'
 import { BankPaymentsAllowanceLine } from '@/components/payments/BankPaymentsAllowance'
@@ -234,7 +234,7 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
     >
       {/* Paid from another account than the verifikat credits, the bank and the books part ways: said, not refused. */}
       {bookedAccount?.cash_account_id && accountId && accountId !== bookedAccount.cash_account_id && (
-        <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+        <p data-ph-mask="" className="text-xs text-muted-foreground">
           {t('account_not_booked', { account: payingAccountName(bookedAccount) })}
         </p>
       )}
@@ -271,7 +271,7 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
                   {payee.name}
                   <span className="ml-2 tabular-nums text-muted-foreground">{payee.masked_account}</span>
                   {!payee.known_account && (
-                    <span className="ml-2 text-[12.5px] text-muted-foreground" title={t('new_account_help')}>
+                    <span className="ml-2 text-xs text-muted-foreground" title={t('new_account_help')}>
                       {t('new_account')}
                     </span>
                   )}
@@ -280,38 +280,38 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
               </li>
             ))}
           </ul>
-          <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
+          <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2 font-medium">
             <span>{t('total')}</span>
             <span className="tabular-nums">{formatCurrency(preview.total)}</span>
           </div>
         </div>
       ) : previewing ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-full" />
-        </div>
+        </LateReveal>
       ) : null}
 
       {preview?.date_moved_from && (
-        <p className="text-[12.5px] text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
+        <p className="text-xs text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
       )}
       {afterPayday?.payday && <AttnLine>{t('after_payday', { date: formatDate(afterPayday.payday) })}</AttnLine>}
-      {preview?.correction && <p className="text-[12.5px] text-muted-foreground">{tc('difference_only')}</p>}
+      {preview?.correction && <p className="text-xs text-muted-foreground">{tc('difference_only')}</p>}
       {preview && preview.zero_payouts > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {preview.correction
             ? tc('zero_payouts', { count: preview.zero_payouts })
             : t('zero_payouts', { count: preview.zero_payouts })}
         </p>
       )}
       {preview && preview.in_payment > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">{t('in_payment', { count: preview.in_payment })}</p>
+        <p className="text-xs text-muted-foreground">{t('in_payment', { count: preview.in_payment })}</p>
       )}
-      {preview && preview.replaces_drafts > 0 && <p className="text-[12.5px] text-muted-foreground">{t('replaces_draft')}</p>}
+      {preview && preview.replaces_drafts > 0 && <p className="text-xs text-muted-foreground">{t('replaces_draft')}</p>}
 
       {refusal?.code === 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY' &&
         (refusal.correction && refusal.correction.inPayment === 0 ? (
-          <p className="text-[12.5px] text-muted-foreground">{tc('nothing_to_pay')}</p>
+          <p className="text-xs text-muted-foreground">{tc('nothing_to_pay')}</p>
         ) : (
           <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('nothing_to_pay')}</AttnLine>
         ))}
@@ -344,7 +344,7 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
 
       {preview && (
         <>
-          <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
+          <p className="text-xs text-muted-foreground">{t('sign_hint')}</p>
           <BankPaymentsAllowanceLine usage={usage} count={count} canRequest onIncluded={bank.raiseIncluded} />
         </>
       )}

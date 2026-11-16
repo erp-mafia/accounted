@@ -75,7 +75,8 @@ export function OAuthButton({
     <Button
       type="button"
       variant="outline"
-      size={compact ? 'default' : 'lg'}
+      // One height for every way in on the auth pages; compact only shortens the label.
+      size="lg"
       className="w-full"
       onClick={handleClick}
       loading={isRedirecting}

@@ -1,4 +1,4 @@
-import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { isInkorgV2Enabled } from '@/lib/inkorg/flag'
 import { isAutogiroEnabled } from '@/lib/invoices/autogiro/flag'
@@ -16,11 +16,13 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
  * stays in the block that owns its page; this composition layer only
  * gathers them.
  */
-export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled'>
+export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled'>
 
 export function navRollouts(companyId: string | null | undefined): NavRollouts {
   return {
     arkivEnabled: isArkivSectionEnabled(companyId),
+    // The Fakta view of the wiki: where Arkiv reads the documents.
+    arkivBrainEnabled: !!companyId && isArkivBrainEnabled(companyId),
     agentsEnabled: isAgentsPageEnabled(companyId),
     inkorgV2Enabled: isInkorgV2Enabled(companyId),
     autogiroEnabled: isAutogiroEnabled(companyId),

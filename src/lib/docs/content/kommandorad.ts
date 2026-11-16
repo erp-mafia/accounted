@@ -36,10 +36,10 @@ Webbläsaren öppnar Accounteds inloggning, och adressen skrivs också ut i term
 
 Över SSH eller i en container når webbläsaren inte datorn där kommandot körs. Öppna den utskrivna adressen i valfri webbläsare och godkänn. Webbläsaren hamnar då på en sida som inte går att ladda: kopiera hela adressen till den sidan, klistra in den i terminalen och tryck Enter. \`accounted login --no-browser\` hoppar över webbläsaren och går direkt till inklistringen. Inloggningen väntar i 5 minuter.
 
-Inloggningen sparas i \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` om den är satt, i \`%APPDATA%\\accounted\` på Windows), och bara din användare kan läsa filen. Den syns som en anslutning under **Inställningar › API och MCP** (\`/settings/api\`).
+Inloggningen sparas i \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` om den är satt, i \`%APPDATA%\\accounted\` på Windows), och bara din användare kan läsa filen. Den syns som en anslutning under **Agenter › Koppla en agent** (\`/settings/api\`).
 
 - \`accounted status\` visar servern, inloggningen och vilka bolag den når. Kommandot avslutas med kod 3 om du inte är inloggad.
-- \`accounted logout\` tar bort inloggningen från den här datorn, men bara här. Nyckeln fungerar tills du kopplar från den under Inställningar › API och MCP, och logout skriver ut nyckelns prefix så att du hittar rätt rad.
+- \`accounted logout\` tar bort inloggningen från den här datorn, men bara här. Nyckeln fungerar tills du kopplar från den under Agenter › Koppla en agent, och logout skriver ut nyckelns prefix så att du hittar rätt rad.
 - \`accounted login --force\` byter ut inloggningen, till exempel för att ge andra behörigheter. Koppla sedan från den gamla nyckeln i inställningarna.
 
 ## Hitta och kör verktyg
@@ -123,7 +123,7 @@ En nyckel får som standard göra 100 anrop i minuten. Vid gränsen avslutas kom
 
 ## API-nyckel för CI och servrar
 
-Där ingen kan öppna en webbläsare använder du en API-nyckel i stället för en inloggning. Skapa den under **Inställningar › API och MCP** (\`/settings/api\`), spara den bland CI-tjänstens hemligheter och sätt den som \`ACCOUNTED_API_KEY\`:
+Där ingen kan öppna en webbläsare använder du en API-nyckel i stället för en inloggning. Skapa den under **Agenter › Koppla en agent** (\`/settings/api\`), spara den bland CI-tjänstens hemligheter och sätt den som \`ACCOUNTED_API_KEY\`:
 
 \`\`\`bash
 export ACCOUNTED_API_KEY=gnubok_sk_...

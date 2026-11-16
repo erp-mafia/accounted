@@ -504,7 +504,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'connecting' ? <Wait text={t('provider_connecting', { provider: provName })} /> : null}
       {phase === 'connecting' && activating ? (
         <div className="bks-center-col" style={{ marginTop: 12 }}>
-          <Button variant="link" size="sm" className="h-auto whitespace-normal text-center text-muted-foreground" onClick={enterKeyByHand}>
+          <Button variant="link" className="h-auto whitespace-normal text-center text-muted-foreground" onClick={enterKeyByHand}>
             {tx('ext_arcim_bl_manual_key_toggle')}
           </Button>
         </div>
@@ -514,7 +514,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           no message back, so the step would otherwise wait there. */}
       {phase === 'connect' || phase === 'connecting' ? (
         <div className="bks-center-col" style={{ marginTop: 18 }}>
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'PICK_SIE' })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'PICK_SIE' })}>
             {t('provider_sie_instead')}
           </Button>
           <p className="brandhint">
@@ -535,7 +535,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           ) : null}
           {providerId === 'bjornlunden' ? <p className="brandhint">{tx('ext_arcim_bl_token_help')}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
             <Button size="lg" disabled={missingTokenCredential(providerId ?? '', { apiToken: tokenA, companyId: tokenB }) !== null} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
@@ -603,7 +603,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 })}
               </Pills>
               {tooManyYears ? <p className="jny-attn" role="status">{tx('ext_arcim_year_select_too_many', { max: maxYears })}</p> : null}
-              {!tooManyYears && needsSeveralRuns(sourceYears, maxYears) ? <p className="mt-2.5 text-center text-[12.5px] text-muted-foreground">{tx('ext_arcim_year_select_oldest_first', { max: maxYears })}</p> : null}
+              {!tooManyYears && needsSeveralRuns(sourceYears, maxYears) ? <p className="mt-2.5 text-center text-xs text-muted-foreground">{tx('ext_arcim_year_select_oldest_first', { max: maxYears })}</p> : null}
             </div>
           ) : null}
           <Sentence open={optsOpen} onToggle={() => setOptsOpen((v) => !v)} changeLabel={t('change')} closeLabel={t('close')}>
@@ -670,11 +670,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
               retry. Back to the years instead, where it can be left out as
               on a first run; the preview is still in memory. */}
           {unfetched.length > 0 && sourceYears.length > 1 ? (
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => { setShown(0); setTick(0); setImportError(null); setPhase('preview') }}>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => { setShown(0); setTick(0); setImportError(null); setPhase('preview') }}>
               {t('provider_pick_years')}
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
             {t('provider_change_source')}
           </Button>
         </div>

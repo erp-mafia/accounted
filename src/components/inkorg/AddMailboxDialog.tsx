@@ -56,7 +56,7 @@ export function AddMailboxDialog({ open, onOpenChange }: { open: boolean; onOpen
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('add_mailbox')}</DialogTitle>
           <DialogDescription>{t('add_mailbox_intro')}</DialogDescription>
@@ -83,11 +83,11 @@ function MailboxList() {
   })
 
   return (
-    <ul className="border-t border-border">
+    <ul className="border-t-hairline">
       {entries.map((entry) =>
         entry.comingSoon ? (
           <MailboxRow key={entry.door} door={entry.door} muted>
-            <Badge variant="secondary" className="text-[11px]">
+            <Badge variant="secondary" className="text-xs">
               {t('coming_soon')}
             </Badge>
           </MailboxRow>
@@ -103,7 +103,7 @@ function MailboxList() {
           <BilloRow key={entry.door} {...digital.rowProps('billo')} />
         ) : (
           <MailboxRow key={entry.door} door={entry.door}>
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="outline">
               <Link href="/settings/peppol">{t('open')}</Link>
             </Button>
           </MailboxRow>
@@ -130,11 +130,11 @@ function MailboxRow({
 }) {
   const t = useTranslations('inkorg')
   return (
-    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-b border-border py-3">
+    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-b-hairline py-3">
       <DoorMark door={door} size={28} className={muted ? 'opacity-60' : undefined} />
       <div className={muted ? 'text-muted-foreground' : undefined}>
         <p className="text-[13px] font-medium">{t(`mailbox_${door}_name`)}</p>
-        <div className="text-[12.5px] text-muted-foreground">{detail ?? t(`mailbox_${door}_body`)}</div>
+        <div className="text-xs text-muted-foreground">{detail ?? t(`mailbox_${door}_body`)}</div>
       </div>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
       {extra ? <div className="col-span-2 col-start-2">{extra}</div> : null}
@@ -267,7 +267,7 @@ function IntakeAddressRow() {
   if (state.status === 'none') {
     return (
       <MailboxRow door="intake_email">
-        <Button size="sm" onClick={() => void onCreate()} loading={creating}>
+        <Button onClick={() => void onCreate()} loading={creating}>
           {t('address_create')}
         </Button>
       </MailboxRow>
@@ -278,12 +278,12 @@ function IntakeAddressRow() {
       door="intake_email"
       detail={
         <>
-          <code data-ph-mask="" className="break-all text-[12.5px] text-foreground">
+          <code data-ph-mask="" className="break-all text-xs text-foreground">
             {state.address}
           </code>
           {copy === 'failed' && <AttnLine>{t('address_copy_failed')}</AttnLine>}
           {state.previous.map((previous) => (
-            <p key={previous} className="mt-0.5 text-[12.5px]">
+            <p key={previous} className="mt-0.5 text-xs">
               {t('address_previous')}{' '}
               <code data-ph-mask="" className="break-all">
                 {previous}
@@ -292,7 +292,7 @@ function IntakeAddressRow() {
                 type="button"
                 onClick={() => void onStopPrevious(previous)}
                 aria-label={t('address_previous_stop_aria', { address: previous })}
-                className="text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                className="text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
               >
                 {t('address_previous_stop')}
               </button>
@@ -309,8 +309,8 @@ function IntakeAddressRow() {
         </>
       }
     >
-      <Button variant="secondary" size="sm" onClick={() => void onCopy(state.address)}>
-        {copy === 'copied' ? <CheckIcon className="mr-1 h-3.5 w-3.5" /> : <Square2StackIcon className="mr-1 h-3.5 w-3.5" />}
+      <Button variant="outline" onClick={() => void onCopy(state.address)}>
+        {copy === 'copied' ? <CheckIcon className="h-3.5 w-3.5" /> : <Square2StackIcon className="h-3.5 w-3.5" />}
         {copy === 'copied' ? t('copied') : t('copy')}
       </Button>
       <span className="sr-only" aria-live="polite">
@@ -347,7 +347,7 @@ function WhatsAppRow() {
       door="whatsapp"
       detail={linked?.linked ? t('whatsapp_linked', { phone: linked.phoneMasked ?? '' }) : undefined}
     >
-      <Button asChild variant={linked?.linked ? 'secondary' : 'default'} size="sm">
+      <Button asChild variant={linked?.linked ? 'outline' : 'default'}>
         <Link href="/settings/whatsapp">{linked?.linked ? t('open') : t('connect')}</Link>
       </Button>
     </MailboxRow>
@@ -376,7 +376,7 @@ function GmailRow() {
   }
   return (
     <MailboxRow door="mailbox" detail={connected ? t('gmail_connected', { count: summary.active.length }) : undefined}>
-      <Button asChild variant={connected ? 'secondary' : 'default'} size="sm">
+      <Button asChild variant={connected ? 'outline' : 'default'}>
         <Link href={MAIL_SETTINGS_HREF}>{connected ? t('open') : t('connect')}</Link>
       </Button>
     </MailboxRow>
@@ -608,7 +608,7 @@ function SendingLine({
   const id = useId()
   return (
     <div className="flex items-center justify-between gap-4">
-      <label htmlFor={id} className="text-[12.5px] text-muted-foreground">
+      <label htmlFor={id} className="text-xs text-muted-foreground">
         {t('digital_sending')}
       </label>
       <Switch
@@ -627,7 +627,7 @@ function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxPr
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon-sm" aria-label={t('digital_more', { provider: t(`mailbox_${provider}_name`) })}>
+        <Button variant="outline" size="icon" aria-label={t('digital_more', { provider: t(`mailbox_${provider}_name`) })}>
           <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
         </Button>
       </DropdownMenuTrigger>
@@ -696,7 +696,7 @@ function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
   if (view.receive === 'off') {
     return (
       <MailboxRow door="kivra" extra={sending}>
-        <Button size="sm" loading={busy === 'connect'} onClick={() => void connect()}>
+        <Button loading={busy === 'connect'} onClick={() => void connect()}>
           {t('connect_kivra')}
         </Button>
       </MailboxRow>
@@ -705,10 +705,10 @@ function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
   if (view.receive === 'pending') {
     return (
       <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
-        <Button variant="secondary" size="sm" loading={busy === 'connect'} onClick={openKivra}>
+        <Button variant="outline" loading={busy === 'connect'} onClick={openKivra}>
           {t('kivra_open')}
         </Button>
-        <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(true)}>
+        <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(true)}>
           {t('kivra_check')}
         </Button>
       </MailboxRow>
@@ -716,7 +716,7 @@ function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
   }
   return (
     <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
-      <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
+      <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
         {t('digital_fetch_now')}
       </Button>
       <DigitalRowMenu provider="kivra" onDisconnect={() => void actions.disconnect()} />
@@ -749,7 +749,7 @@ function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
   if (view.receive === 'off') {
     return (
       <MailboxRow door="billo" extra={sending}>
-        <Button size="sm" onClick={() => setCreating(true)}>
+        <Button onClick={() => setCreating(true)}>
           {t('billo_create')}
         </Button>
         <BilloCreateDialog
@@ -767,7 +767,7 @@ function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
   return (
     <MailboxRow door="billo" detail={<DigitalDetail provider="billo" view={view} />} extra={sending}>
       {view.receive === 'active' && (
-        <Button variant="secondary" size="sm" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
+        <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
           {t('digital_fetch_now')}
         </Button>
       )}
@@ -789,7 +789,7 @@ function BilloCreateDialog({
   const t = useTranslations('inkorg')
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('billo_dialog_title')}</DialogTitle>
           <DialogDescription>{t('billo_dialog_intro')}</DialogDescription>
@@ -939,7 +939,7 @@ function BilloCreateForm({ onCancel, onCreated }: { onCancel: () => void; onCrea
             aria-describedby={invalid.email ? `${emailId}-hint` : undefined}
           />
           {invalid.email && (
-            <p id={`${emailId}-hint`} className="text-[12.5px] text-destructive">
+            <p id={`${emailId}-hint`} className="text-xs text-destructive">
               {t('billo_email_invalid')}
             </p>
           )}
@@ -957,14 +957,14 @@ function BilloCreateForm({ onCancel, onCreated }: { onCancel: () => void; onCrea
             aria-describedby={invalid.phone ? `${phoneId}-hint` : undefined}
           />
           {invalid.phone && (
-            <p id={`${phoneId}-hint`} className="text-[12.5px] text-destructive">
+            <p id={`${phoneId}-hint`} className="text-xs text-destructive">
               {t('billo_phone_invalid')}
             </p>
           )}
         </div>
       </div>
 
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         {t('billo_consent')}{' '}
         <a
           href="https://billo.life/terms"

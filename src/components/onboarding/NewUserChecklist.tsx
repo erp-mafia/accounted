@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { CheckIcon } from '@/components/icons'
+import { HemPrimaryTaken } from '@/components/dashboard/need-count'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import JourneyOrb from '@/components/onboarding/journey/JourneyOrb'
@@ -251,6 +252,8 @@ export default function NewUserChecklist({
   const numbers = checklistNumbers({ hasSkatteverket, hasInbox, hasAssistant: hasClaudeStep })
   const stepCount = numbers.count
 
+  // A read-only member can do none of the steps (connect, import, start): not offered.
+  if (companyContext?.role === 'viewer') return null
   if (state.dismissedAt) return null
   // After the beat, stay retired even while the completion PATCH is still in
   // flight or retrying: falling through to the full checklist here would
@@ -376,13 +379,14 @@ export default function NewUserChecklist({
   return (
     <section className={className} aria-label={t('title', { count: stepCount })}>
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm">{t('title', { count: stepCount })}</h2>
+        {/* A section of Hem like Först and Rutin: the same 15px title. */}
+        <h2 className="text-[15px] font-medium text-strong">{t('title', { count: stepCount })}</h2>
         {canRecord && (
           <button
             type="button"
             disabled={saving !== null}
             onClick={dismiss}
-            className="shrink-0 text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+            className="inline-flex min-h-7 shrink-0 items-center text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground pointer-coarse:min-h-10"
           >
             {t('dismiss')}
           </button>
@@ -397,7 +401,6 @@ export default function NewUserChecklist({
           title={t('step_books_title')}
           action={(variant) => (
             <Button
-              size="sm"
               variant={variant}
               disabled={saving !== null}
               onClick={() => void goMigration()}
@@ -410,7 +413,7 @@ export default function NewUserChecklist({
               <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
               <LogoMark name="Visma" />
               <LogoMark src="/logos/bokio.png" name="Bokio" />
-              <span className="text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
+              <span className="text-xs text-muted-foreground">{t('step_books_sie')}</span>
             </>
           }
           footnote={
@@ -425,13 +428,13 @@ export default function NewUserChecklist({
                   type="button"
                   disabled={saving !== null}
                   onClick={() => void goMigration(unfinishedConnect.provider)}
-                  className="text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_books_unfinished_retry')}
                 </button>
                 <Link
                   href="/import?mode=sie"
-                  className="text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_books_unfinished_sie')}
                 </Link>
@@ -446,7 +449,7 @@ export default function NewUserChecklist({
                 type="button"
                 disabled={saving !== null}
                 onClick={goFresh}
-                className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
               >
                 {t('step_books_fresh_link')}
               </button>{' '}
@@ -467,7 +470,6 @@ export default function NewUserChecklist({
           last={lastStep === 'bank'}
           action={(variant) => (
             <Button
-              size="sm"
               variant={variant}
               disabled={saving !== null}
               onClick={() => void goBank()}
@@ -487,7 +489,7 @@ export default function NewUserChecklist({
             (sieSweep.auto_linked > 0 || sieSweep.suggested > 0) ? (
               <Link
                 href="/transactions"
-                className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
               >
                 {t('step_bank_sweep_note', {
                   matched: sieSweep.auto_linked,
@@ -514,7 +516,6 @@ export default function NewUserChecklist({
             action={(variant) =>
               skvOmbudEnabled ? (
                 <Button
-                  size="sm"
                   variant={variant}
                   loading={ombud.linking || ombud.checking}
                   onClick={() => {
@@ -525,7 +526,7 @@ export default function NewUserChecklist({
                   {ombudWaiting ? tOmbud('reopen') : t('step_skv_action')}
                 </Button>
               ) : (
-                <Button size="sm" variant={variant} asChild>
+                <Button variant={variant} asChild>
                   {/* The authorize endpoint redirects off-site to Skatteverket. */}
                   {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                   <a
@@ -556,7 +557,7 @@ export default function NewUserChecklist({
                 {' '}
                 <Link
                   href="/settings/tax"
-                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_skv_choose_period')}
                 </Link>
@@ -576,12 +577,12 @@ export default function NewUserChecklist({
             skipLabel={t('step_skip')}
             doneNote={receiptsSkipped ? skippedNote : undefined}
             action={(variant) => (
-              <Button size="sm" variant={variant} onClick={goReceipts}>
+              <Button variant={variant} onClick={goReceipts}>
                 {t('step_receipts_action')}
               </Button>
             )}
             marks={
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {hasWhatsApp ? t('step_receipts_channels') : t('step_receipts_channels_no_wa')}
               </span>
             }
@@ -601,7 +602,7 @@ export default function NewUserChecklist({
           skipLabel={t('step_skip')}
           doneNote={claudeSkipped ? skippedNote : undefined}
           action={(variant) => (
-            <Button size="sm" variant={variant} onClick={goClaude}>
+            <Button variant={variant} onClick={goClaude}>
               {t('step_claude_action')}
             </Button>
           )}
@@ -619,7 +620,7 @@ export default function NewUserChecklist({
                   href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  className="underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                 >
                   {t('step_claude_guide_link')}
                 </a>
@@ -631,7 +632,7 @@ export default function NewUserChecklist({
                     type="button"
                     onClick={() => toggleSideDoor(door)}
                     aria-expanded={sideDoor === door}
-                    className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                    className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
                   >
                     {t(`step_claude_${door}_link`)}
                   </button>
@@ -642,7 +643,7 @@ export default function NewUserChecklist({
                   <p className="max-w-prose text-xs leading-5 text-muted-foreground">
                     {t(`step_claude_${sideDoor}_steps`, { appName })}
                   </p>
-                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
+                  <Button variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
                     {serverUrlCopied
                       ? t('step_claude_chatgpt_copied')
                       : t('step_claude_chatgpt_copy')}
@@ -707,6 +708,9 @@ function Step({
   children: React.ReactNode
 }) {
   const open = active && !done
+  // While Hem's top bar holds the filled button (Börja), the open step's
+  // action is outline too: one filled button in view.
+  const primaryTaken = useContext(HemPrimaryTaken)
 
   return (
     <li
@@ -743,18 +747,18 @@ function Step({
             {badge && (
               <Badge
                 variant="secondary"
-                className={cn('shrink-0 uppercase tracking-wider', !open && 'font-normal')}
+                className={cn('shrink-0', !open && 'font-normal')}
               >
                 {badge}
               </Badge>
             )}
           </div>
-          {!done && action?.(open ? 'default' : 'outline')}
+          {!done && action?.(open && !primaryTaken ? 'default' : 'outline')}
           {open && onSkip && skipLabel && (
             <button
               type="button"
               onClick={onSkip}
-              className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors hover:text-foreground"
             >
               {skipLabel}
             </button>
@@ -798,7 +802,7 @@ function LogoMark({ src, name, mono = false }: { src?: string; name: string; mon
           )}
         />
       ) : (
-        <span role="img" className="text-[11px] font-semibold text-foreground" aria-label={name}>
+        <span role="img" className="text-xs font-semibold text-foreground" aria-label={name}>
           {name.charAt(0)}
         </span>
       )}

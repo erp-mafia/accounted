@@ -64,7 +64,7 @@ export default function BankFileResultStep({
         </CardHeader>
         {!isSuccess && result.first_error && (
           <CardContent>
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            <div className="bg-destructive/8 rounded-lg p-3 text-sm">
               <p className="font-medium text-destructive">Databasfel</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
                 {result.first_error.message}
@@ -78,7 +78,7 @@ export default function BankFileResultStep({
 
       {/* Next steps */}
       {isSuccess && (
-        <Card className="bg-muted/50">
+        <Card>
           <CardHeader>
             <CardTitle className="text-base">Nästa steg</CardTitle>
           </CardHeader>
@@ -127,7 +127,7 @@ export default function BankFileResultStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onNewImport}>
-          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowUturnLeftIcon className="h-4 w-4" />
           Ny import
         </Button>
         {isSuccess && (

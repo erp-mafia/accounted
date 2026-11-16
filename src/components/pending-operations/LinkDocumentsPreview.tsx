@@ -76,7 +76,7 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
       </div>
       {rows.length > 0 && (
         <div className="max-h-80 overflow-y-auto">
-          <table className="w-full border-collapse text-[12.5px]" aria-label={t('link_preview_table_label')}>
+          <table className="w-full border-collapse text-xs" aria-label={t('link_preview_table_label')}>
             <thead>
               <tr>
                 <th className={VTH_CLASS}>{t('link_preview_file')}</th>
@@ -104,7 +104,7 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
                     )}
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>{voucher(row)}</td>
-                  <td className={cn(VTD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                  <td className={cn(VTD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
                     {row.voucher_date ? formatDate(row.voucher_date) : ''}
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap')}>

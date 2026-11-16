@@ -1,0 +1,1 @@
+[2026-11-14] Att göra V8: Hem, Behöver dig, Börja and Gjort are views of "/" (?vy=), not routes, and Hem counts rows, not the worklist total: one read feeds all four. Fråga senare, Lämna till byrån and the balance line were left out: no data behind them.

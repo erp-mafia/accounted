@@ -5,6 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   DropdownMenu,
@@ -195,6 +196,7 @@ function SkatteverketPanelInner({
   const effectiveYear = periodType === 'yearly' && fiscalYearEnd ? fiscalYearEnd.year : year
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const tSigning = useTranslations('skv_signing')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -738,7 +740,7 @@ function SkatteverketPanelInner({
   }
 
   const signingBlock = signeringslank ? (
-    <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+    <div className="rounded-lg p-3 space-y-2 bg-control shadow-raised">
       <p className="text-sm font-medium">{tSigning('awaiting_title')}</p>
       <p className="text-xs text-muted-foreground">
         Öppna länken nedan och signera med BankID på Skatteverkets sida. När du
@@ -757,7 +759,7 @@ function SkatteverketPanelInner({
           disabled={actionLoading !== null}
           loading={actionLoading === 'check'}
         >
-          {actionLoading !== 'check' && <CheckCircleIcon className="mr-2 h-4 w-4" />}
+          {actionLoading !== 'check' && <CheckCircleIcon className="h-4 w-4" />}
           Kontrollera inlämning
         </Button>
       </div>
@@ -770,7 +772,7 @@ function SkatteverketPanelInner({
     return (
       <section aria-busy>
         <ActionRow>
-          <Skeleton className="h-8 w-44 rounded-full" />
+          <Skeleton className="h-8 w-44 rounded-md" />
           {actions}
           {help}
         </ActionRow>
@@ -787,7 +789,7 @@ function SkatteverketPanelInner({
     return (
       <section className="space-y-3">
         <ActionRow>
-          <Button size="sm" disabled className="gap-2">
+          <Button disabled className="gap-2">
             <PaperAirplaneIcon className="h-4 w-4" />
             Skicka till Skatteverket
           </Button>
@@ -809,7 +811,7 @@ function SkatteverketPanelInner({
     return (
       <section className="space-y-3">
         <ActionRow>
-          <Button size="sm" onClick={handleConnect} className="gap-2">
+          <Button onClick={handleConnect} className="gap-2" disabled={!canWrite} title={lockedTitle}>
             <LinkIcon className="h-4 w-4" />
             Anslut med BankID
           </Button>
@@ -844,18 +846,18 @@ function SkatteverketPanelInner({
             expired session is the exception and gets the attn sentence. */}
         <ActionRow>
           <Button
-            size="sm"
             onClick={handleSubmit}
-            disabled={!hasData || localBlocked || actionLoading !== null}
+            disabled={!canWrite || !hasData || localBlocked || actionLoading !== null}
+            title={lockedTitle}
             loading={actionLoading === 'submit'}
           >
-            {actionLoading !== 'submit' && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+            {actionLoading !== 'submit' && <PaperAirplaneIcon className="h-4 w-4" />}
             Skicka till Skatteverket
           </Button>
           {actions}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
+              <Button variant="ghost" size="icon" aria-label="Fler åtgärder">
                 <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -877,7 +879,7 @@ function SkatteverketPanelInner({
                 </div>
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={!hasData || localBlocked || actionLoading !== null}
+                disabled={!canWrite || !hasData || localBlocked || actionLoading !== null}
                 onSelect={() => handleSaveDraft()}
               >
                 <div>
@@ -888,7 +890,7 @@ function SkatteverketPanelInner({
                 </div>
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={!hasData || actionLoading !== null}
+                disabled={!canWrite || !hasData || actionLoading !== null}
                 onSelect={() => handleLock()}
               >
                 <div>
@@ -936,7 +938,7 @@ function SkatteverketPanelInner({
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Återställning</DropdownMenuLabel>
               <DropdownMenuItem
-                disabled={actionLoading !== null}
+                disabled={!canWrite || actionLoading !== null}
                 onSelect={() => handleUnlock()}
               >
                 <div>
@@ -947,7 +949,7 @@ function SkatteverketPanelInner({
                 </div>
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={actionLoading !== null}
+                disabled={!canWrite || actionLoading !== null}
                 onSelect={() => handleDeleteDraftConfirmed()}
               >
                 <div>
@@ -959,7 +961,7 @@ function SkatteverketPanelInner({
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                disabled={actionLoading !== null}
+                disabled={!canWrite || actionLoading !== null}
                 onSelect={() => handleDisconnectConfirmed()}
                 className="text-destructive focus:text-destructive"
               >
@@ -975,11 +977,13 @@ function SkatteverketPanelInner({
           {help}
         </ActionRow>
         {status.expired && (
-          <p className="mt-2 text-[12.5px] leading-5 text-attn">
+          <p className="mt-2 text-xs leading-5 text-attn">
             Sessionen mot Skatteverket har gått ut.{' '}
             <button
               type="button"
               onClick={handleConnect}
+              disabled={!canWrite}
+              title={lockedTitle}
               className="underline underline-offset-2 hover:opacity-80"
             >
               Förnya med BankID
@@ -1016,7 +1020,7 @@ function SkatteverketPanelInner({
             <div
               role="status"
               aria-live="polite"
-              className="flex items-start gap-2 text-sm rounded-lg border border-border bg-muted/30 p-3"
+              className="flex items-start gap-2 text-sm rounded-lg p-3 bg-control shadow-raised"
             >
               {notice.kind === 'success' ? (
                 <CheckCircleIcon className="h-4 w-4 mt-1 shrink-0 text-success" />
@@ -1031,7 +1035,7 @@ function SkatteverketPanelInner({
         {/* Validation results from Skatteverket */}
         {kontroller.length > 0 && (
           <div className="space-y-2">
-            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <h3 className="font-sans text-xs font-medium text-muted-foreground">
               Skatteverkets valideringsresultat
             </h3>
             {kontroller.map((k, i) => (

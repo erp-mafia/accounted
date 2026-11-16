@@ -4,6 +4,10 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { AgentPromo } from '@/components/dashboard/AgentPromo'
+import { HemDone } from '@/components/dashboard/HemDone'
+import { HEM_ACTION_SLOT_ID } from '@/components/dashboard/hem-slot'
+import { parseHemView } from '@/components/dashboard/need-model'
 import { RefreshWhenRestored } from '@/components/system/RefreshWhenRestored'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
@@ -16,7 +20,6 @@ import {
   getDashboardCompanyId,
   getDashboardSettings,
   getDashboardTeamMemberships,
-  getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
   redirectInvoicerOffPage,
 } from './request-context'
@@ -41,7 +44,14 @@ export const dynamic = 'force-dynamic'
 // whole page behind the slowest one. RSC streaming applies to client
 // navigations too, not only hard loads.
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ vy?: string | string[]; steg?: string | string[] }>
+} = {}) {
+  const query = (await searchParams) ?? {}
+  const vy = parseHemView(query.vy)
+  const initialStep = (Array.isArray(query.steg) ? query.steg[0] : query.steg) ?? null
   const [{ supabase, user }, companyId] = await Promise.all([
     getDashboardAuthContext(),
     getDashboardCompanyId(),
@@ -98,7 +108,6 @@ export default async function DashboardPage() {
 
   const [
     settingsRes,
-    { data: profile },
     agentProfile,
     { count: skatteverketTokenCount },
     aiConnection,
@@ -106,9 +115,6 @@ export default async function DashboardPage() {
   ] =
     await Promise.all([
       getDashboardSettings(),
-      // First name for the greeting (request-cached: the layout reads the
-      // same row for the account popover).
-      getDashboardUserProfile(),
       getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
@@ -156,7 +162,6 @@ export default async function DashboardPage() {
   if (hemGate === 'onboarding' || !settings) redirect('/onboarding')
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
-  const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
   const initialSetup = {
     path: settings.initial_setup_path ?? null,
     completedAt: settings.initial_setup_completed_at ?? null,
@@ -189,37 +194,64 @@ export default async function DashboardPage() {
     </Suspense>
   ) : null
 
-  // Hem: greeting, notice line, setup checklist, then the Att göra and
-  // Fortsätt panes side by side. The content runs under the Att göra top
-  // bar, and MainContainer's full-bleed frame stretches it to the panel. The
-  // three-pane queue of PR 3 was tried and dropped (founder direction
-  // 2026-09-10: "the to-do page should be the old homepage, but stretched").
+  // Hem (Att göra V8): the notice line, then the streamed pane, which opens
+  // with the date and the headline and carries Kom igång and the assistant
+  // prompt right under it. Behöver dig, Börja and Gjort are views of the same
+  // page (?vy=), so every count comes from one read.
+  //
+  // Build-assistant nudge: shown only until the company has a verified
+  // agent_profile, after the checklist is dismissed or completed, and once a
+  // connected agent has worked (until then the Kopplingar agent chip is the
+  // page's agent prompt).
+  const agentConnected = aiConnection.connected && !firstTask
+  const promo =
+    !agentBuilt && agentConnected && (initialSetup.dismissedAt || initialSetup.completedAt) ? (
+      <AgentPromo companyId={companyId} />
+    ) : null
+  const tHem = await getTranslations('hem')
   const hem = (
     <DashboardContent
-      companyId={companyId}
-      agentBuilt={agentBuilt}
-      agentConnected={aiConnection.connected && !firstTask}
-      userFirstName={userFirstName}
-      initialSetup={initialSetup}
-      notices={notices}
-      checklist={checklist}
+      notices={vy === 'hem' ? notices : null}
       panes={
-        <Suspense fallback={<PanesSkeleton />}>
-          <HemPanesSection
-            companyId={companyId}
-            now={now}
-            setupOpen={setupOpen}
-            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess}
-            aiConnection={aiConnection}
-            firstTaskClient={firstTask}
-          />
-        </Suspense>
+        vy === 'gjort' ? (
+          <HemDone />
+        ) : (
+          <Suspense fallback={<PanesSkeleton view={vy} />}>
+            <HemPanesSection
+              view={vy}
+              initialStep={initialStep}
+              afterHeadline={
+                vy === 'hem' && (checklist || promo) ? (
+                  <>
+                    {checklist}
+                    {promo}
+                  </>
+                ) : null
+              }
+              companyId={companyId}
+              now={now}
+              setupOpen={setupOpen}
+              hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess}
+              aiConnection={aiConnection}
+              firstTaskClient={firstTask}
+            />
+          </Suspense>
+        )
       }
     />
   )
 
-  const tV2 = await getTranslations('att_gora_v2')
-  const header = <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
+  // The top bar: the view's title (the menu label), Hem as the parent of the
+  // views under it, and the slot the view puts its one primary in.
+  const title = vy === 'behover' ? tHem('need_title') : vy === 'borja' ? tHem('borja_title') : vy === 'gjort' ? tHem('done_title') : tHem('title')
+  const header = (
+    <PageHeader
+      title={title}
+      parent={vy === 'borja' ? { label: tHem('title'), href: '/' } : undefined}
+      help={vy === 'hem' ? <HelpPopover>{tHem('help')}</HelpPopover> : undefined}
+      action={vy === 'gjort' ? undefined : <div id={HEM_ACTION_SLOT_ID} className="flex items-center justify-end" />}
+    />
+  )
 
   // Att göra is a live worklist: when the client router shows this render
   // again from its cache (back/forward, or a link click within

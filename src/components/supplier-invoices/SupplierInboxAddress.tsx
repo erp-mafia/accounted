@@ -63,7 +63,6 @@ export function SupplierInboxAddress() {
   return (
     <Button
       variant="ghost"
-      size="sm"
       className="min-w-0 gap-2 text-muted-foreground"
       onClick={handleCopy}
       title={t('inbox_address_hint')}

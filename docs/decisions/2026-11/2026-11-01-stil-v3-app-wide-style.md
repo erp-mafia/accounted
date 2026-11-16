@@ -1,0 +1,1 @@
+[2026-11-01] Stil v3 replaces the old style app-wide in one switch: 6px buttons, Inter for all text, Hedvig only for headline numbers, a warm ink scale with hairline shadows, no cards inside the panel: founder decisions 2026-10-29; rollback is a Vercel instant rollback.
