@@ -151,6 +151,46 @@ describe('calculateLatePaymentInterest', () => {
     expect(result.rate).toBe(0.05)
   })
 
+  it('holds an override at referensränta plus 20 points for a consumer (konsumentkreditlagen 4 kap. 4 §)', () => {
+    const input = { overdueAmount: 10_000, dueDate: '2026-09-01', asOfDate: '2026-10-01', overrideRate: 0.25 }
+    // 2026 referensränta 2%: ceiling 22%. 10 000 × 0.22 × 30 / 365 = 180.82
+    const capped = calculateLatePaymentInterest({ ...input, consumer: true })
+    expect(capped.amount).toBe(180.82)
+    expect(capped.rate).toBe(0.22)
+    // A company debtor pays the agreed rate: 10 000 × 0.25 × 30 / 365 = 205.48
+    expect(calculateLatePaymentInterest(input).amount).toBe(205.48)
+  })
+
+  it('leaves a consumer rate under the ceiling alone', () => {
+    const result = calculateLatePaymentInterest({
+      overdueAmount: 10_000,
+      dueDate: '2026-09-01',
+      asOfDate: '2026-10-01',
+      overrideRate: 0.12,
+      consumer: true,
+    })
+    // 10 000 × 0.12 × 30 / 365 = 98.63
+    expect(result.amount).toBe(98.63)
+    expect(result.periods).toHaveLength(1)
+  })
+
+  it('moves the consumer ceiling with the referensränta across a half-year', () => {
+    const result = calculateLatePaymentInterest({
+      overdueAmount: 10_000,
+      dueDate: '2025-06-15',
+      asOfDate: '2025-07-15',
+      overrideRate: 0.25,
+      consumer: true,
+    })
+    // 15 days at 3% + 20 = 23%, 15 days at 2% + 20 = 22%:
+    // 10 000 × (0.23 × 15 + 0.22 × 15) / 365 = 184.93
+    expect(result.periods.map((p) => [p.days, p.rate])).toEqual([
+      [15, 0.23],
+      [15, 0.22],
+    ])
+    expect(result.amount).toBe(184.93)
+  })
+
   it('throws on a negative overdue amount', () => {
     expect(() =>
       calculateLatePaymentInterest({

@@ -45,6 +45,12 @@ export const latePaymentInterestOutputSchema = z.object({
   as_of: z.string(),
   rate: z.number().describe('The yearly rate in effect on as_of, as a fraction (0.10 = 10%).'),
   rate_is_override: z.boolean().describe("True when the company's own rate (reminder_interest_rate_override) replaces the statutory one."),
+  consumer_rate_ceiling: z
+    .number()
+    .nullable()
+    .describe(
+      "Set when the company's own rate is above the ceiling for private persons (referensränta plus 20 percentage points, konsumentkreditlagen 4 kap. 4 §): their rows are computed at this lower rate. Null otherwise.",
+    ),
   paid_late: z.array(PaidLate),
   overdue_open: z.array(OverdueOpen),
   totals: z.array(

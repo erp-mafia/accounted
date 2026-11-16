@@ -77,6 +77,8 @@ export default function LatePaymentInterestPage() {
             rate: percent(report.rate),
             date: formatDate(report.as_of),
           })}
+          {report.consumer_rate_ceiling !== null &&
+            ` ${t('rate_line_consumer_ceiling', { rate: percent(report.consumer_rate_ceiling) })}`}
         </p>
       )}
 

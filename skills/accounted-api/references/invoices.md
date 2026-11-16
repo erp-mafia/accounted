@@ -2452,6 +2452,7 @@ Response `200`:
     as_of: string,
     rate: number,
     rate_is_override: boolean,
+    consumer_rate_ceiling: number | null,
     paid_late: { invoice_id: string, invoice_number: string, customer_name: string | null, currency: string, due_date: string, paid_late_amount: number, last_payment_date: string, days_late: number, interest: number }[],
     overdue_open: { invoice_id: string, invoice_number: string, customer_name: string | null, currency: string, due_date: string, remaining_amount: number, days_overdue: number, interest: number }[],
     totals: { currency: string, paid_late_interest: number, overdue_interest: number }[]

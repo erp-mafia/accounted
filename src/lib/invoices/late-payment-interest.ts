@@ -22,6 +22,16 @@ import { roundOre } from '@/lib/money'
  * `company_settings.reminder_interest_rate_override` (the agreed rate). An
  * override is applied flat for the whole delay, as typed (not referensränta
  * plus the override): "11.5% per year" means 11.5%.
+ *
+ * Towards a consumer the rate has a ceiling. Konsumentkreditlagen
+ * (2026:1011) 4 kap. 4 §: "Krediträntan eller dröjsmålsräntan per år får
+ * inte överstiga den vid varje tid gällande referensräntan enligt 9 §
+ * räntelagen (1975:635) med ett tillägg av 20 procentenheter." The same
+ * ceiling stood in 19 a § of the 2010 act (prop. 2025/26:223, kommentaren
+ * till 4 kap. 4 §), so it holds for every invoice to a private person,
+ * whatever its date. The statutory rate (plus eight) is always under it; the
+ * ceiling only ever lowers a company's own rate, and because it follows the
+ * referensränta a capped delay is split per half-year like a statutory one.
  */
 
 /**
@@ -46,6 +56,18 @@ const REFERENSRANTA_HISTORY: ReadonlyArray<{ from: string; rate: number }> = [
 ] as const
 
 const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter, Räntelagen 6 §
+const CONSUMER_RATE_CEILING_PREMIUM = 0.2 // 20 procentenheter, konsumentkreditlagen 4 kap. 4 §
+
+/** The highest yearly rate a consumer can be charged on a given date. */
+export function getConsumerRateCeilingAt(date: string): number {
+  return roundRate(getReferensrantaAt(date) + CONSUMER_RATE_CEILING_PREMIUM)
+}
+
+// Rates are fractions with at most four decimals (12.34%); adding two of them
+// in binary floating point must not leave a 0.22000000000000003.
+function roundRate(rate: number): number {
+  return Math.round(rate * 10_000) / 10_000
+}
 
 /**
  * The referensränta in effect on a given date, as a decimal fraction
@@ -64,11 +86,12 @@ export function getReferensrantaAt(date: string): number {
 
 /**
  * The yearly late-payment rate in effect on a given date: the override
- * when the company set one, else referensränta + 8 percentage points.
+ * when the company set one, else referensränta + 8 percentage points. For a
+ * consumer the override is held at the ceiling of that date.
  */
-export function getAnnualInterestRate(date: string, overrideRate?: number | null): number {
+export function getAnnualInterestRate(date: string, overrideRate?: number | null, consumer = false): number {
   if (overrideRate !== undefined && overrideRate !== null) {
-    return overrideRate
+    return consumer ? Math.min(overrideRate, getConsumerRateCeilingAt(date)) : overrideRate
   }
   return getReferensrantaAt(date) + LATE_PAYMENT_PREMIUM
 }
@@ -82,6 +105,8 @@ export interface LatePaymentInterestInput {
   asOfDate: string
   /** The company's own yearly rate (0.115 = 11.5%), applied flat. */
   overrideRate?: number | null
+  /** The debtor is a private person: the rate is held at the consumer ceiling. */
+  consumer?: boolean
 }
 
 export interface LatePaymentInterestPeriod {
@@ -116,7 +141,7 @@ export interface LatePaymentInterestResult {
 export function calculateLatePaymentInterest(
   input: LatePaymentInterestInput,
 ): LatePaymentInterestResult {
-  const { overdueAmount, dueDate, asOfDate, overrideRate } = input
+  const { overdueAmount, dueDate, asOfDate, overrideRate, consumer = false } = input
 
   if (overdueAmount < 0) {
     throw new Error('overdueAmount must be non-negative')
@@ -124,10 +149,10 @@ export function calculateLatePaymentInterest(
 
   const days = daysBetween(dueDate, asOfDate)
   if (days <= 0 || overdueAmount === 0) {
-    return { rate: getAnnualInterestRate(dueDate, overrideRate), amount: 0, fromDate: dueDate, days: 0, periods: [] }
+    return { rate: getAnnualInterestRate(dueDate, overrideRate, consumer), amount: 0, fromDate: dueDate, days: 0, periods: [] }
   }
 
-  const periods = splitIntoRatePeriods(addDays(dueDate, 1), asOfDate, overrideRate)
+  const periods = splitIntoRatePeriods(addDays(dueDate, 1), asOfDate, overrideRate, consumer)
   const raw = periods.reduce((sum, p) => sum + overdueAmount * p.rate * (p.days / 365), 0)
 
   return {
@@ -142,15 +167,17 @@ export function calculateLatePaymentInterest(
 /**
  * Split the interest days firstDay..lastDay (inclusive) at every
  * referensränta change. With an override the rate never changes, so the
- * whole delay is one period.
+ * whole delay is one period, unless the debtor is a consumer and the override
+ * can meet the ceiling, which moves with the referensränta.
  */
 function splitIntoRatePeriods(
   firstDay: string,
   lastDay: string,
   overrideRate: number | null | undefined,
+  consumer: boolean,
 ): LatePaymentInterestPeriod[] {
   const hasOverride = overrideRate !== undefined && overrideRate !== null
-  const changes = hasOverride
+  const changes = hasOverride && !consumer
     ? []
     : REFERENSRANTA_HISTORY.map((e) => e.from).filter((from) => from > firstDay && from <= lastDay)
 
@@ -158,7 +185,7 @@ function splitIntoRatePeriods(
   let from = firstDay
   for (const next of [...changes, addDays(lastDay, 1)]) {
     const to = addDays(next, -1)
-    periods.push({ from, to, days: daysBetween(from, to) + 1, rate: getAnnualInterestRate(from, overrideRate) })
+    periods.push({ from, to, days: daysBetween(from, to) + 1, rate: getAnnualInterestRate(from, overrideRate, consumer) })
     from = next
   }
   return periods
