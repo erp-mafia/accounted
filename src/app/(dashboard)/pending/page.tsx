@@ -393,6 +393,16 @@ function RowAmount({ op }: { op: PendingOperation }) {
   )
 }
 
+/**
+ * A staged title as the list reads it: its leading type ("Manuell
+ * verifikation:") and the part that identifies the item. A title with no
+ * such prefix is all name.
+ */
+function splitRowTitle(title: string): { type: string | null; name: string } {
+  const cut = title.indexOf(': ')
+  return cut > 0 && cut <= 30 && cut + 2 < title.length ? { type: title.slice(0, cut + 1), name: title.slice(cut + 2) } : { type: null, name: title }
+}
+
 type SourceFilter = 'all' | 'agent' | 'high_risk'
 
 // Concept scene 11: two views. Historik merges committed + rejected,
@@ -1236,6 +1246,18 @@ export default function PendingOperationsPage() {
   /** A run's band: who staged it and which day. */
   const runLabel = (first: PendingOperation) =>
     `${originOf(first) ?? t('run_manual')}${stagedDay(first) ? `, ${formatDate(stagedDay(first))}` : ''}`
+  /** Who a run's band names, once and short: the agent and the person it worked for, without "Föreslaget av". */
+  const runWho = (first: PendingOperation) => {
+    switch (first.actor_type) {
+      case 'agent_chat':
+      case 'mcp_oauth':
+      case 'api_key':
+      case 'service_account':
+        return attribute({ actorType: first.actor_type, actorLabel: first.actor_label, userId: first.user_id })
+      default:
+        return originOf(first) ?? t('run_manual')
+    }
+  }
   const runs: Array<{ key: string; ops: PendingOperation[] }> = []
   if (activeTab === 'pending') {
     const byKey = new Map<string, PendingOperation[]>()
@@ -1590,7 +1612,15 @@ export default function PendingOperationsPage() {
       )}
 
       {!spotCheckOpen && activeTab === 'pending' && !isLoading && loadError !== 'initial' && waitingCount > 0 && (
-        <h2 className="text-xl text-strong">{t('rutin_headline', { count: waitingCount })}</h2>
+        <div>
+          <h2 className="text-xl text-strong">{t('rutin_headline', { count: waitingCount })}</h2>
+          {/* Why the top bar's number is lower than the headline's. */}
+          {bulkEligible.length > 0 && excludedFromBulk > 0 && (
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              {t('rutin_bulk_split', { together: bulkEligible.length, apart: excludedFromBulk })}
+            </p>
+          )}
+        </div>
       )}
 
       {!spotCheckOpen && conversationFilter && (
@@ -1625,7 +1655,9 @@ export default function PendingOperationsPage() {
           value={activeTab}
           onChange={setActiveTab}
           options={[
-            { value: 'pending', label: t('tab_pending'), count: waitingCount },
+            // The headline states the number while Väntar is open; the tab
+            // carries it only from Historik, where the headline is not shown.
+            { value: 'pending', label: t('tab_pending'), ...(activeTab === 'pending' ? {} : { count: waitingCount }) },
             { value: 'history', label: t('tab_history') },
           ]}
         />
@@ -1875,17 +1907,41 @@ export default function PendingOperationsPage() {
               // kicker (type, origin, retrieved instructions) and the consent
               // sentence live in the slide-over the row opens.
               const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
+              const rowTitle = splitRowTitle(op.title)
+              const fixCopy = FIXABLE_REFUSAL_COPY[fixNotes[op.id]]
+              const rowLine: { text: string; attention: boolean; refused?: boolean; fixHref?: string; fixLabel?: string } | null = fixCopy
+                ? {
+                    text: t(fixCopy.note),
+                    attention: true,
+                    fixHref: fixableRefusalFor(op.operation_type, fixNotes[op.id])?.fixHref,
+                    fixLabel: t(fixCopy.link),
+                  }
+                : refusedIds.has(op.id)
+                  ? { text: failureText(approvalResults[op.id]), attention: true, refused: true }
+                  : isRun
+                    ? null
+                    : complianceWarning
+                      ? { text: complianceWarningText(complianceWarning), attention: true }
+                      : op.agent_reason
+                        ? { text: op.agent_reason, attention: false }
+                        : null
               // The first proposal of a run carries the run's band: who
               // staged them, which day, and how many.
               const run = runStarts.get(op.id)
               return (
                 <Fragment key={op.id}>
                 {run && (
-                  <p className="flex items-end gap-2 border-b-hairline px-1 pb-1.5 pt-4 text-xs font-medium text-muted-foreground first:pt-0">
-                    <span className="min-w-0 truncate" data-ph-mask="">
-                      {runLabel(op)}
+                  // The band: who proposed, which day, how many, each once.
+                  <p className="flex items-end border-b-hairline px-1 pb-1.5 pt-5 text-xs text-muted-foreground first:pt-0" title={runLabel(op)}>
+                    <span className="min-w-0 truncate font-medium" data-ph-mask="">
+                      {runWho(op)}
                     </span>
-                    <span className="shrink-0 font-normal tabular-nums">{t('run_count', { count: run.ops.length })}</span>
+                    <span className="date-figures shrink-0 whitespace-pre">
+                      {[stagedDay(op) ? formatDate(stagedDay(op)) : null, t('run_count', { count: run.ops.length })]
+                        .filter(Boolean)
+                        .map((part) => ` · ${part}`)
+                        .join('')}
+                    </span>
                   </p>
                 )}
                 <div
@@ -1924,79 +1980,50 @@ export default function PendingOperationsPage() {
                       />
                     )}
                   </span>
+                  {/* Line 1: what it is. The type ("Kategorisera:") is quiet and
+                      gives way first (a phone leaves it out); the part that
+                      identifies the item keeps the width. Line 2: ONE line, why it needs a person: a
+                      refused approval, else the staged warning (it must not
+                      pass unseen, crm#1003), else the agent's reason. The
+                      review has each in full; when it was staged is the
+                      band's date, and in the hover text. */}
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="flex min-w-0 items-center gap-2 text-[13px]">
-                      {/* A daily batch reads in its own words, with what it
-                          does as the hover text. */}
-                      <span className="min-w-0 text-strong max-sm:line-clamp-2 max-sm:break-words sm:truncate" title={runRow?.detail} data-ph-mask="">
-                        {runRow?.title ?? op.title}
-                      </span>
-                      {/* The staged compliance warning stays on the row, as a
-                          truncated suffix: approving from the row or with
-                          "Godkänn alla" must not pass it unseen (crm#1003).
-                          The slide-over has it in full. */}
-                      {complianceWarning && !isRun && (
-                        <span
-                          className="flex items-center gap-1 text-xs text-attn max-sm:shrink-0 sm:min-w-[35%] sm:flex-1"
-                          title={complianceWarningText(complianceWarning)}
-                        >
-                          <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
-                          <span className="min-w-0 truncate max-sm:sr-only">{complianceWarningText(complianceWarning)}</span>
-                        </span>
+                    <span
+                      className="flex min-w-0 items-baseline gap-1 text-[13px]"
+                      title={runRow?.detail ?? `${op.title} · ${formatRelativeTime(op.created_at, t)}`}
+                      data-ph-mask=""
+                    >
+                      {!runRow && rowTitle.type && (
+                        <span className="min-w-0 shrink-[100] truncate text-muted-foreground max-sm:hidden">{rowTitle.type}</span>
                       )}
+                      <span className="min-w-0 truncate text-strong">{runRow?.title ?? rowTitle.name}</span>
                     </span>
-                    {/* Why the agent proposes it, in its own words: one muted
-                        line, so the reviewer reads it before approving from
-                        the row. The slide-over has it in full.
-                        data-ph-mask: free text, may name people. */}
-                    {op.agent_reason && !isRun && (
-                      <span className="min-w-0 truncate text-xs text-muted-foreground" title={op.agent_reason} data-ph-mask="">
-                        {op.agent_reason}
-                      </span>
-                    )}
-                    {/* The last approval was refused for something fixed
-                        around the proposal: what, and where. The proposal is
-                        still pending; Godkänn works once it is fixed. */}
-                    {/* Any other approval that did not go through: the
-                        server's sentence stays on the row while it waits. */}
-                    {refusedIds.has(op.id) && !FIXABLE_REFUSAL_COPY[fixNotes[op.id]] && (
-                      <span className="flex min-w-0 items-center gap-1 text-xs text-attn" data-refused="">
-                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
-                        <span className="min-w-0 truncate" title={approvalResults[op.id].message}>
-                          {failureText(approvalResults[op.id])}
+                    {rowLine && (
+                      <span
+                        className={cn('flex min-w-0 items-start gap-1 text-xs', rowLine.attention ? 'text-attn' : 'text-muted-foreground')}
+                        {...(rowLine.refused ? { 'data-refused': '' } : {})}
+                      >
+                        {rowLine.attention && <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />}
+                        {/* line-clamp, not truncate: the cut falls between words. */}
+                        <span className="line-clamp-1 min-w-0 break-words" title={rowLine.text} data-ph-mask="">
+                          {rowLine.text}
                         </span>
-                      </span>
-                    )}
-                    {FIXABLE_REFUSAL_COPY[fixNotes[op.id]] && (
-                      <span className="flex min-w-0 items-center gap-1 text-xs text-attn">
-                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
-                        <span className="min-w-0 truncate" title={t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}>
-                          {t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].note)}
-                        </span>
-                        {fixableRefusalFor(op.operation_type, fixNotes[op.id])?.fixHref && (
-                          <a
-                            href={fixableRefusalFor(op.operation_type, fixNotes[op.id])?.fixHref}
-                            className="shrink-0 underline underline-offset-2"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {t(FIXABLE_REFUSAL_COPY[fixNotes[op.id]].link)}
+                        {rowLine.fixHref && (
+                          <a href={rowLine.fixHref} className="shrink-0 underline underline-offset-2" onClick={(e) => e.stopPropagation()}>
+                            {rowLine.fixLabel}
                           </a>
                         )}
                       </span>
                     )}
                   </span>
-                  {/* Risk, exceptions only: low risk says nothing, medium is
-                      muted text, the chip is for high risk. */}
-                  {!isRun && <ReviewRisk op={op} quiet />}
-                  <span className="w-24 shrink-0 text-right text-xs text-muted-foreground max-md:hidden">
-                    {formatRelativeTime(op.created_at, t)}
-                  </span>
+                  {/* Risk: only high risk is marked, in one fixed place. */}
+                  <span className="flex w-[4.5rem] shrink-0 justify-end max-sm:w-auto">{!isRun && <ReviewRisk op={op} quiet />}</span>
                   <RowAmount op={op} />
-                  {/* The two decisions as quiet row actions, always in the
-                      same place (text at rest, their surface on row hover:
-                      convention 4's row actions). On a phone the row opens
-                      the review, where both sit in the fixed footer. */}
-                  <span className="flex shrink-0 items-center justify-end gap-1 max-sm:hidden">
+                  {/* The two decisions, in a fixed place: shown on row hover
+                      and keyboard focus with a pointer, always on touch
+                      (HOVER_REVEAL_CLASS), so nothing shifts. On a phone the
+                      row opens the review, where both sit in the fixed footer. */}
+                  <span className={cn('flex shrink-0 items-center justify-end gap-1 max-sm:hidden', HOVER_REVEAL_CLASS)}>
                     <Button
                       variant="row-primary"
                       title={

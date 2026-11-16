@@ -2010,7 +2010,8 @@
     "refused_marker": "Refused",
     "refused_row": "Refused: {message}",
     "refused_show": "Show the proposal",
-    "refused_marker_network": "Not sent"
+    "refused_marker_network": "Not sent",
+    "rutin_bulk_split": "{together, plural, one {# can be approved together} other {# can be approved together}}, {apart, plural, one {# is reviewed on its own} other {# are reviewed one by one}}."
   },
   "deadlines": {
     "title": "Key dates",
