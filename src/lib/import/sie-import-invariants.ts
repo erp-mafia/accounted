@@ -55,14 +55,31 @@ export const DUPLICATE_SCAN_COMPANY_PAGE = 500
 /** The single-statement check sampled the first 20 groups; so does the scan. */
 const DUPLICATE_SAMPLE_LIMIT = 20
 
-/** The duplicate imported voucher check over every company, page by page. */
+/**
+ * The duplicate imported voucher check over every company, page by page. A
+ * copy group is two or more posted imported vouchers of one company and
+ * fiscal year with the same source series, number and voucher date
+ * (migration 20261116093917): a reused source number on another date is a
+ * different voucher.
+ */
 export interface SieDuplicateVoucherScan {
-  /** Groups of posted imported vouchers sharing company, fiscal year, source series and number. */
+  /**
+   * Copy groups that hold a voucher with an import batch: the copies the
+   * import engine can still make, and the violation the cron reports.
+   */
   duplicate_groups: number
-  /** Vouchers beyond the first of each group. */
+  /** Vouchers beyond the first of each of those groups. */
   extra_vouchers: number
-  /** The first 20 groups in company, fiscal year, series and number order. */
+  /** The first 20 of those groups in company, fiscal year, series, number and date order. */
   duplicate_samples: unknown[]
+  /**
+   * Copy groups made only of vouchers imported before imports had a batch
+   * identity (#2532). No such voucher can be posted any more, so these are
+   * known history: reported, never alerted.
+   */
+  legacy_duplicate_groups: number
+  /** Vouchers beyond the first of each legacy group. */
+  legacy_extra_vouchers: number
   /** Companies checked, in company id order. */
   companies_checked: number
   /** The last company checked; null before the first page finished. */
@@ -82,6 +99,8 @@ interface DuplicatePage {
   duplicate_groups?: unknown
   extra_vouchers?: unknown
   duplicate_samples?: unknown
+  legacy_duplicate_groups?: unknown
+  legacy_extra_vouchers?: unknown
 }
 
 /**
@@ -102,6 +121,8 @@ export async function scanSieImportDuplicateVouchers(
     duplicate_groups: 0,
     extra_vouchers: 0,
     duplicate_samples: [],
+    legacy_duplicate_groups: 0,
+    legacy_extra_vouchers: 0,
     companies_checked: 0,
     last_company_id: null,
     finished: false,
@@ -127,6 +148,8 @@ export async function scanSieImportDuplicateVouchers(
     const checked = Number(page.companies_checked ?? 0)
     scan.duplicate_groups += Number(page.duplicate_groups ?? 0)
     scan.extra_vouchers += Number(page.extra_vouchers ?? 0)
+    scan.legacy_duplicate_groups += Number(page.legacy_duplicate_groups ?? 0)
+    scan.legacy_extra_vouchers += Number(page.legacy_extra_vouchers ?? 0)
     scan.companies_checked += checked
     if (Array.isArray(page.duplicate_samples)) {
       const room = DUPLICATE_SAMPLE_LIMIT - scan.duplicate_samples.length

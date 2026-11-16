@@ -17,6 +17,8 @@ type Page = {
   duplicate_groups: number
   extra_vouchers: number
   duplicate_samples: unknown[]
+  legacy_duplicate_groups?: number
+  legacy_extra_vouchers?: number
 }
 const page = (overrides: Partial<Page>): { data: Page; error: null } => ({
   data: {
@@ -39,8 +41,8 @@ beforeEach(() => {
 describe('scanSieImportDuplicateVouchers', () => {
   it('walks the company pages in order and sums them', async () => {
     rpc
-      .mockResolvedValueOnce(page({ companies_checked: 500, last_company_id: 'company-500', duplicate_groups: 1, extra_vouchers: 2, duplicate_samples: [sample(3)] }))
-      .mockResolvedValueOnce(page({ companies_checked: 120, last_company_id: 'company-620', done: true, duplicate_groups: 2, extra_vouchers: 2, duplicate_samples: [sample(510), sample(600)] }))
+      .mockResolvedValueOnce(page({ companies_checked: 500, last_company_id: 'company-500', duplicate_groups: 1, extra_vouchers: 2, duplicate_samples: [sample(3)], legacy_duplicate_groups: 3424, legacy_extra_vouchers: 3424 }))
+      .mockResolvedValueOnce(page({ companies_checked: 120, last_company_id: 'company-620', done: true, duplicate_groups: 2, extra_vouchers: 2, duplicate_samples: [sample(510), sample(600)], legacy_duplicate_groups: 1437, legacy_extra_vouchers: 1440 }))
 
     const scan = await scanSieImportDuplicateVouchers(supabase, { deadline: Date.now() + 60_000 })
 
@@ -52,6 +54,8 @@ describe('scanSieImportDuplicateVouchers', () => {
       duplicate_groups: 3,
       extra_vouchers: 4,
       duplicate_samples: [sample(3), sample(510), sample(600)],
+      legacy_duplicate_groups: 4861,
+      legacy_extra_vouchers: 4864,
       companies_checked: 620,
       last_company_id: 'company-620',
       finished: true,

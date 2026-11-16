@@ -34,7 +34,10 @@ const outcome = (failure: CheckFailure | null) => (failure ? { finished: false, 
 // says which checks finished and how many companies the duplicate check
 // reached (error messages go to the run log only). A violation found is 503
 // even when the scan is incomplete; an incomplete scan without one is 500,
-// never a clean 200.
+// never a clean 200. Copies made only of vouchers imported before imports
+// had a batch identity (legacy_duplicate_groups) are reported in the data
+// and the run log but are no violation: none can be posted any more, so
+// alerting on them would repeat the same known history every week.
 export const GET = withCronContext('cron.sie_import_invariants',async (_request,ctx) => {
   const supabase = createServiceClientNoCookies()
   const jobs = await settle(() => checkSieImportJobInvariants(supabase))
