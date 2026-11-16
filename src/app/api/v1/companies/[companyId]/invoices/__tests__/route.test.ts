@@ -92,6 +92,14 @@ function makeFlexibleSupabase(
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
+            // The read of the invoices' own payment reference facts
+            // (withPaymentReference) is a second read of `invoices`: it gets
+            // its own answer, `invoice_reference_facts`, and no rows when a
+            // test names none.
+            if (table === 'invoices' && columns?.includes('autogiro_payer_number')) {
+              resolve(byTable.invoice_reference_facts ?? { data: [], error: null })
+              return
+            }
             const result = byTable[table] ?? { data: null, error: null }
             resolve(table === 'customers' ? { ...result, data: projectRow(result.data, columns) } : result)
           }
@@ -467,6 +475,115 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.data).toHaveLength(1)
     expect(body.meta.next_cursor).toBeTruthy()
+  })
+})
+
+// crm#1886: the reference the invoice PDF prints was returned by no door, so
+// an integrator who delivers the invoice itself had to rebuild the check digit.
+describe('GET invoices: payment_reference (crm#1886)', () => {
+  const DRAFT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const facts = (overrides: Record<string, unknown> = {}) => ({
+    id: INVOICE_ID,
+    payment_details: null,
+    autogiro_payer_number: null,
+    customer: { language: 'sv' },
+    ...overrides,
+  })
+  const supabaseWith = (tables: Record<string, { data?: unknown; error?: unknown }>) =>
+    makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      ...tables,
+    })
+
+  it('lists each invoice with the reference its PDF prints, null on a draft', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: {
+          data: [SAMPLE_INVOICE, { ...SAMPLE_INVOICE, id: DRAFT_ID, status: 'draft', invoice_number: null }],
+          error: null,
+        },
+        company_settings: { data: { bankgiro: '5050-1055' }, error: null },
+        invoice_reference_facts: { data: [facts()], error: null },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // 2026-0042: its digits and a Luhn check digit.
+    expect(body.data[0]).toMatchObject({ id: INVOICE_ID, payment_reference: '202600425', payment_reference_type: 'ocr' })
+    expect(body.data[1]).toMatchObject({ id: DRAFT_ID, payment_reference: null, payment_reference_type: null })
+  })
+
+  it('returns the reference on the detail, and the invoice number when the PDF prints no OCR', async () => {
+    const detail = async (tables: Record<string, { data?: unknown; error?: unknown }>) => {
+      mockServiceClient.mockReturnValue(supabaseWith({ invoices: { data: SAMPLE_INVOICE, error: null }, ...tables }))
+      const res = await getInvoice(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+      expect(res.status).toBe(200)
+      return (await res.json()).data
+    }
+    const giro = { company_settings: { data: { bankgiro: '5050-1055' }, error: null } }
+
+    expect(await detail({ ...giro, invoice_reference_facts: { data: [facts()] } })).toMatchObject({
+      payment_reference: '202600425',
+      payment_reference_type: 'ocr',
+    })
+    // An English invoice prints "Reference" with the number.
+    expect(
+      await detail({ ...giro, invoice_reference_facts: { data: [facts({ customer: { language: 'en' } })] } }),
+    ).toMatchObject({ payment_reference: '2026-0042', payment_reference_type: 'invoice_number' })
+    // No giro printed: nothing to pay an OCR to.
+    expect(await detail({ invoice_reference_facts: { data: [facts()] } })).toMatchObject({
+      payment_reference: '2026-0042',
+      payment_reference_type: 'invoice_number',
+    })
+    // Debited by Autogiro: the customer is asked for nothing.
+    expect(
+      await detail({ ...giro, invoice_reference_facts: { data: [facts({ autogiro_payer_number: '4711' })] } }),
+    ).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('is null on a credit note', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: {
+          data: { ...SAMPLE_INVOICE, invoice_number: 'KR-2026-0042', total: -12500, credited_invoice_id: DRAFT_ID },
+          error: null,
+        },
+        company_settings: { data: { bankgiro: '5050-1055' }, error: null },
+        invoice_reference_facts: { data: [facts()], error: null },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect((await res.json()).data).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('answers 500 instead of a guessed reference when the settings cannot be read', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: { data: SAMPLE_INVOICE, error: null },
+        company_settings: { data: null, error: { message: 'connection reset' } },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
   })
 })
 

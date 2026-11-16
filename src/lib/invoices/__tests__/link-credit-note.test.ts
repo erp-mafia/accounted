@@ -161,10 +161,11 @@ describe('linkCreditNoteToInvoice: the link', () => {
 
     expect(result).toMatchObject({ ok: true, dryRun: false, creditAmount: 12500, openAmount: 12500, currency: 'SEK' })
     expect(row(CREDIT_ID)).toMatchObject({ credited_invoice_id: INVOICE_ID, status: 'sent' })
-    expect(row(INVOICE_ID)).toMatchObject({ status: 'credited', paid_amount: 0, journal_entry_id: null })
+    // Nothing is left to pay on the credited original (crm#1886).
+    expect(row(INVOICE_ID)).toMatchObject({ status: 'credited', paid_amount: 0, remaining_amount: 0, journal_entry_id: null })
     // Two writes, both on invoices: no journal table is ever touched.
     expect(updates.map((u) => u.table)).toEqual(['invoices', 'invoices'])
-    expect(updates[1].values).toEqual({ status: 'credited' })
+    expect(updates[1].values).toEqual({ status: 'credited', remaining_amount: 0 })
   })
 
   it('writes the link as a compare-and-set on what was read', async () => {

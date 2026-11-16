@@ -382,6 +382,7 @@ import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-s
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus, type OverdueInvoiceInput } from '@/lib/invoices/overdue'
 import { emailRefusal } from '@/lib/invoices/issue-and-book-invoice'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import { withPaymentReference, type PaymentReferenceRow } from '@/lib/invoices/payment-reference-fields'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -10231,9 +10232,12 @@ export const tools: McpTool[] = [
       const priced = await withAmountToPay(
         supabase,
         companyId,
-        rows.slice(0, limit) as unknown as Array<AmountToPayRow & Record<string, unknown>>,
+        rows.slice(0, limit) as unknown as Array<AmountToPayRow & PaymentReferenceRow & Record<string, unknown>>,
       )
-      const invoices = priced.map((inv) => ({
+      // crm#1886: the reference each invoice's PDF asks the payer to quote,
+      // from the projection the v1 responses use.
+      const referenced = await withPaymentReference(supabase, companyId, priced)
+      const invoices = referenced.map((inv) => ({
         id: inv.id,
         invoice_number: inv.invoice_number,
         // A received self-billed sale has no number of ours (invoice_number
@@ -10249,6 +10253,10 @@ export const tools: McpTool[] = [
         // invoice shows its residual without a second call.
         paid_amount: inv.paid_amount ?? 0,
         remaining_amount: inv.remaining_amount ?? null,
+        // What the payer quotes: ocr (number digits + Luhn check digit) or
+        // invoice_number; null when the document asks for no payment.
+        payment_reference: inv.payment_reference,
+        payment_reference_type: inv.payment_reference_type,
         currency: inv.currency,
         invoice_date: inv.invoice_date,
         due_date: inv.due_date,
@@ -10361,6 +10369,8 @@ export const tools: McpTool[] = [
         ore_rounding_amount: { type: 'number', description: 'The öresavrundning row the invoice prints, 0 when none' },
         paid_amount: { type: 'number' },
         remaining_amount: { type: ['number', 'null'], description: 'Open balance in the ledger, exact öre' },
+        payment_reference: { type: ['string', 'null'], description: 'What the payer quotes, as the PDF prints it. null: no number yet, credit note, quote, proforma, delivery note or Autogiro' },
+        payment_reference_type: { type: ['string', 'null'], description: 'ocr: invoice number digits + Luhn check digit, no length digit. invoice_number: the number as the payment message' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
         invoice_marking: { type: ['string', 'null'], description: 'Fakturamärkning (buyer marking), separate from your_reference' },
@@ -10565,6 +10575,11 @@ export const tools: McpTool[] = [
       const [{ amount_to_pay, ore_rounding_amount }] = await withAmountToPay(supabase, companyId, [
         invoice as unknown as AmountToPayRow,
       ])
+      // crm#1886: the reference the PDF prints, as gnubok_list_invoices and
+      // the v1 responses report it.
+      const [{ payment_reference, payment_reference_type }] = await withPaymentReference(supabase, companyId, [
+        invoice as unknown as PaymentReferenceRow,
+      ])
 
       return {
         invoice_id: invoice.id,
@@ -10591,6 +10606,8 @@ export const tools: McpTool[] = [
         ore_rounding_amount,
         paid_amount: invoice.paid_amount ?? 0,
         remaining_amount: invoice.remaining_amount ?? null,
+        payment_reference,
+        payment_reference_type,
         your_reference: invoice.your_reference ?? null,
         our_reference: invoice.our_reference ?? null,
         invoice_marking: invoice.invoice_marking ?? null,

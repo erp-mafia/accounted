@@ -43,6 +43,17 @@ describe('public webhook event catalogue', () => {
     expect(WEBHOOKS_MD).toContain('- `period.lock_date_changed`: ')
   })
 
+  it('documents the payment reference invoice.sent carries (crm#1886)', () => {
+    const invoicing = PUBLIC_WEBHOOK_EVENT_GROUPS.find((group) => group.title === 'Invoicing')
+    const entry = invoicing?.events.find((event) => event.type === 'invoice.sent') as
+      | { type: string; description?: string }
+      | undefined
+    for (const field of ['payment_reference', 'payment_reference_type']) {
+      expect(entry?.description, field).toContain(`\`${field}\``)
+    }
+    expect(WEBHOOKS_MD).toContain('- `invoice.sent`: ')
+  })
+
   it('is exactly the event_type enum the v1 create endpoint advertises in the OpenAPI spec', () => {
     const spec = generateOpenApiSpec('https://unit.test')
     const op = (spec.paths['/api/v1/companies/{companyId}/webhooks'] as Record<string, unknown>).post as {

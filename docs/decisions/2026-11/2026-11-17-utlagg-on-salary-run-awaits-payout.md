@@ -1,0 +1,1 @@
+[2026-11-17] An utlägg on a salary run keeps status registered: "waits for a payout" is one definition (registered and on no payslip line) read by Att göra and every list, with salary_run_id beside it, not the third status crm#1942 proposed: a new status breaks v1 clients and needs a migration.

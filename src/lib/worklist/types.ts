@@ -139,11 +139,14 @@ export const WORKLIST_CATEGORIES = [
   /**
    * People the company owes for out-of-pocket purchases ("Betala ut utlägg
    * till Anna"), one item per person.
-   * Pending:  expense_claims.status = 'registered' (booked as cost against a
-   *           person-liability account 2893/2820/2018, nothing paid out yet),
-   *           grouped by employee_id, or by claimant_name for the owner.
+   * Pending:  a claim that waits for a payout: expense_claims.status =
+   *           'registered' (booked as cost against a person-liability account
+   *           2893/2820/2018, nothing paid out yet) and on no payslip line
+   *           (lib/salary/expense-claim-payout-state.ts), grouped by
+   *           employee_id, or by claimant_name for the owner.
    * Done:     every claim of that person is marked 'paid' (a payout batch
-   *           posted the 1930 leg), or the claim is deleted (storno).
+   *           posted the 1930 leg), put on a salary run (repaid with that
+   *           salary), or deleted (storno).
    * Counts PEOPLE, not receipts: the action is one transfer per person.
    */
   'expense_payout',

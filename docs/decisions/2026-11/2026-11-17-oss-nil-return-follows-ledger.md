@@ -1,0 +1,1 @@
+[2026-11-17] The OSS underlag answers nil_return only when nothing is left outside it (no unaccounted verifikat, no missing order, no VAT on the OSS accounts); a manual OSS verifikat is listed with a warning, never split per country from ledger totals: the ledger has no country (crm#1902).

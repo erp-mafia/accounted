@@ -544,7 +544,9 @@ describe('gnubok_get_invoice: registered from the books', () => {
     for (const key of ['voucher_label', 'voucher_document_ids', 'note']) {
       expect(result, key).not.toHaveProperty(key)
     }
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // No read of the verifikat or its documents. The two reads after the
+    // invoice are its payment reference's (the settings, its own facts).
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual(['invoices', 'company_settings', 'invoices'])
   })
 
   it('does not mark a draft without lines: it has no verifikat', async () => {
@@ -627,7 +629,7 @@ describe('gnubok_get_invoice: what the invoice asks for (crm#1568)', () => {
     ) as Promise<Record<string, unknown>>
 
   it('returns amount_to_pay and ore_rounding_amount next to the exact total', async () => {
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({
       data: invoiceRow({
         status: 'sent',
@@ -648,8 +650,9 @@ describe('gnubok_get_invoice: what the invoice asks for (crm#1568)', () => {
     expect(columns).toContain('ore_rounding')
     expect(columns).toContain('deduction_total')
     expect(result).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25, remaining_amount: 3116.25 })
-    // Its own choice, frozen at issue: the company setting is not read.
-    expect(findCall('company_settings', 'select')).toBeUndefined()
+    // Its own choice, frozen at issue: the company's rounding is not read.
+    // The one settings read is the payment reference's.
+    expect(findCalls('company_settings', 'select')).toEqual([['*']])
   })
 
   it('computes a draft without a choice of its own with the company setting', async () => {
@@ -676,5 +679,79 @@ describe('gnubok_get_invoice: what the invoice asks for (crm#1568)', () => {
     const props = (getInvoice.outputSchema as { properties: Record<string, { description?: string }> }).properties
     expect(props.amount_to_pay.description).toMatch(/Att betala/)
     expect(props.ore_rounding_amount).toBeDefined()
+  })
+})
+
+// crm#1886: the reference the invoice PDF prints, as gnubok_list_invoices and
+// the v1 responses report it.
+describe('gnubok_get_invoice: payment_reference (crm#1886)', () => {
+  const execute = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+  const facts = (overrides: Record<string, unknown> = {}) => ({
+    id: INVOICE_ID,
+    payment_details: null,
+    autogiro_payer_number: null,
+    customer: { language: 'sv' },
+    ...overrides,
+  })
+
+  it('declares both fields in the output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, { type: unknown }> }).properties
+    expect(props.payment_reference.type).toEqual(['string', 'null'])
+    expect(props.payment_reference_type.type).toEqual(['string', 'null'])
+  })
+
+  it('returns the OCR reference of an issued invoice that prints a giro', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: '5050-1055' } }) // company_settings
+    enqueue({ data: [facts()] })
+
+    const result = await execute(supabase)
+
+    // 0073 plus its Luhn check digit, as the PDF prints "OCR/Referens".
+    expect(result).toMatchObject({ invoice_number: '0073', payment_reference: '00737', payment_reference_type: 'ocr' })
+  })
+
+  it('returns the invoice number when the PDF prints no OCR', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: null, plusgiro: null } }) // company_settings: no giro to pay an OCR to
+    enqueue({ data: [facts()] })
+
+    expect(await execute(supabase)).toMatchObject({ payment_reference: '0073', payment_reference_type: 'invoice_number' })
+  })
+
+  it('is null on a draft without a number, and reads nothing for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow() })
+
+    const result = await execute(supabase)
+
+    expect(result).toMatchObject({ invoice_number: null, payment_reference: null, payment_reference_type: null })
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('is null on an invoice debited by Autogiro', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ data: { bankgiro: '5050-1055' } })
+    enqueue({ data: [facts({ autogiro_payer_number: '4711' })] })
+
+    expect(await execute(supabase)).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('fails the call when the settings cannot be read, never guessing the reference', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '0073', journal_entry_id: 'je-1' }) })
+    enqueue({ error: { message: 'permission denied' } }) // company_settings
+
+    await expect(execute(supabase)).rejects.toThrow(/company_settings/)
   })
 })

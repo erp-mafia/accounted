@@ -7,7 +7,7 @@ import {
   ACCRUAL_RELEASE_FAILED_WARNING,
   createSchedulesForCustomerInvoice,
 } from '@/lib/bookkeeping/accruals/from-invoices'
-import { eventBus } from '@/lib/events'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
@@ -701,10 +701,7 @@ export async function finishIssuedInvoice(
     }
   }
 
-  await eventBus.emit({
-    type: 'invoice.sent',
-    payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId, userId },
-  })
+  await emitInvoiceSent({ supabase, companyId, userId, invoice: invoice as Invoice, settings, log })
 
   return failures
 }

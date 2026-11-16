@@ -22,6 +22,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { listExpenseClaimsAwaitingPayout } from './expense-claim-payout-state'
 import { invalidateRunCalculation } from './invalidate-calculation'
 import { payslipLineFlags } from './line-item-roles'
 import {
@@ -50,41 +51,24 @@ export interface OpenExpenseClaim {
 }
 
 /**
- * The employee's registered claims that are not yet scheduled on any payslip
- * line (this run or another draft). Oldest first, like the worklist.
+ * The employee's claims that still wait for a payout: registered and not yet
+ * on any payslip line (this run or another one). The rule is
+ * listExpenseClaimsAwaitingPayout's, shared with Att göra and the payout
+ * readers (expense-claim-payout-state.ts). Oldest first, like the worklist.
  */
 export async function listOpenExpenseClaimsForEmployee(
   supabase: SupabaseClient,
   companyId: string,
   employeeId: string,
 ): Promise<OpenExpenseClaim[]> {
-  const { data: claims, error } = await supabase
-    .from('expense_claims')
-    .select('id, description, expense_date, amount_sek, liability_account')
-    .eq('company_id', companyId)
-    .eq('employee_id', employeeId)
-    .eq('status', 'registered')
-    .order('expense_date', { ascending: true })
-    .order('id', { ascending: true })
-  if (error) throw new Error(`Failed to list open expense claims: ${error.message}`)
-  const rows = (claims ?? []) as Array<Omit<OpenExpenseClaim, 'amount_sek'> & { amount_sek: number | string }>
-  if (rows.length === 0) return []
-
-  const { data: linked, error: linkedError } = await supabase
-    .from('salary_line_items')
-    .select('source_expense_claim_id')
-    .eq('company_id', companyId)
-    .in('source_expense_claim_id', rows.map((r) => r.id))
-  if (linkedError) throw new Error(`Failed to read scheduled expense claims: ${linkedError.message}`)
-  const scheduled = new Set(
-    ((linked ?? []) as Array<{ source_expense_claim_id: string | null }>)
-      .map((l) => l.source_expense_claim_id)
-      .filter((id): id is string => Boolean(id)),
-  )
-
-  return rows
-    .filter((r) => !scheduled.has(r.id))
-    .map((r) => ({ ...r, amount_sek: roundOre(Number(r.amount_sek)) }))
+  const claims = await listExpenseClaimsAwaitingPayout(supabase, companyId, { employeeId })
+  return claims.map((claim) => ({
+    id: claim.id,
+    description: claim.description,
+    expense_date: claim.expense_date,
+    amount_sek: roundOre(Number(claim.amount_sek)),
+    liability_account: claim.liability_account,
+  }))
 }
 
 export interface AddedExpenseClaimLines {

@@ -5381,7 +5381,7 @@ Example response `200`:
 **Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro.**
 `scope:reports:read · risk:low · idempotent`
 
-Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter's sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos), and warnings the orders missing from the underlag. Read-only; nothing is filed.
+Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter's sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos): they count in ledger_vat_sek but in no row or total, because the ledger does not say their country or VAT rate. warnings names the orders missing from the underlag. Read-only; nothing is filed.
 
 **Use when:** Before filing the quarterly OSS declaration in Skatteverket's e-tjänst, or to check what the OSS accounts hold per country.
 **Do not use for:** The Swedish momsdeklaration (OSS sales are outside it), EU sales taxed in Sweden below the distance-selling threshold, or invoices (they carry Swedish VAT only).
@@ -5390,6 +5390,7 @@ Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS out
 - Only booked orders count, in the quarter of the verifikat that books them: book the quarter's orders first (warnings unbooked_orders).
 - Euro amounts are null until the ECB has published the rate for the last day of the quarter (warnings rate_unavailable); the kronor amounts are final.
 - The VAT is declared with two decimals, never rounded. A nil_return quarter still needs a declaration.
+- nil_return is true only when nothing is left outside the underlag: no unaccounted verifikat, no warning about a missing order, no VAT on the OSS accounts. Empty rows with nil_return false is NOT a nil return: a sale booked as a manual voucher has no order to take its country from (warnings vouchers_without_order), so it is declared by hand from the sales records.
 - A correction uses the ECB rate of the quarter it corrects, so a full refund takes back exactly what was declared.
 
 | Parameter | In | Type | Required | Notes |

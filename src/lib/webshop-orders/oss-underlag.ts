@@ -23,7 +23,11 @@ import { OSS_VAT_ACCOUNT, SWEDISH_RULE_RATES, isOssRule, sameVatRate } from './c
  * (Shopify's destination country and VAT split). The ledger decides WHICH
  * orders count and WHEN: an order counts in the quarter of the verifikat that
  * books it on an OSS account, and every OSS-account verifikat that books no
- * order is listed, so the underlag never leaves out a posting silently.
+ * order is listed, so the underlag never leaves out a posting silently. Such
+ * a verifikat (a sale booked by hand, with no order row behind it) gets no
+ * row: its country and rate are not in the ledger, and guessing them from the
+ * totals would put a figure in a declaration. It is listed with a warning,
+ * and the quarter is then never answered as a nil return.
  *
  * What the law asks (Skatteverket, "Deklarera och betala moms i One Stop
  * Shop"; VAT Directive art. 369h; the Commission's OSS guide, part 3):
@@ -112,7 +116,13 @@ export interface OssUnderlag {
   ledger_vat_sek: number
   unaccounted: OssUnaccountedVoucher[]
   warnings: OssUnderlagWarning[]
-  /** Nothing to declare: Skatteverket still wants a declaration (a nil return). */
+  /**
+   * Nothing to declare: Skatteverket still wants a declaration (a nil
+   * return). True only when nothing says otherwise: no row, no correction,
+   * no entry in `unaccounted`, no order missing (`warnings`) and no VAT
+   * movement on the OSS accounts. Empty rows with this false is an underlag
+   * with a gap, not a quarter without sales.
+   */
   nil_return: boolean
 }
 
@@ -252,6 +262,10 @@ const WARNING_TEXT: Record<string, { sv: string; en: string }> = {
     sv: 'Återbetalningar vars order inte är bokförd som OSS-försäljning finns inte med i underlaget. Redovisa dem som rättelse för det kvartal ordern deklarerades i.',
     en: 'Refunds whose order is not booked as an OSS sale are not in the report. Declare them as a correction of the quarter the order was declared in.',
   },
+  vouchers_without_order: {
+    sv: 'Verifikat på OSS-konton i kvartalet är inte kopplade till en order, så underlaget vet inte vilket land eller vilken momssats de gäller och har dem inte med i beloppen. En försäljning till en konsument i ett annat EU-land, eller en återbetalning av en sådan, lägger du till i deklarationen själv: land, momssats och belopp tar du ur ditt eget försäljningsunderlag. Försäljning räknas om till euro med ECB:s kurs för kvartalets sista dag.',
+    en: 'Vouchers on OSS accounts in the quarter are not linked to an order, so the report does not know which country or VAT rate they are for and leaves them out of the amounts. Add a sale to a consumer in another EU country, or a refund of one, to the return yourself: take the country, VAT rate and amounts from your own sales records. Sales are converted to euro at the ECB rate for the last day of the quarter.',
+  },
   rate_unavailable: {
     sv: 'ECB:s eurokurs för sista dagen i kvartalet finns inte än eller kunde inte hämtas, så eurobeloppen saknas. Beloppen i kronor stämmer.',
     en: 'The ECB euro rate for the last day of the quarter is not published yet or could not be fetched, so the euro amounts are missing. The krona amounts are right.',
@@ -342,7 +356,9 @@ function isSwedishRate(rate: number): boolean {
  *   quarter the books held it, and the storno is that later quarter's matter.
  * - Every other verifikat on an OSS account (a manual one, a storno or a
  *   rättelse of an earlier quarter's verifikat) books no order and is listed
- *   in `unaccounted` with its amounts.
+ *   in `unaccounted` with its amounts, under the warning
+ *   `vouchers_without_order`: what it is (a sale, a refund, the payment of
+ *   last quarter's OSS VAT) the ledger does not say.
  */
 export function classifyOssBookings(input: OssClassifyInput): OssClassification {
   const { quarter, revenueAccounts, vatAccounts, entries, orders, parentBookingDates } = input
@@ -470,6 +486,7 @@ export function classifyOssBookings(input: OssClassifyInput): OssClassification 
   if (foreignNotOss.length > 0) warnings.push(warning('foreign_vat_not_oss', foreignNotOss))
   if (notPlaceable.length > 0) warnings.push(warning('orders_not_placeable', notPlaceable))
   if (refundsWithoutOssParent.length > 0) warnings.push(warning('refund_parent_not_oss', refundsWithoutOssParent))
+  if (unaccounted.length > 0) warnings.push(warning('vouchers_without_order'))
 
   return { rows, corrections, unaccounted, ledgerVatSek: roundOre(ledgerVatSek), warnings }
 }
@@ -564,6 +581,20 @@ export function finalizeOssUnderlag(
   const warnings = [...classification.warnings]
   if (rateList.some((rate) => rate.unavailable)) warnings.push(warning('rate_unavailable'))
 
+  // A nil return only when nothing says otherwise. Empty rows are not enough:
+  // a sale booked by hand on the OSS accounts has no order to take country
+  // and rate from, so it reaches `unaccounted` and the ledger total but never
+  // a row, and answering "nothing to declare" beside it invites a nil return
+  // for a quarter with OSS VAT in the books (crm#1902). Every classification
+  // warning names something left outside the underlag; the ledger total
+  // catches what no warning names.
+  const nilReturn =
+    rows.length === 0
+    && corrections.length === 0
+    && classification.unaccounted.length === 0
+    && classification.warnings.length === 0
+    && classification.ledgerVatSek === 0
+
   return {
     period: { ...quarter, ...bounds, label: quarterLabel(quarter), deadline: ossDeadline(quarter.year, quarter.quarter) },
     rows,
@@ -580,7 +611,7 @@ export function finalizeOssUnderlag(
     ledger_vat_sek: classification.ledgerVatSek,
     unaccounted: classification.unaccounted,
     warnings,
-    nil_return: rows.length === 0 && corrections.length === 0,
+    nil_return: nilReturn,
   }
 }
 

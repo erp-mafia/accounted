@@ -162,6 +162,18 @@ function claimRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+const RUN_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+/** The payslip line that repays a claim, as the payout-state reader embeds its salary run. */
+function payslipLine(claimId: string, runStatus = 'draft') {
+  return {
+    id: 'line-1',
+    source_expense_claim_id: claimId,
+    salary_run_employee: {
+      salary_run: { id: RUN_ID, status: runStatus, period_year: 2026, period_month: 9, payment_date: '2026-09-25' },
+    },
+  }
+}
+
 const validClaim = {
   description: 'USB-hubb',
   expense_date: '2026-09-01',
@@ -229,6 +241,40 @@ describe('GET /api/v1/companies/:companyId/expense-claims', () => {
     expect(client.calls).toContainEqual({ table: 'expense_claims', method: 'limit', args: [2] })
   })
 
+  it('names the salary run of a registered claim that is on a payslip, and null for one that waits for a payout (crm#1942)', async () => {
+    const waiting = claimRow({ id: CLAIM_B, created_at: '2026-08-01T09:00:00.000Z' })
+    const client = makeClient({
+      company_members: MEMBER,
+      expense_claims: { data: [claimRow({ employee_id: EMPLOYEE_ID, liability_account: '2820' }), waiting], error: null },
+      salary_line_items: { data: [payslipLine(CLAIM_ID)], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await list('?status=registered')
+    expect(res.status).toBe(200)
+    const claims = (await res.json()).data.expense_claims
+    expect(claims.map((c: { expense_claim_id: string; status: string; salary_run_id: string | null }) => [c.expense_claim_id, c.status, c.salary_run_id])).toEqual([
+      [CLAIM_ID, 'registered', RUN_ID],
+      [CLAIM_B, 'registered', null],
+    ])
+    expect(client.calls).toContainEqual({ table: 'salary_line_items', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(client.calls).toContainEqual({
+      table: 'salary_line_items',
+      method: 'in',
+      args: ['source_expense_claim_id', [CLAIM_ID, CLAIM_B]],
+    })
+  })
+
+  it('500 when the payslip lines cannot be read: never an answer that reads as "waits for a payout"', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: [claimRow()], error: null },
+        salary_line_items: { data: null, error: { message: 'boom' } },
+      }),
+    )
+    expect((await list()).status).toBe(500)
+  })
+
   it('a cursor continues strictly after the last row of the previous page', async () => {
     const client = makeClient({ company_members: MEMBER, expense_claims: { data: [], error: null } })
     mockServiceClient.mockReturnValue(client)
@@ -263,8 +309,23 @@ describe('GET /api/v1/companies/:companyId/expense-claims/:id', () => {
     mockServiceClient.mockReturnValue(client)
     const res = await getClaim(request(`${BASE}/${CLAIM_ID}`), claimParams)
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'paid', payout_batch_id: CLAIM_B })
+    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'paid', payout_batch_id: CLAIM_B, salary_run_id: null })
     expect(client.calls).toContainEqual({ table: 'expense_claims', method: 'eq', args: ['company_id', COMPANY_ID] })
+    // A paid claim waits for nothing: its payslip is not looked up.
+    expect(client.calls.filter((c) => c.table === 'salary_line_items')).toEqual([])
+  })
+
+  it('answers the salary run that repays a registered claim on a payslip', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: claimRow({ employee_id: EMPLOYEE_ID, liability_account: '2820' }), error: null },
+        salary_line_items: { data: [payslipLine(CLAIM_ID, 'approved')], error: null },
+      }),
+    )
+    const res = await getClaim(request(`${BASE}/${CLAIM_ID}`), claimParams)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ expense_claim_id: CLAIM_ID, status: 'registered', salary_run_id: RUN_ID })
   })
 })
 
@@ -832,6 +893,21 @@ describe('POST /api/v1/companies/:companyId/expense-claims/payouts', () => {
     expect(res.status).toBe(status)
     expect((await res.json()).error.code).toBe(code)
     expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run that refuses a claim on a payslip names the salary run', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        expense_claims: { data: [claimRow()], error: null },
+        salary_line_items: { data: [payslipLine(CLAIM_ID)], error: null },
+      }),
+    )
+    const res = await post(payout, '?dry_run=true')
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('EXPENSE_PAYOUT_ON_PAYSLIP')
+    expect(body.error.details).toMatchObject({ claim_id: CLAIM_ID, salary_run_id: RUN_ID, salary_run_status: 'draft' })
   })
 
   it('a dry run refuses a cash account missing from the chart', async () => {

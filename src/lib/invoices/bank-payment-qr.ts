@@ -48,14 +48,13 @@ import { roundOre } from '@/lib/money'
 import {
   formatBankgiroNumber,
   formatPlusgiroNumber,
-  generateOcrReference,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
 import {
+  invoicePaymentReference,
   invoicePrintsBankgiro,
   invoicePrintsPlusgiro,
-  invoiceShowsOcrReference,
 } from '@/lib/invoices/ocr-reference'
 import { isInvoicePayableStatus } from '@/lib/invoices/amount-due'
 
@@ -168,16 +167,14 @@ export function buildBankPaymentQrPayload({ company, invoice, amountDue, lang }:
 
   const name = company.company_name?.trim()
   const orgNumber = company.org_number?.trim()
-  const invoiceNumber = invoice.invoice_number
+  // The reference the invoice tells the payer to use: the OCR row when it is
+  // printed (only beside a printed giro), otherwise the invoice number. Null
+  // while the invoice has no number.
+  const { reference } = invoicePaymentReference(company, invoice.invoice_number, lang)
   const dueDate = compactDate(invoice.due_date)
   const account = bankPaymentQrPayee(company)
-  if (!name || !orgNumber || !invoiceNumber?.trim() || !dueDate || !account.ok) return null
+  if (!name || !orgNumber || !reference || !dueDate || !account.ok) return null
 
-  // The reference the invoice tells the payer to use: the OCR row when it is
-  // printed (only beside a printed giro), otherwise the invoice number.
-  const reference = invoiceShowsOcrReference(company, lang)
-    ? generateOcrReference(invoiceNumber)
-    : invoiceNumber.trim()
   const invoiceDate = compactDate(invoice.invoice_date)
 
   return asciiJson({

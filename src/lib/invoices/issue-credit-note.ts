@@ -256,6 +256,15 @@ async function findExistingCreditJournalEntry(
  * linking an existing one to its original afterwards (link-credit-note.ts).
  * `moved` is false when the read failed or no row was in one of those
  * statuses (changed since it was read).
+ *
+ * The same write settles what the customer still owed on it (crm#1886):
+ * both doors credit the whole invoice (the credit note mirrors every line,
+ * and the link refuses a credit below the open amount), so nothing is left
+ * to pay. Without it `remaining_amount` kept the amount from before the
+ * credit, and a reader that asks "does the customer still owe money" by
+ * that column alone was told yes. The supplier side has always done this
+ * (lib/supplier-invoices/credit.ts). The kundreskontra is unaffected: it
+ * reads total and paid_amount and nets the pair (reports/credited-pairs.ts).
  */
 export async function markOriginalInvoiceCredited(
   supabase: SupabaseClient,
@@ -264,7 +273,7 @@ export async function markOriginalInvoiceCredited(
 ): Promise<{ moved: boolean; error: { message: string; code?: string } | null }> {
   const { data, error } = await supabase
     .from('invoices')
-    .update({ status: 'credited' })
+    .update({ status: 'credited', remaining_amount: 0 })
     .eq('id', originalInvoiceId)
     .eq('company_id', companyId)
     .in('status', ['sent', 'paid', 'overdue'])

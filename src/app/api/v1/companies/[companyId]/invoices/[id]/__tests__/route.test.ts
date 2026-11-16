@@ -74,8 +74,14 @@ function makeFlexibleSupabase(
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
+            // The read of the invoice's own payment reference facts
+            // (withPaymentReference) is a second read of `invoices`: it has
+            // its own queue, `invoice_reference_facts`, and answers no rows
+            // when a test names none.
+            const key = table === 'invoices' && columns?.includes('autogiro_payer_number') ? 'invoice_reference_facts' : table
+            const q = queues.get(key)
+            const fallback = key === table ? { data: null, error: null } : { data: [], error: null }
+            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? fallback)
             resolve(table === 'customers' ? { ...next, data: projectRow(next.data, columns) } : next)
           }
         }

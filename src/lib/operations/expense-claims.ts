@@ -40,6 +40,13 @@ const ExpenseClaimOut = z.object({
   status: z.enum(['registered', 'paid']),
   journal_entry_id: z.string().uuid().nullable().describe('The verifikat that booked the claim.'),
   payout_batch_id: z.string().uuid().nullable().describe('The payout that repaid it, once paid.'),
+  salary_run_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe(
+      'The salary run whose payslip repays the claim, while its status is registered: it is paid with that salary, and a separate payout is refused. null: a registered claim still waits for a payout.',
+    ),
   created_at: z.string(),
 })
 
@@ -62,6 +69,7 @@ const EXAMPLE_CLAIM = {
   status: 'registered',
   journal_entry_id: '9c1e…',
   payout_batch_id: null,
+  salary_run_id: null,
   created_at: '2026-09-01T09:12:00Z',
 }
 
@@ -74,12 +82,13 @@ export const expenseClaimsList = defineOperation({
   docs: {
     summary: 'List expense claims (utlägg): what the company owes owners and employees for private purchases.',
     description:
-      'Returns the utlägg register newest first: each claim\'s claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.',
+      'Returns the utlägg register newest first: each claim\'s claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid), the salary run that repays it when it is on a payslip (salary_run_id) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.',
     useWhen:
       'You need the open claims before paying someone back or matching a bank transfer, or you are reconciling 2893/2820/2890 against who is owed what.',
     doNotUseFor:
-      'Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints); an utlägg put on a payslip is still listed here as registered until the salary run is booked.',
+      'Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints).',
     pitfalls: [
+      'A registered claim waits for a payout only while salary_run_id is null. One put on a payslip stays registered until the salary run is booked, with salary_run_id naming the run: it is paid with that salary, so never pay it out or match a bank transfer to it (409 EXPENSE_PAYOUT_ON_PAYSLIP).',
       'amount_sek is gross incl. VAT: the amount owed, not the cost.',
       'A claim on 2018 (enskild firma owner) is an egen insättning, not a debt; it is listed but is not normally paid back.',
       'The page is in data.expense_claims with data.next_cursor; a cursor that no longer decodes starts from the first page.',
@@ -103,7 +112,7 @@ export const expenseClaimsList = defineOperation({
     name: 'gnubok_list_expense_claims',
     title: 'List Expense Claims',
     description:
-      'List utlägg (private purchases the company owes an owner or employee for), newest first, with status registered (owed) or paid, amounts in SEK and the liability account. Filter by status or employee_id; paginate with cursor.',
+      'List utlägg (private purchases the company owes an owner or employee for), newest first, with status registered (owed) or paid, amounts in SEK and the liability account. A claim with salary_run_id is repaid with that salary. Filter by status or employee_id; paginate with cursor.',
     keywords: ['utlägg', 'utläggsregister', 'privat betalt', 'skuld till ägare', 'skuld till anställd', 'kvitto privat kort'],
   },
   run: (ctx, input) => listExpenseClaimsPage(ctx, input),
@@ -118,7 +127,7 @@ export const expenseClaimsGet = defineOperation({
   docs: {
     summary: 'Read one expense claim (utlägg).',
     description:
-      'Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status and the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.',
+      'Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status, the salary run that repays it while it is on a payslip (salary_run_id), the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.',
     useWhen: 'You hold an expense_claim_id (from the list or a create) and need its current status.',
     doNotUseFor: 'Finding claims: list them with GET /expense-claims?status=registered.',
     pitfalls: ['An id from another company answers 404 EXPENSE_CLAIM_NOT_FOUND.'],
