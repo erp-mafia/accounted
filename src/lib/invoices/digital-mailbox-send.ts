@@ -23,7 +23,6 @@
 import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { getConnection } from '@/lib/digital-mailboxes/connections'
@@ -38,7 +37,7 @@ import type {
 import { isLegalPersonOrgNumber, normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { invoiceAmountDue } from '@/lib/invoices/amount-due'
 import { issueAndBookInvoice } from '@/lib/invoices/issue-and-book-invoice'
-import { invoicePrintsBankgiro, invoicePrintsPlusgiro, invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import { invoicePaymentReference, invoicePrintsBankgiro, invoicePrintsPlusgiro } from '@/lib/invoices/ocr-reference'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import type { Logger } from '@/lib/logger'
@@ -164,15 +163,9 @@ export function invoiceMailboxPayment(invoice: Invoice, settings: CompanySetting
   } else {
     return null
   }
-  const ocr = invoiceShowsOcrReference(giro, language)
-  return {
-    amount,
-    dueDate: invoice.due_date,
-    method,
-    account,
-    reference: ocr ? generateOcrReference(invoice.invoice_number) : invoice.invoice_number,
-    referenceType: ocr ? 'ocr' : 'invoice_number',
-  }
+  const { reference, type: referenceType } = invoicePaymentReference(giro, invoice.invoice_number, language)
+  if (!reference) return null
+  return { amount, dueDate: invoice.due_date, method, account, reference, referenceType }
 }
 
 async function loadInvoice(supabase: SupabaseClient, companyId: string, invoiceId: string): Promise<LoadedInvoice | null> {

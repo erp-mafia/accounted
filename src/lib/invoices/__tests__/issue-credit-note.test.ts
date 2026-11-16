@@ -37,7 +37,7 @@ import {
   issueCreditNote,
 } from '@/lib/invoices/issue-credit-note'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const log: Logger = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -153,6 +153,48 @@ describe('issueCreditNote', () => {
     })
     expect(mockCreateCreditNoteJournalEntry).not.toHaveBeenCalled()
     expect(mockCancelSchedulesForSource).not.toHaveBeenCalled()
+  })
+
+  // crm#1886: the original kept the amount it asked for before the credit, so
+  // a reader of remaining_amount alone was told the customer still owed it.
+  it('leaves nothing to pay on the credited original, in the write that moves it to credited', async () => {
+    enqueue({ data: [{ id: 'invoice-1' }], error: null })
+
+    await issueCreditNote({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      creditNote: makeCreditNote(),
+      originalInvoice: { id: 'invoice-1', invoice_number: 'F-100', status: 'sent' },
+      entityType: 'enskild_firma',
+      accountingMethod: 'cash',
+      deferInvoiceBooking: false,
+      log,
+    })
+
+    // One write on the original, compare-and-set on the statuses a credit may leave.
+    expect(findCalls('invoices', 'update')).toEqual([[{ status: 'credited', remaining_amount: 0 }]])
+    expect(findCalls('invoices', 'in')).toEqual([['status', ['sent', 'paid', 'overdue']]])
+  })
+
+  it('does not touch the original, its remaining amount included, when the credit could not be booked', async () => {
+    enqueue({ data: null, error: null })
+    mockCreateCreditNoteJournalEntry.mockRejectedValue(new Error('Perioden är låst'))
+
+    const result = await issueCreditNote({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      creditNote: makeCreditNote(),
+      originalInvoice: { id: 'invoice-1', invoice_number: 'F-100', status: 'sent' },
+      entityType: 'enskild_firma',
+      accountingMethod: 'accrual',
+      deferInvoiceBooking: false,
+      log,
+    })
+
+    expect(result.complete).toBe(false)
+    expect(findCalls('invoices', 'update')).toEqual([])
   })
 
   it('does not cancel accrual schedules when the credit journal entry fails', async () => {

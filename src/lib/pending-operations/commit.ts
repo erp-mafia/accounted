@@ -20,6 +20,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
@@ -3131,10 +3132,7 @@ async function commitSendInvoice(
         log,
       })
     }
-    await eventBus.emit({
-      type: 'invoice.sent',
-      payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, userId, companyId },
-    })
+    await emitInvoiceSent({ supabase, companyId, userId, invoice: invoice as Invoice, settings: company as CompanySettings, log })
     const entry = getErrorEntry('INVOICE_SEND_ISSUED_NOT_DELIVERED')
     return {
       error: entry?.message_sv ?? 'Fakturan är utfärdad men e-postmeddelandet kunde inte skickas.',
@@ -3203,10 +3201,7 @@ async function commitSendInvoice(
     } catch { /* non-blocking */ }
   }
 
-  await eventBus.emit({
-    type: 'invoice.sent',
-    payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, userId, companyId },
-  })
+  await emitInvoiceSent({ supabase, companyId, userId, invoice: invoice as Invoice, settings: company as CompanySettings, log })
 
   const warnings = [
     // The raw provider/DB reason is logged above; the agent-facing text stays Swedish.

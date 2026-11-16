@@ -188,6 +188,7 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     expect(result.rows).toEqual([])
     expect(result.corrections).toEqual([])
     expect(result.warnings.map((w) => [w.code, w.order_numbers])).toEqual([['refund_parent_not_oss', ['#r1']]])
+    expect(result.nil_return).toBe(false)
   })
 
   it('drops a verifikat and its storno in the same quarter, and follows the rättelse that replaced it', () => {
@@ -236,6 +237,51 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     ])
     expect(result.ledger_vat_sek).toBe(25)
     expect(result.totals.vat_sek).toBe(190)
+    // One warning for the list, whatever its length: the vouchers are not in the amounts.
+    expect(result.warnings.map((w) => [w.code, w.order_numbers])).toEqual([['vouchers_without_order', []]])
+  })
+
+  it('never answers a nil return for a sale booked by hand on the OSS accounts, and invents no country for it', () => {
+    // A sale through a payment provider, booked as a manual verifikat: no order row carries its country.
+    const result = underlag(input({
+      entries: [entry('e7', { description: 'Manuell OSS-försäljning', net: 80, vat: 16 })],
+    }))
+
+    expect(result.rows).toEqual([])
+    expect(result.corrections).toEqual([])
+    expect(result.totals).toEqual({ net_eur: 0, vat_eur: 0, corrections_vat_eur: 0, net_sek: 0, vat_sek: 0, corrections_vat_sek: 0 })
+    expect(result.rates).toEqual([])
+    expect(result.ledger_vat_sek).toBe(16)
+    expect(result.unaccounted).toEqual([
+      { journal_entry_id: 'e7', voucher_series: 'A', voucher_number: 7, entry_date: '2026-08-15', description: 'Manuell OSS-försäljning', net_sek: 80, vat_sek: 16 },
+    ])
+    expect(result.warnings.map((w) => [w.code, w.order_numbers])).toEqual([['vouchers_without_order', []]])
+    expect(result.warnings[0].message_sv).toContain('vilket land')
+    expect(result.warnings[0].message_en).toContain('which country')
+    expect(result.nil_return).toBe(false)
+  })
+
+  it('answers no nil return for any verifikat left outside, the payment of last quarter\'s OSS VAT included', () => {
+    // Debit on the OSS VAT account alone: a payment, or a correction to declare. The ledger does not say which.
+    const result = underlag(input({ entries: [entry('e9', { description: 'Betalning OSS', net: 0, vat: -190 })] }))
+
+    expect(result.rows).toEqual([])
+    expect(result.unaccounted.map((voucher) => [voucher.journal_entry_id, voucher.net_sek, voucher.vat_sek])).toEqual([['e9', 0, -190]])
+    expect(result.nil_return).toBe(false)
+  })
+
+  it('answers no nil return when the ledger holds OSS VAT that no row and no warning explains', () => {
+    // Marked as booked on a verifikat with OSS VAT, but the order row itself carries no VAT to place.
+    const result = underlag(input({
+      entries: [entry('e5')],
+      orders: [order('o1', { manually_booked_journal_entry_id: 'e5', manually_booked_at: '2026-08-16T10:00:00Z', vat_breakdown: [] })],
+    }))
+
+    expect(result.rows).toEqual([])
+    expect(result.unaccounted).toEqual([])
+    expect(result.warnings).toEqual([])
+    expect(result.ledger_vat_sek).toBe(190)
+    expect(result.nil_return).toBe(false)
   })
 
   it('counts an order marked as booked on a verifikat that carries OSS lines', () => {
@@ -258,6 +304,9 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     }))
     expect(result.rows).toEqual([])
     expect(result.warnings.map((w) => [w.code, w.order_numbers])).toEqual([['orders_not_placeable', ['#o1', '#o2', '#o3']]])
+    // The OSS accounts hold their VAT: no rows is a gap here, not a quarter without sales.
+    expect(result.ledger_vat_sek).toBe(570)
+    expect(result.nil_return).toBe(false)
   })
 
   it('leaves 0 % buckets out of the declaration', () => {
@@ -285,6 +334,9 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     ])
     expect(result.warnings[0].message_sv).toContain('inte bokförda')
     expect(result.warnings[0].message_en).toContain('not booked')
+    // Orders known to be missing: an empty underlag is not a nil return yet.
+    expect(result.rows).toEqual([])
+    expect(result.nil_return).toBe(false)
   })
 
   it('keeps the kronor and leaves the euro empty while the ECB rate is missing', () => {
@@ -303,6 +355,9 @@ describe('classifyOssBookings + finalizeOssUnderlag', () => {
     expect(ossRateNeeds(classification, Q3)).toEqual([])
     const result = finalizeOssUnderlag(Q3, classification, new Map())
     expect(result.nil_return).toBe(true)
+    expect(result.ledger_vat_sek).toBe(0)
+    expect(result.unaccounted).toEqual([])
+    expect(result.warnings).toEqual([])
     expect(result.totals).toEqual({ net_eur: 0, vat_eur: 0, corrections_vat_eur: 0, net_sek: 0, vat_sek: 0, corrections_vat_sek: 0 })
   })
 

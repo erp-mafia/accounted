@@ -1030,7 +1030,47 @@ describe('listExpensePayoutsDue', () => {
     ])
   })
 
+  it('a claim on a salary run is no payout to make: it leaves the person\'s total, and a person with nothing else is not listed (crm#1942)', async () => {
+    enqueue({
+      data: [
+        { id: 'c1', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 250, expense_date: '2026-09-02' },
+        { id: 'c2', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
+        { id: 'c3', employee_id: 'emp-2', claimant_name: 'Erik Ek', liability_account: '2820', amount_sek: 150, expense_date: '2026-09-04' },
+      ],
+    })
+    // c1 and c3 sit on a draft salary run: still 'registered', repaid with that salary.
+    enqueue({
+      data: ['c1', 'c3'].map((claimId) => ({
+        id: `line-${claimId}`,
+        source_expense_claim_id: claimId,
+        salary_run_employee: { salary_run: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      })),
+    })
+    const people = await listExpensePayoutsDue(supabase, COMPANY)
+    expect(findCalls('salary_line_items', 'in')).toEqual([['source_expense_claim_id', ['c1', 'c2', 'c3']]])
+    expect(people).toEqual([
+      {
+        key: 'emp-1',
+        employee_id: 'emp-1',
+        claimant_name: 'Anna Berg',
+        liability_account: '2820',
+        claim_count: 1,
+        claim_ids: ['c2'],
+        total_sek: 400,
+        oldest_expense_date: '2026-09-06',
+      },
+    ])
+  })
+
   it('soft-fails to an empty list on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
+  })
+
+  it('soft-fails to an empty list when the payslip lines cannot be read: nobody is offered a payout on a guess', async () => {
+    enqueue({
+      data: [{ id: 'c1', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 250, expense_date: '2026-09-02' }],
+    })
     enqueue({ error: { message: 'boom' } })
     await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
   })
@@ -1046,6 +1086,7 @@ describe('listExpensePayoutSuggestions', () => {
         { id: 'c1', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 1240, expense_date: '2026-09-03' },
       ],
     })
+    enqueue({ data: [] }) // none of them is on a payslip
     // Unbooked outflows: one repays Anna exactly, one is a different amount.
     enqueue({
       data: [

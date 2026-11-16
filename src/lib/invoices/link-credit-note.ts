@@ -308,7 +308,7 @@ export async function linkCreditNoteToInvoice(params: {
     ok: true,
     dryRun: false,
     creditNote: linked as Row,
-    original: { ...original, status: 'credited' },
+    original: { ...original, status: 'credited', remaining_amount: 0 },
     creditAmount,
     openAmount,
     currency,

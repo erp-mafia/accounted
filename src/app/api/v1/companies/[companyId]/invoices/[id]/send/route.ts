@@ -100,7 +100,7 @@ import {
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import { invoiceRequiresPaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
-import { eventBus } from '@/lib/events'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -689,9 +689,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         log: ctx.log,
       })
       try {
-        await eventBus.emit({
-          type: 'invoice.sent',
-          payload: { invoice: renderableInvoice, companyId: ctx.companyId!, userId: ctx.userId },
+        await emitInvoiceSent({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          invoice: renderableInvoice,
+          settings,
+          log: ctx.log,
         })
       } catch (err) {
         ctx.log.error('invoice.sent emit failed', err as Error, { invoiceId, companyId: ctx.companyId })
@@ -829,13 +833,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 10b: emit invoice.sent.
     try {
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: {
-          invoice: renderableInvoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
+      await emitInvoiceSent({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoice: renderableInvoice,
+        settings,
+        log: ctx.log,
       })
     } catch (err) {
       ctx.log.error('invoice.sent emit failed', err as Error, {

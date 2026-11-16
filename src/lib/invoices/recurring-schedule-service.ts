@@ -17,6 +17,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import {
   getArticleVatRateAdoptionSet,
   getPermittedVatRates,
@@ -1063,10 +1064,7 @@ async function sendInvoiceFromSchedule(
       log: issueLog,
     })
     if (archiveFailure) followUpWarnings.push(archiveFailure.reason)
-    await eventBus.emit({
-      type: 'invoice.sent',
-      payload: { invoice: { ...invoice, status: 'sent' }, companyId, userId },
-    })
+    await emitInvoiceSent({ supabase, companyId, userId, invoice, settings: company, log })
     return {
       sent: false,
       warning: [
@@ -1089,10 +1087,7 @@ async function sendInvoiceFromSchedule(
     }
   }
 
-  await eventBus.emit({
-    type: 'invoice.sent',
-    payload: { invoice: { ...invoice, status: 'sent' }, companyId, userId },
-  })
+  await emitInvoiceSent({ supabase, companyId, userId, invoice, settings: company, log })
 
   return followUpWarnings.length > 0
     ? { sent: true, warning: `Fakturan skickades, men: ${followUpWarnings.join(' ')}` }

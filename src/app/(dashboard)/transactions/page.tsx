@@ -85,6 +85,7 @@ import {
   groupExpenseClaimsByPerson,
   matchTransactionsToExpensePayouts,
 } from '@/lib/expenses/expense-payout-candidates'
+import { listExpenseClaimsAwaitingPayout } from '@/lib/salary/expense-claim-payout-state'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
 import type { SalaryRunPayout } from '@/lib/transactions/salary-run-payouts'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
@@ -281,10 +282,11 @@ function buildSupplierInvoiceMap(
   }, {})
 }
 
-// Pair unbooked outflows with the person whose registered utlägg they repay
-// in full (lib/expenses/expense-payout-candidates). Read-time: the open claims
-// are the candidate pool, so this is one small query and nothing for the
-// companies without any. Non-fatal like fetchPotentialMatches.
+// Pair unbooked outflows with the person whose utlägg they repay in full
+// (lib/expenses/expense-payout-candidates). Read-time: the claims that wait
+// for a payout are the candidate pool (a claim on a salary run is not one),
+// so this is one small query and nothing for the companies without any.
+// Non-fatal like fetchPotentialMatches.
 async function fetchExpensePayoutMatches(
   supabase: SupabaseDataClient,
   companyId: string | null,
@@ -292,20 +294,9 @@ async function fetchExpensePayoutMatches(
 ): Promise<{ byTransaction: Map<string, ExpensePayoutDue>; people: ExpensePayoutDue[] }> {
   const out = new Map<string, ExpensePayoutDue>()
   if (!companyId || rows.length === 0) return { byTransaction: out, people: [] }
-  // Every registered claim, paged past the PostgREST row cap: a truncated set
-  // would understate a person's debt and suggest a payout for part of it.
   let claimRows: Parameters<typeof groupExpenseClaimsByPerson>[0]
   try {
-    claimRows = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('expense_claims')
-        .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
-        .eq('company_id', companyId)
-        .eq('status', 'registered')
-        .order('expense_date', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
+    claimRows = await listExpenseClaimsAwaitingPayout(supabase, companyId)
   } catch (error) {
     console.error('[fetchExpensePayoutMatches] expense_claims query failed', error)
     return { byTransaction: out, people: [] }

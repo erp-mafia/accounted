@@ -37,6 +37,7 @@ import {
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import { withExpenseClaimPayoutState, type ExpenseClaimPayoutState } from '@/lib/salary/expense-claim-payout-state'
 import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { roundOre, sumOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -674,13 +675,22 @@ export interface ListExpenseClaimsOptions {
   status?: 'registered' | 'paid'
 }
 
+/** A claim as the register lists it: the row and whether it still waits for a payout. */
+export type ListedExpenseClaim = ExpenseClaimRow & ExpenseClaimPayoutState
+
+/**
+ * The register, newest expense first. Each claim says whether it waits for a
+ * payout and, when it is on a payslip instead, which salary run repays it
+ * (lib/salary/expense-claim-payout-state.ts), so no reader of the list
+ * decides that from the status alone.
+ */
 export async function listExpenseClaims(
   supabase: SupabaseClient,
   companyId: string,
   options: ListExpenseClaimsOptions = {},
-): Promise<ExpenseClaimRow[]> {
+): Promise<ListedExpenseClaim[]> {
   // Paged, id as the unique tiebreaker: the register used to end at 1,000.
-  return fetchAllRows<ExpenseClaimRow>(({ from, to }) => {
+  const claims = await fetchAllRows<ExpenseClaimRow>(({ from, to }) => {
     let query = supabase
       .from('expense_claims')
       .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
@@ -693,6 +703,7 @@ export async function listExpenseClaims(
   }).catch((error: Error) => {
     throw new Error(`Failed to list expense claims: ${error.message}`)
   })
+  return withExpenseClaimPayoutState(supabase, companyId, claims)
 }
 
 export type DeleteExpenseClaimResult =

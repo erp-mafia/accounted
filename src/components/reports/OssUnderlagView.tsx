@@ -98,7 +98,11 @@ export function OssUnderlagView() {
   const report = upToDate ? result.data ?? null : null
   const error = upToDate ? result.error ?? null : null
   const message = (w: { message_sv: string; message_en: string }) => (locale === 'en' ? w.message_en : w.message_sv)
-  const incomplete = !!report && (report.unaccounted.length > 0 || report.warnings.some((w) => w.code !== 'rate_unavailable'))
+  // No amounts, yet not a nil return (the underlag decides that, never this
+  // view): something on the OSS accounts or among the orders is left outside.
+  const emptyNotNil = !!report && !report.nil_return && report.rows.length === 0 && report.corrections.length === 0
+  const incomplete =
+    !!report && (emptyNotNil || report.unaccounted.length > 0 || report.warnings.some((w) => w.code !== 'rate_unavailable'))
 
   return (
     <div className="space-y-4">
@@ -158,7 +162,9 @@ export function OssUnderlagView() {
           <p className="text-[13px] text-muted-foreground">
             {report.nil_return
               ? t('nil_return', { date: formatDateLong(report.period.deadline) })
-              : t('deadline', { date: formatDateLong(report.period.deadline) })}
+              : emptyNotNil
+                ? t('nil_unconfirmed', { date: formatDateLong(report.period.deadline) })
+                : t('deadline', { date: formatDateLong(report.period.deadline) })}
           </p>
 
           {report.rows.length > 0 && (

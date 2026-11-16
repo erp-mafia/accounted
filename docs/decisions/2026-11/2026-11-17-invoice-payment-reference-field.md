@@ -1,0 +1,1 @@
+[2026-11-17] Customer invoices return payment_reference and payment_reference_type (ocr or invoice_number) on the v1 and MCP reads and on invoice.sent: derived by the function the PDF prints from, never stored, so it follows the company's giro settings as the PDF does (crm#1886).

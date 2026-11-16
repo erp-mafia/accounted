@@ -21,6 +21,7 @@ import { supersededTwins, type TwinCandidate } from '@/lib/cash-accounts/twins'
 import { toError } from '@/lib/errors/to-error'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { listExpenseClaimsAwaitingPayout } from '@/lib/salary/expense-claim-payout-state'
 import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import {
   groupExpenseClaimsByPerson,
@@ -1394,42 +1395,23 @@ export async function countReconciliationDue(
 }
 
 /**
- * People owed for registered, unpaid utlägg, newest debt last. The canonical
- * "att betala ut" predicate: expense_claims.status = 'registered'. Grouped
- * here (not in SQL) because the owner has no employee row: two owner claims
- * with the same claimant_name are one person, one transfer.
+ * People owed a payout for their utlägg, oldest debt first. Which claims
+ * wait for a payout is listExpenseClaimsAwaitingPayout's answer (registered
+ * and on no payslip line, lib/salary/expense-claim-payout-state.ts): a claim
+ * put on a salary run is repaid with that salary and is no payout to make.
+ * Grouped here (not in SQL) because the owner has no employee row: two owner
+ * claims with the same claimant_name are one person, one transfer.
  */
 export async function listExpensePayoutsDue(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<ExpensePayoutDue[]> {
-  type ClaimRow = {
-    id: string
-    employee_id: string | null
-    claimant_name: string
-    liability_account: string
-    amount_sek: number | string
-    expense_date: string
-  }
-  let rows: ClaimRow[]
   try {
-    // Every registered claim, paginated past the PostgREST row cap: a person
-    // omitted or a total understated here is money the company owes someone.
-    rows = await fetchAllRows<ClaimRow>(({ from, to }) =>
-      supabase
-        .from('expense_claims')
-        .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
-        .eq('company_id', companyId)
-        .eq('status', 'registered')
-        .order('expense_date', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
+    return groupExpenseClaimsByPerson(await listExpenseClaimsAwaitingPayout(supabase, companyId))
   } catch (err) {
     logAndZero('expense_payout', companyId, err as { message?: string })
     return []
   }
-  return groupExpenseClaimsByPerson(rows)
 }
 
 /** Number of people owed for unpaid utlägg (see listExpensePayoutsDue). */

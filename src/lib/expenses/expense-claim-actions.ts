@@ -32,6 +32,11 @@ import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/paginatio
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { bankRowRefusalCode, decideBankRowRebooking, type GatedBankRow } from '@/lib/transactions/is-booked'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import {
+  readPayslipLinesForClaims,
+  withExpenseClaimPayoutState,
+  type ExpenseClaimPayoutState,
+} from '@/lib/salary/expense-claim-payout-state'
 import { readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
@@ -78,6 +83,8 @@ export interface ExpenseClaimPublic {
   status: 'registered' | 'paid'
   journal_entry_id: string | null
   payout_batch_id: string | null
+  /** The salary run that repays the claim, while it is registered and on a payslip. */
+  salary_run_id: string | null
   created_at: string
 }
 
@@ -85,7 +92,9 @@ function nullableNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value)
 }
 
-export function toPublicClaim(row: Partial<ExpenseClaimRow> & { id: string }): ExpenseClaimPublic {
+export function toPublicClaim(
+  row: Partial<ExpenseClaimRow> & { id: string } & Partial<ExpenseClaimPayoutState>,
+): ExpenseClaimPublic {
   return {
     expense_claim_id: row.id,
     employee_id: row.employee_id ?? null,
@@ -103,6 +112,7 @@ export function toPublicClaim(row: Partial<ExpenseClaimRow> & { id: string }): E
     status: row.status === 'paid' ? 'paid' : 'registered',
     journal_entry_id: row.journal_entry_id ?? null,
     payout_batch_id: row.payout_batch_id ?? null,
+    salary_run_id: row.salary_run?.salary_run_id ?? null,
     created_at: row.created_at ?? '',
   }
 }
@@ -141,12 +151,17 @@ export async function listExpenseClaimsPage(
   const rows = (data ?? []) as unknown as ExpenseClaimRow[]
   const page = rows.slice(0, limit)
   const last = page[page.length - 1]
-  return {
-    ok: true,
-    data: {
-      expense_claims: page.map(toPublicClaim),
-      next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
-    },
+  try {
+    const claims = await withExpenseClaimPayoutState(ctx.supabase, ctx.companyId, page)
+    return {
+      ok: true,
+      data: {
+        expense_claims: claims.map(toPublicClaim),
+        next_cursor: rows.length > limit && last ? encodeDefaultCursor(last) : null,
+      },
+    }
+  } catch (err) {
+    return failed(err)
   }
 }
 
@@ -162,7 +177,12 @@ export async function getExpenseClaim(
     .maybeSingle()
   if (error) return failed(error)
   if (!data) return { ok: false, code: 'EXPENSE_CLAIM_NOT_FOUND' }
-  return { ok: true, data: toPublicClaim(data as unknown as ExpenseClaimRow) }
+  try {
+    const [claim] = await withExpenseClaimPayoutState(ctx.supabase, ctx.companyId, [data as unknown as ExpenseClaimRow])
+    return { ok: true, data: toPublicClaim(claim) }
+  } catch (err) {
+    return failed(err)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -518,17 +538,18 @@ async function previewPayout(
   const notOpen = claims.find((c) => c.status !== 'registered')
   if (notOpen) return { ok: false, code: 'EXPENSE_PAYOUT_ALREADY_PAID', details: { claim_id: notOpen.id } }
 
-  const { data: scheduled, error: scheduledError } = await supabase
-    .from('salary_line_items')
-    .select('source_expense_claim_id')
-    .eq('company_id', companyId)
-    .in('source_expense_claim_id', claimIds)
-  if (scheduledError) return failed(scheduledError)
-  const onPayslip = ((scheduled ?? []) as Array<{ source_expense_claim_id: string | null }>).find(
-    (row) => row.source_expense_claim_id,
-  )
+  const payslipLines = await readPayslipLinesForClaims(supabase, companyId, claimIds)
+  const onPayslip = claimIds.find((id) => payslipLines.has(id))
   if (onPayslip) {
-    return { ok: false, code: 'EXPENSE_PAYOUT_ON_PAYSLIP', details: { claim_id: onPayslip.source_expense_claim_id } }
+    const run = payslipLines.get(onPayslip)?.salary_run
+    return {
+      ok: false,
+      code: 'EXPENSE_PAYOUT_ON_PAYSLIP',
+      details: {
+        claim_id: onPayslip,
+        ...(run ? { salary_run_id: run.salary_run_id, salary_run_status: run.status } : {}),
+      },
+    }
   }
 
   const claimantKey = (c: (typeof claims)[number]) =>

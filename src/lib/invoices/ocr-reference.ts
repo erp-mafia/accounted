@@ -1,3 +1,5 @@
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
+
 // Loose on purpose: rows written before the invoice_show_* flags existed
 // reach the templates with them undefined, which is why each flag defaults
 // here, once, for every caller.
@@ -37,4 +39,48 @@ export function invoiceShowsOcrReference(company: OcrSettings, lang: 'sv' | 'en'
     lang === 'sv' &&
     (invoicePrintsBankgiro(company) || invoicePrintsPlusgiro(company))
   )
+}
+
+/**
+ * How a payment reference is built. `ocr`: the digits of the invoice number
+ * followed by a Luhn (10-modulen) check digit, no length digit: invoice 0073
+ * is paid as 00737. `invoice_number`: the invoice number as it is, written as
+ * the message of the payment.
+ */
+export type InvoicePaymentReferenceType = 'ocr' | 'invoice_number'
+
+export interface InvoicePaymentReference {
+  type: InvoicePaymentReferenceType
+  /** What the payer writes with the payment; null while the invoice has no number. */
+  reference: string | null
+}
+
+/**
+ * The reference an invoice asks the payer to quote: the OCR reference when
+ * the invoice shows one (invoiceShowsOcrReference), otherwise its number.
+ *
+ * The ONE place that chooses between the two, for everything that says how
+ * to pay an invoice: the PDF payment box and the mails (payment-rows.ts),
+ * the bank-app QR (bank-payment-qr.ts), the digital mailbox
+ * (digital-mailbox-send.ts) and the `payment_reference` field of the API and
+ * MCP reads (payment-reference-fields.ts). Each of the first three chose on
+ * its own before, and no API returned the choice, so an integrator who
+ * delivered the invoice outside Accounted had to work out the check digit
+ * to print the reference the invoice carries (crm#1886).
+ *
+ * `company` is the company with the invoice's payee already applied
+ * (companyWithInvoicePaymentAccount), as for invoiceShowsOcrReference. The
+ * bank match reads a payment under either form (ocr-keys.ts), so the choice
+ * never decides whether a payment is recognised.
+ */
+export function invoicePaymentReference(
+  company: OcrSettings,
+  invoiceNumber: string | null | undefined,
+  lang: 'sv' | 'en',
+): InvoicePaymentReference {
+  const number = invoiceNumber?.trim() || null
+  if (invoiceShowsOcrReference(company, lang)) {
+    return { type: 'ocr', reference: number ? generateOcrReference(number) : null }
+  }
+  return { type: 'invoice_number', reference: number }
 }

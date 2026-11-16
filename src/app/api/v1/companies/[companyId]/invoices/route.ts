@@ -36,6 +36,7 @@ import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import { PAYMENT_REFERENCE_PITFALL, withPaymentReference } from '@/lib/invoices/payment-reference-fields'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
 import {
@@ -137,6 +138,12 @@ const InvoiceSummary = z.object({
   amount_to_pay: z.number(),
   ore_rounding_amount: z.number(),
   remaining_amount: z.number(),
+  // The reference the invoice asks the payer to quote, as its PDF prints it
+  // (crm#1886): ocr = the digits of invoice_number plus a Luhn check digit,
+  // invoice_number = the number as it is. Both null on a document that asks
+  // for no payment under a reference (lib/invoices/payment-reference-fields.ts).
+  payment_reference: z.string().nullable(),
+  payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -223,7 +230,8 @@ registerEndpoint({
     'Fetching a single invoice you already know the id of: use GET /api/v1/companies/{companyId}/invoices/{id}. Supplier invoices are a different resource (supplier-invoices).',
   pitfalls: [
     'Draft invoices have invoice_number=null until they are sent.',
-    'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices.',
+    PAYMENT_REFERENCE_PITFALL,
+    'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices. Crediting an invoice sets its remaining_amount to 0: the credit note settles it.',
     'Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.',
     'Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.',
     'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
@@ -249,6 +257,8 @@ registerEndpoint({
           amount_to_pay: 12500,
           ore_rounding_amount: 0,
           remaining_amount: 12500,
+          payment_reference: '202600425',
+          payment_reference_type: 'ocr',
           paid_at: null,
           created_at: '2026-05-01T09:14:33Z',
         },
@@ -393,7 +403,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     } & AmountToPayRow & Record<string, unknown>
 
     const rows = ((data ?? []) as unknown) as InvoiceRow[]
-    const trimmed = await withAmountToPay(ctx.supabase, ctx.companyId!, rows.slice(0, limit))
+    const priced = await withAmountToPay(ctx.supabase, ctx.companyId!, rows.slice(0, limit))
+    const trimmed = await withPaymentReference(ctx.supabase, ctx.companyId!, priced)
     const hasMore = rows.length > limit
 
     const pickCustomer = (c: InvoiceRow['customer']): CustomerObj | null => {
@@ -423,6 +434,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         amount_to_pay: r.amount_to_pay,
         ore_rounding_amount: r.ore_rounding_amount,
         remaining_amount: r.remaining_amount,
+        payment_reference: r.payment_reference,
+        payment_reference_type: r.payment_reference_type,
         paid_at: r.paid_at,
         created_at: r.created_at,
       }

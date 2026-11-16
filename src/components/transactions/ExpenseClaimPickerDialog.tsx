@@ -38,6 +38,8 @@ interface ClaimRow {
   amount_sek: number | string
   expense_date: string
   description: string
+  /** Registered and on no payslip: the server's answer (lib/salary/expense-claim-payout-state.ts). */
+  awaits_payout: boolean
 }
 
 interface Props {
@@ -82,7 +84,11 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
       .then((json) => {
         if (cancelled) return
         setLoadFailed(false)
-        const rows = ((json?.data ?? []) as ClaimRow[]).filter((r) => r.liability_account !== '2018')
+        // A claim on a salary run is repaid with that salary: it is no
+        // transfer to match, and the booking would refuse it.
+        const rows = ((json?.data ?? []) as ClaimRow[]).filter(
+          (r) => r.awaits_payout && r.liability_account !== '2018',
+        )
         setClaims(rows)
         const people = groupExpenseClaimsByPerson(rows)
         // Preselect the person (and all their receipts) when one person's

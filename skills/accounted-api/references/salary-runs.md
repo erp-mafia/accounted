@@ -1088,6 +1088,7 @@ Adds one tax-free expense_reimbursement line to the employee's payslip on a draf
 - No open claims returns 404 SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS; a claim that lands on another payslip concurrently returns 409 EXPENSE_CLAIM_ALREADY_ON_PAYSLIP.
 - Adds all open claims of the employee at once; remove a line you do not want with DELETE /salary-runs/{id}/lines/{lineId}.
 - Run POST /salary-runs/{id}/calculate afterwards so the totals include the lines.
+- The claims keep status registered until the run is booked. Until then GET /expense-claims names this run in their salary_run_id: they are paid with the salary and are no payout to make.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

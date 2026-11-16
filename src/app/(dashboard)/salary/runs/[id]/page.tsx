@@ -79,6 +79,8 @@ interface OpenClaimRow {
   id: string
   employee_id: string | null
   amount_sek: number | string
+  /** Registered and on no payslip of any run: the server's answer (lib/salary/expense-claim-payout-state.ts). */
+  awaits_payout: boolean
 }
 
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
@@ -184,7 +186,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       if (data?.status === 'draft') {
         void fetch('/api/expense-claims?status=registered')
           .then(async (claimsRes) => (claimsRes.ok ? claimsRes.json() : null))
-          .then((json) => setOpenClaims((json?.data as OpenClaimRow[] | undefined) ?? []))
+          .then((json) =>
+            setOpenClaims(((json?.data as OpenClaimRow[] | undefined) ?? []).filter((claim) => claim.awaits_payout)),
+          )
           .catch(() => setOpenClaims([]))
       } else {
         setOpenClaims([])
@@ -954,8 +958,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const reportsToFora = employees.some((sre) => !!sre.employee?.fora_fok_id)
   const paymentPeriod = agiReportingPeriod(run)
 
-  // Open utlägg per employee that are not already on a payslip line of this
-  // run (#2331). The server re-checks against every run when adding.
+  // Open utlägg per employee: the claims that wait for a payout, less the
+  // ones put on a payslip line of this run since they were read (#2331).
   const scheduledClaimIds = new Set(
     employees.flatMap((sre) =>
       (sre.line_items ?? [])

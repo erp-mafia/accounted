@@ -244,7 +244,7 @@ describe('creditInvoice', () => {
     expect(byAccount['1510']).toMatchObject({ debit_amount: 0, credit_amount: 8750 })
     // The original is flipped only after the verifikat exists.
     const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
-    expect(updates).toContainEqual({ status: 'credited' })
+    expect(updates).toContainEqual({ status: 'credited', remaining_amount: 0 })
     // The schedules of a periodised original stop (faktureringsmetoden).
     expect(mocks.cancelSchedulesForSource).toHaveBeenCalledWith(
       expect.anything(),
@@ -413,7 +413,7 @@ describe('creditInvoice', () => {
     const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
     expect(updates).toContainEqual({ status: 'sent' })
     expect(updates).toContainEqual({ status: 'draft' })
-    expect(updates).not.toContainEqual({ status: 'credited' })
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: 'credited' }))
   })
 
   it('reuses the kept draft on a retry instead of creating a second credit note', async () => {
@@ -656,7 +656,7 @@ describe('creditInvoice: a deferred original that was never booked', () => {
     })
     const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
     expect(updates).toContainEqual({ status: 'draft' })
-    expect(updates).not.toContainEqual({ status: 'credited' })
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: 'credited' }))
   })
 
   it('books nothing first where the company books at issue: the unlinked original is reversed as before', async () => {

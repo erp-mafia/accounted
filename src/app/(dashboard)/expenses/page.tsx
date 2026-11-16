@@ -92,6 +92,10 @@ interface ExpenseClaim {
   expense_account: string
   liability_account: string
   status: 'registered' | 'paid'
+  /** Registered and on no payslip: the server's answer (lib/salary/expense-claim-payout-state.ts). */
+  awaits_payout: boolean
+  /** The salary run that repays the claim, while it is registered and on a payslip. */
+  salary_run: { salary_run_id: string; payment_date: string } | null
   journal_entry_id: string | null
   document: { id: string; file_name: string | null } | null
   batch: { id: string; payout_date: string } | null
@@ -248,7 +252,7 @@ export default function ExpenseClaimsPage() {
         // payout request never names a claim deleted or paid in another tab.
         setSelected((prev) => {
           const next = new Set(
-            [...prev].filter((id) => rows.some((r) => r.id === id && r.status === 'registered')),
+            [...prev].filter((id) => rows.some((r) => r.id === id && r.awaits_payout)),
           )
           return next.size === prev.size ? prev : next
         })
@@ -335,14 +339,14 @@ export default function ExpenseClaimsPage() {
   const outstandingByClaimant = useMemo(() => {
     const sums = new Map<string, number>()
     for (const c of claims) {
-      if (c.status !== 'registered') continue
+      if (!c.awaits_payout) continue
       sums.set(c.claimant_name, (sums.get(c.claimant_name) ?? 0) + c.amount_sek)
     }
     return [...sums.entries()].sort((a, b) => b[1] - a[1])
   }, [claims])
 
   const selectableIds = useMemo(
-    () => visibleClaims.filter((c) => c.status === 'registered').map((c) => c.id),
+    () => visibleClaims.filter((c) => c.awaits_payout).map((c) => c.id),
     [visibleClaims],
   )
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
@@ -1054,7 +1058,7 @@ export default function ExpenseClaimsPage() {
                 setSelected(
                   new Set(
                     claims
-                      .filter((c) => c.status === 'registered' && c.claimant_name === name)
+                      .filter((c) => c.awaits_payout && c.claimant_name === name)
                       .map((c) => c.id),
                   ),
                 )
@@ -1165,7 +1169,7 @@ export default function ExpenseClaimsPage() {
                   className={`${TD_CLASS} w-8`}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {c.status === 'registered' && canWrite ? (
+                  {c.awaits_payout && canWrite ? (
                     <Checkbox
                       checked={selected.has(c.id)}
                       onCheckedChange={() => toggleSelected(c.id)}
@@ -1195,8 +1199,20 @@ export default function ExpenseClaimsPage() {
                 </td>
                 <td className={TD_CLASS}>
                   {/* Chips mark exceptions (convention 5): registered and
-                      paid are both normal states, so both read as muted text. */}
-                  <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
+                      paid are both normal states, so both read as muted text.
+                      A claim on a salary run is repaid with that salary: the
+                      status names the payment day and opens the run. */}
+                  {c.salary_run ? (
+                    <Link
+                      href={`/salary/runs/${c.salary_run.salary_run_id}`}
+                      className={`${QUIET_LINK_CLASS} whitespace-nowrap tabular-nums`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {t('status_on_salary_run', { date: formatDate(c.salary_run.payment_date) })}
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
+                  )}
                   {c.batch && (
                     <span className="ml-2 text-xs text-muted-foreground tabular-nums">
                       {formatDate(c.batch.payout_date)}

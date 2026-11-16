@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { eventBus } from '@/lib/events'
+import { emitInvoiceSent } from '@/lib/invoices/invoice-sent-event'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { getEmailService } from '@/lib/email/service'
@@ -537,9 +537,13 @@ export const POST = withRouteContext(
             log: opLog,
           })
         : null
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
+      await emitInvoiceSent({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoice: invoice as Invoice,
+        settings: company as CompanySettings,
+        log: opLog,
       })
       return errorResponseFromCode('INVOICE_SEND_ISSUED_NOT_DELIVERED', opLog, {
         requestId,
@@ -638,9 +642,13 @@ export const POST = withRouteContext(
     }
 
     if (!isCreditNote) {
-      await eventBus.emit({
-        type: 'invoice.sent',
-        payload: { invoice: { ...(invoice as Invoice), status: 'sent' }, companyId: companyId!, userId: user.id },
+      await emitInvoiceSent({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoice: invoice as Invoice,
+        settings: company as CompanySettings,
+        log: opLog,
       })
     }
 

@@ -384,7 +384,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(body.error.details.failure_steps).toEqual(['journal_entry'])
     const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
     expect(updates).toContainEqual({ status: 'draft' })
-    expect(updates).not.toContainEqual({ status: 'credited' })
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: 'credited' }))
   })
 
   it('returns 404 INVOICE_CREDIT_ORIGINAL_NOT_FOUND when the original is missing', async () => {

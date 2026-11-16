@@ -42,6 +42,11 @@ import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
+import {
+  PAYMENT_REFERENCE_PITFALL,
+  withPaymentReference,
+  type PaymentReferenceRow,
+} from '@/lib/invoices/payment-reference-fields'
 import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -112,6 +117,13 @@ const InvoiceDetail = z.object({
   // draft (it follows the company setting until issued).
   ore_rounding: z.boolean().nullable().optional(),
   remaining_amount: z.number(),
+  // The reference the invoice asks the payer to quote, as its PDF prints it
+  // (crm#1886): ocr = the digits of invoice_number plus a Luhn check digit,
+  // invoice_number = the number as it is. Both null on a document that asks
+  // for no payment under a reference. On GET; the draft update leaves them
+  // out (a draft has no number to build one from).
+  payment_reference: z.string().nullable().optional(),
+  payment_reference_type: z.enum(['ocr', 'invoice_number']).nullable().optional(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -147,6 +159,7 @@ registerEndpoint({
     'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
     'total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
+    PAYMENT_REFERENCE_PITFALL,
   ],
   example: {
     response: {
@@ -162,6 +175,8 @@ registerEndpoint({
         amount_to_pay: 12500,
         ore_rounding_amount: 0,
         remaining_amount: 12500,
+        payment_reference: '202600425',
+        payment_reference_type: 'ocr',
         paid_at: null,
         created_at: '2026-05-01T09:14:33Z',
       },
@@ -242,10 +257,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const row = data as unknown as Record<string, unknown> & {
       quote_status?: string | null
       valid_until?: string | null
-    } & OverdueInvoiceInput & AmountToPayRow
+    } & OverdueInvoiceInput & AmountToPayRow & PaymentReferenceRow
     const [withAmounts] = await withAmountToPay(ctx.supabase, ctx.companyId!, [row])
+    // crm#1886: the reference its PDF prints, from the projection the list
+    // and the MCP reads use.
+    const [withReference] = await withPaymentReference(ctx.supabase, ctx.companyId!, [withAmounts])
     return ok(
-      { ...withAmounts, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
+      { ...withReference, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
       { requestId: ctx.requestId },
     )
   },

@@ -165,7 +165,7 @@ describe('gnubok_list_invoices: overdue follows the due date (crm#1084)', () => 
 // carried since crm#1487, from the same helper (withAmountToPay).
 describe('gnubok_list_invoices: what the invoice asks for (crm#1568)', () => {
   it('returns amount_to_pay and ore_rounding_amount next to the exact total', async () => {
-    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({
       data: [
         // Rounded up from a half krona, and the report's own 3116,25 rounded down.
@@ -183,8 +183,9 @@ describe('gnubok_list_invoices: what the invoice asks for (crm#1568)', () => {
     // total and remaining_amount stay what the books carry; amount_to_pay is the document's figure.
     expect(result.invoices[0]).toMatchObject({ total: 4312.5, amount_to_pay: 4313, ore_rounding_amount: 0.5, remaining_amount: 4312.5 })
     expect(result.invoices[1]).toMatchObject({ total: 3116.25, amount_to_pay: 3116, ore_rounding_amount: -0.25, remaining_amount: 3116.25 })
-    // Both rows carry their own choice (frozen at issue): no company read.
-    expect(findCall('company_settings', 'select')).toBeUndefined()
+    // Both rows carry their own choice (frozen at issue): the company's
+    // rounding is not read. The one settings read is the payment reference's.
+    expect(findCalls('company_settings', 'select')).toEqual([['*']])
   })
 
   it('computes a draft without a choice of its own with the company setting, and nets a ROT/RUT deduction', async () => {
@@ -243,6 +244,11 @@ describe('gnubok_list_invoices: the register-coverage note (crm#1759)', () => {
     vi.setSystemTime(new Date('2026-11-10T08:00:00Z'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: rows, count: rows.length })
+    if (rows.length > 0) {
+      // The payment reference of the listed invoices: the company's settings, then the rows' own facts.
+      enqueue({ data: null })
+      enqueue({ data: [] })
+    }
     enqueue({ data: { pre_register_in_period: false, ...coverage } }) // rpc:get_invoice_register_coverage
     const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as CoverageResult
     expect(supabase.rpc).toHaveBeenCalledWith('get_invoice_register_coverage', expect.objectContaining({ p_today: '2026-11-10' }))
@@ -277,5 +283,44 @@ describe('gnubok_list_invoices: the register-coverage note (crm#1759)', () => {
     const unknown = await listWith([], { covers_from: null, has_pre_register_invoices: false })
     expect(unknown.invoice_register_coverage).toEqual({ covers_from: null, has_pre_register_invoices: false })
     expect(unknown).not.toHaveProperty('coverage_note')
+  })
+})
+
+// crm#1886: the reference the invoice PDF prints, on every row, from the
+// projection the v1 responses use (withPaymentReference).
+describe('gnubok_list_invoices: payment_reference (crm#1886)', () => {
+  it('returns what the payer quotes for each invoice, and null where none is asked for', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const issued = { status: 'sent', due_date: '2099-12-31', ore_rounding: true, deduction_total: 0 }
+    enqueue({
+      data: [
+        invoiceRow({ ...issued, id: 'inv-sv', invoice_number: '0073' }),
+        invoiceRow({ ...issued, id: 'inv-en', invoice_number: '0074' }),
+        invoiceRow({ id: 'draft', status: 'draft', invoice_number: null, ore_rounding: true, deduction_total: 0 }),
+        invoiceRow({ ...issued, id: 'quote', invoice_number: 'OF-0073', document_type: 'quote', quote_status: 'open' }),
+        invoiceRow({ ...issued, id: 'credit', invoice_number: 'KR-0073', total: -15625, credited_invoice_id: 'inv-sv' }),
+      ],
+      count: 5,
+    })
+    enqueue({ data: { bankgiro: '5050-1055' } }) // company_settings
+    enqueue({
+      // The facts of the rows that can carry a reference.
+      data: [
+        { id: 'inv-sv', payment_details: null, autogiro_payer_number: null, customer: { language: 'sv' } },
+        { id: 'inv-en', payment_details: null, autogiro_payer_number: null, customer: { language: 'en' } },
+      ],
+    })
+
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as ListResult
+    const byId = Object.fromEntries(result.invoices.map((inv) => [inv.id, inv]))
+
+    // 0073 plus its Luhn check digit, as the PDF prints "OCR/Referens".
+    expect(byId['inv-sv']).toMatchObject({ payment_reference: '00737', payment_reference_type: 'ocr' })
+    // An English invoice prints "Reference" with the number.
+    expect(byId['inv-en']).toMatchObject({ payment_reference: '0074', payment_reference_type: 'invoice_number' })
+    for (const id of ['draft', 'quote', 'credit']) {
+      expect(byId[id], id).toMatchObject({ payment_reference: null, payment_reference_type: null })
+    }
+    expect(findCalls('invoices', 'in')).toContainEqual(['id', ['inv-sv', 'inv-en']])
   })
 })

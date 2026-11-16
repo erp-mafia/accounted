@@ -12,12 +12,13 @@ are in SKILL.md and are not repeated per endpoint.
 **List expense claims (utlägg): what the company owes owners and employees for private purchases.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Returns the utlägg register newest first: each claim's claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.
+Returns the utlägg register newest first: each claim's claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid), the salary run that repays it when it is on a payslip (salary_run_id) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.
 
 **Use when:** You need the open claims before paying someone back or matching a bank transfer, or you are reconciling 2893/2820/2890 against who is owed what.
-**Do not use for:** Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints); an utlägg put on a payslip is still listed here as registered until the salary run is booked.
+**Do not use for:** Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints).
 
 **Pitfalls:**
+- A registered claim waits for a payout only while salary_run_id is null. One put on a payslip stays registered until the salary run is booked, with salary_run_id naming the run: it is paid with that salary, so never pay it out or match a bank transfer to it (409 EXPENSE_PAYOUT_ON_PAYSLIP).
 - amount_sek is gross incl. VAT: the amount owed, not the cost.
 - A claim on 2018 (enskild firma owner) is an egen insättning, not a debt; it is listed but is not normally paid back.
 - The page is in data.expense_claims with data.next_cursor; a cursor that no longer decodes starts from the first page.
@@ -34,7 +35,7 @@ Response `200`:
 ```ts
 {
   data: {
-    expense_claims: { expense_claim_id: string, handle?: string, employee_id: string | null, claimant_name: string, description: string, expense_date: string, amount_sek: number, vat_sek: number, currency: string, amount_in_currency: number | null, exchange_rate: number | null, expense_account: string, liability_account: string, document_id: string | null, status: "registered" | "paid", journal_entry_id: string | null, payout_batch_id: string | null, created_at: string }[],
+    expense_claims: { expense_claim_id: string, handle?: string, employee_id: string | null, claimant_name: string, description: string, expense_date: string, amount_sek: number, vat_sek: number, currency: string, amount_in_currency: number | null, exchange_rate: number | null, expense_account: string, liability_account: string, document_id: string | null, status: "registered" | "paid", journal_entry_id: string | null, payout_batch_id: string | null, salary_run_id: string | null, created_at: string }[],
     next_cursor: string | null
   },
   meta: {
@@ -71,6 +72,7 @@ Example response `200`:
         "status": "registered",
         "journal_entry_id": "9c1e…",
         "payout_batch_id": null,
+        "salary_run_id": null,
         "created_at": "2026-09-01T09:12:00Z"
       }
     ],
@@ -163,6 +165,7 @@ Response `200`:
     status: "registered" | "paid",
     journal_entry_id: string | null,
     payout_batch_id: string | null,
+    salary_run_id: string | null,
     created_at: string
   },
   meta: {
@@ -197,6 +200,7 @@ Example response `200`:
     "status": "registered",
     "journal_entry_id": "9c1e…",
     "payout_batch_id": null,
+    "salary_run_id": null,
     "created_at": "2026-09-01T09:12:00Z"
   },
   "meta": {
@@ -213,7 +217,7 @@ Example response `200`:
 **Read one expense claim (utlägg).**
 `scope:suppliers:read · risk:low · idempotent`
 
-Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status and the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.
+Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status, the salary run that repays it while it is on a payslip (salary_run_id), the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.
 
 **Use when:** You hold an expense_claim_id (from the list or a create) and need its current status.
 **Do not use for:** Finding claims: list them with GET /expense-claims?status=registered.
@@ -247,6 +251,7 @@ Response `200`:
     status: "registered" | "paid",
     journal_entry_id: string | null,
     payout_batch_id: string | null,
+    salary_run_id: string | null,
     created_at: string
   },
   meta: {
@@ -281,6 +286,7 @@ Example response `200`:
     "status": "registered",
     "journal_entry_id": "9c1e…",
     "payout_batch_id": null,
+    "salary_run_id": null,
     "created_at": "2026-09-01T09:12:00Z"
   },
   "meta": {

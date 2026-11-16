@@ -46,7 +46,11 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     title: 'Invoicing',
     events: [
       { type: 'invoice.created', description: 'draft invoice created' },
-      { type: 'invoice.sent', description: 'invoice marked sent (email delivered or external)' },
+      {
+        type: 'invoice.sent',
+        description:
+          'invoice marked sent (email delivered or external). `invoice` carries `payment_reference`, the reference its PDF asks the payer to quote, and `payment_reference_type` (`ocr`: the digits of the invoice number and a Luhn check digit; `invoice_number`: the number as it is), as `GET /invoices/{id}` answers them; both `null` on a document that asks for no payment under a reference',
+      },
       {
         type: 'invoice.paid',
         description: 'invoice fully paid, whichever way it was settled (mark-paid, bank match, voucher link); never on a partial payment',

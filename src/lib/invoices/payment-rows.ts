@@ -12,9 +12,10 @@
  *   Betala online, and exactly one reference row.
  *
  * The reference row is the OCR reference when a giro prints and the invoice
- * is Swedish (invoiceShowsOcrReference), otherwise "Meddelande" / "Reference"
- * with the invoice number. It always prints: when the method rows exceed the
- * budget, the lowest-priority method rows are the ones left out.
+ * is Swedish, otherwise "Meddelande" / "Reference" with the invoice number
+ * (invoicePaymentReference, which the API reads too). It always prints: when
+ * the method rows exceed the budget, the lowest-priority method rows are the
+ * ones left out.
  *
  * An Autogiro invoice (invoices.autogiro_payer_number set) asks for no
  * payment at all: Bankgirot debits the payer, so its one row is the payer
@@ -28,11 +29,10 @@
  */
 import type { Currency } from '@/types'
 import { formatIbanGroups } from '@/lib/company/connection-iban'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import {
+  invoicePaymentReference,
   invoicePrintsBankgiro,
   invoicePrintsPlusgiro,
-  invoiceShowsOcrReference,
 } from '@/lib/invoices/ocr-reference'
 import { bankCodeLabelKey } from '@/lib/cash-accounts/invoice-payment-accounts'
 
@@ -254,10 +254,14 @@ export function buildInvoicePaymentRows({
   push(bankCodeLabelKey((invoice.currency ?? 'SEK') as Currency), clean(company.bank_code))
   push('payment_link', clean(invoice.payment_link_url))
 
-  const invoiceNumber = clean(invoice.invoice_number)
-  const reference: InvoicePaymentRow = invoiceShowsOcrReference(company, lang)
-    ? { key: 'ocr', label: L.ocr, value: invoiceNumber ? generateOcrReference(invoiceNumber) : '-', emphasis: true }
-    : { key: 'message', label: L.message, value: invoiceNumber ?? '-', emphasis: true }
+  const quoted = invoicePaymentReference(company, invoice.invoice_number, lang)
+  const referenceKey = quoted.type === 'ocr' ? 'ocr' : 'message'
+  const reference: InvoicePaymentRow = {
+    key: referenceKey,
+    label: L[referenceKey],
+    value: quoted.reference ?? '-',
+    emphasis: true,
+  }
 
   return [...methods.slice(0, INVOICE_PAYMENT_ROW_LIMIT - 1), reference]
 }
