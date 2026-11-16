@@ -643,9 +643,16 @@ export function createArkivTools(deps: Deps): McpTool[] {
         }
         const marked = items.map((i) => ({ ...i, duplicate_of: i.document_id && originals.has(i.document_id) ? `document:${originals.get(i.document_id)}` : null }))
         const unread = await countUnreadDocuments(supabase, companyId)
-        const hint = unread > 0
+        const unreadHint = unread > 0
           ? `${unread} document${unread === 1 ? ' is' : 's are'} not read yet and not in this search. Page through gnubok_list_records (read: false) and open one with gnubok_read_document: it is read on the spot.`
           : null
+        // Nor is an empty answer "no such order": the archive is not a search
+        // of the books. An agent looked up a webshop order number here, got
+        // nothing and reported the order missing (crm#1931).
+        const emptyHint = marked.length === 0
+          ? 'Nothing in the archive matched. It holds documents, agreements and facts; orders, invoices and bank rows are not in it: gnubok_search_tools finds the tool that lists them.'
+          : null
+        const hint = [unreadHint, emptyHint].filter((part) => part !== null).join(' ') || null
         return { items: marked, count: marked.length, unread, hint }
       },
     },

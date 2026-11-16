@@ -29,6 +29,7 @@ import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
 import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import {
   initJourney,
+  journeyBack,
   journeyReducer,
   stationOfStep,
   type JourneyState,
@@ -565,7 +566,12 @@ export default function OnboardingJourney({
           logError('journey create company failed', { error: result.error })
           dispatch({
             type: 'SUBMIT_FAILED',
-            code: result.error === 'org_number_invalid' ? 'org_number_invalid' : 'generic',
+            code:
+              result.error === 'org_number_invalid'
+                ? 'org_number_invalid'
+                : result.error === 'period_invalid'
+                  ? 'period_invalid'
+                  : 'generic',
           })
           return
         }
@@ -1052,6 +1058,7 @@ export default function OnboardingJourney({
                 }
                 {...flyProps}
               />
+              <FirstYearLine t={t} onPick={() => dispatch({ type: 'FY_FIRST_SELECTED' })} />
             </Question>
           )
         }
@@ -1102,6 +1109,7 @@ export default function OnboardingJourney({
               }}
               {...flyProps}
             />
+            <FirstYearLine t={t} onPick={() => dispatch({ type: 'FY_FIRST_SELECTED' })} />
           </Question>
         )
       }
@@ -1113,6 +1121,7 @@ export default function OnboardingJourney({
             monthShort={monthShort}
             monthLong={monthLong}
             onUse={(m) => dispatch({ type: 'FY_END_MONTH_PICKED', endMonth: m })}
+            onFirstYear={() => dispatch({ type: 'FY_FIRST_SELECTED' })}
           />
         )
 
@@ -1245,9 +1254,10 @@ export default function OnboardingJourney({
 
   /* ── composition ──────────────────────────────────────────────── */
 
-  // Tillbaka from the first question leaves the journey for a page that renders.
-  const exitHref = mode === 'add' ? '/' : backHref
-  const canGoBack = state.step === 'done' || state.history.length > 0 || !!exitHref
+  // Tillbaka from the first question leaves the journey for a page that
+  // renders; the done screen has no Tillbaka at all (journeyBack).
+  const back = journeyBack(state, mode === 'add' ? '/' : backHref)
+  const canGoBack = back.kind !== 'none'
 
   return (
     <div className="jny jny-fixed" style={{ ['--jny-dawn' as string]: String(station / 4) }}>
@@ -1306,7 +1316,7 @@ export default function OnboardingJourney({
 
         <div className="jny-balance" aria-hidden="true" />
         <div className="jny-backrow">
-            <Button variant="ghost" className={canGoBack ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? navigation.stepBack(() => dispatch({ type: 'BACK' })) : exitHref && router.push(exitHref))}>
+            <Button variant="ghost" className={canGoBack ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready || state.submitting || state.lookupPending} onClick={() => navigation.back(() => back.kind === 'step' ? navigation.stepBack(() => dispatch({ type: 'BACK' })) : back.kind === 'exit' && router.push(back.href))}>
               &lsaquo; {t('back')}
             </Button>
         </div>
@@ -1358,16 +1368,38 @@ function NameInput({
   )
 }
 
+/**
+ * One quiet line on the fiscal-year questions. A shortened or extended first
+ * year is set through the first-year dates, and nothing on these questions
+ * said so by name: someone looking for a "förlängt räkenskapsår" picked the
+ * calendar year, or "Annat räkenskapsår" (the end-month picker, which only
+ * makes twelve-month years), and never met the choice.
+ */
+function FirstYearLine({ t, onPick }: { t: TFn; onPick: () => void }) {
+  return (
+    <p className="jny-more">
+      {t('journey_fy_first_line')}{' '}
+      <button type="button" className="jny-link" onClick={onPick}>
+        {t('journey_fy_first_line_link')}
+      </button>
+      .
+    </p>
+  )
+}
+
 function FyMonthStep({
   t,
   monthShort,
   monthLong,
   onUse,
+  onFirstYear,
 }: {
   t: TFn
   monthShort: string[]
   monthLong: string[]
   onUse: (endMonth: number) => void
+  /** Leaves the end-month picker for the first year's own start and end. */
+  onFirstYear: () => void
 }) {
   const [sel, setSel] = useState(0)
   const [hover, setHover] = useState(0)
@@ -1402,6 +1434,7 @@ function FyMonthStep({
           </button>
         ))}
       </div>
+      <FirstYearLine t={t} onPick={onFirstYear} />
       {sel ? (
         <div className="jny-qactions">
           <Button size="lg" onClick={() => onUse(sel)}>
@@ -1479,6 +1512,17 @@ function FyEndStep({
   const span: [number, number] | null = preview
     ? [sm - 1, (preview.year - sy) * 12 + preview.month - 1]
     : [sm - 1, sm - 1]
+  // "14 månader · förlängt första år", on the option itself and not only in
+  // the band's hover note: a touch screen has no hover, and the extended
+  // year went unnamed there.
+  const lengthLabel = (months: number) =>
+    `${t('journey_fyend_months', { count: months })}${
+      months > 12
+        ? ` · ${t('journey_fyend_extended')}`
+        : months < 12
+          ? ` · ${t('journey_fyend_short')}`
+          : ''
+    }`
   return (
     <Question
       title={t('journey_fyend_title')}
@@ -1494,19 +1538,7 @@ function FyEndStep({
             ? `${formatDate(startDate)} – ${formatDate(preview.date)}`
             : t('journey_fyend_start_label', { date: formatDate(startDate) })
         }
-        note={
-          preview
-            ? `${t('journey_fyend_months', { count: preview.months })}${
-                preview.months > 12
-                  ? ` · ${t('journey_fyend_extended')}`
-                  : preview.months < 12
-                    ? ` · ${t('journey_fyend_short')}`
-                    : ''
-              }`
-            : options.length === 0
-              ? t('journey_fyend_none')
-              : ''
-        }
+        note={preview ? lengthLabel(preview.months) : options.length === 0 ? t('journey_fyend_none') : ''}
       />
       <div className="jny-chips" style={{ marginTop: 20 }}>
         {options.map((o) => (
@@ -1518,7 +1550,7 @@ function FyEndStep({
             onClick={() => onPick(o)}
           >
             {formatDate(o.date)}
-            <span className="jny-rec">{t('journey_fyend_months', { count: o.months })}</span>
+            <span className="jny-rec">{lengthLabel(o.months)}</span>
           </button>
         ))}
         {!calendarOnly ? (

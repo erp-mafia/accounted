@@ -10,6 +10,9 @@ import { regenerateTaxDeadlinesForUser, toDeadlineSettings } from '@/lib/tax/dea
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { EntityType } from '@/types'
+import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearLockedToCalendar } from '@/lib/company/entity-type'
+import { isSaneDateString } from '@/lib/invariants/iso-date'
 import { signupProfileColumns } from '@/lib/modules/signup-profile'
 import { createLogger } from '@/lib/logger'
 import { registeredOfficeFromRegistry } from './registered-office'
@@ -65,6 +68,7 @@ export type CreateCompanyResult =
 
 export const COMPANY_CREATION_ERRORS = {
   org_number_invalid: 'org_number_invalid',
+  period_invalid: 'period_invalid',
   create_failed: 'Kunde inte skapa företag. Försök igen.',
   org_number_save_failed: 'Kunde inte spara organisationsnummer. Försök igen.',
   chart_failed: 'Kunde inte skapa kontoplan. Försök igen.',
@@ -105,6 +109,23 @@ export async function createCompanyCore(
   // say so field by field, but the web journey sends its settings as they are.
   if (vatRegisteredWithoutOrgNumber(input.settings.vat_registered as boolean | null | undefined, rawOrgNumber)) {
     return { error: COMPANY_CREATION_ERRORS.vat_needs_org_number }
+  }
+
+  // The dates of the räkenskapsår come from the caller as well: the web
+  // journey works them out in the browser, a first year's from what the
+  // person picked. They are real dates in the shape BFL 3 kap. allows
+  // (checkPeriodDuration, the one rule every door reads), or nothing is
+  // written; the fiscal_periods trigger stays the floor under it.
+  const { startDate, endDate } = input.fiscalPeriod
+  if (
+    !isSaneDateString(startDate) ||
+    !isSaneDateString(endDate) ||
+    checkPeriodDuration(startDate, endDate, {
+      isFirstPeriod: input.settings.is_first_fiscal_year === true,
+      calendarYearOnly: fiscalYearLockedToCalendar(input.entityType),
+    })
+  ) {
+    return { error: COMPANY_CREATION_ERRORS.period_invalid }
   }
 
   // Säte comes from the register (SCB Säteskommun), never from the postal

@@ -44,6 +44,7 @@ vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', async (import
 })
 
 import { tools } from '../server'
+import { uploadCompanyNote } from '../tool-reach'
 
 const companyId = '11111111-1111-4111-8111-111111111111'
 const userId = '22222222-2222-4222-8222-222222222222'
@@ -215,6 +216,24 @@ describe('MCP model-free document upload tools', () => {
     })
     const schema = tool.inputSchema as { properties: Record<string, unknown> }
     expect(schema.properties).not.toHaveProperty('file_content_base64')
+  })
+
+  // crm#1862: on a key that reaches several companies an upload was aimed at
+  // the default one, and nothing in the answer said how to aim it at another.
+  // The dispatcher marks such a call (callable-via-parity.test.ts); the
+  // answer above, without the mark, is what a single-company key gets.
+  it('tells a caller that reaches several companies which company the upload belongs to and how to pick another', async () => {
+    const result = (await findTool('gnubok_create_document_upload').execute(
+      { file_name: 'invoice.pdf', __multiCompany: true },
+      companyId,
+      userId,
+      {} as never,
+    )) as Record<string, unknown>
+
+    expect(result.company_note).toBe(uploadCompanyNote(companyId))
+    expect(result.company_note).toContain(`This upload belongs to company ${companyId}`)
+    expect(result.company_note).toContain('send the same company_id to gnubok_complete_document_upload')
+    expect(result.company_note).toContain('start a new chat')
   })
 
   it('completes the reserved upload and uses the upload UUID for both records', async () => {
@@ -761,6 +780,18 @@ describe('MCP model-free document upload tools', () => {
     expect(mocks.extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
       buffer: Buffer.from(buffer), fileName: 'receipt.png', mimeType: 'image/jpeg',
     }))
+  })
+
+  // crm#1919: a scheduled agent whose sandbox may make no outbound request
+  // could not PUT to upload_url, and nothing said the inline tool was the way
+  // out. The proxy on the app origin does not help a client that reaches the
+  // MCP host only.
+  it('names the inline upload as the way out when the sandbox cannot reach upload_url', () => {
+    const create = findTool('gnubok_create_document_upload')
+    expect(create.description).toContain('If your sandbox cannot reach upload_url, use gnubok_upload_document instead.')
+    // The tool it points at takes the bytes in the call itself.
+    const inline = findTool('gnubok_upload_document').inputSchema as { required: string[] }
+    expect(inline.required).toContain('file_content_base64')
   })
 
   it('keeps the scope aligned across all upload paths, with no tool-level AI gate', () => {

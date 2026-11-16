@@ -41,6 +41,7 @@ import {
   type VatDeclarationPrep,
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain, vatDeclarationIncompleteFailure } from './lib/vat-submit'
+import { readVatRefusal, type VatRefusal, type VatRefusalStep } from './lib/vat-refusal'
 import { awaitingSignatureOf } from './lib/submission-state'
 import { vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import {
@@ -61,6 +62,7 @@ import {
   recordProbeResult,
 } from './lib/connection-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { userFacingFailure } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
@@ -136,6 +138,54 @@ const SKV_STATE_REJECTED_MESSAGE =
 // to login BEFORE the flow is spent and resumes from there).
 const SKV_SESSION_MISSING_MESSAGE =
   'Sessionen har gått ut. Stäng fliken, logga in och försök ansluta igen.'
+
+// The callback's answer when the code exchange or the token store fails with
+// no sentence of its own. The thrown text is for the log: a failed store has
+// carried the database host and an edge error page to the person (crm#1944).
+const SKV_CONNECT_FAILED_MESSAGE =
+  'Ett tekniskt fel uppstod när anslutningen till Skatteverket skulle slutföras. Försök ansluta igen med BankID.'
+
+// What the callback says for an OAuth error Skatteverket's login sent the
+// browser back with (RFC 6749 4.1.2.1). Skatteverket's own description goes
+// to the log; the page says what happened and what to do next.
+const SKV_CONSENT_DENIED_MESSAGE =
+  'Inloggningen hos Skatteverket avbröts eller godkändes inte. Anslut igen och slutför med BankID.'
+const SKV_CONSENT_UNAVAILABLE_MESSAGE =
+  'Skatteverkets inloggning svarar inte just nu. Försök ansluta igen om en stund.'
+const SKV_CONSENT_FAILED_MESSAGE =
+  'Skatteverket kunde inte slutföra inloggningen. Försök ansluta igen.'
+
+/** The callback's own sentences for a refused login: the only text a handoff may put on the page. */
+const SKV_CONSENT_MESSAGES: ReadonlySet<string> = new Set([
+  SKV_CONSENT_DENIED_MESSAGE,
+  SKV_CONSENT_UNAVAILABLE_MESSAGE,
+  SKV_CONSENT_FAILED_MESSAGE,
+])
+
+function skvConsentErrorMessage(code: string): string {
+  if (code === 'access_denied') return SKV_CONSENT_DENIED_MESSAGE
+  if (code === 'server_error' || code === 'temporarily_unavailable') return SKV_CONSENT_UNAVAILABLE_MESSAGE
+  return SKV_CONSENT_FAILED_MESSAGE
+}
+
+// The two sentences every other Skatteverket door answers for a failure no
+// branch has words for (handleSkvError, mapServiceError).
+const SKV_TIMEOUT_MESSAGE = 'Skatteverket svarade inte i tid. Försök igen om en stund.'
+const SKV_UNEXPECTED_FAILURE_MESSAGE =
+  'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'
+
+/**
+ * What a person reads when a Skatteverket call, or our own bookkeeping around
+ * it, failed in a way no branch has a sentence for. The thrown text is kept
+ * only when it was written in Swedish for the person (userFacingFailure);
+ * anything else stays in the log. The token store runs inside every call (a
+ * refresh stores the new pair), so its raw failure reached the page from any
+ * of these doors, not only from the callback (crm#1944).
+ */
+function skvUnexpectedFailureMessage(err: unknown): string {
+  if (isTimeoutError(err)) return SKV_TIMEOUT_MESSAGE
+  return userFacingFailure(err, SKV_UNEXPECTED_FAILURE_MESSAGE)
+}
 
 /**
  * For a candidates answer with nothing to offer: the unlinked verifikat on
@@ -854,7 +904,17 @@ export const skatteverketExtension: Extension = {
             return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
           }
           flow = consumed
-          if (error) providerError = url.searchParams.get('error_description') || 'Okänt fel'
+          if (error) {
+            // Skatteverket's code and description are for the log. What is
+            // carried on (to the page, or through the handoff) is our own
+            // sentence for the code.
+            log.warn('skatteverket login returned an error', {
+              companyId: consumed.companyId,
+              error: error.slice(0, 100),
+              errorDescription: url.searchParams.get('error_description')?.slice(0, 500) ?? null,
+            })
+            providerError = skvConsentErrorMessage(error)
+          }
         }
         responseOrigin = flow.origin
 
@@ -913,7 +973,10 @@ export const skatteverketExtension: Extension = {
         const companyId = flow.companyId
 
         if (providerError !== null) {
-          return respondWithError(providerError, errorPath(providerError))
+          // A handoff holds what hop 1 stored. Only the callback's own
+          // sentences are printed, whatever the row carried.
+          const reason = SKV_CONSENT_MESSAGES.has(providerError) ? providerError : SKV_CONSENT_FAILED_MESSAGE
+          return respondWithError(reason, errorPath(reason))
         }
         if (!code) {
           return respondWithError(SKV_STATE_REJECTED_MESSAGE, errorPath(SKV_STATE_REJECTED_MESSAGE))
@@ -960,11 +1023,14 @@ export const skatteverketExtension: Extension = {
           log.error('token exchange failed', err, { companyId, userId })
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
+          // Every other failure gets one fixed sentence, unless the thrown
+          // text was itself written in Swedish for the person (the
+          // connector's "starta om anslutningen"). The thrown text of a
+          // failed token store is an upstream's: it stays in the log line
+          // above (crm#1944).
           const message = err instanceof TimeoutError
             ? 'Tidsgränsen mot Skatteverket överskreds: försök igen med BankID'
-            : err instanceof Error
-              ? err.message
-              : 'Token exchange misslyckades'
+            : userFacingFailure(err, SKV_CONNECT_FAILED_MESSAGE)
           return respondWithError(message, errorPath(message))
         }
       },
@@ -1313,12 +1379,8 @@ export const skatteverketExtension: Extension = {
           )
 
           if (!response.ok) {
-            const text = await response.text()
             ctx.log.error('VAT validate refused', { redovisningsperiod, status: response.status })
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
+            return vatRefusalResponse(response, 'validate')
           }
 
           const data = await response.json()
@@ -1376,12 +1438,8 @@ export const skatteverketExtension: Extension = {
           )
 
           if (!response.ok) {
-            const text = await response.text()
             ctx.log.error('VAT draft refused', { redovisningsperiod, status: response.status })
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
+            return vatRefusalResponse(response, 'draft')
           }
 
           const data = await response.json()
@@ -1431,13 +1489,7 @@ export const skatteverketExtension: Extension = {
             return NextResponse.json({ data: null })
           }
 
-          if (!response.ok) {
-            const text = await response.text()
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
-          }
+          if (!response.ok) return vatRefusalResponse(response, 'draft_read')
 
           const data = await response.json()
           return NextResponse.json({ data })
@@ -1467,13 +1519,7 @@ export const skatteverketExtension: Extension = {
             { endpoint: 'declaration/draft/delete', agRegistreradId: redovisare, redovisningsperiod }
           )
 
-          if (response.status !== 204 && !response.ok) {
-            const text = await response.text()
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
-          }
+          if (response.status !== 204 && !response.ok) return vatRefusalResponse(response, 'draft_delete')
 
           await ctx.settings.clear(`submission_${redovisningsperiod}`)
           return NextResponse.json({ success: true })
@@ -1509,13 +1555,7 @@ export const skatteverketExtension: Extension = {
             { endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod }
           )
 
-          if (!response.ok) {
-            const text = await response.text()
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
-          }
+          if (!response.ok) return vatRefusalResponse(response, 'lock')
 
           const data = await response.json()
 
@@ -1557,13 +1597,7 @@ export const skatteverketExtension: Extension = {
             { endpoint: 'declaration/unlock', agRegistreradId: redovisare, redovisningsperiod }
           )
 
-          if (response.status !== 204 && !response.ok) {
-            const text = await response.text()
-            return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
-            )
-          }
+          if (response.status !== 204 && !response.ok) return vatRefusalResponse(response, 'unlock')
 
           await ctx.settings.set(
             `submission_${redovisningsperiod}`,
@@ -1646,6 +1680,7 @@ export const skatteverketExtension: Extension = {
                 ...(result.completenessChecks
                   ? { code: 'VAT_DECLARATION_INCOMPLETE', completeness_checks: result.completenessChecks }
                   : {}),
+                ...(result.skv ? { skv: result.skv } : {}),
               },
               { status: result.httpStatus }
             )
@@ -2847,6 +2882,15 @@ function ombudServiceDown(err: unknown): boolean {
   return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
 }
 
+/**
+ * A refused Momsdeklaration call as the route's answer: Skatteverket's status,
+ * what it said as a sentence, and the same answer in fields (lib/vat-refusal.ts).
+ */
+async function vatRefusalResponse(response: Response, step: VatRefusalStep): Promise<NextResponse> {
+  const refusal: VatRefusal = await readVatRefusal(response, step)
+  return NextResponse.json({ error: refusal.message, skv: refusal.details }, { status: refusal.status })
+}
+
 function handleSkvError(err: unknown): NextResponse {
   if (err instanceof SkatteverketAuthError) {
     // MISSING_SCOPE returns 401: the existing token works, but it doesn't
@@ -2877,7 +2921,7 @@ function handleSkvError(err: unknown): NextResponse {
 
   log.error('API error', err)
   return NextResponse.json(
-    { error: err instanceof Error ? err.message : 'Okänt fel' },
+    { error: skvUnexpectedFailureMessage(err) },
     { status: 500 }
   )
 }
@@ -2995,12 +3039,15 @@ function mapServiceError(err: unknown): Extract<SkvSubmitResult, { ok: false }> 
     const mapped = skvAuthCodeToStructured(err.code)
     return { ok: false, code: mapped.code, http_status: mapped.httpStatus, recoverable: true, error: err.message }
   }
+  // The thrown text is for the log, and this is its only record: the approver
+  // (a person in the app, or an agent) reads a sentence.
+  log.error('commit service failed', err)
   return {
     ok: false,
     code: 'SKATTEVERKET_INTERNAL_ERROR',
     http_status: 500,
     recoverable: false,
-    error: err instanceof Error ? err.message : 'Okänt fel',
+    error: skvUnexpectedFailureMessage(err),
   }
 }
 
@@ -3039,9 +3086,18 @@ async function commitSubmitVatDeclaration(
       }
     }
     if (!result.ok) {
+      // Skatteverket's own answer rides along in fields (status, kod, its
+      // messages, the boxes it names), so the approver and the stored
+      // operation say why, not only that it was refused (crm#1866).
+      const details = {
+        stage: result.stage,
+        draft_saved: result.draftSaved,
+        ...(result.skv ?? {}),
+        ...(result.kontrollresultat ? { kontrollresultat: result.kontrollresultat } : {}),
+      }
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,
-        recoverable: false, error: result.error,
+        recoverable: false, error: result.error, details,
       }
     }
     return {

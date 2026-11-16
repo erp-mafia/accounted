@@ -94,6 +94,17 @@ export function stepAfterBank(flags: BooksFlags): BooksStep {
   return flags.hasSkatteverket ? 'skv' : 'done'
 }
 
+/**
+ * Whether Tillbaka has a step to return to. The source question is the act's
+ * first, and what came before it (the company journey) ended by creating the
+ * company, so nothing lies behind it and it shows no Tillbaka. Leaving the
+ * act is "Hoppa över tills vidare", a choice of its own: Tillbaka opened that
+ * confirm from the first step, which read as the app taking back for skip.
+ */
+export function hasStepBehind(step: BooksStep): boolean {
+  return step !== 'source'
+}
+
 export interface BooksEntry {
   /** ?station= from the gate rewrite or the Skatteverket return. */
   station: string | null

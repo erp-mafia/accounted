@@ -184,6 +184,27 @@ function snapshotOf(s: JourneySnapshot): JourneySnapshot {
   }
 }
 
+/**
+ * What Tillbaka does once the browser entries the journey pushed itself are
+ * used up: a step back inside the journey, an exit from the first question
+ * to a page that renders (`exitHref`), or nothing, and then it is not shown.
+ *
+ * The done screen has nothing: the company exists, so no question is left to
+ * return to and the way on is the screen's own button. Tillbaka there used to
+ * open the app, which for a first company is the books act and for a second
+ * one skips it: back acted as continue.
+ */
+export type JourneyBack = { kind: 'step' } | { kind: 'exit'; href: string } | { kind: 'none' }
+
+export function journeyBack(
+  state: Pick<JourneyState, 'step' | 'history'>,
+  exitHref: string | null,
+): JourneyBack {
+  if (state.step === 'done') return { kind: 'none' }
+  if (state.history.length > 0) return { kind: 'step' }
+  return exitHref ? { kind: 'exit', href: exitHref } : { kind: 'none' }
+}
+
 export function initJourney(init: JourneyInit = {}): JourneyState {
   const settings: Partial<CompanySettings> = {}
   if (init.initialOrgNumber) settings.org_number = init.initialOrgNumber
@@ -654,6 +675,10 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     }
 
     case 'FY_START_PICKED': {
+      // The date picker sends its pick a moment after the tap. One that
+      // arrives after the user left the question (Tillbaka in that moment)
+      // must not move the journey forward again.
+      if (state.step !== 'fystart') return state
       const patched = stay(state, {
         settings: {
           ...state.settings,

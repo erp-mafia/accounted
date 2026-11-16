@@ -9,9 +9,10 @@ export { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/f
  * Every ruta of the declaration and the momsuppgift field that carries it.
  * Typed over the whole VatDeclarationRutor, so a ruta added to the declaration
  * does not compile until it has a Skatteverket field: the eSKD file and this
- * payload cannot end up with different sets of boxes.
+ * payload cannot end up with different sets of boxes. Read the other way by
+ * vat-refusal.ts, to name the box a refused field belongs to.
  */
-const MOMSUPPGIFT_FIELD_BY_RUTA: Record<keyof VatDeclarationRutor, keyof SkatteverketMomsuppgift> = {
+export const MOMSUPPGIFT_FIELD_BY_RUTA: Record<keyof VatDeclarationRutor, keyof SkatteverketMomsuppgift> = {
   // Taxable sales basis
   ruta05: 'momspliktigForsaljning',
   ruta06: 'momspliktigaUttag',

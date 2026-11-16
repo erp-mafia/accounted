@@ -99,6 +99,25 @@ describe('Arkiv tools', () => {
     expect(out.hint).toMatch(/10 documents are not read yet.*gnubok_list_records.*gnubok_read_document/)
   })
 
+  // crm#1931: an agent searched a webshop order number here, got nothing and
+  // reported the order missing. The archive is not a search of the books.
+  it('search_records says on an empty answer that orders, invoices and bank rows are not in the archive', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    enqueue({ data: [] }) // page hits
+    enqueue({ data: [] }) // file names
+    enqueue({ count: 0 }) // unread documents
+    const empty = (await tool('gnubok_search_records').execute({ query: '20769' }, CO, 'user-1', supabase)) as { count: number; hint: string | null }
+    expect(empty.count).toBe(0)
+    expect(empty.hint).toMatch(/Nothing in the archive matched.*orders, invoices and bank rows are not in it.*gnubok_search_tools/)
+
+    // With unread documents too, both are said: the unread ones first.
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ count: 2 })
+    const both = (await tool('gnubok_search_records').execute({ query: '20769' }, CO, 'user-1', supabase)) as { hint: string | null }
+    expect(both.hint).toMatch(/^2 documents are not read yet.*Nothing in the archive matched/)
+  })
+
   it('search_records combines page hits, agreements and facts into record refs', async () => {
     enqueue({ data: [{ document_id: DOC, page_no: 2, file_name: 'hyresavtal.pdf', headline: 'Hyran uppgår till' }] })
     enqueue({ data: [] }) // file names

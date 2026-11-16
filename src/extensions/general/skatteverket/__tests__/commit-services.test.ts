@@ -117,6 +117,45 @@ describe('commitSubmitAgi', () => {
     expect(mockAgiPostUnderlag.mock.calls[0][3]).toBe('<Skatteverket>fresh</Skatteverket>')
   })
 
+  // crm#1944: the thrown text of a failed step is an upstream's or our own
+  // internals. The approver reads a sentence; the text stays in the log.
+  it('an unexpected failure answers a sentence, never the thrown text', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockAgiPostUnderlag.mockRejectedValue(
+      new Error('Failed to clear existing tokens: Edge Error 1104 Script not found | db-host.example.co'),
+    )
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEVERKET_INTERNAL_ERROR',
+      http_status: 500,
+      recoverable: false,
+      error: 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.',
+    })
+    const logged = consoleError.mock.calls.flat().map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join('\n')
+    expect(logged).toContain('commit service failed')
+    expect(logged).toContain('Failed to clear existing tokens')
+    consoleError.mockRestore()
+  })
+
+  it('a call Skatteverket never answered says so in Swedish', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockAgiPostUnderlag.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SKATTEVERKET_INTERNAL_ERROR',
+      error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+    })
+    consoleError.mockRestore()
+  })
+
   it('a refused regeneration is non-recoverable and posts nothing', async () => {
     const { supabase } = createQueuedMockSupabase()
     mockRefreshAgiUnderlag.mockResolvedValue({
@@ -161,6 +200,70 @@ describe('commitSubmitVatDeclaration', () => {
     const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
     expect(result).toMatchObject({ ok: false, recoverable: false, http_status: 400 })
     expect(mockSkvRequest).toHaveBeenCalledTimes(1) // never reached /las
+  })
+
+  // crm#1866: approval of a staged momsdeklaration met a 400 whose envelope
+  // held no message. The approver read a JSON string and the stored operation
+  // kept nothing of what Skatteverket answered.
+  it('a refusal without a reason says so, and carries Skatteverket\'s status and kod in the details', async () => {
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: false, status: 400,
+      text: async () => JSON.stringify({ kod: 400, meddelandeTillAnvandare: null, meddelandeTillUtvecklare: null }),
+    })
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEVERKET_SUBMIT_REJECTED',
+      http_status: 400,
+      recoverable: false,
+      error:
+        'Skatteverket tog inte emot utkastet och angav ingen orsak (svarskod 400). Försök igen om en stund. ' +
+        'Går det fortfarande inte kan deklarationen lämnas direkt i Skatteverkets e-tjänst.',
+      details: { stage: 'draft', draft_saved: false, skv_step: 'draft', skv_status: 400, skv_kod: 400 },
+    })
+  })
+
+  it('a refused lås carries the saved draft and its kontrollresultat in the details', async () => {
+    const kontrollResultat = { status: 'OK', resultat: [] }
+    mockSkvRequest
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ kontrollResultat }) }) // utkast
+      .mockResolvedValueOnce({
+        ok: false, status: 409,
+        text: async () => JSON.stringify({ kod: 409, meddelandeTillAnvandare: 'Begäran kan ej utföras', meddelandeTillUtvecklare: null }),
+      }) // las
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toMatchObject({
+      ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: 409, recoverable: false,
+      details: {
+        stage: 'lock', draft_saved: true, skv_step: 'lock', skv_status: 409, skv_kod: 409,
+        skv_user_message: 'Begäran kan ej utföras', kontrollresultat: kontrollResultat,
+      },
+    })
+    expect(result.error).toMatch(/^Utkastet är sparat hos Skatteverket\. Skatteverket låste inte utkastet för signering: Begäran kan ej utföras\./)
+  })
+
+  // The wording is all that changes for an approval: whatever Skatteverket
+  // answers, a technical error included, consumes the operation as before.
+  it.each([500, 502, 503, 504])('Skatteverket answering %i → still non-recoverable, with what it said', async (status) => {
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: false, status,
+      text: async () => JSON.stringify({ kod: status, meddelandeTillAnvandare: 'Tekniskt fel', meddelandeTillUtvecklare: 'Service unavailable' }),
+    })
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toMatchObject({
+      ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: status, recoverable: false,
+      details: { stage: 'draft', draft_saved: false, skv_status: status, skv_user_message: 'Tekniskt fel' },
+    })
+    expect(result.error).toBe(
+      'Skatteverket tog inte emot utkastet: Tekniskt fel. Skatteverkets detalj: Service unavailable. ' +
+        'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.',
+    )
   })
 
   // An op staged while the books passed, approved after they changed: the

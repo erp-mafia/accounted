@@ -10,7 +10,7 @@ import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
 import { booksSkip } from '@/lib/onboarding-books/skip'
 import { useBranding } from '@/lib/branding/brand-context'
-import { booksReducer, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
+import { booksReducer, hasStepBehind, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
 import JourneyOrb, { type OrbState } from '@/components/onboarding/journey/JourneyOrb'
 import JourneyTrack from '@/components/onboarding/journey/JourneyTrack'
 import '@/components/onboarding/journey/journey.css'
@@ -59,8 +59,8 @@ interface BooksJourneyProps {
  * are recommended, never mandatory. Leaving the act clears the
  * first-session gate and opens Hem. "Hoppa över tills vidare" leaves from
  * any step but Klart, also while an import runs (lib/onboarding-books/skip).
- * Tillbaka on the first step with nowhere to go back to opens the same
- * confirm, since it leaves the act too.
+ * Tillbaka only ever goes one step back: the first step has none behind it
+ * and shows no Tillbaka (hasStepBehind), it never opens the skip confirm.
  */
 export default function BooksJourney(props: BooksJourneyProps) {
   const t = useTranslations('books')
@@ -219,7 +219,11 @@ export default function BooksJourney(props: BooksJourneyProps) {
   }
 
   // Keep navigation in view, including during work when leaving is disabled.
+  // The first step keeps the row's place and shows no Tillbaka: the skip
+  // beside it stays where it is on every step.
+  const backShown = hasStepBehind(state.step)
   const canGoBack =
+    backShown &&
     !state.working &&
     !leaving &&
     !(state.step === 'bank' && (state.bankPhase === 'connecting' || state.bankPhase === 'fetching')) &&
@@ -254,7 +258,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
           <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
-          <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? setSkipOpen(true) : navigation.stepBack(() => dispatch({ type: 'GO_BACK', flags })))}>
+          <Button variant="ghost" className={backShown ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => navigation.stepBack(() => dispatch({ type: 'GO_BACK', flags })))}>
             ‹ {t('back')}
           </Button>
           {/* Never disabled by running work: an import is the server's job, so

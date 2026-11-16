@@ -1,0 +1,1 @@
+[2026-11-17] Onboarding names the shortened or extended first year on the fiscal-year questions (one line to the first-year dates) and on the end options, instead of a new question: the choice sat unnamed behind Det är vårt första år. createCompanyCore checks the period for every door.

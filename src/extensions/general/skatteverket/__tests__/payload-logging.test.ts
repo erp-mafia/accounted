@@ -183,6 +183,11 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
         status: 400,
       })
       expectNoPayloadLogged(ctx)
+      // The answer quotes what Skatteverket said, with the personnummer in it masked.
+      const answer = await response.json()
+      expect(answer.error).toContain('Skatteverkets svar: "Felaktig redovisare 19121212-XXXX')
+      expect(answer.skv).toMatchObject({ skv_status: 400 })
+      expect(JSON.stringify(answer)).not.toContain(PERSONNUMMER)
     },
   )
 
@@ -197,12 +202,40 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
       const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
 
       expect(response.status).toBe(500)
+      // The thrown text is for the log line only: the person reads a sentence
+      // (crm#1944), so neither the redovisare nor the amount reaches the page.
+      expect(await response.json()).toEqual({
+        error: 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.',
+      })
       // handleSkvError has no request context, so it writes through the module
       // logger (createLogger('skatteverket')), the same redacting writer ctx.log wraps.
       expect(everythingLogged(ctx)).toContain('[skatteverket] ERROR API error')
       expectNoPayloadLogged(ctx)
     },
   )
+
+  it.each(['/declaration/validate', '/declaration/draft'])(
+    '%s says Skatteverket did not answer in time, not the runtime\'s own words for it',
+    async (path) => {
+      mockSkvRequest.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+      const ctx = makeContext()
+
+      const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
+
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: 'Skatteverket svarade inte i tid. Försök igen om en stund.' })
+    },
+  )
+
+  it('/declaration/validate keeps a thrown sentence that was written in Swedish for the person', async () => {
+    mockSkvRequest.mockRejectedValue(new Error('Organisationsnummer saknas för företaget.'))
+    const ctx = makeContext()
+
+    const response = await route('POST', '/declaration/validate').handler(postJson('/declaration/validate', vatBody), ctx)
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'Organisationsnummer saknas för företaget.' })
+  })
 
   it('/agi/submit logs nothing personal on success', async () => {
     mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 7 } })

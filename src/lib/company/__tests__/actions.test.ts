@@ -792,3 +792,76 @@ describe('createCompanyFromOnboarding: the profile derived from the legal form',
     expect(result).toEqual({ companyId: 'new-company-id', registeredOffice: null })
   })
 })
+
+describe('createCompanyFromOnboarding: the räkenskapsår is checked on the server', () => {
+  // The journey works the dates out in the browser. The server asks the one
+  // rule (checkPeriodDuration) itself before it writes anything.
+  async function create(settings: Record<string, unknown>, startDate: string, endDate: string) {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: { company_name: 'Testbolaget AB', vat_registered: false, ...settings },
+      fiscalPeriod: { startDate, endDate, name: 'Första räkenskapsåret' },
+    })
+    return {
+      result,
+      companyCreated: supabase.rpc.mock.calls.some(([name]) => name === 'create_company_with_owner'),
+      periodWrite: calls.find((c) => c.table === 'fiscal_periods' && c.method === 'upsert')?.args[0],
+    }
+  }
+
+  const firstYear: Record<string, unknown> = { entity_type: 'aktiebolag', is_first_fiscal_year: true }
+
+  const refused: Array<[label: string, settings: Record<string, unknown>, startDate: string, endDate: string]> = [
+    ['a first year of 19 months', firstYear, '2026-06-15', '2027-12-31'],
+    ['an end that is not the last of a month', firstYear, '2026-09-01', '2027-12-30'],
+    ['an end before the start', firstYear, '2026-09-01', '2026-08-31'],
+    ['a date that does not exist', firstYear, '2026-02-30', '2026-12-31'],
+    ['a date in another shape', firstYear, '1/9 2026', '2026-12-31'],
+    ['a mid-month start on a year that is not the first', { entity_type: 'aktiebolag' }, '2026-01-15', '2026-12-31'],
+    [
+      'a first year ending in June for a form bound to the calendar year',
+      { entity_type: 'enskild_firma', is_first_fiscal_year: true },
+      '2026-09-01',
+      '2027-06-30',
+    ],
+  ]
+  for (const [label, settings, startDate, endDate] of refused) {
+    it(`refuses ${label} before any write`, async () => {
+      const { result, companyCreated, periodWrite } = await create(settings, startDate, endDate)
+      expect(result).toEqual({ error: 'period_invalid' })
+      expect(companyCreated).toBe(false)
+      expect(periodWrite).toBeUndefined()
+    })
+  }
+
+  it('creates an extended first year of 18 months from a mid-month start', async () => {
+    const { result, periodWrite } = await create(firstYear, '2026-07-15', '2027-12-31')
+    expect(result.error).toBeUndefined()
+    expect(result.companyId).toBe('new-company-id')
+    expect(periodWrite).toMatchObject({ period_start: '2026-07-15', period_end: '2027-12-31' })
+  })
+
+  it('creates an extended first year to 31 December for a form bound to the calendar year', async () => {
+    const { result, periodWrite } = await create(
+      { entity_type: 'enskild_firma', is_first_fiscal_year: true },
+      '2026-09-10',
+      '2027-12-31',
+    )
+    expect(result.error).toBeUndefined()
+    expect(periodWrite).toMatchObject({ period_start: '2026-09-10', period_end: '2027-12-31' })
+  })
+
+  it('creates a shortened first year, which has no minimum length', async () => {
+    const { result, periodWrite } = await create(firstYear, '2026-11-20', '2026-12-31')
+    expect(result.error).toBeUndefined()
+    expect(periodWrite).toMatchObject({ period_start: '2026-11-20', period_end: '2026-12-31' })
+  })
+})
