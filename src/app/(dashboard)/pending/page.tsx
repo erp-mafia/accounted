@@ -214,12 +214,17 @@ const DAILY_BATCH_DIALOG: Record<DailyBatchType, ComponentType<ComponentProps<ty
   reminder_daily_batch: ReminderBatchDialog,
 }
 
-// Period status carried inside preview_data when stagePendingOperation can
-// resolve it. Shape mirrors PeriodStatusForDate in lib/core/bookkeeping/period-service.ts.
+// The lock that stops a waiting proposal's approval, attached to
+// preview_data by the list route when the date the approval posts on is
+// locked now (StagedPeriodLock, lib/pending-operations/period-lock.ts). Read
+// on every list load, never stored: unlocking makes the proposal approvable.
 interface PeriodStatusShape {
   period_id: string | null
   status: 'open' | 'locked' | 'closed'
+  /** The company lock date ("låst t.o.m."); null when the year's own lock or closing stops it. */
   lock_date: string | null
+  /** The date the approval would post on. */
+  date: string | null
 }
 
 function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
@@ -232,7 +237,17 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
     period_id: typeof obj.period_id === 'string' ? obj.period_id : null,
     status,
     lock_date: typeof obj.lock_date === 'string' ? obj.lock_date : null,
+    date: typeof obj.date === 'string' ? obj.date : null,
   }
+}
+
+/** Why a proposal in a locked or closed period cannot be approved, as its row's one line. */
+function periodLockRowText(
+  period: PeriodStatusShape,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  if (period.status === 'closed') return t('period_row_closed')
+  return period.lock_date ? t('period_row_locked_through', { date: formatDate(period.lock_date) }) : t('period_row_locked')
 }
 
 /**
@@ -347,15 +362,22 @@ function formatRelativeTime(dateStr: string, t: (key: string, values?: Record<st
  */
 
 /**
- * Inline period-lock banner. Renders when the staged operation touches a
- * period that's already locked or closed: the server's commit-time trigger
- * will reject it, so we tell the approver up front rather than letting them
- * click and see a generic "Misslyckades" toast. The fiscal_period_id link
- * goes to the periods management page where unlocking is possible.
+ * Inline period-lock banner. Renders when the date the approval would post
+ * on is locked or closed: the server's commit-time trigger will reject it, so
+ * we tell the approver up front rather than letting them click and see the
+ * proposal closed by the refusal. The help names where that lock is lifted:
+ * the company lock date under Inställningar, Bokföring; a year's own lock
+ * under Inställningar, Räkenskapsår; a closed year nowhere.
  */
 function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   const t = useTranslations('pending')
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
+  const help =
+    period.status === 'closed'
+      ? t('period_closed_help')
+      : lockedThrough && period.date
+        ? t('period_locked_through_help', { date: formatDate(period.date) })
+        : t('period_locked_help')
   return (
     <div className="flex items-start gap-2 text-[13px]" role="note">
       <LockClosedIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
@@ -367,9 +389,7 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
               ? t('period_locked_through', { date: lockedThrough })
               : t('period_locked_title')}
         </p>
-        <p className="text-xs text-muted-foreground">
-          {period.status === 'closed' ? t('period_closed_help') : t('period_locked_help')}
-        </p>
+        <p className="text-xs text-muted-foreground">{help}</p>
       </div>
     </div>
   )
@@ -1909,6 +1929,8 @@ export default function PendingOperationsPage() {
               const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
               const rowTitle = splitRowTitle(op.title)
               const fixCopy = FIXABLE_REFUSAL_COPY[fixNotes[op.id]]
+              // A locked or closed period disables Godkänn on the row, so the
+              // line says why before anything else staged with it (crm#1923).
               const rowLine: { text: string; attention: boolean; refused?: boolean; fixHref?: string; fixLabel?: string } | null = fixCopy
                 ? {
                     text: t(fixCopy.note),
@@ -1918,13 +1940,15 @@ export default function PendingOperationsPage() {
                   }
                 : refusedIds.has(op.id)
                   ? { text: failureText(approvalResults[op.id]), attention: true, refused: true }
-                  : isRun
-                    ? null
-                    : complianceWarning
-                      ? { text: complianceWarningText(complianceWarning), attention: true }
-                      : op.agent_reason
-                        ? { text: op.agent_reason, attention: false }
-                        : null
+                  : periodLocked && period
+                    ? { text: periodLockRowText(period, t), attention: true }
+                    : isRun
+                      ? null
+                      : complianceWarning
+                        ? { text: complianceWarningText(complianceWarning), attention: true }
+                        : op.agent_reason
+                          ? { text: op.agent_reason, attention: false }
+                          : null
               // The first proposal of a run carries the run's band: who
               // staged them, which day, and how many.
               const run = runStarts.get(op.id)
@@ -1983,7 +2007,8 @@ export default function PendingOperationsPage() {
                   {/* Line 1: what it is. The type ("Kategorisera:") is quiet and
                       gives way first (a phone leaves it out); the part that
                       identifies the item keeps the width. Line 2: ONE line, why it needs a person: a
-                      refused approval, else the staged warning (it must not
+                      refused approval, else the period lock that stops the
+                      approval, else the staged warning (it must not
                       pass unseen, crm#1003), else the agent's reason. The
                       review has each in full; when it was staged is the
                       band's date, and in the hover text. */}

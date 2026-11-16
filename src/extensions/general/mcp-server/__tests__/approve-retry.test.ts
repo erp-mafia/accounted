@@ -81,6 +81,40 @@ describe('gnubok_approve_pending_operation: a resent approval', () => {
     expect(result).not.toHaveProperty('idempotency_replay')
   })
 
+  // crm#1908: a bulk retag left the lines of a closed year untagged and the
+  // approval answered a plain 'committed'.
+  it('answers a partial commit with its warning beside the status, also when resent', async () => {
+    const partial = {
+      outcome: 'partial',
+      warning: 'PARTIAL: 2 of 3 lines were NOT tagged (2 period_closed).',
+      retagged: 1,
+      failed_count: 2,
+    }
+    const retag = { operation_type: 'retag_line_dimensions', risk_level: 'medium' }
+
+    const first = createQueuedMockSupabase()
+    first.enqueue({ data: operation(retag), error: null })
+    commitSpy.mockResolvedValue({ status: 'committed', data: partial, operation_status: 'committed' })
+    expect(await run(first.supabase)).toMatchObject({ status: 'committed', warning: partial.warning, data: partial })
+
+    // The stored result of the same approval says it again.
+    const resent = createQueuedMockSupabase()
+    resent.enqueue({ data: operation({ ...retag, status: 'committed', result_data: partial }), error: null })
+    expect(await run(resent.supabase)).toMatchObject({
+      status: 'committed',
+      warning: partial.warning,
+      idempotency_replay: true,
+    })
+  })
+
+  it('adds no warning to a commit that went through whole', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: operation({ operation_type: 'retag_line_dimensions', risk_level: 'medium' }), error: null })
+    commitSpy.mockResolvedValue({ status: 'committed', data: { outcome: 'complete', retagged: 3 }, operation_status: 'committed' })
+
+    expect(await run(supabase)).not.toHaveProperty('warning')
+  })
+
   it('says a rejected operation was rejected and commits nothing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: operation({ status: 'rejected', result_data: { auto_rejected: true, reason: 'Transaktionen är redan bokförd.' } }), error: null })

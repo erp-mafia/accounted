@@ -17,7 +17,7 @@ import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-det
 import { bankNetMismatch, bulkBookTransactions, type BulkBookInput } from '../bulk-book'
 
 const covered = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoveredThrough: covered }))
+vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoverage: covered }))
 
 vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
@@ -229,7 +229,7 @@ describe('bulk booking dry run (what staging runs)', () => {
   })
 
   it('refuses a new samlingsverifikat over Stripe rows on days the ledger already covers, with one read', async () => {
-    covered.mockResolvedValue('2026-10-20')
+    covered.mockResolvedValue({ through: '2026-10-20', source: 'migrated_ledger' })
     const second = { ...stripeFee, id: TX_LATER, amount: -37.5 }
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [second, stripeFee], error: null })
@@ -246,15 +246,85 @@ describe('bulk booking dry run (what staging runs)', () => {
     expect(outcome).toMatchObject({
       ok: false,
       code: 'BULK_BOOK_LEDGER_DAY_COVERED',
-      details: { transaction_id: TX_LATER, covered_through: '2026-10-20', settlement_account: '1686' },
+      details: {
+        transaction_id: TX_LATER,
+        covered_through: '2026-10-20',
+        settlement_account: '1686',
+        // Every covered row, and what covers it (crm#1901).
+        transaction_ids: [TX_LATER, TX_OUT],
+        uncovered_transaction_ids: [],
+        coverage: [
+          {
+            settlement_account: '1686',
+            covered_through: '2026-10-20',
+            covered_by: 'migrated_ledger',
+            transaction_ids: [TX_LATER, TX_OUT],
+          },
+        ],
+      },
     })
+    expect(messageOf(outcome)).toContain('når till och med 2026-10-20')
+    expect(messageOf(outcome)).toContain('Det gäller alla rader i urvalet.')
     // One read per settlement account, not one per row.
     expect(covered).toHaveBeenCalledTimes(1)
     expect(covered).toHaveBeenCalledWith(supabase, 'company-1', ['1686'], '2026-10-20')
   })
 
+  // crm#1901: one verifikat is all or nothing, so the call is still refused
+  // as a whole, but it names the rows the coverage stops and the rows it does
+  // not, so one retry without the former goes through.
+  it('refuses the whole call but names the covered Stripe row and the bank row it does not concern', async () => {
+    covered.mockResolvedValue({
+      through: '2026-10-20',
+      source: 'manual_voucher',
+      voucher: { journal_entry_id: JE, voucher_label: 'A12' },
+    })
+    const bankFee = { ...transferOut, id: TX_LATER, amount: -12.5 }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [stripeFee, bankFee], error: null })
+    enqueue({ data: [], error: null }) // posted verifikat booked from the rows: none
+    enqueue({
+      data: [
+        { account_number: '1686', is_active: true },
+        { account_number: '1930', is_active: true },
+        { account_number: '6570', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null }) // the Stripe row's cash account
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // the bank row's cash account
+
+    const outcome = await run(supabase, {
+      tx_ids: [TX_OUT, TX_LATER],
+      entry_description: 'Avgifter',
+      manual_lines: [line('6570', 50, 0), line('1686', 0, 37.5), line('1930', 0, 12.5)],
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'BULK_BOOK_LEDGER_DAY_COVERED',
+      details: {
+        transaction_id: TX_OUT,
+        transaction_ids: [TX_OUT],
+        uncovered_transaction_ids: [TX_LATER],
+        coverage: [
+          {
+            settlement_account: '1686',
+            covered_through: '2026-10-20',
+            covered_by: 'manual_voucher',
+            covering_voucher: { journal_entry_id: JE, voucher_label: 'A12' },
+            transaction_ids: [TX_OUT],
+          },
+        ],
+      },
+    })
+    expect(messageOf(outcome)).toContain('Konto 1686 har ett manuellt verifikat daterat 2026-10-20 (A12).')
+    expect(messageOf(outcome)).toContain('Det gäller 1 av 2 rader i urvalet.')
+    expect(messageOf(outcome)).toContain('De övriga 1 berörs inte och kan bokföras för sig.')
+  })
+
   it('never reads coverage for bank rows', async () => {
-    covered.mockResolvedValue('2026-12-31')
+    covered.mockResolvedValue({ through: '2026-12-31', source: 'manual_voucher' })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [transferOut], error: null })
     enqueue({ data: [], error: null }) // posted verifikat booked from the row: none

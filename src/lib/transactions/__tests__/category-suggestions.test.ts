@@ -6,6 +6,7 @@ import {
   mappingRuleMatches,
   merchantHistoryFor,
   rowProposal,
+  type MerchantHistoryMap,
   type SuggestedTemplate,
 } from '../category-suggestions'
 import { makeTransaction } from '@/tests/helpers'
@@ -208,6 +209,68 @@ describe('getSuggestedCategories: counterparty history', () => {
       { expense_office: 5 },
     )
     expect(result).toEqual([])
+  })
+})
+
+describe('counterparty history follows the learned counterpart guards (crm#1920)', () => {
+  // A bank's wording for how the money moved, on every such payment whoever
+  // was paid: no counterparty, so no key to gather tags under.
+  const generic = (text: string, category: string) => ({
+    merchant_name: null,
+    description: text,
+    original_description: text,
+    category,
+  })
+
+  it('gathers nothing under a bank text that names no one', () => {
+    const map = buildMerchantHistory([
+      generic('INTERNET BET 1', 'expense_other'),
+      generic('INTERNET BET 1', 'expense_other'),
+      generic('INSÄTTNING', 'income_other'),
+    ])
+    expect(map.size).toBe(0)
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1')).toEqual({})
+  })
+
+  it('reads nothing for a row whose text names no one, whatever the map holds', () => {
+    // Before the guard both rows keyed on the bank's own words.
+    const map: MerchantHistoryMap = new Map([
+      ['internet bet 1', { expense_other: 2 }],
+      ['internet bet', { expense_other: 2 }],
+    ])
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1')).toEqual({})
+    expect(merchantHistoryFor(map, 'INTERNET BET 4')).toEqual({})
+  })
+
+  it('counts no tag on a row no live verifikat books any more', () => {
+    const map = buildMerchantHistory([
+      { merchant_name: 'Zqxw Vrpt', category: 'expense_office', is_booked: true },
+      { merchant_name: 'Zqxw Vrpt', category: 'expense_other', is_booked: false },
+    ])
+    expect(merchantHistoryFor(map, 'Zqxw Vrpt')).toEqual({ expense_office: 1 })
+  })
+
+  it('still gathers history when the line names someone beside the wording', () => {
+    const map = buildMerchantHistory([generic('INTERNET BET 1 ZQXW FÖRSÄKRING', 'expense_other')])
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1 ZQXW FÖRSÄKRING')).toEqual({ expense_other: 1 })
+  })
+
+  it('gives a key shorter than two characters no history', () => {
+    const map = buildMerchantHistory([{ merchant_name: 'X', category: 'expense_office' }])
+    expect(merchantHistoryFor(map, 'X')).toEqual({})
+  })
+
+  it('offers no history for a payment to Skatteverket: the skattekonto rule books it', () => {
+    // The catalog template that books these rows tags them expense_other.
+    const payment = tx({ merchant_name: 'Skatteverket', description: 'SKATTEVERKET', amount: -5000 })
+    const result = getSuggestedCategories(payment, [], { expense_other: 5 })
+    expect(result.some((s) => s.source === 'history')).toBe(false)
+  })
+
+  it('keeps history for money in from Skatteverket, which the rule leaves alone', () => {
+    const payout = tx({ merchant_name: 'Skatteverket', description: 'SKATTEVERKET', amount: 5000 })
+    const result = getSuggestedCategories(payout, [], { income_other: 2 })
+    expect(result).toEqual([expect.objectContaining({ category: 'income_other', source: 'history' })])
   })
 })
 

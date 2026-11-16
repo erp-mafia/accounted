@@ -67,7 +67,7 @@ import { bankNetAccountTest, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { isGeneratedVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { firstCoveredFeedRow, isFeedConnectorRow } from '@/lib/bookkeeping/feed-row-coverage'
+import { coveredDayMessage, coveredFeedRows, isFeedConnectorRow } from '@/lib/bookkeeping/feed-row-coverage'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { bulkBookedBankLineBusinessEvent } from '@/lib/bookkeeping/sql-posting-business-events'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -402,17 +402,27 @@ export async function bulkBookTransactions(
   // A new samlingsverifikat over feed rows (Stripe) on days the books already
   // hold books that money twice (accounted#101); linking them to the existing
   // verifikat (existing_journal_entry_id) stays open. Bank rows are never read for.
+  // One verifikat is all or nothing, so the whole call is refused; the answer
+  // names every covered row, the day, what holds it, and the rows a retry may
+  // carry (crm#1901: an agent was told none of it and probed day by day).
   if (newEntryPayload && txTyped.some(isFeedConnectorRow)) {
     const ledgers = await rowLedgers()
-    const covered = await firstCoveredFeedRow(supabase, companyId, txTyped, (id) => ledgers.get(id))
-    if (covered) {
+    const covered = await coveredFeedRows(supabase, companyId, txTyped, (id) => ledgers.get(id))
+    if (covered.length > 0) {
+      const coveredIds = new Set(covered.flatMap((c) => c.transaction_ids))
+      const first = covered[0]!
       return {
         ok: false,
         code: 'BULK_BOOK_LEDGER_DAY_COVERED',
+        messageSv: coveredDayMessage(covered, txTyped.length).sv,
         details: {
-          transaction_id: covered.transactionId,
-          covered_through: covered.coveredThrough,
-          settlement_account: covered.settlementAccount,
+          // The first covered row, as before; coverage lists every one.
+          transaction_id: first.transaction_ids[0],
+          covered_through: first.covered_through,
+          settlement_account: first.settlement_account,
+          transaction_ids: [...coveredIds],
+          uncovered_transaction_ids: txTyped.map((t) => t.id).filter((id) => !coveredIds.has(id)),
+          coverage: covered,
         },
       }
     }

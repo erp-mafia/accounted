@@ -19,7 +19,7 @@ const { createTxJE, propagate, saveRule, intercept, lock, covered } = vi.hoisted
   covered: vi.fn(),
 }))
 
-vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoveredThrough: covered }))
+vi.mock('@/lib/bookkeeping/ledger-coverage', () => ({ ledgerCoverage: covered }))
 
 vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
@@ -125,8 +125,8 @@ describe('categorizeTransaction: dry run', () => {
     expect(payloads('fiscal_periods', 'upsert')).toEqual([])
   })
 
-  it('refuses a Stripe feed row on a day the ledger already covers, in the dry run too', async () => {
-    covered.mockResolvedValue('2026-05-12')
+  it('refuses a Stripe feed row on a day the ledger already covers, in the dry run too, naming the day and what holds it', async () => {
+    covered.mockResolvedValue({ through: '2026-05-12', source: 'migrated_ledger' })
     const stripeRow = row({ import_source: 'stripe' })
     const { supabase, payloads } = ledger({
       transactions: [{ data: stripeRow, error: null }, { data: [{ ...stripeRow, journal_entry_id: 'je-1' }], error: null }],
@@ -140,15 +140,20 @@ describe('categorizeTransaction: dry run', () => {
     expect(outcome).toMatchObject({
       ok: false,
       code: 'TX_CATEGORIZE_LEDGER_DAY_COVERED',
-      details: { covered_through: '2026-05-12', settlement_account: '1930' },
+      details: { covered_through: '2026-05-12', settlement_account: '1930', covered_by: 'migrated_ledger' },
     })
+    // The day and its source reach the person and the agent (crm#1901).
+    if (outcome.ok) throw new Error('expected a refusal')
+    expect(outcome.message?.sv).toContain('Bokföringen du importerade från ditt förra program når till och med 2026-05-12')
+    expect(outcome.message?.sv).toContain('Det gäller den här raden.')
+    expect(outcome.message?.en).toContain('reaches 2026-05-12 (its last imported verifikat, on any account)')
     expect(covered).toHaveBeenCalledWith(supabase, COMPANY_ID, ['1930'], '2026-05-12')
     expect(createTxJE).not.toHaveBeenCalled()
     expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('never reads coverage for a bank row: a manual verifikat on 1930 says nothing about which days are booked', async () => {
-    covered.mockResolvedValue('2026-12-31')
+    covered.mockResolvedValue({ through: '2026-12-31', source: 'manual_voucher' })
     const { supabase } = ledger()
 
     const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {

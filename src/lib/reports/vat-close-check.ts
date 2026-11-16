@@ -34,7 +34,7 @@ import { findUnattributedEuSales, type PsWarning } from '@/lib/reports/periodisk
 import { euTradeInRutor, formatEuTradeBoxes, helarsmomsHasEuTrade } from '@/lib/reports/eu-trade'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
-import { computeSettlementAccountDrift, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
+import { computeSettlementAccountDrift, type SettlementAccountAging, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
@@ -491,29 +491,62 @@ export function toCompletenessFindings(
   }))
 }
 
+/** How many of an account's source verifikat the finding's sentence names; the rest are in settlement_accounts. */
+const DRIFT_SOURCES_IN_MESSAGE = 5
+
+/** " (från A-12 2026-03-31: 30 000 kr, ...)": the verifikat one account's drift comes from, empty when none is known. */
+function driftSourcesText(account: SettlementAccountAging): string {
+  const named = account.entries.slice(0, DRIFT_SOURCES_IN_MESSAGE).map((entry) => {
+    const counted = formatCurrency(entry.counted, 'SEK')
+    const share = entry.counted < entry.amount ? `${counted} av ${formatCurrency(entry.amount, 'SEK')}` : counted
+    return `${entry.opening_balance ? 'ingående balans ' : ''}${entry.voucher_label} ${entry.entry_date}: ${share}`
+  })
+  if (account.entries.length > DRIFT_SOURCES_IN_MESSAGE) {
+    named.push(`${account.entries.length - DRIFT_SOURCES_IN_MESSAGE} verifikat till`)
+  }
+  if (account.unattributed > 0) {
+    named.push(`${formatCurrency(account.unattributed, 'SEK')} som inget verifikat på kontot förklarar`)
+  }
+  return named.length > 0 ? ` (från ${named.join(', ')})` : ''
+}
+
 /**
  * The medium finding for moms left on 2650/1650 after Skatteverket charged or
  * paid it: never a stop on the close, because the period being declared is
  * right; the books around it are not. Below 100 kr it is rounding.
+ *
+ * It states the day it describes, the account balance the amount is part of
+ * and the verifikat it comes from, so it can be laid beside the huvudbok
+ * (crm#1924: the same amount came back for two periods with nothing to
+ * reconcile it against).
  */
 export function settlementAccountDriftBlocker(drift: SettlementAccountDrift): VatCloseBlocker | null {
   const MIN_DRIFT_KR = 100
-  const parts: string[] = []
-  if (drift.payable_drift >= MIN_DRIFT_KR) {
-    parts.push(`${formatCurrency(drift.payable_drift, 'SEK')} på 2650 är moms att betala som fördes dit för mer än 150 dagar sedan och som Skatteverkets debitering aldrig har bokförts mot`)
-  }
-  if (drift.receivable_drift >= MIN_DRIFT_KR) {
-    parts.push(`${formatCurrency(drift.receivable_drift, 'SEK')} på 1650 är moms att få tillbaka äldre än 150 dagar som aldrig har bokförts som utbetald`)
-  }
-  if (parts.length === 0) return null
+  const flagged = [drift.payable, drift.receivable].filter((account) => account.drift >= MIN_DRIFT_KR)
+  if (flagged.length === 0) return null
+  const parts = flagged.map((account) => {
+    const amount = `${formatCurrency(account.drift, 'SEK')} av saldot ${formatCurrency(account.balance, 'SEK')}`
+    return account === drift.payable
+      ? `${amount} på 2650 är moms att betala som fördes dit före ${account.window_start} och som Skatteverkets debitering aldrig har bokförts mot${driftSourcesText(account)}`
+      : `${amount} på 1650 är moms att få tillbaka som fördes dit före ${account.window_start} och som aldrig har bokförts som utbetald${driftSourcesText(account)}`
+  })
   return {
     kind: 'earlier_vat_on_settlement_account',
     severity: 'medium',
     count: parts.length,
-    message: `${parts.join('; ')}. Tidigare perioders moms ligger alltså kvar, och skulden eller fordran i balansräkningen stämmer inte.`,
+    message: `Läget i bokföringen per ${drift.as_of}, oavsett vilken period kontrollen gäller: ${parts.join('; ')}. Tidigare perioders moms ligger alltså kvar, och skulden eller fordran i balansräkningen stämmer inte.`,
     hint:
       'Bokför Skatteverkets momsrader på skattekontot (sidan Skattekonto, eller gnubok_book_skattekonto_rows), eller betalningen till ' +
-      'Skatteverket mot 2650. Hör beloppet till en period som redan är betald och bokförd på annat konto, rätta med en verifikation.',
+      'Skatteverket mot 2650. Hör beloppet till en period som redan är betald och bokförd på annat konto, rätta med en verifikation. ' +
+      'Beloppet är en del av kontots saldo i huvudboken samma dag, aldrig ett eget belopp att boka bort: stäm av verifikaten som nämns ' +
+      'mot Skatteverkets momsrader först. De är de senaste som förde moms till kontot före fönstret på 150 dagar, eftersom betalningar ' +
+      'räknas mot äldst moms först.',
+    as_of: drift.as_of,
+    settlement_accounts: flagged.map((account) => ({
+      ...account,
+      entries: account.entries.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP),
+      entry_count: account.entries.length,
+    })),
   }
 }
 
@@ -554,6 +587,18 @@ interface VatCloseBlocker {
    * EXCLUDED_SETTLEMENT_ENTRIES_CAP; `count` is the uncapped total.
    */
   eu_sales?: Array<{ journal_entry_id: string | null; amount: number | null; message: string }>
+  /**
+   * Only on `earlier_vat_on_settlement_account`: the day the finding
+   * describes, which is today's books whatever period was asked for.
+   */
+  as_of?: string
+  /**
+   * Only on `earlier_vat_on_settlement_account`: per flagged account the
+   * huvudbok balance the amount is part of and the verifikat it comes from,
+   * capped at EXCLUDED_SETTLEMENT_ENTRIES_CAP; `entry_count` is the uncapped
+   * total.
+   */
+  settlement_accounts?: Array<SettlementAccountAging & { entry_count: number }>
   /**
    * Stable rule id when this blocker comes from the shared momsdeklaration
    * completeness checks (lib/reports/vat-declaration-checks.ts), so an agent
@@ -1395,8 +1440,12 @@ export async function computeVatCloseCheck(
   const sanity = compareVatPeriods(vatReport.rutor, previousRutor)
 
   // Moms earlier periods left on 2650/1650 after Skatteverket charged or paid
-  // it (lib/reports/vat-settlement-account-drift.ts). Read last, as today's
-  // state of the books; a failed read leaves the close check as it was.
+  // it (lib/reports/vat-settlement-account-drift.ts). Read last, as TODAY's
+  // state of the books whatever period was asked for, and the finding says
+  // so (as_of). It asks for a booking that can only be made now: taken at the
+  // period's end it would keep warning after Skatteverket's charge is booked
+  // today, and say nothing of what has built up since. A failed read leaves
+  // the close check as it was.
   try {
     const drift = await computeSettlementAccountDrift(supabase, companyId, todayIsoStockholm())
     const driftBlocker = settlementAccountDriftBlocker(drift)

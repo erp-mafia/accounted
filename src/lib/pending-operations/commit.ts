@@ -210,7 +210,7 @@ import { createArticle, updateArticle } from '@/lib/articles/article-commands'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
-import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
+import { everyRetagRefused, partialRetagWarning, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { applyBulkIgnore } from '@/lib/transactions/bulk-ignore'
@@ -1913,10 +1913,15 @@ async function commitCreateDimensionValue(
  * and echoed (capped at 20) so the caller can re-stage just the failed set.
  * Only when EVERY line fails does the operation as a whole fail.
  *
- * The loop, the merge of the staged pairs into each line's current bag, and
- * the all-refused rule live in lib/dimensions/retag-service.ts. A merge
- * reads the bags at approval, not at staging, so a tag set in between is
- * kept.
+ * A partial result is said as one (crm#1908): outcome 'partial' and a
+ * warning lead the answer, and failed_by_reason counts every line left
+ * untagged per reason (closed period, locked period, lock date, ...), also
+ * past the 20 echoed. An approval answers that warning beside its status.
+ *
+ * The loop, the merge of the staged pairs into each line's current bag, the
+ * lock check and the all-refused rule live in lib/dimensions/
+ * retag-service.ts. A merge reads the bags at approval, not at staging, so a
+ * tag set in between is kept.
  */
 async function commitRetagLineDimensions(
   supabase: SupabaseClient,
@@ -1950,13 +1955,23 @@ async function commitRetagLineDimensions(
       reason: validated.reason,
     },
   )
-  // Reading the lines for a merge failed: nothing was written.
-  if (!outcome.ok) throw outcome.error ?? new Error(outcome.code)
+  // Reading the lines or their period locks failed, before any write: the
+  // operation stays pending, so the same approval works once the read does.
+  // Every retag reads them now, and a failed read used to consume the op.
+  if (!outcome.ok) {
+    return {
+      error:
+        'Verifikationsraderna eller deras periodlås kunde inte läsas, så ingenting taggades om. Åtgärden ligger kvar: godkänn den igen om en stund.',
+      status: 503,
+      returnToPending: true,
+    }
+  }
   if (outcome.dryRun) return { data: outcome.preview }
 
-  const { retagged, unchanged, failed } = outcome.data
+  const { retagged, unchanged, failed, failed_by_reason } = outcome.data
   // Echo at most 20 failures: enough to act on without bloating result_data
-  // on a pathological 500-line all-but-one failure.
+  // on a pathological 500-line all-but-one failure. failed_by_reason counts
+  // them all.
   const echoedFailures = failed.slice(0, 20)
   const refused = everyRetagRefused(outcome.data)
   if (refused) {
@@ -1964,15 +1979,19 @@ async function commitRetagLineDimensions(
       error: refused.messageSv,
       errorCode: 'DIMENSION_RETAG_FAILED',
       status: 400,
-      data: { failed_count: failed.length, failed: echoedFailures },
+      data: { failed_count: failed.length, failed_by_reason, failed: echoedFailures },
     }
   }
 
+  const warning = partialRetagWarning(outcome.data)
   return {
     data: {
+      outcome: outcome.data.outcome,
+      ...(warning ? { warning } : {}),
       retagged,
       unchanged,
       failed_count: failed.length,
+      failed_by_reason,
       failed: echoedFailures,
       mode: validated.mode,
       dimensions: validated.dimensions,

@@ -357,14 +357,18 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import {
+  describeRetagFailureGroup,
   dimensionsLabel,
+  groupRetagFailures,
   requiredDimensionRemovedMessage,
   requiredDimensionsRemoved,
   requiredRulesFor,
   resultingDimensions,
   sameDimensions,
   storedDimensions,
+  type RetagLineFailure,
 } from '@/lib/dimensions/retag-service'
+import { fetchRetagLockFacts, retagBlockOf } from '@/lib/dimensions/retag-lock'
 import { createCustomer, updateCustomer } from '@/lib/customers/customer-commands'
 import {
   CreateRecurringScheduleParamsSchema,
@@ -557,6 +561,14 @@ import {
   type ReconciliationItemBucket,
 } from '@/lib/reconciliation/schemas'
 import { unknownAccountKeyError } from './reconciliation-key-error'
+import {
+  accountKeyLabel,
+  outsideRowLabel,
+  reconciliationMatchTitle,
+  reconciliationResidualTitle,
+  reconciliationSignoffTitle,
+  reconciliationUnmatchTitle,
+} from './reconciliation-titles'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import { daysOffPerYear } from '@/lib/salary/vacation-net-days'
 import { effectiveRow, effectiveRunTotals, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
@@ -624,7 +636,8 @@ import {
 } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
-import { countUnbookedInPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { countUnbookedInPeriod, resolvePeriodLockForDate, type PeriodLockForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { stagedPeriodLockNote } from '@/lib/pending-operations/period-lock'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
@@ -2365,7 +2378,10 @@ interface StageOptions {
    * provided, the response includes a `period_status` envelope so agents and
    * widgets can detect locked/closed periods without a round-trip. Failure to
    * resolve (DB blip, missing settings row) leaves the response unchanged:
-   * the DB triggers remain the authoritative gate.
+   * the DB triggers remain the authoritative gate. When the operation posts
+   * a verifikat on this date, list its type in
+   * lib/pending-operations/period-lock.ts: the staged message and the
+   * approval queue then say when the date is locked.
    */
   dateForPeriodCheck?: string
   /**
@@ -2548,20 +2564,32 @@ async function stagePendingOperation(
   // without each tool having to opt in. Failure is non-fatal: DB triggers
   // are the authoritative gate; a missing envelope just degrades preview UX.
   const dateForPeriodCheck = options.dateForPeriodCheck ?? autoExtractDateForPeriodCheck(params)
-  let periodStatus: PeriodStatusForDate | undefined
+  let periodLock: PeriodLockForDate | undefined
   if (dateForPeriodCheck) {
     try {
-      periodStatus = await resolvePeriodStatusForDate(supabase, companyId, dateForPeriodCheck)
+      periodLock = await resolvePeriodLockForDate(supabase, companyId, dateForPeriodCheck)
     } catch (err) {
-      log.warn('resolvePeriodStatusForDate failed', {
+      log.warn('resolvePeriodLockForDate failed', {
         operationType,
         companyId,
         dateForPeriodCheck,
         error: err instanceof Error ? err.message : String(err),
       })
-      periodStatus = undefined
+      periodLock = undefined
     }
   }
+  const periodStatus: PeriodStatusForDate | undefined = periodLock?.status
+  // A posting on a date that is locked now is still staged (the person may
+  // unlock first), but the answer says so in words and what to do: with only
+  // period_status in the envelope the proposal read as approvable (crm#1923).
+  // Only for the operation types that post on that date
+  // (lib/pending-operations/period-lock.ts); the approval queue reads the
+  // same lock when it lists the proposal, so nothing about it is stored.
+  const periodLockNote = stagedPeriodLockNote(
+    { operation_type: operationType, params, preview_data: previewData },
+    dateForPeriodCheck,
+    periodLock,
+  )
 
   // ── One bank row, one open proposal (crm#1264). Rows another open
   //    operation names are refused, a dry run included, whatever force
@@ -2704,7 +2732,7 @@ async function stagePendingOperation(
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${periodLockNote ? ` ${periodLockNote}` : ''}${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
     ...(superseded.length + supersededTwins.length > 0 ? { superseded_operation_ids: [...superseded, ...supersededTwins] } : {}),
     ...approveHint(data.id, companyId, actor),
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
@@ -2807,6 +2835,19 @@ function stagingOptions(args: Record<string, unknown>): Pick<StageOptions, 'dryR
     dryRun: args.dry_run === true,
     idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
   }
+}
+
+/**
+ * The account a staged reconciliation title names (./reconciliation-titles.ts).
+ * A dry run stores no title, so it reads nothing.
+ */
+async function stagedAccountLabel(
+  supabase: SupabaseClient,
+  companyId: string,
+  accountKey: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  return args.dry_run === true ? '' : accountKeyLabel(supabase, companyId, accountKey)
 }
 
 // ── Skatteverket filing helpers (PR5) ────────────────────────
@@ -5208,6 +5249,20 @@ async function runInnerTool(params: {
 }
 
 /**
+ * A committed operation whose executor says only part of it went through
+ * (data.outcome 'partial', its sentence in data.warning): the sentence is
+ * answered beside the status, so 'committed' is never read as all of it.
+ * The answers for several operations at once carry no data, so a bulk retag
+ * that left lines untagged was a bare 'committed' there (crm#1908).
+ */
+function partialCommitWarning(result: { status: string; data?: Record<string, unknown> | null }): { warning?: string } {
+  const data = result.data
+  return result.status === 'committed' && data?.outcome === 'partial' && typeof data.warning === 'string'
+    ? { warning: data.warning }
+    : {}
+}
+
+/**
  * What gnubok_approve_pending_operation answers for an operation that has
  * already settled, read from its row: the stored result of the approval that
  * committed it (idempotency_replay: true), its posted ids after a partial
@@ -5224,6 +5279,7 @@ function settledApprovalOutcome(
       return {
         status: 'committed',
         operation_id: operation.id,
+        ...partialCommitWarning({ status: 'committed', data: stored }),
         data: stored,
         operation_status: 'committed',
         idempotency_replay: true,
@@ -5473,6 +5529,7 @@ async function approveOneOperation(params: {
   return {
     status: result.status,
     operation_id: operationId,
+    ...partialCommitWarning(result),
     ...(result.data ? { data: result.data } : {}),
     ...(result.error ? { error: result.error } : {}),
     ...(result.code ? { error_code: result.code } : {}),
@@ -10158,7 +10215,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'update_article',
-        title: `Uppdatera artikel ${parsed.data.name || (preview.preview.name as string | undefined) || articleId}`,
+        title: `Uppdatera artikel ${parsed.data.name || (preview.preview.name as string | undefined) || ''}`.trim(),
         params,
         preview: preview.preview,
         actor,
@@ -13463,10 +13520,13 @@ export const tools: McpTool[] = [
       // Build category history from past categorizations
       // Counterparty-keyed history: the engine only surfaces history tied to
       // the SAME merchant: global frequency padding produced the identical
-      // ~0.5 four-way spread agents reported as pure noise (P2-1).
+      // ~0.5 four-way spread agents reported as pure noise (P2-1). is_booked
+      // is read with each row, not filtered on, so its cost stays with the
+      // 200 rows fetched; buildMerchantHistory counts no tag whose verifikat
+      // is gone (crm#1920).
       const { data: historicalTxns } = await supabase
         .from('transactions')
-        .select('category, merchant_name, description, original_description')
+        .select('category, merchant_name, description, original_description, is_booked')
         .eq('company_id', companyId)
         .not('is_business', 'is', null)
         .neq('category', 'uncategorized')
@@ -13486,16 +13546,24 @@ export const tools: McpTool[] = [
       const counterpartyResult: Record<string, unknown> = {}
 
       for (const tx of transactions) {
+        const cpMatch = counterpartyMatches.get(tx.id)
+        // The learned counterpart is this counterparty's history as the
+        // verifikat booked it, kept right when a booking is reversed. The
+        // tag count is a second read of the same rows that cannot name the
+        // account (a booking on an account no category defaults to is
+        // tagged expense_other and read back as 6991), so it is never
+        // printed beside the match (crm#1920).
         suggestions[tx.id] = getSuggestedCategories(
           tx as Transaction, mappingRules ?? [],
-          merchantHistoryFor(
-            merchantHistory,
-            (tx as Transaction).merchant_name,
-            (tx as Transaction).original_description ?? (tx as Transaction).description,
-          )
+          cpMatch
+            ? {}
+            : merchantHistoryFor(
+                merchantHistory,
+                (tx as Transaction).merchant_name,
+                (tx as Transaction).original_description ?? (tx as Transaction).description,
+              ),
         )
 
-        const cpMatch = counterpartyMatches.get(tx.id)
         if (cpMatch) {
           // The legs as this row books them: money against the learned
           // direction (a likely refund) is mirrored by the booking, so it is
@@ -14162,7 +14230,13 @@ export const tools: McpTool[] = [
         credit_amount: number
         sort_order: number
         dimensions: unknown
-        journal_entries: { id: string; entry_date: string; voucher_number: number; voucher_series: string }
+        journal_entries: {
+          id: string
+          entry_date: string
+          voucher_number: number
+          voucher_series: string
+          fiscal_period_id: string | null
+        }
       }
 
       // Two-step fetch (lib/bookkeeping/entry-lines.ts) instead of a
@@ -14232,6 +14306,7 @@ export const tools: McpTool[] = [
         entry_date: string
         voucher_number: number
         voucher_series: string
+        fiscal_period_id: string | null
       }
       type BareLineRow = {
         id: string
@@ -14251,7 +14326,7 @@ export const tools: McpTool[] = [
           const { data: entryPage, error: entryError } = await filterEntries(
             supabase
               .from('journal_entries')
-              .select('id, entry_date, voucher_number, voucher_series, status'),
+              .select('id, entry_date, voucher_number, voucher_series, status, fiscal_period_id'),
           )
             // Stable total order on the PK for correct paging (same invariant
             // as lib/supabase/fetch-all.ts).
@@ -14334,15 +14409,44 @@ export const tools: McpTool[] = [
 
       const bagLabel = dimensionsLabel(resolvedBag)
 
+      // Which matched lines the approval can tag at all: the lock check the
+      // commit runs (lib/dimensions/retag-lock.ts), asked now. A line in a
+      // closed or locked period, or on or before the company lock date, is
+      // refused at approval, so the preview counts it apart and says why. It
+      // used to count every matched line as if it would be tagged (crm#1908).
+      const locks = await fetchRetagLockFacts(
+        supabase,
+        companyId,
+        rows.map((r) => r.journal_entries.fiscal_period_id),
+      )
+      const blocks = rows.map((r) => retagBlockOf(locks, r.journal_entries))
+      const blockedLines: RetagLineFailure[] = rows.flatMap((r, i) => {
+        const block = blocks[i]
+        return block
+          ? [{ line_id: r.id, error: block.message, reason: block.reason, entry_date: r.journal_entries.entry_date }]
+          : []
+      })
+      const blockedByReason = groupRetagFailures(blockedLines)
+      const blockedSummary = blockedByReason.map(describeRetagFailureGroup)
+      const taggableLines = rows.length - blockedLines.length
+      // Nothing to approve: the approval would refuse every line.
+      if (taggableLines === 0) {
+        throw badArgument(
+          'filters',
+          `Ingen av de ${rows.length} matchade raderna kan taggas om: ${blockedSummary.join(' ')}`,
+        )
+      }
+
       // The bag each line ends up with (lib/dimensions/retag-service.ts, the
-      // same computation the approval runs): grouped for the whole match, and
-      // before/after on the sample lines. A merge is applied to the bags as
-      // they are at approval, so a tag set in between is kept.
+      // same computation the approval runs): grouped for the lines that can
+      // be tagged, and before/after on the sample lines. A merge is applied
+      // to the bags as they are at approval, so a tag set in between is kept.
       const outcomes = rows.map((r) => {
         const before = storedDimensions(r.dimensions)
         const after = resultingDimensions(before, resolvedBag, mode)
         return { before, after }
       })
+      const taggable = outcomes.filter((_, i) => !blocks[i])
 
       // A dimension an account requires is never taken off a line that
       // carries it (the approval refuses the same per line): refused before
@@ -14351,6 +14455,7 @@ export const tools: McpTool[] = [
       if (rules) {
         const refusals = new Map<string, string>()
         rows.forEach((r, i) => {
+          if (blocks[i]) return
           const removed = requiredDimensionsRemoved(r.account_number, outcomes[i].before, outcomes[i].after, rules)
           if (removed.length > 0) refusals.set(r.account_number, requiredDimensionRemovedMessage(r.account_number, removed))
         })
@@ -14362,16 +14467,19 @@ export const tools: McpTool[] = [
         }
       }
       const resultingBags: Record<string, number> = {}
-      for (const { after } of outcomes) {
+      for (const { after } of taggable) {
         const label = dimensionsLabel(after)
         resultingBags[label] = (resultingBags[label] ?? 0) + 1
       }
-      const unchangedLines = outcomes.filter(({ before, after }) => sameDimensions(before, after)).length
+      const unchangedLines = taggable.filter(({ before, after }) => sameDimensions(before, after)).length
 
       // Same Zod schema the commit executor re-validates with: the staged
       // params can never drift from what commitRetagLineDimensions accepts.
       // The mode is always staged explicitly: a row without one reads as a
       // replace at commit (what rows staged before merge existed meant).
+      // Every matched line is staged, the blocked ones too: the approval
+      // asks the lock check again, tags a line whose period was opened in
+      // between and reports the ones it leaves.
       const params = RetagLineDimensionsParamsSchema.parse({
         line_ids: rows.map((r) => r.id),
         dimensions: resolvedBag,
@@ -14380,36 +14488,52 @@ export const tools: McpTool[] = [
         filter_summary: filterSummary,
       })
 
-      // No dateForPeriodCheck: the matched lines span dates; the retag RPC
-      // enforces open-period + lock-date per line at commit time.
+      const lineCount = blockedLines.length > 0 ? `${taggableLines} av ${rows.length}` : `${rows.length}`
+      const tagged = blockedLines.length > 0 ? `the ${taggableLines} matched POSTED lines that can be tagged` : 'every matched POSTED line'
+      const left =
+        blockedLines.length > 0
+          ? `; the ${blockedLines.length} lines in blocked_by_reason sit behind a period lock and are left as they are (the approval answers outcome partial and lists them)`
+          : ''
+
+      // No dateForPeriodCheck: the matched lines span dates, so the lock
+      // verdict is per line (taggable_lines, blocked_lines above) and not one
+      // period_status. The retag RPC enforces it per line once more at commit.
       return stage({
         supabase,
         companyId,
         userId,
         type: 'retag_line_dimensions',
         title: mode === 'merge'
-          ? `Tagga om ${rows.length} verifikationsrader: ${bagLabel}`
-          : `Ersätt dimensionerna på ${rows.length} verifikationsrader: ${bagLabel}`,
+          ? `Tagga om ${lineCount} verifikationsrader: ${bagLabel}`
+          : `Ersätt dimensionerna på ${lineCount} verifikationsrader: ${bagLabel}`,
         params: params as unknown as Record<string, unknown>,
         preview: {
           matched_lines: rows.length,
+          taggable_lines: taggableLines,
+          blocked_lines: blockedLines.length,
+          ...(blockedLines.length > 0 ? { blocked_by_reason: blockedByReason } : {}),
           mode,
           dimensions: resolvedBag,
           resulting_dimensions: resultingBags,
           unchanged_lines: unchangedLines,
           filter_summary: filterSummary,
-          sample: rows.slice(0, 10).map((r, i) => ({
-            account: r.account_number,
-            date: r.journal_entries.entry_date,
-            debit: r.debit_amount,
-            credit: r.credit_amount,
-            dimensions_before: outcomes[i].before,
-            dimensions_after: outcomes[i].after,
-          })),
+          sample: rows.slice(0, 10).map((r, i) => {
+            const block = blocks[i]
+            return {
+              account: r.account_number,
+              date: r.journal_entries.entry_date,
+              debit: r.debit_amount,
+              credit: r.credit_amount,
+              dimensions_before: outcomes[i].before,
+              // A blocked line keeps the bag it has.
+              dimensions_after: block ? outcomes[i].before : outcomes[i].after,
+              ...(block ? { blocked: block.reason } : {}),
+            }
+          }),
           ...(resolutions.length > 0 ? { dimension_resolutions: resolutions } : {}),
           will: mode === 'merge'
-            ? 'set these dimensions (an empty code removes one) on every matched POSTED line and keep its other dimensions, via the audited retag RPC: internal reporting only, the verifikat itself is untouched'
-            : 'replace the dimensions bag on every matched POSTED line via the audited retag RPC: internal reporting only, the verifikat itself is untouched',
+            ? `set these dimensions (an empty code removes one) on ${tagged}, keeping each line's other dimensions, via the audited retag RPC${left}: internal reporting only, the verifikat itself is untouched`
+            : `replace the dimensions bag on ${tagged} via the audited retag RPC${left}: internal reporting only, the verifikat itself is untouched`,
         },
         actor,
         next: {
@@ -14419,6 +14543,13 @@ export const tools: McpTool[] = [
         },
         dryRun: Boolean(dry_run),
         idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+        // The approver reads this on the Granskning row and the agent in the
+        // staging message: what the approval will leave untagged, and why.
+        ...(blockedLines.length > 0
+          ? {
+              complianceNote: `${blockedLines.length} av ${rows.length} matchade rader kan inte taggas om och lämnas som de är: ${blockedSummary.join(' ')}`,
+            }
+          : {}),
       })
     },
   },
@@ -15833,7 +15964,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'link_invoice_voucher',
-        title: `Länka verifikat ${voucherLabel} → faktura ${invoice.invoice_number ?? invoiceId.slice(0, 8)}${shareNote}`,
+        title: `Länka verifikat ${voucherLabel} → faktura ${invoice.invoice_number ?? 'utan nummer'}${shareNote}`,
         params: amount != null
           ? { invoice_id: invoiceId, journal_entry_id: journalEntryId, notes, amount }
           : { invoice_id: invoiceId, journal_entry_id: journalEntryId, notes },
@@ -16222,7 +16353,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'link_supplier_invoice_voucher',
-        title: `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? supplierInvoiceId.slice(0, 8)}${shareNote}`,
+        title: `Länka verifikat ${voucherLabel} → leverantörsfaktura ${invoice.supplier_invoice_number ?? 'utan nummer'}${shareNote}`,
         params: amount != null
           ? { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes, amount }
           : { supplier_invoice_id: supplierInvoiceId, journal_entry_id: journalEntryId, notes },
@@ -16431,7 +16562,7 @@ export const tools: McpTool[] = [
             companyId,
             userId,
             type: 'match_transaction_invoice',
-            title: `Matcha: ${p.transaction_description || p.transaction_id} → ${p.invoice_number}`,
+            title: `Matcha: ${p.transaction_description || 'Transaktion'} → ${p.invoice_number}`,
             params: { transaction_id: p.transaction_id, invoice_id: p.invoice_id },
             preview: {
               transaction_description: p.transaction_description,
@@ -16848,9 +16979,11 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'reconciliation_match',
-        title: settledPreview.length === resolvedPairs.length
-          ? `Koppla ${settledPreview.reduce((n, s) => n + s.entries.length, 0)} verifikat mot varandra på ${accountKey}`
-          : `Koppla ${resolvedPairs.length} rad(er) på ${accountKey}`,
+        title: reconciliationMatchTitle(
+          await stagedAccountLabel(supabase, companyId, accountKey, args),
+          resolvedPairs.length,
+          settledPreview.length === resolvedPairs.length ? settledPreview.reduce((n, s) => n + s.entries.length, 0) : null,
+        ),
         params: { account_key: accountKey, pairs: resolvedPairs },
         preview: {
           account_key: accountKey,
@@ -16926,9 +17059,14 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'reconciliation_unmatch',
-        title: settlementId
-          ? `Koppla bort verifikat som kopplats mot varandra på ${accountKey}`
-          : `Koppla bort rad ${externalId} på ${accountKey}`,
+        title: reconciliationUnmatchTitle(
+          await stagedAccountLabel(supabase, companyId, accountKey, args),
+          settlementId
+            ? 'settlement'
+            : args.dry_run === true
+              ? null
+              : await outsideRowLabel(supabase, companyId, accountKey, externalId),
+        ),
         params: { account_key: accountKey, external_id: externalId },
         preview: settlementId
           ? { account_key: accountKey, settlement_id: settlementId }
@@ -16996,7 +17134,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'reconciliation_signoff',
-        title: `Markera ${accountKey} som avstämt t.o.m. ${throughDate}`,
+        title: reconciliationSignoffTitle(await stagedAccountLabel(supabase, companyId, accountKey, args), throughDate),
         params: {
           account_key: accountKey,
           through_date: throughDate,
@@ -17066,7 +17204,12 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'reconciliation_residual',
-        title: `Bokför restpost ${wouldBook.residual_amount} ${wouldBook.currency} (${kind}) på ${accountKey} och koppla ${externalIds.length} rad(er)`,
+        title: reconciliationResidualTitle(await stagedAccountLabel(supabase, companyId, accountKey, args), {
+          amount: wouldBook.residual_amount,
+          currency: wouldBook.currency,
+          kind,
+          rows: externalIds.length,
+        }),
         params: { account_key: accountKey, ...input },
         preview: { ...wouldBook, account_key: accountKey, transaction_count: externalIds.length, max_amount: RESIDUAL_MAX_AMOUNT },
         actor,
@@ -22948,7 +23091,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'uncategorize_transaction',
-        title: `Återta kategorisering: ${tx.merchant_name || tx.description || transactionId}`,
+        title: `Återta kategorisering: ${tx.merchant_name || tx.description || 'Transaktion'}`,
         params: { transaction_id: transactionId, journal_entry_id: tx.journal_entry_id },
         preview: {
           transaction_description: tx.merchant_name || tx.description,
@@ -23026,7 +23169,7 @@ export const tools: McpTool[] = [
         )
       }
 
-      const label = tx.merchant_name || tx.description || transactionId
+      const label = tx.merchant_name || tx.description || 'Transaktion'
       return stage({
         supabase,
         companyId,
@@ -25830,7 +25973,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'update_invoice',
-        title: `${isQuote ? 'Uppdatera offert' : 'Uppdatera fakturautkast'}: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
+        title: [isQuote ? 'Uppdatera offert' : 'Uppdatera fakturautkast', customerName ?? invoice.invoice_number].filter(Boolean).join(': '),
         params: parsed.data,
         preview: {
           invoice_id: invoice.id,
@@ -28551,6 +28694,7 @@ export const tools: McpTool[] = [
             results.push({
               ...row,
               status: outcome.status,
+              ...partialCommitWarning(outcome),
               ...(outcome.error ? { error: outcome.error } : {}),
               ...(outcome.code ? { error_code: outcome.code } : {}),
               ...(outcome.operation_status ? { operation_status: outcome.operation_status } : {}),
@@ -28627,6 +28771,7 @@ export const tools: McpTool[] = [
             results.push({
               ...row,
               status: outcome.status,
+              ...partialCommitWarning(outcome),
               ...(outcome.error ? { error: outcome.error } : {}),
               ...(outcome.code ? { error_code: outcome.code } : {}),
               ...(outcome.operation_status ? { operation_status: outcome.operation_status } : {}),

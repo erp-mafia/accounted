@@ -301,6 +301,38 @@ describe('GET /api/v1/companies/:companyId/compliance/check?type=vat_close', () 
     ])
   })
 
+  it('carries the day and the verifikat behind moms left on 2650/1650, as the MCP tool does', async () => {
+    const settlementAccounts = [{
+      account_number: '2650',
+      balance: 7300,
+      drift: 5200,
+      entries: [{ journal_entry_id: 'e3', voucher_label: 'A-14', entry_date: '2026-03-31', amount: 5200, counted: 5200, opening_balance: false }],
+      entry_count: 1,
+    }]
+    mockServiceClient.mockReturnValue(makeSupabase({ tables: { company_members: MEMBERSHIP } }))
+    mockComputeVatCloseCheck.mockResolvedValue({
+      ...closeCheck,
+      blockers: [{
+        kind: 'earlier_vat_on_settlement_account',
+        severity: 'medium',
+        count: 1,
+        message: 'Läget i bokföringen per 2026-11-16',
+        hint: 'Bokför Skatteverkets momsrader',
+        as_of: '2026-11-16',
+        settlement_accounts: settlementAccounts,
+      }],
+    })
+
+    const res = await call(makeRequest('?type=vat_close&period_type=quarterly&year=2026&period=3'))
+    const body = (await res.json()) as { data: { findings: Array<{ code: string; severity: string; details: unknown }> } }
+
+    expect(body.data.findings[0]).toMatchObject({
+      severity: 'warning',
+      code: 'VAT_CLOSE_EARLIER_VAT_ON_SETTLEMENT_ACCOUNT',
+      details: { count: 1, as_of: '2026-11-16', settlement_accounts: settlementAccounts },
+    })
+  })
+
   it('returns 400 for a malformed period, with the reason', async () => {
     mockServiceClient.mockReturnValue(makeSupabase({ tables: { company_members: MEMBERSHIP } }))
     mockComputeVatCloseCheck.mockRejectedValue(codedRefusal('VALIDATION_ERROR', 'year must be between 2000 and 2100'))

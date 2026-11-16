@@ -1,0 +1,1 @@
+[2026-11-17] A covered-day refusal of bulk book stays whole-call and names the refused rows, the day, what holds it and the rows a retry may carry, rather than booking the rest (crm#1901): one verifikat is all or nothing, and the caller's lines would no longer match the rows left.

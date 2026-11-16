@@ -24,6 +24,12 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal)
   return { ...actual, detectBookingDuplicate: vi.fn() }
 })
 
+const ledgerCoverage = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/ledger-coverage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/ledger-coverage')>()),
+  ledgerCoverage,
+}))
+
 const bulkBook = tools.find((t) => t.name === 'gnubok_bulk_book_transactions')!
 
 const TX_1 = '11111111-1111-4111-8111-111111111111'
@@ -350,5 +356,69 @@ describe('gnubok_bulk_book_transactions: bank net and accounts at stage (crm#150
 
     expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_INVALID_ACCOUNT')
     expect((err as Error).message).toContain('Not active in the chart: 2645. Ask the user, then activate them with gnubok_activate_accounts')
+  })
+})
+
+/**
+ * crm#1901: the refusal for a feed row on a day the books already hold said
+ * only "already booked". An agent found the boundary by staging day after
+ * day and blamed a verifikat that did not set it. One verifikat is all or
+ * nothing, so the call is still refused as a whole; the answer names the
+ * refused rows, the day, what holds it, and the rows a retry may carry.
+ */
+describe('gnubok_bulk_book_transactions: a feed row on a day the books already hold', () => {
+  const STRIPE_ROW = {
+    id: TX_1,
+    amount: -100,
+    currency: 'SEK',
+    date: '2026-05-12',
+    journal_entry_id: null,
+    cash_account_id: 'cash-1686',
+    import_source: 'stripe',
+  }
+  const BANK_ROW = { id: TX_2, amount: -200, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, cash_account_id: 'cash-1930' }
+
+  async function refused(coverage: Record<string, unknown>) {
+    ledgerCoverage.mockResolvedValue(coverage)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [STRIPE_ROW, BANK_ROW], error: null }) // transactions fetch
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows
+    enqueue({
+      data: [
+        { account_number: '6570', is_active: true },
+        { account_number: '1930', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts
+    enqueue({ data: { ledger_account: '1686', currency: 'SEK' }, error: null }) // the Stripe row's cash account
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // the bank row's cash account
+    const err = await bulkBook
+      .execute({ tx_ids: [TX_1, TX_2], ...NEW_ENTRY }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e as Error & { code?: string })
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+    return err as Error & { code?: string }
+  }
+
+  it('names the refused row, the day the imported ledger reaches, and the row a retry may carry', async () => {
+    const err = await refused({ through: '2026-05-12', source: 'migrated_ledger' })
+
+    expect(err.code).toBe('BULK_BOOK_LEDGER_DAY_COVERED')
+    expect(err.message).toContain('Nothing was staged.')
+    expect(err.message).toContain('reaches 2026-05-12 (its last imported verifikat, on any account)')
+    expect(err.message).toContain(`Refused for that reason: ${TX_1}.`)
+    expect(err.message).toContain('force does not lift this refusal')
+    expect(err.message).toContain(`Not affected: ${TX_2}. Stage those in a call of their own.`)
+    expect(getStructuredError(err)).toMatchObject({ code: 'BULK_BOOK_LEDGER_DAY_COVERED', retryable: false })
+  })
+
+  it('names the hand-entered verifikat on the settlement account when that sets the day', async () => {
+    const err = await refused({
+      through: '2026-05-31',
+      source: 'manual_voucher',
+      voucher: { journal_entry_id: JE_1, voucher_label: 'A57' },
+    })
+
+    expect(err.code).toBe('BULK_BOOK_LEDGER_DAY_COVERED')
+    expect(err.message).toContain('Account 1686 has a hand-entered verifikat dated 2026-05-31 (A57).')
   })
 })

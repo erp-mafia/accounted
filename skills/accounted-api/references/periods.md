@@ -2028,7 +2028,7 @@ Example response `200`:
 **Change or remove the dimension tags (kostnadsställe, projekt) on posted journal lines.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sets or removes dimension tags on lines of posted verifikat, the one thing about a posted line that may change: amounts, accounts and texts never do. mode merge (default) sets the pairs in `dimensions` and keeps every other dimension the line carries; replace makes the line's tags exactly `dimensions`. An empty code removes that dimension: {"6": ""} takes the project off. Each line is its own transaction through the audited retag path, which writes an immutable before/after row with the reason (GET /dimensions/retag-log) and refuses a line in a closed or locked period, on or before the bookkeeping lock date, on a draft, or with a code that is not an active registry value. Partial success is success: refused lines are listed in failed. Idempotent. Dry-runnable: the dry run shows each line's tags before and after.
+Sets or removes dimension tags on lines of posted verifikat, the one thing about a posted line that may change: amounts, accounts and texts never do. mode merge (default) sets the pairs in `dimensions` and keeps every other dimension the line carries; replace makes the line's tags exactly `dimensions`. An empty code removes that dimension: {"6": ""} takes the project off. Each line is its own transaction through the audited retag path, which writes an immutable before/after row with the reason (GET /dimensions/retag-log) and refuses a line in a closed or locked period, on or before the bookkeeping lock date, on a draft, or with a code that is not an active registry value. A call where some lines were refused answers 200 with outcome partial: failed_by_reason counts the refused lines per reason and failed lists them. Idempotent. Dry-runnable: the dry run shows each line's tags before and after, and names the lines the commit will refuse (blocked_lines, blocked_by_reason, taggable_lines).
 
 **Use when:** Posted lines lack a project or cost centre, or carry the wrong one, and you know the line ids (lines[].id of GET /journal-entries/{id}).
 **Do not use for:** Changing amounts, accounts or dates (a rättelse: POST /journal-entries/{id}/correct), or tagging lines of a draft (edit the draft).
@@ -2038,7 +2038,7 @@ Sets or removes dimension tags on lines of posted verifikat, the one thing about
 - merge keeps the line's other tags, and those must still be active registry values too: a line carrying an archived code is refused until the code is reactivated or replace is used.
 - At most 500 line ids per call; the reason (3-500 characters) is stored per line.
 - A dimension the line's account requires (an account rule) is never removed: the line is refused and listed in failed.
-- When every line is refused the call answers 400 DIMENSION_RETAG_FAILED with details.failed; otherwise it answers 200 with the refused lines in failed.
+- A 200 is not every line tagged: read outcome. partial means lines were left untagged, counted per reason in failed_by_reason (a closed or locked period, the lock date). When every line is refused the call answers 400 DIMENSION_RETAG_FAILED with details.failed.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2073,10 +2073,12 @@ Response `200`:
 ```ts
 {
   data: {
+    outcome: "complete" | "partial",
     retagged: number,
     unchanged: number,
     failed_count: number,
-    failed: { line_id: string, error: string }[],
+    failed_by_reason: { reason: "period_closed" | "period_locked" | "company_lock_date" | "line_not_found" | "required_dimension" | "refused", lines: number, message: string, date_from?: string, date_to?: string }[],
+    failed: { line_id: string, error: string, reason: "period_closed" | "period_locked" | "company_lock_date" | "line_not_found" | "required_dimension" | "refused", entry_date?: string }[],
     mode: "merge" | "replace"
   },
   meta: {
@@ -2095,9 +2097,11 @@ Example response `200`:
 ```json
 {
   "data": {
+    "outcome": "complete",
     "retagged": 2,
     "unchanged": 0,
     "failed_count": 0,
+    "failed_by_reason": [],
     "failed": [],
     "mode": "merge"
   },

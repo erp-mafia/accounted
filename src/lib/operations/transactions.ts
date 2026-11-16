@@ -26,6 +26,7 @@ import { deleteTransaction, refreshTransactionExchangeRate, updateTransaction } 
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionBatch, type MatchBatchInput } from '@/lib/transactions/match-batch'
 import { bulkBookTransactions } from '@/lib/transactions/bulk-book'
+import { coveredDayReason, type CoveredFeedRows } from '@/lib/bookkeeping/feed-row-coverage'
 import { hasScope, type ApiKeyScope } from '@/lib/auth/api-keys'
 import { codedRefusal } from '@/lib/errors/refusal'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -998,6 +999,26 @@ export const transactionsBulkBook = defineOperation({
             return codedRefusal(
               failure.code,
               `Not active in the chart: ${accounts}. Ask the user, then activate them with gnubok_activate_accounts (BAS 2026 numbers; it also reactivates a deactivated one) and stage again.`,
+            )
+          }
+          // Which rows, through which day and what holds it (crm#1901): the
+          // registry sentence named none of them, so an agent probed day by
+          // day for the boundary. One verifikat is all or nothing, so the
+          // answer names the rows a retry may carry instead of booking them.
+          case 'BULK_BOOK_LEDGER_DAY_COVERED': {
+            const d = (failure.details ?? {}) as { coverage?: CoveredFeedRows[]; uncovered_transaction_ids?: string[] }
+            if (!d.coverage?.length) return undefined
+            const rest = d.uncovered_transaction_ids ?? []
+            return codedRefusal(
+              failure.code,
+              'Nothing was staged. ' +
+                d.coverage.map((c) => `${coveredDayReason(c).en} Refused for that reason: ${c.transaction_ids.join(', ')}.`).join(' ') +
+                ' A new samlingsverifikat over those rows would book the same money twice, and force does not lift this refusal: ' +
+                'link them to the verifikat that holds them (existing_journal_entry_id; they must sum to its net on the account) or ignore them (gnubok_ignore_transaction). ' +
+                (rest.length > 0
+                  ? `Not affected: ${rest.join(', ')}. Stage those in a call of their own.`
+                  : 'No row in the call is unaffected.') +
+                ' If the user says no verifikat holds the refused rows, tell them the day and what sets it: this tool cannot tell and has no override.',
             )
           }
           default:
