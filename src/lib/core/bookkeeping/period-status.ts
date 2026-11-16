@@ -102,6 +102,51 @@ export async function resolvePeriodStatusForDate(
 /** The layer that decided a `locked` verdict. */
 export type PeriodLockLayer = 'company_lock_date' | 'fiscal_period'
 
+/** The verdict of resolvePeriodStatusForDate with the layer that decided it. */
+export interface PeriodLockForDate {
+  status: PeriodStatusForDate
+  /** Null when the date is open or the lookup failed. */
+  layer: PeriodLockLayer | null
+}
+
+/** What the verdict reads of a fiscal period (the period covering a date). */
+export interface PeriodLockFacts {
+  id: string
+  is_closed?: boolean | null
+  locked_at?: string | null
+}
+
+/**
+ * The verdict for one date from the two facts the DB triggers read: the
+ * company lock date and the fiscal period covering the date (null when none
+ * does). The one definition: resolvePeriodLockForDate reads the facts for one
+ * date and answers through this, the batch read below does the same for many
+ * dates, and a caller that already holds the facts (the lines of a bulk
+ * retag, lib/dimensions/retag-lock.ts) asks it per date without a query each.
+ */
+export function periodLockVerdict(date: string, lockThrough: string | null, period: PeriodLockFacts | null): PeriodLockForDate {
+  // Layer 1: company-wide lock date.
+  if (lockThrough && date <= lockThrough) {
+    return {
+      status: { period_id: period?.id ?? null, status: 'locked', lock_date: lockThrough },
+      layer: 'company_lock_date',
+    }
+  }
+  // Layer 2: fiscal period status.
+  if (!period) {
+    // No covering period: treated as open at this layer; the engine's own
+    // ensure-period helper will create one. Agents should still warn the user.
+    return { status: { period_id: null, status: 'open', lock_date: null }, layer: null }
+  }
+  if (period.is_closed) {
+    return { status: { period_id: period.id, status: 'closed', lock_date: null }, layer: 'fiscal_period' }
+  }
+  if (period.locked_at) {
+    return { status: { period_id: period.id, status: 'locked', lock_date: period.locked_at }, layer: 'fiscal_period' }
+  }
+  return { status: { period_id: period.id, status: 'open', lock_date: null }, layer: null }
+}
+
 /**
  * resolvePeriodStatusForDate's verdict plus the layer that locked it, for a
  * caller that reports the reason (v1 PERIOD_LOCKED details). Kept off the
@@ -112,7 +157,7 @@ export async function resolvePeriodLockForDate(
   supabase: SupabaseClient,
   companyId: string,
   date: string,
-): Promise<{ status: PeriodStatusForDate; layer: PeriodLockLayer | null }> {
+): Promise<PeriodLockForDate> {
   // Layer 1: company-wide lock date.
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -136,10 +181,7 @@ export async function resolvePeriodLockForDate(
       .lte('period_start', date)
       .gte('period_end', date)
       .maybeSingle()
-    return {
-      status: { period_id: period?.id ?? null, status: 'locked', lock_date: lockThrough },
-      layer: 'company_lock_date',
-    }
+    return periodLockVerdict(date, lockThrough, period ?? null)
   }
 
   // Layer 2: fiscal period status.
@@ -152,21 +194,64 @@ export async function resolvePeriodLockForDate(
     .maybeSingle()
 
   if (periodError) {
-    // Distinct from `!period` below: that is "verified, no covering period
-    // exists"; this is "we do not know what period covers this date".
+    // Distinct from "no covering period" in the verdict: that is "verified,
+    // no covering period exists"; this is "we do not know what period covers
+    // this date".
     return { status: periodLookupFailed(companyId, date, 'fiscal_periods', periodError), layer: null }
   }
+  return periodLockVerdict(date, lockThrough, period ?? null)
+}
 
-  if (!period) {
-    // No covering period: treated as open at this layer; the engine's own
-    // ensure-period helper will create one. Agents should still warn the user.
-    return { status: { period_id: null, status: 'open', lock_date: null }, layer: null }
+/**
+ * resolvePeriodLockForDate for several dates in two reads: the company lock
+ * date once, and every fiscal period that can cover one of the dates. For a
+ * list that states the lock per row (the approval queue,
+ * lib/pending-operations/period-lock.ts), where a read pair per date would be
+ * a request per row.
+ *
+ * Fails closed exactly like the single read: a failed settings read answers
+ * every date `lookup_failed`; a failed period read, or two periods covering
+ * one date (what .maybeSingle() answers with an error), answers that date
+ * `lookup_failed` unless the company lock date already locks it.
+ */
+export async function resolvePeriodLocksForDates(
+  supabase: SupabaseClient,
+  companyId: string,
+  dates: readonly string[],
+): Promise<Map<string, PeriodLockForDate>> {
+  const verdicts = new Map<string, PeriodLockForDate>()
+  const wanted = [...new Set(dates)].sort()
+  if (wanted.length === 0) return verdicts
+
+  const { data: settings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('bookkeeping_locked_through')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settingsError) {
+    for (const date of wanted) {
+      verdicts.set(date, { status: periodLookupFailed(companyId, date, 'company_settings', settingsError), layer: null })
+    }
+    return verdicts
   }
-  if (period.is_closed) {
-    return { status: { period_id: period.id, status: 'closed', lock_date: null }, layer: 'fiscal_period' }
+  const lockThrough: string | null = settings?.bookkeeping_locked_through ?? null
+
+  const { data: periods, error: periodsError } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, is_closed, locked_at')
+    .eq('company_id', companyId)
+    .lte('period_start', wanted[wanted.length - 1])
+    .gte('period_end', wanted[0])
+  const rows = (periods ?? []) as Array<PeriodLockFacts & { period_start: string; period_end: string }>
+
+  for (const date of wanted) {
+    const covering = rows.filter((period) => period.period_start <= date && period.period_end >= date)
+    const unreadable = periodsError ?? (covering.length > 1 ? { message: 'more than one fiscal period covers the date' } : null)
+    if (unreadable && !(lockThrough && date <= lockThrough)) {
+      verdicts.set(date, { status: periodLookupFailed(companyId, date, 'fiscal_periods', unreadable), layer: null })
+      continue
+    }
+    verdicts.set(date, periodLockVerdict(date, lockThrough, unreadable ? null : (covering[0] ?? null)))
   }
-  if (period.locked_at) {
-    return { status: { period_id: period.id, status: 'locked', lock_date: period.locked_at }, layer: 'fiscal_period' }
-  }
-  return { status: { period_id: period.id, status: 'open', lock_date: null }, layer: null }
+  return verdicts
 }

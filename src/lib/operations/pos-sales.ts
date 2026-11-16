@@ -628,7 +628,8 @@ export const posSalesDayBook = defineOperation({
     keywords: ['bokför dagskassa', 'bokför kassarapport', 'dagsrapport', 'z-rapport', 'dagskassa', 'kassa', 'pos'],
     stage: {
       pendingType: 'book_pos_sales_day',
-      title: (input) => `Bokför dagskassa (${String(input.day_id ?? '').slice(0, 8)})`,
+      // The day itself, never its id (crm#1938): the dry run states it.
+      title: (_input, preview = {}) => `Bokför dagskassa ${typeof preview.business_date === 'string' ? preview.business_date : ''}`.trim(),
       // The approver saw this version of the day: the commit must book it.
       pinParams: (input, preview) =>
         typeof preview.raw_sha256 === 'string' ? { ...input, expected_raw_sha256: preview.raw_sha256 } : input,

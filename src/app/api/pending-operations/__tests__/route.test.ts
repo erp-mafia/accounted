@@ -132,6 +132,66 @@ describe('GET /api/pending-operations', () => {
     expect(supabase.from).toHaveBeenCalledTimes(3)
   })
 
+  // crm#1923: a voucher staged into a locked period waited in the queue
+  // looking approvable; approving it was refused and closed the proposal.
+  it('tells the queue which waiting proposals a period lock stops, read now and not from the stored row', async () => {
+    const lockedVoucher = {
+      id: 'operation-locked',
+      status: 'pending',
+      operation_type: 'create_voucher',
+      params: { entry_date: '2026-10-05' },
+      preview_data: { entry_date: '2026-10-05', total_debit: 1200 },
+    }
+    const openVoucher = {
+      id: 'operation-open',
+      status: 'pending',
+      operation_type: 'create_voucher',
+      params: { entry_date: '2026-11-03' },
+      preview_data: { entry_date: '2026-11-03', total_debit: 800 },
+    }
+    enqueue({ data: [lockedVoucher, openVoucher], count: 2 })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+    enqueue({ data: { bookkeeping_locked_through: '2026-10-31' } }) // company_settings
+    enqueue({
+      data: [{ id: 'fp-2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null }],
+    }) // fiscal_periods
+
+    const response = await GET(createMockRequest('/api/pending-operations'), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: Array<{ id: string; preview_data: Record<string, unknown> }>
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data[0].preview_data).toEqual({
+      entry_date: '2026-10-05',
+      total_debit: 1200,
+      period_status: { period_id: 'fp-2026', status: 'locked', lock_date: '2026-10-31', date: '2026-10-05' },
+    })
+    expect(body.data[1].preview_data).toEqual(openVoucher.preview_data)
+    expect(findCalls('company_settings', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCalls('fiscal_periods', 'eq')).toEqual([['company_id', 'company-1']])
+    // Read only: nothing about the lock is written to the proposal.
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
+  it('reads no period locks for the history tabs: a resolved proposal is not waiting on one', async () => {
+    enqueue({
+      data: [{ id: 'operation-1', status: 'committed', operation_type: 'create_voucher', params: { entry_date: '2026-10-05' } }],
+      count: 1,
+    })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations', { searchParams: { status: 'committed' } }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(supabase.from).toHaveBeenCalledTimes(3)
+  })
+
   it('orders the pending queue oldest-first when order=asc is given', async () => {
     enqueue({ data: [{ id: 'operation-old', status: 'pending' }], count: 1 })
     enqueue({ count: 0 })

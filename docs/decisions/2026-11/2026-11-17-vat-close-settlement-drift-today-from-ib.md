@@ -1,0 +1,1 @@
+[2026-11-17] The 2650/1650 warning in the VAT close stays today's books for every period asked about and says so (as_of), counted from the latest ingående balans and naming its verifikat (crm#1924): a period-end balance keeps warning after the fix is booked, and all history counted years twice.

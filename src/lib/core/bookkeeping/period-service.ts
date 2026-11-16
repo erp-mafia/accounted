@@ -966,7 +966,10 @@ export async function resolvePreviousFiscalPeriod<P extends { id: string; period
 export {
   resolvePeriodStatusForDate,
   resolvePeriodLockForDate,
+  periodLockVerdict,
   type PeriodStatusValue,
   type PeriodStatusForDate,
   type PeriodLockLayer,
+  type PeriodLockForDate,
+  type PeriodLockFacts,
 } from './period-status'

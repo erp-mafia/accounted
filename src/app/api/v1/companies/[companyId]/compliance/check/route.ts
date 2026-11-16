@@ -243,7 +243,14 @@ async function runVatCloseCheck(
       severity: (b.severity === 'high' ? 'blocker' : b.severity === 'medium' ? 'warning' : 'info') as FindingShape['severity'],
       code: `VAT_CLOSE_${b.kind.toUpperCase()}`,
       message: b.message,
-      details: { count: b.count, hint: b.hint, ...(b.check_code ? { check_code: b.check_code } : {}), ...(b.entries ? { entries: b.entries } : {}) },
+      details: {
+        count: b.count,
+        hint: b.hint,
+        ...(b.check_code ? { check_code: b.check_code } : {}),
+        ...(b.entries ? { entries: b.entries } : {}),
+        // VAT_CLOSE_EARLIER_VAT_ON_SETTLEMENT_ACCOUNT: the day it describes and what it is made of.
+        ...(b.settlement_accounts ? { as_of: b.as_of, settlement_accounts: b.settlement_accounts } : {}),
+      },
     })),
     ...result.declaration_checks.map((c) => ({
       severity: (c.status === 'ERROR' ? 'blocker' : c.status === 'WARNING' ? 'warning' : 'info') as FindingShape['severity'],

@@ -102,6 +102,31 @@ describe('gnubok_approve_pending_operation: operation_ids', () => {
     ])
   })
 
+  // crm#1908: the rows of this answer carry no data, so a retag that left
+  // lines untagged read as a bare 'committed' here.
+  it('says which committed operation went through only in part', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        operation(ID.low, { operation_type: 'retag_line_dimensions' }),
+        operation(ID.medium, { operation_type: 'retag_line_dimensions' }),
+      ],
+      error: null,
+    })
+    const warning = 'PARTIAL: 4 of 9 lines were NOT tagged (4 period_closed).'
+    commitSpy
+      .mockResolvedValueOnce({ status: 'committed', data: { outcome: 'partial', warning, retagged: 5 }, operation_status: 'committed' })
+      .mockResolvedValueOnce({ status: 'committed', data: { outcome: 'complete', retagged: 2 }, operation_status: 'committed' })
+
+    const result = await run(supabase, { operation_ids: [ID.low, ID.medium] })
+
+    expect(result).toMatchObject({ status: 'batch', committed: 2, failed: 0 })
+    const [first, second] = result.results as Array<Record<string, unknown>>
+    expect(first).toMatchObject({ operation_id: ID.low, status: 'committed', warning })
+    expect(second).toMatchObject({ operation_id: ID.medium, status: 'committed' })
+    expect(second).not.toHaveProperty('warning')
+  })
+
   it('commits oldest staged first, whatever order the ids are listed in (crm#1815)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

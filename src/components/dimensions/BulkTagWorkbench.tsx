@@ -43,6 +43,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
 import { useDimensions } from '@/lib/reference-data/hooks'
+import type { RetagBlock, RetagBlockReason } from '@/lib/dimensions/retag-lock'
 
 /** Line DTO inside a voucher from GET /api/dimensions/tagging/lines. */
 interface TaggingLine {
@@ -64,8 +65,17 @@ interface TaggingVoucher {
   reversed_by_id: string | null
   reverses_id: string | null
   fiscal_period_id: string
+  /** Why the voucher's lines cannot be retagged (a period lock), else null. */
+  retag_block: RetagBlock | null
   lines: TaggingLine[]
 }
+
+/** The chip a voucher behind a lock carries, per reason. */
+const BLOCK_LABEL_KEY = {
+  period_closed: 'tagging_block_period_closed',
+  period_locked: 'tagging_block_period_locked',
+  company_lock_date: 'tagging_block_company_lock_date',
+} as const satisfies Record<RetagBlockReason, string>
 
 interface ApplyResult {
   retagged: number
@@ -128,6 +138,7 @@ function voucherTagState(v: TaggingVoucher): {
  */
 export default function BulkTagWorkbench() {
   const { toast } = useToast()
+  const t = useTranslations('dimensions')
   const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
 
@@ -279,6 +290,18 @@ export default function BulkTagWorkbench() {
   const selectedVoucherCount = useMemo(() => {
     if (!vouchers) return 0
     return vouchers.filter((v) => v.lines.some((l) => selected.has(l.id))).length
+  }, [vouchers, selected])
+
+  // Selected lines of vouchers behind a period lock: the apply route leaves
+  // them as they are, so the count says so before anyone clicks.
+  const blockedSelectedCount = useMemo(() => {
+    if (!vouchers) return 0
+    let count = 0
+    for (const v of vouchers) {
+      if (!v.retag_block) continue
+      for (const line of v.lines) if (selected.has(line.id)) count++
+    }
+    return count
   }, [vouchers, selected])
 
   // Reversal-pair guard: only reachable when annullerade are shown: a
@@ -709,6 +732,17 @@ export default function BulkTagWorkbench() {
                           Delvis taggad
                         </Badge>
                       )}
+                      {voucher.retag_block && (
+                        <>
+                          <DataListMetaSeparator />
+                          <Badge
+                            variant="secondary"
+                            className="px-1.5 py-0 text-xs font-normal"
+                          >
+                            {t(BLOCK_LABEL_KEY[voucher.retag_block.reason])}
+                          </Badge>
+                        </>
+                      )}
                     </DataListMeta>
                     {hasError && !isExpanded && (
                       <p className="mt-1 text-xs text-destructive">
@@ -807,6 +841,7 @@ export default function BulkTagWorkbench() {
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant="secondary">
               {selectedVoucherCount} verifikat · {selected.size} rader
+              {blockedSelectedCount > 0 && ` · ${t('tagging_selected_blocked', { count: blockedSelectedCount })}`}
             </Badge>
             <Button
               variant="ghost"

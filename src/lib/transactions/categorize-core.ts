@@ -45,7 +45,7 @@ import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { firstCoveredFeedRow } from '@/lib/bookkeeping/feed-row-coverage'
+import { coveredDayMessage, coveredFeedRows } from '@/lib/bookkeeping/feed-row-coverage'
 import { learnableBankPair } from '@/lib/bookkeeping/bank-leg'
 import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
@@ -943,14 +943,13 @@ export async function categorizeTransaction(
   const { mappingResult, settlementAccount } = mapped
   // A feed row (Stripe) on a day a samlingsverifikat or the migrated ledger
   // already holds is the same money a second time (accounted#101): link it to
-  // that verifikat or ignore it. Bank rows are never read for.
+  // that verifikat or ignore it. Bank rows are never read for. The refusal
+  // names the day and what holds it (crm#1901).
   if (wouldBook) {
-    const covered = await firstCoveredFeedRow(supabase, companyId, [transaction], () => settlementAccount)
-    if (covered) {
-      return refuseFor('TX_CATEGORIZE_LEDGER_DAY_COVERED', {
-        covered_through: covered.coveredThrough,
-        settlement_account: covered.settlementAccount,
-      })
+    const covered = await coveredFeedRows(supabase, companyId, [transaction], () => settlementAccount)
+    if (covered.length > 0) {
+      const { transaction_ids: _row, ...coverage } = covered[0]!
+      return refuseFor('TX_CATEGORIZE_LEDGER_DAY_COVERED', coverage, { message: coveredDayMessage(covered, 1) })
     }
   }
 

@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { PendingOperationsQuerySchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { withPeriodLocks } from '@/lib/pending-operations/period-lock'
 import { resolveHandledProposals } from '@/lib/pending-operations/resolve-handled'
 import type { PendingOperation } from '@/types'
 
@@ -91,6 +92,12 @@ export const GET = withRouteContext(
       if (!result.error) counts[candidate] = result.count ?? 0
     })
 
-    return NextResponse.json({ data: data ?? [], count, counts })
+    // A waiting proposal whose posting date is locked now says so before the
+    // click (preview_data.period_status), read here and never stored: the
+    // lock may come or go while the proposal waits (crm#1923).
+    const rows = (data ?? []) as PendingOperation[]
+    const listed = status === 'pending' ? await withPeriodLocks(supabase, companyId, rows) : rows
+
+    return NextResponse.json({ data: listed, count, counts })
   },
 )

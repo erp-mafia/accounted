@@ -190,7 +190,7 @@ export const importsSieUndo = defineOperation({
     hints: { destructive: true },
     stage: {
       pendingType: 'undo_sie_import',
-      title: (_input, preview = {}) => `Ångra SIE-import: ${preview.filename ?? preview.import_id}`,
+      title: (_input, preview = {}) => ['Ångra SIE-import', preview.filename].filter(Boolean).join(': '),
       preview: (input, preview) => ({
         import_id: preview.import_id,
         filename: preview.filename,

@@ -1,0 +1,1 @@
+[2026-11-17] Rutin reads a waiting proposal's period lock when the queue is listed, only for types that post on a stated date, and never stores it at staging (crm#1923): a stored verdict keeps Godkänn disabled after an unlock and would block types a lock does not stop.

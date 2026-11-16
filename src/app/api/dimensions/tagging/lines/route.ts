@@ -20,8 +20,13 @@
  *
  * Response: 200 { data: { vouchers: [...], total_capped } } where each
  * voucher is { journal_entry_id, entry_date, voucher_number, voucher_series,
- * description, annulled, lines: [{ id, account_number, debit_amount,
- * credit_amount, dimensions }] }.
+ * description, annulled, retag_block, lines: [{ id, account_number,
+ * debit_amount, credit_amount, dimensions }] }.
+ *
+ * retag_block says why the voucher's lines cannot be retagged (a closed or
+ * locked period, the company lock date), else null: the lock check the apply
+ * route runs (lib/dimensions/retag-lock.ts), asked while browsing, so the
+ * workbench shows what can be tagged before anyone tries (crm#1908).
  */
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -29,6 +34,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { DimensionTaggingLinesQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { fetchRetagLockFacts, retagBlockOf, type RetagLockFacts } from '@/lib/dimensions/retag-lock'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 
 interface RawEntry {
@@ -188,6 +194,16 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
 
+    // Step 3: which vouchers sit behind a lock. A lock state that cannot be
+    // read fails the browse: a voucher is never shown as taggable unread.
+    let locks: RetagLockFacts
+    try {
+      locks = await fetchRetagLockFacts(supabase, companyId, entries.map((e) => e.fiscal_period_id))
+    } catch (err) {
+      log.error('tagging period lock fetch failed', err as Error)
+      return errorResponse(err, log, { requestId })
+    }
+
     const linesByEntry = new Map<string, RawLine[]>()
     for (const line of lineData) {
       const bucket = linesByEntry.get(line.journal_entry_id) ?? []
@@ -212,6 +228,7 @@ export const GET = withRouteContext(
       reversed_by_id: e.reversed_by_id,
       reverses_id: e.reverses_id,
       fiscal_period_id: e.fiscal_period_id,
+      retag_block: retagBlockOf(locks, e),
       lines: (linesByEntry.get(e.id) ?? []).map((l) => ({
         id: l.id,
         account_number: l.account_number,
