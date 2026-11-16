@@ -4118,6 +4118,7 @@
     "remove_confirm_action": "Ta bort konto",
     "remove_checking": "Kontrollerar om kontot kan tas bort",
     "remove_refused_title": "{account} kan inte tas bort",
+    "remove_refused_to_bank": "Till bankkopplingar",
     "remove_done_title": "Kontot borttaget",
     "remove_done_body": "{account} är borttaget med {count, plural, =0 {inga transaktioner} one {# obokförd transaktion} other {# obokförda transaktioner}}.",
     "remove_failed": "Kunde inte ta bort kontot",

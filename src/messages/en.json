@@ -4118,6 +4118,7 @@
     "remove_confirm_action": "Remove account",
     "remove_checking": "Checking whether the account can be removed",
     "remove_refused_title": "{account} cannot be removed",
+    "remove_refused_to_bank": "Go to bank connections",
     "remove_done_title": "Account removed",
     "remove_done_body": "{account} was removed with {count, plural, =0 {no transactions} one {# unbooked transaction} other {# unbooked transactions}}.",
     "remove_failed": "Could not remove the account",

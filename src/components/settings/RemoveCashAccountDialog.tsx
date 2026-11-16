@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,9 +25,17 @@ interface RemovalPreview {
 type RemovalState =
   | { kind: 'checking' }
   | { kind: 'ready'; preview: RemovalPreview }
-  | { kind: 'refused'; message: string }
+  /** `toBank`: a bank connection holds the account, so the way out is Kopplingar. */
+  | { kind: 'refused'; message: string; toBank?: boolean }
   /** Removal must keep the rows (PH 222): archiving is offered instead. */
   | { kind: 'archivable'; message: string; open: number }
+
+/** The refusal that is lifted by disconnecting the bank under Kopplingar. */
+const BANK_CONNECTED_CODE = 'CASH_ACCOUNT_REMOVE_BANK_CONNECTED'
+
+function errorCode(json: unknown): string | undefined {
+  return (json as { error?: { code?: string } } | null)?.error?.code
+}
 
 interface Props {
   /** The account to remove; null keeps the dialog closed. */
@@ -85,9 +94,9 @@ function RemoveCashAccountBody({
           return
         }
         const message = getErrorMessage(json, { context: 'settings', statusCode: res.status, locale })
-        const code = (json as { error?: { code?: string } } | null)?.error?.code
+        const code = errorCode(json)
         if (!code || !CASH_ACCOUNT_ARCHIVABLE_REMOVAL_CODES.includes(code)) {
-          setState({ kind: 'refused', message })
+          setState({ kind: 'refused', message, toBank: code === BANK_CONNECTED_CODE })
           return
         }
         // The rows must stay: ask whether the account can be archived instead.
@@ -100,6 +109,7 @@ function RemoveCashAccountBody({
             : {
                 kind: 'refused',
                 message: getErrorMessage(archiveJson, { context: 'settings', statusCode: archiveRes.status, locale }),
+                toBank: errorCode(archiveJson) === BANK_CONNECTED_CODE,
               },
         )
       })
@@ -119,7 +129,11 @@ function RemoveCashAccountBody({
       if (!res.ok) {
         // The account changed since the check (a row got booked, a bank
         // connection claimed it): say why instead of the old preview.
-        setState({ kind: 'refused', message: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale }) })
+        setState({
+          kind: 'refused',
+          message: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale }),
+          toBank: errorCode(json) === BANK_CONNECTED_CODE,
+        })
         return
       }
       await onRemoved()
@@ -148,7 +162,11 @@ function RemoveCashAccountBody({
       const res = await fetch(`/api/cash-accounts/${account.id}/archive`, { method: 'POST' })
       const json = await res.json().catch(() => null)
       if (!res.ok) {
-        setState({ kind: 'refused', message: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale }) })
+        setState({
+          kind: 'refused',
+          message: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale }),
+          toBank: errorCode(json) === BANK_CONNECTED_CODE,
+        })
         return
       }
       await onRemoved()
@@ -204,9 +222,18 @@ function RemoveCashAccountBody({
         )}
         <DialogFooter className="gap-2 sm:gap-2">
           {state.kind === 'refused' ? (
-            <Button variant="ghost" onClick={onClose}>
-              {tCommon('close')}
-            </Button>
+            <>
+              <Button variant="ghost" onClick={onClose}>
+                {tCommon('close')}
+              </Button>
+              {state.toBank && (
+                <Button asChild>
+                  <Link href="/settings/connections" onClick={onClose}>
+                    {t('remove_refused_to_bank')}
+                  </Link>
+                </Button>
+              )}
+            </>
           ) : state.kind === 'archivable' ? (
             <>
               <Button variant="ghost" onClick={onClose} disabled={pending}>
