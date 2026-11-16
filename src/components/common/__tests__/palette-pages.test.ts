@@ -120,6 +120,110 @@ describe('palettePages: nothing the old hand-written list found is lost', () => 
   })
 })
 
+/**
+ * The V7 shell renamed about twenty rows on 2026-11-16 and the palette lists
+ * the rows by their new names, so the old name of a page, and the words
+ * people type for the pages that lost their row, found nothing. Read in the
+ * palette's own order: the actions, then the pages (flatEntries).
+ */
+describe('the palette answers to the names the menu had before', () => {
+  const firstHit = (query: string, pages = pagesFor()) =>
+    [...actionEntries(null), ...pages].find((entry) => matches(entry, query))?.href
+
+  it.each([
+    ['transaktioner', '/transactions'],
+    ['assistent', '/chat'],
+    ['viktiga datum', '/deadlines'],
+    ['wiki', '/wiki'],
+    ['årsbokslut', '/bookkeeping/year-end'],
+    ['årsredovisning', '/bookkeeping/year-end'],
+    ['inkomstdeklaration', '/reports'],
+    ['importera', '/import'],
+    ['exportera', '/import'],
+    ['alla dokument', '/arkiv'],
+    ['bolaget', '/bolaget'],
+    ['api och mcp', '/settings/api'],
+    // The English menu was renamed too.
+    ['transactions', '/transactions'],
+    ['assistant', '/chat'],
+    ['important dates', '/deadlines'],
+  ])('"%s" opens %s first', (oldName, href) => {
+    expect(firstHit(oldName)).toBe(href)
+  })
+
+  it.each([
+    ['banktransaktioner', '/transactions'],
+    ['deadlines', '/deadlines'],
+    ['förfallodagar', '/deadlines'],
+    ['fråga', '/chat'],
+    ['ink2', '/reports'],
+    ['ink3', '/reports'],
+    ['ne-bilaga', '/reports'],
+    ['sie', '/import'],
+    ['byta', '/import'],
+    ['mcp', '/settings/api'],
+    ['api-nyckel', '/settings/api'],
+    ['chatgpt', '/settings/api'],
+    ['kopplingar', '/settings/connections'],
+    ['bankkoppling', '/settings/banking'],
+    ['koppla bank', '/settings/banking'],
+    ['abonnemang', '/settings/billing'],
+    ['pris', '/settings/billing'],
+    ['användare', '/settings/members'],
+    ['medlemmar', '/settings/members'],
+    ['bjud in', '/settings/members'],
+  ])('"%s", a word people type, opens %s first', (word, href) => {
+    expect(firstHit(word)).toBe(href)
+  })
+
+  it('lists the årsredovisning and the income declarations where the reports for the legal form are', () => {
+    const hits = pagesFor().filter((p) => matches(p, 'årsredovisning')).map((p) => p.href)
+    expect(hits).toEqual(['/bookkeeping/year-end', '/reports'])
+  })
+
+  // Enter opens the first hit, so a new word must not move one that already led somewhere.
+  it.each([
+    ['deklaration', '/reports/vat-declaration'],
+    ['kontoutdrag', '/reports/huvudbok'],
+    ['bank', '/transactions'],
+    ['plan', '/chart-of-accounts'],
+    ['betalning', '/payments'],
+    ['nyckel', '/kpi'],
+    ['koppla', '/settings/api'],
+    ['rapporter', '/reports'],
+    ['inställningar', '/settings'],
+  ])('"%s" still opens %s first', (word, href) => {
+    expect(firstHit(word)).toBe(href)
+  })
+
+  it('files the settings pages under Inställningar and offers them only with a company open', () => {
+    const sections = ['/settings/banking', '/settings/connections', '/settings/billing', '/settings/members']
+    const pages = pagesFor()
+    const settings = pages.find((p) => p.href === '/settings')!
+    for (const href of sections) {
+      // Under the area's name, with the area's icon: the alias brings none.
+      expect(pages.find((p) => p.href === href), href).toMatchObject({ group: nav.settings, icon: settings.icon })
+    }
+    const without = pagesFor({}, { hasCompany: false })
+    for (const href of sections) expect(without.some((p) => p.href === href), href).toBe(false)
+  })
+
+  it('lets an old name go with its page when the company does not have the page', () => {
+    // No MCP extension: Koppla en agent is not offered, under either name.
+    const ctx = { ...gateContext(), mcpExtensionEnabled: false }
+    const noMcp = palettePages({ passes: (item) => passesNavGates(item, ctx), hasCompany: true, isByraMember: false, navLabel, aliases: PAGE_ALIASES })
+    expect(firstHit('api och mcp', noMcp)).toBeUndefined()
+    expect(firstHit('mcp', noMcp)).toBeUndefined()
+    // No Bolaget rollout: the old name of its row finds nothing instead of a page that is not there.
+    expect(firstHit('bolaget', pagesFor({ bolagetEnabled: false, commitmentsEnabled: false }))).toBeUndefined()
+  })
+
+  it('says to try another word when nothing is found: with an empty list Enter opens nothing', () => {
+    expect(sv.command_palette.empty).toBe('Inget hittades. Prova ett annat ord.')
+    expect(en.command_palette.empty).not.toMatch(/Enter/)
+  })
+})
+
 describe('paletteStartPages', () => {
   it('shows one row per area, where its rail button lands, with the area as the hint', () => {
     const start = paletteStartPages(pagesFor())
@@ -139,6 +243,14 @@ describe('paletteOpensForRole', () => {
     }
   })
 
+  it('hides every destination an old name or a settings alias leads to from the invoicing-only role, except its own pages', () => {
+    const offered = pagesFor().filter((page) => paletteOpensForRole('invoicer', page.href)).map((page) => page.href)
+    expect(offered).toEqual(['/invoices', '/quotes', '/sales-orders', '/customers', '/articles'])
+    for (const href of ['/settings/banking', '/settings/connections', '/settings/billing', '/settings/members', '/settings/api', '/chat', '/import']) {
+      expect(paletteOpensForRole('invoicer', href), href).toBe(false)
+    }
+  })
+
   it('changes nothing for every other role', () => {
     for (const role of ['owner', 'admin', 'member', 'viewer', null]) {
       for (const page of pagesFor()) expect(paletteOpensForRole(role, page.href)).toBe(true)
@@ -153,7 +265,9 @@ describe('localizeEntry: the palette in the language of the reader', () => {
   it('shows every action and every destination without a menu row in English, and still finds it by its Swedish words', () => {
     for (const entry of [...actionEntries(null), ...rowless]) {
       const shown = localizeEntry(entry, palette(en))
-      expect(shown.label, entry.id).not.toBe(entry.label)
+      // The entry has a message of its own ("Bank" reads the same in both languages).
+      expect(shown, entry.id).not.toBe(entry)
+      if (entry.id !== 'bank') expect(shown.label, entry.id).not.toBe(entry.label)
       expect(shown.label, entry.id).not.toMatch(/[åäöÅÄÖ]/)
       expect(matches(shown, entry.label.toLowerCase()), entry.id).toBe(true)
     }
@@ -168,7 +282,7 @@ describe('localizeEntry: the palette in the language of the reader', () => {
   })
 
   it('leaves an entry with no message as it is', () => {
-    const entry = { id: 'add-company', label: 'Lägg till företag', icon: PAGE_ALIASES[0].icon, href: '/companies/new' }
+    const entry = { id: 'add-company', label: 'Lägg till företag', icon: actionEntries(null)[0].icon, href: '/companies/new' }
     expect(localizeEntry(entry, palette(en))).toBe(entry)
   })
 })

@@ -58,6 +58,7 @@ import { loadToPayQueue } from '@/lib/supplier-invoices/attest-queues'
 import { isAttestRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { listInvoicesAfterFailedPayment } from '@/lib/payments/orders/failed-payments'
+import { readUnsignedPayments } from '@/lib/payments/orders/unsigned-payments'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import type {
@@ -68,6 +69,7 @@ import type {
   InvoiceSetAllocation,
   OverdueInvoicesDue,
   PaymentFailedDue,
+  PaymentsToSignDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -1551,6 +1553,26 @@ export async function listPaymentsFailedDue(supabase: SupabaseClient, companyId:
 /** How many supplier invoices wait to be paid again after their bank payment did not go through (see listPaymentsFailedDue). */
 export async function countPaymentsFailedDue(supabase: SupabaseClient, companyId: string): Promise<number> {
   return (await listPaymentsFailedDue(supabase, companyId)).length
+}
+
+/**
+ * The bank payments that wait for a person's approval or BankID signature
+ * (see lib/worklist/types.ts payments_to_sign): one grouped row, "Signera N
+ * betalningar", opening Betalningar. Null when there are none. Soft-fails to
+ * null, like every count here.
+ */
+export async function listPaymentsToSignDue(supabase: SupabaseClient, companyId: string): Promise<PaymentsToSignDue | null> {
+  try {
+    return await readUnsignedPayments(supabase, companyId)
+  } catch (err) {
+    logAndZero('payments_to_sign', companyId, err)
+    return null
+  }
+}
+
+/** How many bank payments wait for a person's approval or signature (listPaymentsToSignDue's count). */
+export async function countPaymentsToSignDue(supabase: SupabaseClient, companyId: string): Promise<number> {
+  return (await listPaymentsToSignDue(supabase, companyId))?.count ?? 0
 }
 
 /** How many of one person's pending signer rows a list reads; nobody has more open at once. */

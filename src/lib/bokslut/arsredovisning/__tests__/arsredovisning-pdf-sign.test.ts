@@ -161,6 +161,56 @@ describe('årsredovisning PDF keeps the sign of a loss (issue #1982)', () => {
 })
 
 /**
+ * crm#1887: the amounts kept their sign, but a text someone typed did not. An
+ * agent wrote the loss in the resultatdisposition with U+2212, the way sv-SE
+ * formats it, and the PDF printed the amount unsigned next to a table that
+ * showed it negative.
+ */
+describe('årsredovisning PDF keeps a minus sign typed into its texts (crm#1887)', () => {
+  const MINUS = String.fromCharCode(0x2212)
+  // The sv-SE thousands separator; pdfTextStrings gives it back as a space.
+  const NBSP = String.fromCharCode(0x00a0)
+  const typed = (thousands: number, rest: string) => `${MINUS}${thousands}${NBSP}${rest}`
+
+  // Short texts, so no line wraps inside what the assertions read.
+  function typedWithUnicodeMinus(framework: 'k2' | 'k3'): ArsredovisningData {
+    const data = makeLossYearData(framework)
+    return {
+      ...data,
+      forvaltningsberattelse: {
+        ...data.forvaltningsberattelse,
+        description: `Resultatet blev ${typed(7, '301')} kr.`,
+        important_events: `Kursförlust ${typed(7, '302')} kr.`,
+        resultatdisposition: `Förlusten ${typed(7, '303')} kr balanseras.`,
+      },
+      noter: [{ number: 1, title: 'Resultat', body: `Årets resultat ${typed(7, '304')} kr.` }],
+    }
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: förvaltningsberättelse, resultatdisposition and notes print the sign', async (framework) => {
+    const render = framework === 'k2' ? ArsredovisningPDF : ArsredovisningK3PDF
+    const text = pdfTextStrings(await renderToBuffer(render({ data: typedWithUnicodeMinus(framework), mode: 'signing' }))).join('\n')
+    expect(text).toContain('-7 301')
+    expect(text).toContain('-7 302')
+    // Twice: the proposal, and the stämma's decision quoting it in the intyg.
+    expect(text.split('-7 303').length - 1).toBe(2)
+    expect(text).toContain('-7 304')
+    expect(text).not.toContain(UNMAPPED)
+  }, RENDER_TIMEOUT)
+
+  it('the same texts lose the sign without the fix: the unmapped byte is what U+2212 becomes', async () => {
+    // Guards the test itself: Helvetica really has no glyph for U+2212, so
+    // the assertions above cannot pass by accident.
+    const { Document, Page, Text } = await import('@react-pdf/renderer')
+    const { createElement } = await import('react')
+    const doc = createElement(Document, null, createElement(Page, { size: 'A4' }, createElement(Text, null, typed(7, '305'))))
+    const text = pdfTextStrings(await renderToBuffer(doc)).join('\n')
+    expect(text).toContain(UNMAPPED)
+    expect(text).not.toContain('-7 305')
+  }, RENDER_TIMEOUT)
+})
+
+/**
  * The revisorspåteckning (ABL 9 kap. 28 §): the revisor's slot prints below
  * the board's signatures as the hänvisning to the revisionsberättelse, never
  * as one of the board's signatures.

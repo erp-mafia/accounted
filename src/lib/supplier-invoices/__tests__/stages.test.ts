@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { bankEnteredHolds, countByStage, deriveStage, openPaymentMarker, stageIndex, stagesFor, SUPPLIER_INVOICE_STAGES } from '../stages'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
+import { PAYMENT_ORDER_STATUSES, paymentOrderWaitsFor } from '@/lib/payments/orders/status'
+import {
+  bankEnteredHolds,
+  countByStage,
+  deriveStage,
+  hasOpenBankPaymentOrder,
+  openPaymentMarker,
+  OPEN_PAYMENT_MARKER_LABEL_KEYS,
+  stageIndex,
+  stagesFor,
+  SUPPLIER_INVOICE_STAGES,
+} from '../stages'
 
 const base = { status: 'registered', approved_at: null, is_credit_note: false, in_open_batch: false, reconciled: false }
 
@@ -97,6 +110,54 @@ describe('openPaymentMarker (crm#1243)', () => {
       expect(openPaymentMarker({ status, open_payment: { batch, payment_order: order } })).toBeNull()
     }
     expect(openPaymentMarker({ status: 'registered', is_credit_note: true, open_payment: { batch, payment_order: order } })).toBeNull()
+  })
+})
+
+describe('a bank payment that waits for a person is a marker of its own (crm#1925)', () => {
+  const orderIn = (status: string) => ({ id: 'order-1', status, created_at: '2026-11-09T10:12:00Z', provider_status: null, provider_error_code: null })
+  const invoiceWith = (status: string) => ({ status: 'approved', open_payment: { batch: null, payment_order: orderIn(status) } })
+
+  it('reads an order nobody has approved or signed as unsigned, not as in payment', () => {
+    // Prepared by an agent: a draft until a person approves and signs it.
+    expect(openPaymentMarker(invoiceWith('draft'))).toBe('bank_payment_unsigned')
+    // Approved, or back from a BankID that ended unsigned.
+    expect(openPaymentMarker(invoiceWith('approved'))).toBe('bank_payment_unsigned')
+  })
+
+  it('reads an order that has gone to the bank as in payment, as before', () => {
+    for (const status of ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed']) {
+      expect(openPaymentMarker(invoiceWith(status))).toBe('bank_payment')
+    }
+  })
+
+  it('asks the one rule: unsigned exactly when the order waits for a person, for every status', () => {
+    for (const status of PAYMENT_ORDER_STATUSES) {
+      expect(openPaymentMarker(invoiceWith(status)) === 'bank_payment_unsigned').toBe(paymentOrderWaitsFor({ status }) !== null)
+    }
+  })
+
+  it('still wins over a tick and a file, and still says nothing on a settled invoice', () => {
+    const batch = { id: 'batch-1', created_at: '2026-11-01T08:00:00Z' }
+    const ticked = { status: 'approved', bank_entered_at: '2026-11-10T09:00:00Z', due_date: '2026-11-30', remaining_amount: 12500 }
+    expect(openPaymentMarker({ ...ticked, open_payment: { batch, payment_order: orderIn('draft') } }, '2026-11-12')).toBe('bank_payment_unsigned')
+    expect(openPaymentMarker({ status: 'paid', open_payment: { batch: null, payment_order: orderIn('draft') } })).toBeNull()
+  })
+
+  it('counts as an open bank payment order either way: no new payment of the invoice is offered', () => {
+    expect(hasOpenBankPaymentOrder('bank_payment')).toBe(true)
+    expect(hasOpenBankPaymentOrder('bank_payment_unsigned')).toBe(true)
+    expect(hasOpenBankPaymentOrder('bank_entered')).toBe(false)
+    expect(hasOpenBankPaymentOrder('payment_file')).toBe(false)
+    expect(hasOpenBankPaymentOrder(null)).toBe(false)
+  })
+
+  it('has its own chip words in both languages, as every marker has', () => {
+    for (const key of Object.values(OPEN_PAYMENT_MARKER_LABEL_KEYS)) {
+      expect(sv.supplier_invoices).toHaveProperty(key)
+      expect(en.supplier_invoices).toHaveProperty(key)
+    }
+    expect(OPEN_PAYMENT_MARKER_LABEL_KEYS.bank_payment_unsigned).not.toBe(OPEN_PAYMENT_MARKER_LABEL_KEYS.bank_payment)
+    expect(sv.supplier_invoices.bank_payment_unsigned_chip).toBe('Väntar på signering')
   })
 })
 

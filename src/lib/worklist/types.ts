@@ -397,6 +397,22 @@ export const WORKLIST_CATEGORIES = [
    * payment run), like overdue_invoice.
    */
   'attested_to_pay',
+  /**
+   * Bank payments that wait for a person ("Signera 3 betalningar"), one
+   * grouped row, opening Betalningar, where they are approved and signed.
+   * Pending:  payment_orders with status 'draft' (prepared by a person, the
+   *           API or an agent, approved by nobody) or 'approved' (not signed;
+   *           where an order lands again when its BankID ends unsigned):
+   *           paymentOrderWaitsFor of lib/payments/orders/status.ts, read by
+   *           lib/payments/orders/unsigned-payments.ts. Every purpose (a
+   *           supplier invoice, the skattekonto, a salary): the orders
+   *           Betalningar lists under Att godkänna and Att signera.
+   * Done:     signed (the BankID takes the order to the bank), or cancelled.
+   * The order already covers its invoice, which has left attested_to_pay, so
+   * no invoice is in both rows. Counts PAYMENTS, but the total takes the row
+   * as one thing to do (one visit to Betalningar), like attested_to_pay.
+   */
+  'payments_to_sign',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
@@ -540,6 +556,24 @@ export interface AttestedToPayDue {
   next_due: string
   /** How many have passed their due date. */
   overdue: number
+}
+
+/**
+ * The bank payments that wait for a person's approval or BankID signature:
+ * the Att göra row "Signera N betalningar" (payments_to_sign), which opens
+ * Betalningar. Null when there are none.
+ */
+export interface PaymentsToSignDue {
+  /** Payments nobody has signed: the ones to approve and the ones to sign together. */
+  count: number
+  /** How many of them nobody has approved yet; the rest wait only for the BankID. */
+  to_approve: number
+  /** The earliest day the bank is asked to pay one of them (requested_execution_date, ISO yyyy-MM-dd). */
+  next_date: string
+  /** What they add up to when they share one currency; null across currencies. */
+  amount: number | null
+  /** The currency of `amount`; null across currencies. */
+  currency: string | null
 }
 
 /**

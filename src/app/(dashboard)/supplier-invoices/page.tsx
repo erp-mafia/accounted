@@ -75,6 +75,7 @@ import { PaymentsVerificationLine } from '@/components/payments/PaymentsVerifica
 import { SupplierInboxAddress } from '@/components/supplier-invoices/SupplierInboxAddress'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import {
+  hasOpenBankPaymentOrder,
   openPaymentMarker,
   OPEN_PAYMENT_MARKER_LABEL_KEYS,
   type OpenPaymentInstruction,
@@ -460,7 +461,7 @@ export default function SupplierInvoicesPage() {
 
   // An invoice with an open bank payment takes no new payment: no checkbox
   // (the server refuses it in both channels anyway).
-  const isRowSelectable = (inv: ListInvoice) => isBatchSelectable(inv) && openPaymentMarker(inv) !== 'bank_payment'
+  const isRowSelectable = (inv: ListInvoice) => isBatchSelectable(inv) && !hasOpenBankPaymentOrder(openPaymentMarker(inv))
   const selectableInvoices = filteredInvoices.filter(isRowSelectable)
   // The selection is the payable invoices of the current tab, filter and
   // search: a row they hide leaves it (useBulkSelection). Ranges walk the
@@ -812,7 +813,8 @@ export default function SupplierInvoicesPage() {
                 const canApprove =
                   attests && canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isRowSelectable(inv)
-                // What already covers the invoice: a bank payment, a standing
+                // What already covers the invoice: a bank payment (one that
+                // still waits for its signature says so), a standing
                 // "I banken" tick, or a file (openPaymentMarker).
                 const openPayment = openPaymentMarker(inv)
                 // "Inlagd i banken" (#2220) shares the trailing slot with
@@ -824,7 +826,7 @@ export default function SupplierInvoicesPage() {
                   !canApprove &&
                   !inv.auto_debit &&
                   canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method) &&
-                  (bankEntered || (canWrite && openPayment !== 'bank_payment'))
+                  (bankEntered || (canWrite && !hasOpenBankPaymentOrder(openPayment)))
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.
                 const groupKey = rowGroupKeys.get(inv.id) ?? null

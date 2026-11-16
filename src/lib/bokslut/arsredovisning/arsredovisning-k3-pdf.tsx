@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
@@ -270,12 +271,15 @@ function PageChrome({
  *   document can be locked only once K3 is released (k3-release.ts).
  */
 export function ArsredovisningK3PDF({
-  data,
+  data: reportData,
   mode = 'draft',
 }: {
   data: ArsredovisningData
   mode?: ArsredovisningPdfMode
 }) {
+  // As in the K2 template: the typed texts are made safe for Helvetica
+  // (no U+2212 glyph) once, where the data enters (crm#1887).
+  const data = pdfTextDeep(reportData)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`

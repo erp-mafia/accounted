@@ -1,0 +1,1 @@
+[2026-11-17] The command palette answers to the names the menu had before 2026-11-16 (lib/navigation/palette-aliases.ts). A new word never moves the first hit of a word that already led somewhere (kontoutdrag stays with Huvudbok, deklaration with Moms): Enter opens the first hit.

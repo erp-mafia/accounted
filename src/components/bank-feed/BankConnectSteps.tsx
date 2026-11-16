@@ -95,6 +95,8 @@ interface FlowStepsProps {
   onEarlierConnection?: () => void
   /** Copy the link a second signatory opens; absent where no such link exists (the signatory page). */
   onCopyReminder?: () => void
+  /** Close the flow and open the bank file import, offered under a refused BankID; absent where the entry point has none to offer (flow-steps.ts offersFileImport). */
+  onImportFile?: () => void
   /** Hand the verification form to a signatory by mail; absent where the signatory is the one at the screen. */
   onSendToSignatory?: () => void
   /** Hand the verification form to a signatory as a copied link; absent where the signatory is the one at the screen. */
@@ -102,7 +104,7 @@ interface FlowStepsProps {
 }
 
 /** The step on screen, from the controller's state. The header (title, "?", step count) is the surface's own. */
-export function FlowSteps({ controller, session, banks, banksFailed, onRetryBanks, soleTrader, closeButton, onClose, onEarlierConnection, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
+export function FlowSteps({ controller, session, banks, banksFailed, onRetryBanks, soleTrader, closeButton, onClose, onEarlierConnection, onCopyReminder, onImportFile, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
   const { state, dispatch } = controller
   switch (state.step) {
     case 'intro':
@@ -139,6 +141,7 @@ export function FlowSteps({ controller, session, banks, banksFailed, onRetryBank
           onSignAsSignatory={controller.signAsSignatory}
           onContinueToBank={controller.continueToBank}
           onCopyReminder={onCopyReminder}
+          onImportFile={onImportFile}
           closeButton={closeButton}
         />
       )

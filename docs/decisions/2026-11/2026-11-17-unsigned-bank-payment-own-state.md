@@ -1,0 +1,1 @@
+[2026-11-17] A bank payment nobody has signed (draft or approved) reads Väntar på signering on its invoice, not I betalning, and Att göra has one row, Signera N betalningar, to Betalningar: no signing exists before the BankID starts, so one row per company, not per signing (crm#1925).

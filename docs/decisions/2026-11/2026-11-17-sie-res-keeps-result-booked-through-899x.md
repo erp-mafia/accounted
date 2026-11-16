@@ -1,0 +1,1 @@
+[2026-11-17] SIE #RES (year 0 and -1) is read before only a resultatavslut that books a result account outside 8990-8999; a result booked only through 899x against equity stays in #RES (crm#1869): it zeroes no account, and receivers read the booked result there.

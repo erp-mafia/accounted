@@ -70,6 +70,14 @@ describe('Att betala and a ticked "Inlagd i banken" (crm#1824)', () => {
     expect(isToPayInList({ ...ticked, status: 'overdue', due_date: '2026-11-01', open_payment })).toBe(false)
   })
 
+  it('keeps an invoice whose bank payment nobody has signed out too: it is signed on Betalningar, not paid again (crm#1925)', () => {
+    for (const status of ['draft', 'approved']) {
+      const open_payment = { batch: null, payment_order: { ...openOrder, status } }
+      expect(isToPayInList({ status: 'approved', open_payment })).toBe(false)
+      expect(isToPayInList({ status: 'overdue', due_date: '2026-11-01', open_payment })).toBe(false)
+    }
+  })
+
   it('brings the invoice straight back when the tick is taken back', () => {
     expect(isToPayInList({ ...ticked, bank_entered_at: null })).toBe(true)
   })

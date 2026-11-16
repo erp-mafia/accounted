@@ -5,6 +5,7 @@ import type {
   DocumentToSignDue,
   ExpensePayoutDue,
   PaymentFailedDue,
+  PaymentsToSignDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -37,6 +38,7 @@ import {
   countReminderBatchReady,
   getOverdueInvoicesDue,
   countPaymentsFailedDue,
+  countPaymentsToSignDue,
   countPaymentsVerificationDue,
   countPendingOperations,
   countReconciliationDue,
@@ -128,6 +130,12 @@ export interface GetWorklistCountsOptions {
    */
   attestedToPayDue?: AttestedToPayDue | null | Promise<AttestedToPayDue | null>
   /**
+   * The bank payments waiting for approval or signature the caller is already
+   * fetching (Hem renders them as one Signera row): the count is taken from it
+   * instead of a second read. Pass null for "none waits".
+   */
+  paymentsToSignDue?: PaymentsToSignDue | null | Promise<PaymentsToSignDue | null>
+  /**
    * Whose per-person work to count when no list is passed (documents_to_sign:
    * a signature asked of this user). Without it the per-person count is 0.
    */
@@ -177,6 +185,7 @@ export async function getWorklistCounts(
     documentsToSign,
     paymentFailed,
     attestedToPay,
+    paymentsToSign,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -234,6 +243,9 @@ export async function getWorklistCounts(
     options.attestedToPayDue !== undefined
       ? Promise.resolve(options.attestedToPayDue).then((due) => due?.count ?? 0)
       : countAttestedToPayDue(supabase, companyId),
+    options.paymentsToSignDue !== undefined
+      ? Promise.resolve(options.paymentsToSignDue).then((due) => due?.count ?? 0)
+      : countPaymentsToSignDue(supabase, companyId),
   ])
 
   // The overdue customer invoices are one grouped row (lib/worklist/types.ts
@@ -274,6 +286,7 @@ export async function getWorklistCounts(
       documents_to_sign: documentsToSign,
       payment_failed: paymentFailed,
       attested_to_pay: attestedToPay,
+      payments_to_sign: paymentsToSign,
     },
     total:
       bookTransaction +
@@ -306,7 +319,9 @@ export async function getWorklistCounts(
       documentsToSign +
       paymentFailed +
       // One payment run, however many invoices it pays (lib/worklist/types.ts).
-      (attestedToPay > 0 ? 1 : 0),
+      (attestedToPay > 0 ? 1 : 0) +
+      // One visit to Betalningar, however many payments wait there.
+      (paymentsToSign > 0 ? 1 : 0),
     overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
     inboxHref: inboxHref(isInkorgV2Enabled(companyId)),
   }

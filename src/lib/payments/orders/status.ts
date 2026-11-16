@@ -106,6 +106,35 @@ export const OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES: readonly PaymentOrderStatus[
 )
 
 /**
+ * The statuses of an order that waits for a person and that no bank holds:
+ * prepared and not approved, or approved and not signed. Nothing is sent, and
+ * nothing is paid, until that person acts, and no status sync ever moves one
+ * on. They are the orders the Betalningar page lists under Att godkänna and
+ * Att signera, and where an order lands again when a BankID ends unsigned
+ * (crm#1470).
+ */
+export const UNSIGNED_PAYMENT_ORDER_STATUSES = ['draft', 'approved'] as const satisfies readonly PaymentOrderStatus[]
+
+/** approval: a person approves it, then it is signed. signature: approved, a person signs it with BankID. */
+export type PaymentOrderWaitsFor = 'approval' | 'signature'
+
+/**
+ * What an order waits for from a person before the bank gets it; null once
+ * it has gone to the bank, and when it is closed. An open order covers its
+ * invoice whatever it waits for (isOpenPaymentOrder: no second payment), so
+ * "is it open" never answered "is anyone asked to do something": an order an
+ * agent prepared read as I betalning on its invoice and had no row in Att
+ * göra (crm#1925). One reading for the supplier invoice list's marker
+ * (lib/supplier-invoices/stages.ts openPaymentMarker) and the Att göra row
+ * (unsigned-payments.ts).
+ */
+export function paymentOrderWaitsFor(order: { status: PaymentOrderStatus | string }): PaymentOrderWaitsFor | null {
+  if (order.status === 'draft') return 'approval'
+  if (order.status === 'approved') return 'signature'
+  return null
+}
+
+/**
  * Signing statuses a finalised BankID leaves on its batch
  * (payment_order_batches.status): the person signed, and nothing in that
  * signing waits for them any more.

@@ -15,7 +15,7 @@
 import { initialSelection, setLedger, toggleAccount, type SelectionMap } from './account-selection'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
 import { bankSigningApproach, type SigningApproach } from './bank-help'
-import { firstStep, nextStep, type FlowMode, type FlowStep } from './flow-steps'
+import { dismissPolicy, firstStep, nextStep, type FlowMode, type FlowStep } from './flow-steps'
 import type {
   AccountContext,
   ConnectMethod,
@@ -261,6 +261,28 @@ export function bankDetailsSettled(state: Pick<FlowState, 'bank' | 'bankDetails'
  */
 export function removesConnectionOnClose(state: Pick<FlowState, 'connectionId' | 'connection' | 'mode' | 'returned'>): boolean {
   return Boolean(state.connectionId) && !state.connection && (state.mode !== 'resume' || state.returned !== null)
+}
+
+/**
+ * The bank has refused the consent (or the person came back from its page
+ * with an error): nothing is running at the bank, and the step shows the
+ * reason and what to do next.
+ */
+export function consentRefused(state: Pick<FlowState, 'pollState'>): boolean {
+  return state.pollState === 'failed'
+}
+
+export type CloseOutcome = 'confirm' | 'remove' | 'close'
+
+/**
+ * What a request to close does where the flow stands: ask first (a BankID is
+ * running, a selection is unsaved), close at once and remove the half-made
+ * connection behind the close (the bank has refused: there is nothing to
+ * interrupt, and the row must not linger), or just close.
+ */
+export function closeOutcome(state: Pick<FlowState, 'step' | 'pollState' | 'connectionId' | 'connection' | 'mode' | 'returned'>): CloseOutcome {
+  if (dismissPolicy(state.step, consentRefused(state)) === 'confirm') return 'confirm'
+  return removesConnectionOnClose(state) ? 'remove' : 'close'
 }
 
 /** The screen after the accounts are live: the payments offer when it stands, else the finished screen. */

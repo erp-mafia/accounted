@@ -37,6 +37,7 @@ import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { groupPalettePages, paletteOpensForRole, palettePages, paletteStartPages, type PageAlias } from './palette-pages'
 import { INBOX_SEARCH_KEYWORDS, INKORG_HREF, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { PALETTE_WORD_ALIASES } from '@/lib/navigation/palette-aliases'
 import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 
 type Entry = {
@@ -73,6 +74,10 @@ const ENTRY_LABEL_KEYS: Record<string, { label: string; hint?: string }> = {
   'rapport-saldobalans': { label: 'page_trial_balance' },
   'rapport-kundreskontra': { label: 'page_customer_ledger' },
   'inställningar': { label: 'page_settings' },
+  bank: { label: 'page_bank' },
+  kopplingar: { label: 'page_connections' },
+  abonnemang: { label: 'page_billing' },
+  'användare': { label: 'page_members' },
   help: { label: 'page_help' },
 }
 
@@ -138,6 +143,9 @@ export const PAGE_ALIASES: PageAlias[] = [
   { id: 'kompetens', label: 'Kompetens', icon: SparklesIcon, href: '/skills', keywords: 'instruktioner skills' },
   { id: 'inställningar', label: 'Inställningar', icon: Cog6ToothIcon, href: '/settings' },
   { id: 'help', label: 'Hjälp', icon: QuestionMarkCircleIcon, href: '/help' },
+  // The names the menu had before 2026-11-16 and the settings pages people
+  // look for by name: words that are typed, kept with the other Swedish data.
+  ...PALETTE_WORD_ALIASES,
 ]
 
 /** The gates as the layout resolved them: the object DashboardNav is handed. */

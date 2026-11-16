@@ -84,7 +84,7 @@ describe('countRowSpecs: which count rows Att göra has', () => {
   it('leaves the rows that are not plain counts to the section (pending operations, batches, payments)', () => {
     const all = input(Object.fromEntries(WORKLIST_CATEGORIES.map((c) => [c, 1])) as Record<WorklistCategory, number>)
     const categories = new Set(countRowSpecs(all).map((s) => s.category))
-    for (const c of ['pending_operations', 'collection_batch_ready', 'reminder_batch_ready', 'attested_to_pay', 'overdue_invoice', 'suggestion'] as const) {
+    for (const c of ['pending_operations', 'collection_batch_ready', 'reminder_batch_ready', 'attested_to_pay', 'payments_to_sign', 'overdue_invoice', 'suggestion'] as const) {
       expect(categories.has(c)).toBe(false)
     }
   })
