@@ -153,6 +153,23 @@ describe('getLatePaymentInterestReport', () => {
     expect(report.rate_is_override).toBe(true)
   })
 
+  it('holds a private person at the consumer ceiling and says so', async () => {
+    const privatePerson = invoice({ id: 'inv-p', customer: { name: 'Anna', customer_type: 'individual' } })
+    const report = await run([payment({ id: 'p-p', invoice_id: 'inv-p', invoice: privatePerson }), payment()], [], 0.25)
+    const byInvoice = Object.fromEntries(report.paid_late.map((row) => [row.invoice_id, row.interest]))
+    // Ceiling 2% + 20 = 22%: 12 500 × 0.22 × 20 / 365 = 150.68
+    expect(byInvoice['inv-p']).toBe(150.68)
+    // The company debtor pays the agreed 25%: 12 500 × 0.25 × 20 / 365 = 171.23
+    expect(byInvoice['inv-1']).toBe(171.23)
+    expect(report.rate).toBe(0.25)
+    expect(report.consumer_rate_ceiling).toBe(0.22)
+  })
+
+  it('reports no ceiling when the own rate is under it', async () => {
+    const report = await run([payment()], [], 0.12)
+    expect(report.consumer_rate_ceiling).toBeNull()
+  })
+
   it('keeps each currency apart in the totals', async () => {
     const report = await run([
       payment({ id: 'p-eur', invoice: invoice({ id: 'inv-eur', currency: 'EUR' }), amount: 1_000 }),

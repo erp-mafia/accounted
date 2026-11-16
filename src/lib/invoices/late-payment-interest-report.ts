@@ -3,7 +3,7 @@ import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
-import { calculateLatePaymentInterest, getAnnualInterestRate } from '@/lib/invoices/late-payment-interest'
+import { calculateLatePaymentInterest, getAnnualInterestRate, getConsumerRateCeilingAt } from '@/lib/invoices/late-payment-interest'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
@@ -78,6 +78,12 @@ export interface LatePaymentInterestReport {
   rate: number
   /** True when the company's own rate replaces the statutory one. */
   rate_is_override: boolean
+  /**
+   * The ceiling for private persons on as_of (konsumentkreditlagen 4 kap.
+   * 4 §), when the company's own rate is above it and their rows are
+   * therefore computed at the lower rate; null otherwise.
+   */
+  consumer_rate_ceiling: number | null
   paid_late: LatePaidInvoice[]
   overdue_open: OverdueOpenInvoice[]
   totals: LatePaymentInterestTotal[]
@@ -94,7 +100,7 @@ interface InvoiceRow {
   credited_invoice_id: string | null
   total?: number | string | null
   remaining_amount?: number | string | null
-  customer: { name: string | null } | null
+  customer: { name: string | null; customer_type?: string | null } | null
 }
 
 interface PaymentRow {
@@ -129,7 +135,7 @@ export async function getLatePaymentInterestReport(
     supabase
       .from('invoice_payments')
       .select(
-        'id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, customer:customers(name))',
+        'id, invoice_id, payment_date, amount, journal_entry:journal_entries!journal_entry_id(source_type), invoice:invoices!inner(id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, customer:customers(name, customer_type))',
       )
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
@@ -142,7 +148,7 @@ export async function getLatePaymentInterestReport(
     supabase
       .from('invoices')
       .select(
-        'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, remaining_amount, customer:customers(name)',
+        'id, invoice_number, external_invoice_number, due_date, currency, status, document_type, credited_invoice_id, total, remaining_amount, customer:customers(name, customer_type)',
       )
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
@@ -166,6 +172,7 @@ export async function getLatePaymentInterestReport(
       dueDate: invoice.due_date,
       asOfDate: payment.payment_date,
       overrideRate,
+      consumer: invoice.customer?.customer_type === 'individual',
     })
     const row = paidLate.get(invoice.id) ?? {
       invoice_id: invoice.id,
@@ -197,6 +204,7 @@ export async function getLatePaymentInterestReport(
       dueDate: invoice.due_date,
       asOfDate: asOf,
       overrideRate,
+      consumer: invoice.customer?.customer_type === 'individual',
     })
     overdueOpen.push({
       invoice_id: invoice.id,
@@ -219,6 +227,8 @@ export async function getLatePaymentInterestReport(
     as_of: asOf,
     rate: getAnnualInterestRate(asOf, overrideRate),
     rate_is_override: overrideRate !== null,
+    consumer_rate_ceiling:
+      overrideRate !== null && overrideRate > getConsumerRateCeilingAt(asOf) ? getConsumerRateCeilingAt(asOf) : null,
     paid_late: paidLateRows,
     overdue_open: overdueOpen,
     totals: totalsByCurrency(paidLateRows, overdueOpen),

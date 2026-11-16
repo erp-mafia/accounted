@@ -19543,6 +19543,7 @@
     "help": "Interest follows the Swedish Interest Act: Riksbanken's reference rate for each half-year plus eight percentage points, or the company's own rate if you have set one. Each payment that arrived after the due date earns interest on its own amount, from the due date to the payment date. Only payments booked in Accounted count, so invoices paid late before you moved here are not shown. The amounts are the basis for an interest invoice. Nothing is booked or sent from here.",
     "rate_line": "Rate today {rate} per year, the reference rate plus eight percentage points. Calculated up to and including {date}.",
     "rate_line_override": "Rate {rate} per year, the company's own. Calculated up to and including {date}.",
+    "rate_line_consumer_ceiling": "For private persons at most {rate} per year is charged: the law allows no more than the reference rate plus 20 percentage points.",
     "load_failed": "The interest could not be loaded.",
     "retry": "Try again",
     "empty_title": "No late payment interest",

@@ -19543,6 +19543,7 @@
     "help": "Räntan räknas enligt räntelagen: Riksbankens referensränta för varje halvår plus åtta procentenheter, eller företagets egen räntesats om ni har angett en. Varje betalning som kom in efter förfallodagen ger ränta på sitt eget belopp, från förfallodagen till betalningsdagen. Bara betalningar som bokförts i Accounted räknas, så fakturor som betalades för sent innan ni flyttade hit syns inte. Beloppen är underlag för en räntefaktura. Ingenting bokförs eller skickas härifrån.",
     "rate_line": "Räntesats idag {rate} per år, referensräntan plus åtta procentenheter. Beräknat till och med {date}.",
     "rate_line_override": "Räntesats {rate} per år, företagets egen. Beräknat till och med {date}.",
+    "rate_line_consumer_ceiling": "För privatpersoner räknas högst {rate} per år: lagen tillåter inte mer än referensräntan plus 20 procentenheter.",
     "load_failed": "Det gick inte att hämta räntan.",
     "retry": "Försök igen",
     "empty_title": "Ingen dröjsmålsränta",
