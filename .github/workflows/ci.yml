@@ -1,0 +1,446 @@
+name: CI
+
+# The merge gates, job for job the same as .gitlab-ci.yml: checks, pr-privacy,
+# build, unit-tests (four shards), pg-coverage-gate, pg-real, pg-upgrade and
+# tool-pg. Production migrations are in migrations-production.yml; the nightly
+# simulated company and the report benchmark are in nightly.yml.
+#
+# Two aggregate jobs, Core Build and pg-real gate, are the check names branch
+# protection requires. Each runs with if: always() and fails unless every job
+# it covers succeeded: a job that is skipped because a job it needs failed
+# does not fail its dependents, and a skipped required check counts as passed.
+#
+# Pull requests run everything. Pushes to main run everything except the two
+# jobs that diff a pull request against its base (pg-coverage-gate,
+# pg-upgrade), and they are the only runs that write caches: GitHub scopes a
+# cache entry to the ref that wrote it, and entries written on main are
+# readable from every pull request.
+#
+# Runners: every job runs on a GitHub-hosted runner unless a repository
+# variable names another one. TYPECHECK_RUNNER is the label of a runner that
+# takes one job at a time on a host with 16 GB (the type check needs 12.5 GB
+# cold); CI_RUNNER is the label for every other job. The pg jobs map Postgres
+# and PostgREST to fixed host ports, so a host that carries CI_RUNNER must run
+# one of those jobs at a time.
+#
+# No job here reads a secret, except pr-privacy, which reads the customer name
+# list when the repository has one.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the run it supersedes. Pushes to main
+# group by commit, so every merge gets a complete run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ${{ vars.TYPECHECK_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    env:
+      # tsc's incremental state and ESLint's result cache (see the two cache
+      # steps below and scripts/checks/no-new-type-errors.mjs).
+      CHECKS_CACHE_DIR: .ci-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-core
+        with:
+          save-cache: 'true'
+
+      # Main's latest state for this lockfile. A warm tsc rechecks only what
+      # changed and still reports every stored error. The lockfile is in the
+      # key, so a TypeScript or ESLint upgrade starts clean. Cache keys are
+      # immutable, hence the commit in the key and the prefix fallback.
+      - name: Restore tsc and ESLint state
+        id: checks-state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-cache
+          key: checks-state-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            checks-state-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+
+      - name: Skill bodies in sync with the seed migration
+        run: npm run skills:check
+
+      - name: Taxonomy registry in sync
+        run: npm run taxonomy:check
+
+      - name: accounted-api agent skill in sync
+        run: npm run apiskill:check
+
+      - name: NOTICE in sync
+        run: npm run notice:check
+
+      - name: Lint
+        # Keyed on content, not mtime: a checkout rewrites every mtime.
+        run: |
+          mkdir -p "$CHECKS_CACHE_DIR"
+          npm run check:lint -- --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
+
+      - name: Generate route types
+        # The route types next build generates (.next/types, validator.ts).
+        # With them this type check covers a superset of the build's own, so
+        # the build job skips that pass (SKIP_BUILD_TYPECHECK).
+        run: npx next typegen
+
+      - name: Type check
+        id: types
+        # A cold check of main measured 12.5 GB of heap on 2026-11-01. The
+        # hosted runner for a public repository has 16 GB; a private
+        # repository sets TYPECHECK_RUNNER (see the header).
+        run: npm run check:types
+
+      - name: Antipattern ratchet
+        run: npm run check:guards
+
+      - name: Validate konteringspaket catalogue
+        run: npm run validate:packs
+
+      - name: Validate community registry
+        run: npm run validate:registry
+
+      - name: No core imports from extensions
+        run: |
+          VIOLATIONS=$(grep -r "from '@/extensions/" src/lib/ src/app/api/ src/components/ --include="*.ts" --include="*.tsx" \
+            | grep -v "app/api/extensions/" \
+            | grep -v "components/extensions/" \
+            | grep -v "lib/extensions/_generated/" \
+            | grep -v "lib/extensions/loader.ts" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "ERROR: Core code imports from @/extensions/:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+
+      # Main writes the state every pull request reads (the checks-cache job
+      # in .gitlab-ci.yml). Saved even when a later check failed, as long as
+      # the type check ran.
+      - name: Save tsc and ESLint state
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.types.outcome != 'skipped' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-cache
+          key: ${{ steps.checks-state.outputs.cache-primary-key }}
+
+  # Customer data in the pull request title, description or a commit message
+  # (scripts/check-mr-privacy.mjs lists the rules). Editing the title or the
+  # description starts no run, so an edit is scanned on the next push or
+  # rerun. Customer names come from the MR_PRIVACY_CUSTOMER_NAMES_B64 secret;
+  # without it, and on pull requests from forks, the job says so and runs the
+  # other rules.
+  pr-privacy:
+    name: PR privacy
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so every commit since the base is present, and the
+          # pull request's own head rather than the merge commit.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+      - name: No customer data in the title, description or commit messages
+        # Node built-ins only: no npm ci.
+        env:
+          MR_TITLE: ${{ github.event.pull_request.title }}
+          MR_DESCRIPTION: ${{ github.event.pull_request.body }}
+          MR_PRIVACY_BASE: ${{ github.event.pull_request.base.sha }}
+          MR_PRIVACY_CUSTOMER_NAMES_B64: ${{ secrets.MR_PRIVACY_CUSTOMER_NAMES_B64 }}
+        run: node scripts/check-mr-privacy.mjs
+
+  build:
+    name: Build (zero extensions)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    env:
+      # The Next.js build worker runs out of memory on Node's default heap.
+      NODE_OPTIONS: --max-old-space-size=8192
+      # The checks job's type check covers this build's (see there). Vercel
+      # builds leave it unset and still type-check.
+      SKIP_BUILD_TYPECHECK: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-core
+      - run: npm run build
+      # The JavaScript each of the most visited pages ships on a hard load,
+      # held to scripts/perf/page-budgets.json: a page over its budget fails
+      # the job with the numbers.
+      - name: Page JavaScript budgets
+        run: node scripts/perf/page-js.mjs --check
+
+  unit-tests:
+    name: Unit tests (${{ matrix.shard }}/4)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    strategy:
+      # One failing shard does not hide the other three's failures.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-core
+      - name: Unit tests
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm test -- --shard="$SHARD/4"
+
+  # A migration that touches a trigger, RPC, RLS policy or DEFERRABLE
+  # constraint must come with a *.pg.test.ts (scripts/check-pg-test-coverage.mjs).
+  pg-coverage-gate:
+    name: pg coverage gate
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so the pull request's base commit is present.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+      - name: Require pg-real coverage for trigger, RPC and RLS migrations
+        # Node built-ins only: no npm ci.
+        env:
+          PG_GATE_BASE: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-pg-test-coverage.mjs
+
+  # Every migration replayed on an empty database, then the pg-real suite.
+  pg-real:
+    name: pg-real
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    services:
+      postgres:
+        # Ships the auth schema, auth.uid() and the extensions the migrations
+        # need.
+        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-core
+        with:
+          zero-extensions: 'false'
+      - name: Wait for Postgres
+        # The image initialises and restarts once, and the health check can
+        # pass on the first start: wait until it answers twice over TCP.
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
+          for _ in $(seq 1 90); do
+            if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+              sleep 3
+              psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+            fi
+            sleep 2
+          done
+          psql "$DATABASE_URL" -tAc 'select version()'
+      - name: Bootstrap
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+      - name: Apply every migration
+        run: |
+          set -euo pipefail
+          for f in supabase/migrations/*.sql; do
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null || { echo "Failed applying $f"; exit 1; }
+          done
+      - run: npm run test:pg
+
+  # Schema at the merge base, real rows seeded, then ONLY the new migrations on
+  # top: proves existing data survives them. A pull request that adds no
+  # migration exits after the diff.
+  pg-upgrade:
+    name: pg-upgrade
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so the merge base is present.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Upgrade test
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          BASE=$(git merge-base "$BASE_SHA" HEAD)
+          echo "Merge base: $BASE"
+          git ls-tree -r --name-only HEAD -- supabase/migrations | grep '\.sql$' | sort > "$RUNNER_TEMP/head-migrations.txt"
+          git ls-tree -r --name-only "$BASE" -- supabase/migrations | grep '\.sql$' | sort > "$RUNNER_TEMP/base-migrations.txt"
+          comm -23 "$RUNNER_TEMP/head-migrations.txt" "$RUNNER_TEMP/base-migrations.txt" > "$RUNNER_TEMP/new-migrations.txt"
+          COUNT=$(wc -l < "$RUNNER_TEMP/new-migrations.txt" | tr -d ' ')
+          echo "New migrations ($COUNT):"
+          cat "$RUNNER_TEMP/new-migrations.txt"
+          if [ "$COUNT" = "0" ]; then echo "This pull request adds no migration; nothing to upgrade-test."; exit 0; fi
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null; }
+          # The image initialises and restarts once: wait until it answers twice.
+          for _ in $(seq 1 90); do
+            if psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1; then
+              sleep 3
+              psql "$DATABASE_URL" -tAc 'select 1' >/dev/null 2>&1 && break
+            fi
+            sleep 2
+          done
+          psql "$DATABASE_URL" -tAc 'select version()'
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
+          # Read from the merge-base tree, not the working tree, so an edit to
+          # a shipped migration cannot hide itself here.
+          while read -r f; do
+            git show "$BASE:$f" | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q >/dev/null || { echo "Failed applying (base) $f"; exit 1; }
+          done < "$RUNNER_TEMP/base-migrations.txt"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/upgrade/seed.sql
+          while read -r f; do
+            echo "Applying (new) $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
+          done < "$RUNNER_TEMP/new-migrations.txt"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/pg/upgrade/assert.sql
+
+  # MCP tools driven through a real supabase-js client against a real
+  # PostgREST.
+  tool-pg:
+    name: tool-pg
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: supabase/postgres:15.8.1.060@sha256:0e2279598bc0224fb5960c3a61eb23270cd60119427f3a7bdec86ba282600dcc
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TOOL_PG_REST_URL: http://127.0.0.1:3000
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-core
+        with:
+          zero-extensions: 'false'
+      - uses: ./.github/actions/tool-pg-stack
+      - run: npm run test:tools
+
+  core-build:
+    name: Core Build
+    if: always()
+    needs: [checks, pr-privacy, build, unit-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert every core job succeeded
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          PRIVACY: ${{ needs.pr-privacy.result }}
+          EVENT: ${{ github.event_name }}
+          BUILD: ${{ needs.build.result }}
+          UNIT: ${{ needs.unit-tests.result }}
+        run: |
+          set -euo pipefail
+          echo "event=$EVENT checks=$CHECKS pr-privacy=$PRIVACY build=$BUILD unit-tests=$UNIT"
+          # pr-privacy reads a pull request and is skipped on pushes to main.
+          if [ "$EVENT" != "pull_request" ] && [ "$PRIVACY" = "skipped" ]; then PRIVACY=success; fi
+          for r in "$CHECKS" "$PRIVACY" "$BUILD" "$UNIT"; do
+            if [ "$r" != "success" ]; then
+              echo "::error::One or more core jobs did not succeed"
+              exit 1
+            fi
+          done
+
+  pg-real-gate:
+    name: pg-real gate
+    if: always()
+    needs: [pg-coverage-gate, pg-real, pg-upgrade, tool-pg]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert every pg job succeeded
+        env:
+          EVENT: ${{ github.event_name }}
+          COVERAGE: ${{ needs.pg-coverage-gate.result }}
+          REAL: ${{ needs.pg-real.result }}
+          UPGRADE: ${{ needs.pg-upgrade.result }}
+          TOOLS: ${{ needs.tool-pg.result }}
+        run: |
+          set -euo pipefail
+          echo "event=$EVENT pg-coverage-gate=$COVERAGE pg-real=$REAL pg-upgrade=$UPGRADE tool-pg=$TOOLS"
+          # pg-coverage-gate and pg-upgrade diff a pull request against its
+          # base and are skipped on pushes to main; nothing else may be.
+          if [ "$EVENT" != "pull_request" ]; then
+            if [ "$COVERAGE" = "skipped" ]; then COVERAGE=success; fi
+            if [ "$UPGRADE" = "skipped" ]; then UPGRADE=success; fi
+          fi
+          for r in "$COVERAGE" "$REAL" "$UPGRADE" "$TOOLS"; do
+            if [ "$r" != "success" ]; then
+              echo "::error::One or more pg jobs did not succeed"
+              exit 1
+            fi
+          done
