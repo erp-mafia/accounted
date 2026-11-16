@@ -58,11 +58,9 @@ export function ReviewAmount({ op, className }: { op: PendingOperation; classNam
 export function ReviewRisk({ op, quiet = false }: { op: PendingOperation; quiet?: boolean }) {
   const t = useTranslations('pending')
   if (op.risk_level === 'low') return null
-  // In a list most rows are medium risk: there it reads as muted text, and
-  // the chip is left for the rows that deviate (convention 5).
-  if (quiet && op.risk_level !== 'high') {
-    return <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{t('badge_medium_risk')}</span>
-  }
+  // In a list only high risk is marked: medium is the common case there, and
+  // a word on most rows says nothing (convention 5).
+  if (quiet && op.risk_level !== 'high') return null
   return (
     <Badge variant={op.risk_level === 'high' ? 'destructive' : 'outline'} className="shrink-0 font-normal">
       {op.risk_level === 'high' ? t('badge_high_risk') : t('badge_medium_risk')}

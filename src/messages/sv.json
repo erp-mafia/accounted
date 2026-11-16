@@ -2010,7 +2010,8 @@
     "refused_marker": "Nekades",
     "refused_row": "Nekades: {message}",
     "refused_show": "Visa förslaget",
-    "refused_marker_network": "Inte skickat"
+    "refused_marker_network": "Inte skickat",
+    "rutin_bulk_split": "{together, plural, one {# kan godkännas tillsammans} other {# kan godkännas tillsammans}}, {apart, plural, one {# granskas för sig} other {# granskas var för sig}}."
   },
   "deadlines": {
     "title": "Viktiga datum",
