@@ -52,6 +52,16 @@ describe('SIE recovery and invariant schedules',()=>{
     expect(rpc).toHaveBeenCalledWith('check_sie_import_duplicate_vouchers',{p_after_company_id:null,p_company_limit:500})
     expect((await response.json()).data).toMatchObject({duplicate_groups:1,extra_vouchers:1,duplicate_samples:[{n:2}]})
   })
+  it('reports copies of pre-batch imported vouchers without failing the run: none can be added any more',async()=>{
+    answer({pages:[ok({...cleanPage,legacy_duplicate_groups:4861,legacy_extra_vouchers:4861})]})
+    const response=await check(request())
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toMatchObject({duplicate_groups:0,legacy_duplicate_groups:4861,legacy_extra_vouchers:4861})
+  })
+  it('fails the run on a copy the import engine made, whatever the legacy copies',async()=>{
+    answer({pages:[ok({...cleanPage,duplicate_groups:1,extra_vouchers:1,duplicate_samples:[{n:2}],legacy_duplicate_groups:4861,legacy_extra_vouchers:4861})]})
+    expect((await check(request())).status).toBe(503)
+  })
   it('surfaces a fiscal year held by a finished import job',async()=>{
     answer({jobs:ok({...cleanJobs,stale_holds:1})})
     const response=await check(request())
@@ -117,6 +127,6 @@ describe('SIE recovery and invariant schedules',()=>{
     const body=await response.json()
     expect(body.complete).toBe(true)
     expect(body.paymentRows).toEqual(cleanPaymentRows)
-    expect(body.data).toEqual({duplicate_groups:0,extra_vouchers:0,duplicate_samples:[],...cleanJobs})
+    expect(body.data).toEqual({duplicate_groups:0,extra_vouchers:0,duplicate_samples:[],legacy_duplicate_groups:0,legacy_extra_vouchers:0,...cleanJobs})
   })
 })

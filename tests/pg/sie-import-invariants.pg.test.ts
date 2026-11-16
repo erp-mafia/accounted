@@ -1,11 +1,16 @@
 /**
  * pg-real test for the SIE import invariant monitor
- * (20261110094517_sie_import_invariants_paged): the duplicate check, now one
- * page of companies per call, still finds a seeded duplicate imported voucher
- * (also one a batch-owned voucher shares with a legacy one, outside the
- * partial unique index), and the job check still finds an orphaned import
- * batch. What counts as a violation is unchanged: a voucher that is not
- * posted, or the same source number in another fiscal year, is no duplicate.
+ * (20261110094517_sie_import_invariants_paged, copy rule from
+ * 20261116093917_sie_duplicate_check_counts_copies): the duplicate check goes
+ * one page of companies per call. A copy is the same source series, number
+ * and date posted twice in one fiscal year; a copy that holds a batch-owned
+ * voucher (one a batch-owned voucher shares with a legacy one, outside the
+ * partial unique index) is the violation, and a copy made only of pre-batch
+ * vouchers is reported apart as legacy. The database refuses every other way
+ * to add a copy, which is what lets the legacy ones go unalerted. A voucher
+ * that is not posted, the same source number in another fiscal year, or on
+ * another date in the same year, is no copy. The job check still finds an
+ * orphaned import batch.
  *
  * Everything runs in one rollback-only transaction. Other test files share the
  * database, so a page is pinned to the seeded company (the page after its
@@ -24,6 +29,8 @@ interface DuplicatePage {
   duplicate_groups: number
   extra_vouchers: number
   duplicate_samples: Array<Record<string, unknown>>
+  legacy_duplicate_groups: number
+  legacy_extra_vouchers: number
 }
 
 interface JobInvariants {
@@ -72,10 +79,11 @@ async function importedVoucher(f: Seeded, opts: {
   status?: 'posted' | 'draft'
   period?: string
   batch?: string
+  date?: string
 }) {
   const id = randomUUID()
   const period = opts.period ?? f.period
-  const date = period === f.earlier ? '2025-02-01' : '2026-02-01'
+  const date = opts.date ?? (period === f.earlier ? '2025-02-01' : '2026-02-01')
   if (!opts.batch) {
     await client.query('SET CONSTRAINTS ALL IMMEDIATE')
     await client.query('ALTER TABLE journal_entries DISABLE TRIGGER guard_sie_entry_provenance')
@@ -112,7 +120,7 @@ async function pageOf(company: string): Promise<DuplicatePage> {
 /** Every page in company order, as the cron walks them, summed. */
 async function scanAll(pageSize: number) {
   let after: string | null = null
-  const total = { pages: 0, companies: 0, groups: 0, extra: 0 }
+  const total = { pages: 0, companies: 0, groups: 0, extra: 0, legacyGroups: 0, legacyExtra: 0 }
   for (;;) {
     const { rows } = await client.query('SELECT check_sie_import_duplicate_vouchers($1, $2) AS r', [after, pageSize])
     const page = rows[0].r as DuplicatePage
@@ -120,6 +128,8 @@ async function scanAll(pageSize: number) {
     total.companies += Number(page.companies_checked)
     total.groups += Number(page.duplicate_groups)
     total.extra += Number(page.extra_vouchers)
+    total.legacyGroups += Number(page.legacy_duplicate_groups)
+    total.legacyExtra += Number(page.legacy_extra_vouchers)
     if (page.done) return total
     after = page.last_company_id
   }
@@ -130,40 +140,63 @@ async function jobInvariants(): Promise<JobInvariants> {
 }
 
 describe('check_sie_import_duplicate_vouchers', () => {
-  it('finds a duplicate imported voucher in its company page', async () => {
+  it('finds a copy the import engine made: a batch-owned voucher posted again beside a legacy one', async () => {
+    const f = await seedCompany()
+    const job = await importJob(f, f.period, 'completed')
+    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7, batch: job })
+    await importedVoucher(f, { voucherNumber: 2, sourceNumber: 7 })
+    await importedVoucher(f, { voucherNumber: 3, sourceNumber: 8 })
+
+    const page = await pageOf(f.company)
+    expect(page).toMatchObject({ companies_checked: 1, last_company_id: f.company, duplicate_groups: 1, extra_vouchers: 1,
+      legacy_duplicate_groups: 0, legacy_extra_vouchers: 0 })
+    expect(page.duplicate_samples).toEqual([{
+      company_id: f.company, fiscal_period_id: f.period, source_voucher_series: 'A', source_voucher_number: 7,
+      entry_date: '2026-02-01', n: 2,
+    }])
+  })
+
+  it('reports a copy made only of pre-batch vouchers as legacy, not as a duplicate', async () => {
     const f = await seedCompany()
     await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7 })
     await importedVoucher(f, { voucherNumber: 2, sourceNumber: 7 })
     await importedVoucher(f, { voucherNumber: 3, sourceNumber: 8 })
 
-    const page = await pageOf(f.company)
-    expect(page).toMatchObject({ companies_checked: 1, last_company_id: f.company, duplicate_groups: 1, extra_vouchers: 1 })
-    expect(page.duplicate_samples).toEqual([{
-      company_id: f.company, fiscal_period_id: f.period, source_voucher_series: 'A', source_voucher_number: 7, n: 2,
-    }])
+    expect(await pageOf(f.company)).toMatchObject({ duplicate_groups: 0, extra_vouchers: 0, duplicate_samples: [],
+      legacy_duplicate_groups: 1, legacy_extra_vouchers: 1 })
   })
 
-  it('finds it in a scan of every page too: the pages partition the companies', async () => {
+  it('finds them in a scan of every page too: the pages partition the companies', async () => {
     const before = await scanAll(25)
     const f = await seedCompany()
-    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7 })
+    const job = await importJob(f, f.period, 'completed')
+    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7, batch: job })
     await importedVoucher(f, { voucherNumber: 2, sourceNumber: 7 })
     await importedVoucher(f, { voucherNumber: 3, sourceNumber: 7 })
+    await importedVoucher(f, { voucherNumber: 4, sourceNumber: 9 })
+    await importedVoucher(f, { voucherNumber: 5, sourceNumber: 9 })
 
     const after = await scanAll(25)
     const { rows } = await client.query('SELECT count(*)::int AS n FROM companies')
     expect(after.companies).toBe(rows[0].n)
     expect(after.groups).toBe(before.groups + 1)
     expect(after.extra).toBe(before.extra + 2)
+    expect(after.legacyGroups).toBe(before.legacyGroups + 1)
+    expect(after.legacyExtra).toBe(before.legacyExtra + 1)
   })
 
-  it('counts a duplicate a batch-owned voucher shares with a legacy one', async () => {
+  it('does not count a reused source number on another date in the same fiscal year: that is another voucher', async () => {
+    // A first fiscal year longer than twelve months, where the old system
+    // restarted its numbering each calendar year (prod, 2026-11-16).
     const f = await seedCompany()
     const job = await importJob(f, f.period, 'completed')
-    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7, batch: job })
-    await importedVoucher(f, { voucherNumber: 2, sourceNumber: 7 })
+    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 1, date: '2026-01-05' })
+    await importedVoucher(f, { voucherNumber: 2, sourceNumber: 1, date: '2026-09-01' })
+    await importedVoucher(f, { voucherNumber: 3, sourceNumber: 2, batch: job, date: '2026-01-07' })
+    await importedVoucher(f, { voucherNumber: 4, sourceNumber: 2, date: '2026-09-03' })
 
-    expect(await pageOf(f.company)).toMatchObject({ duplicate_groups: 1, extra_vouchers: 1 })
+    expect(await pageOf(f.company)).toMatchObject({ duplicate_groups: 0, extra_vouchers: 0, duplicate_samples: [],
+      legacy_duplicate_groups: 0, legacy_extra_vouchers: 0 })
   })
 
   it('does not count a copy that is not posted, or the same source number in another fiscal year', async () => {
@@ -172,14 +205,15 @@ describe('check_sie_import_duplicate_vouchers', () => {
     await importedVoucher(f, { voucherNumber: 2, sourceNumber: 7, status: 'draft' })
     await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7, period: f.earlier })
 
-    expect(await pageOf(f.company)).toMatchObject({ companies_checked: 1, duplicate_groups: 0, extra_vouchers: 0, duplicate_samples: [] })
+    expect(await pageOf(f.company)).toMatchObject({ companies_checked: 1, duplicate_groups: 0, extra_vouchers: 0,
+      duplicate_samples: [], legacy_duplicate_groups: 0, legacy_extra_vouchers: 0 })
   })
 
   it('answers done with an empty page past the last company', async () => {
     expect(await client.query("SELECT check_sie_import_duplicate_vouchers('ffffffff-ffff-ffff-ffff-ffffffffffff', 500) AS r")
       .then((r) => r.rows[0].r)).toEqual({
       companies_checked: 0, last_company_id: 'ffffffff-ffff-ffff-ffff-ffffffffffff', done: true,
-      duplicate_groups: 0, extra_vouchers: 0, duplicate_samples: [],
+      duplicate_groups: 0, extra_vouchers: 0, duplicate_samples: [], legacy_duplicate_groups: 0, legacy_extra_vouchers: 0,
     })
   })
 
@@ -207,6 +241,35 @@ describe('check_sie_import_duplicate_vouchers', () => {
     expect(plan).toContain('idx_journal_entries_posted_import_source_voucher')
     expect(plan).not.toMatch(/"Node Type":"(Sort|Incremental Sort|Seq Scan)"/)
     expect(plan).not.toContain('"Strategy":"Hashed"')
+  })
+})
+
+describe('why legacy copies go unalerted: the database refuses every other way to add a copy', () => {
+  it('refuses a new imported voucher without a batch identity', async () => {
+    const f = await seedCompany()
+    await expect(client.query(`INSERT INTO journal_entries(company_id,user_id,fiscal_period_id,voucher_series,voucher_number,
+        source_type,source_voucher_series,source_voucher_number,entry_date,description,status)
+      VALUES($1,$2,$3,'A',1,'import','A',7,'2026-02-01','Synthetic import','draft')`, [f.company, f.user, f.period]))
+      .rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('refuses to turn a voucher into an import without a batch identity', async () => {
+    const f = await seedCompany()
+    const { rows } = await client.query(`INSERT INTO journal_entries(company_id,user_id,fiscal_period_id,voucher_series,voucher_number,
+        source_type,entry_date,description,status)
+      VALUES($1,$2,$3,'A',1,'manual','2026-02-01','Synthetic manual','draft') RETURNING id`, [f.company, f.user, f.period])
+    await expect(client.query(
+      "UPDATE journal_entries SET source_type='import',source_voucher_series='A',source_voucher_number=7 WHERE id=$1", [rows[0].id]))
+      .rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('refuses to post a second batch-owned voucher for the same source voucher in a fiscal year', async () => {
+    const f = await seedCompany()
+    const first = await importJob(f, f.period, 'completed')
+    const second = await importJob(f, f.period, 'completed')
+    await importedVoucher(f, { voucherNumber: 1, sourceNumber: 7, batch: first })
+    await expect(importedVoucher(f, { voucherNumber: 2, sourceNumber: 7, batch: second }))
+      .rejects.toMatchObject({ code: '23505' })
   })
 })
 

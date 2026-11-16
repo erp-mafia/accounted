@@ -1,0 +1,1 @@
+[2026-11-16] The SIE duplicate check counts a copy as the same source series, number and date in a fiscal year, and alerts only on copies holding a batch-owned voucher; copies of pre-batch vouchers are reported, not alerted, since the database refuses new ones.
