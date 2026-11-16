@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dismissPolicy, firstStep, nextStep, stepPosition, stepsFor } from '../flow-steps'
+import { dismissPolicy, firstStep, nextStep, offersFileImport, stepPosition, stepsFor } from '../flow-steps'
 
 describe('stepsFor', () => {
   it('a switch opens with what changes, a new connection and a renewal start at the bank', () => {
@@ -51,5 +51,25 @@ describe('dismissPolicy', () => {
     expect(dismissPolicy('bankid')).toBe('confirm')
     expect(dismissPolicy('accounts')).toBe('confirm')
     for (const step of ['intro', 'bank', 'payments', 'done'] as const) expect(dismissPolicy(step)).toBe('free')
+  })
+
+  it('closes a refused BankID at once: nothing is running to interrupt', () => {
+    expect(dismissPolicy('bankid', true)).toBe('free')
+    expect(dismissPolicy('bankid', false)).toBe('confirm')
+    // A refusal is a state of the BankID step only: an unsaved selection still asks.
+    expect(dismissPolicy('accounts', true)).toBe('confirm')
+  })
+})
+
+describe('offersFileImport', () => {
+  it('points a refused BankID on to bank file import from the settings pages', () => {
+    expect(offersFileImport('banking')).toBe(true)
+    expect(offersFileImport('connections')).toBe(true)
+    expect(offersFileImport(null)).toBe(true)
+  })
+
+  it('does not from onboarding, which has its own way on, or from the signatory page, whose reader has no login', () => {
+    expect(offersFileImport('onboarding')).toBe(false)
+    expect(offersFileImport('koppla')).toBe(false)
   })
 })

@@ -1,0 +1,1 @@
+[2026-11-17] A BankID the bank has refused closes without the "Avbryt kopplingen?" confirm (nothing is running; its half-made connection is still removed) and shows the bank prerequisite, its guide and a link to bank file import under the reason. Onboarding gets no file link: it has its own way on.

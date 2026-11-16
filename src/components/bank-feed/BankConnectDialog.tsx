@@ -16,7 +16,8 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { FlowHelp, FlowSteps, flowPosition, flowShowsBankMark, flowTitle } from './BankConnectSteps'
-import { dismissPolicy } from './flow-steps'
+import { closeOutcome } from './connect-flow-reducer'
+import { offersFileImport } from './flow-steps'
 import { fetchOpenPaymentsOverview, sessionOpenPaymentsApi, type ConnectionView } from './open-payments-client'
 import { useBankConnectController, type BankConnectBackend } from './use-bank-connect-controller'
 import { resumeFlowUrl, verificationMailto } from './verification-mail'
@@ -149,10 +150,13 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }
 
   function requestClose() {
-    if (dismissPolicy(state.step) === 'confirm') {
+    const outcome = closeOutcome(state)
+    if (outcome === 'confirm') {
       setConfirmClose(true)
       return
     }
+    // A refused BankID closes at once; its half-made connection is removed behind the close.
+    if (outcome === 'remove') void controller.abandon()
     onClose()
   }
 
@@ -167,6 +171,15 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
     ? () => {
         onClose()
         router.push('/settings/banking')
+      }
+    : undefined
+
+  // Under a refusal, the way on is the bank file import: the flow closes as
+  // Avbryt closes it there, and the import page opens.
+  const importFile = offersFileImport(session.returnTo)
+    ? () => {
+        requestClose()
+        router.push('/import?mode=bank')
       }
     : undefined
 
@@ -213,6 +226,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
             onClose={onClose}
             onEarlierConnection={earlierConnection}
             onCopyReminder={copyReminder}
+            onImportFile={importFile}
             onSendToSignatory={sendToSignatory}
             onCopyForSignatory={copyForSignatory}
           />

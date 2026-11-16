@@ -58,11 +58,13 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { resolveInitialMode } from '@/lib/ui-state/client'
 import {
+  hasOpenBankPaymentOrder,
   openPaymentMarker,
   stagesFor,
   type InvoiceLifecycle,
   type SupplierInvoiceLadderStage,
 } from '@/lib/supplier-invoices/stages'
+import { paymentOrderWaitsFor } from '@/lib/payments/orders/status'
 import { formatCurrency } from '@/lib/utils'
 import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import {
@@ -782,7 +784,7 @@ export default function SupplierInvoiceDetailPage() {
       ? [{ key: 'mark_paid', label: t('mark_paid'), icon: canWrite ? CreditCardIcon : LockClosedIcon, onSelect: () => setIsPayDialogOpen(true) }]
       : []),
   ].map((option) => ({ ...option, disabled: isProcessing || !canWrite, disabledTitle: payDisabledTitle }))
-  const payVariant = canApprove || openPayment === 'bank_payment' ? 'outline' : 'default'
+  const payVariant = canApprove || hasOpenBankPaymentOrder(openPayment) ? 'outline' : 'default'
   const singlePayOption = payOptions.length === 1 ? payOptions[0] : null
   // #967: registered-without-booking (deferred booking). Ekonomi books the
   // registration verifikat from here.
@@ -1161,11 +1163,15 @@ export default function SupplierInvoiceDetailPage() {
               </DefRow>
             )}
             {/* An open bank payment, linked to where it is followed (the header
-                chip that used to carry the link repeated the strip). */}
+                chip that used to carry the link repeated the strip). One that
+                still waits for a person says so: that page is where it is
+                approved and signed. */}
             {lifecycle?.payment_order && (
               <DefRow label={t('bank_payment_label')}>
                 <Link href="/payments" className="hover:underline underline-offset-4">
-                  {t('bank_payment_created', { date: formatDate(lifecycle.payment_order.created_at) })}
+                  {t(paymentOrderWaitsFor(lifecycle.payment_order) ? 'bank_payment_created_unsigned' : 'bank_payment_created', {
+                    date: formatDate(lifecycle.payment_order.created_at),
+                  })}
                 </Link>
               </DefRow>
             )}

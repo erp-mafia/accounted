@@ -37,6 +37,7 @@ vi.mock('../categories', () => ({
   countDocumentsToSign: vi.fn().mockResolvedValue(0),
   countPaymentsFailedDue: vi.fn().mockResolvedValue(0),
   countAttestedToPayDue: vi.fn().mockResolvedValue(0),
+  countPaymentsToSignDue: vi.fn().mockResolvedValue(0),
 }))
 
 vi.mock('@/lib/suggestions/list', () => ({
@@ -97,6 +98,7 @@ describe('getWorklistCounts', () => {
       documents_to_sign: 0,
       payment_failed: 0,
       attested_to_pay: 0,
+      payments_to_sign: 0,
     })
   })
 
@@ -127,6 +129,25 @@ describe('getWorklistCounts', () => {
     const given = await getWorklistCounts(supabase, 'company-1', { attestedToPayDue: Promise.resolve({ count: 2, next_due: '2026-11-19', overdue: 0 }) })
     expect(given.counts.attested_to_pay).toBe(2)
     expect(countAttestedToPayDue).not.toHaveBeenCalled()
+  })
+
+  it('counts the bank payments nobody has signed as one row in the total, from a caller-supplied value when given (crm#1925)', async () => {
+    const { countPaymentsToSignDue } = await import('../categories')
+    const base = (await getWorklistCounts(supabase, 'company-1', { paymentsToSignDue: null })).total
+    expect(countPaymentsToSignDue).not.toHaveBeenCalled()
+    vi.mocked(countPaymentsToSignDue).mockResolvedValueOnce(3)
+    const counted = await getWorklistCounts(supabase, 'company-1')
+    expect(counted.counts.payments_to_sign).toBe(3)
+    // One visit to Betalningar, however many payments wait: the total moves by one.
+    expect(counted.total).toBe(base + 1)
+    expect(countPaymentsToSignDue).toHaveBeenCalledWith(supabase, 'company-1')
+    vi.mocked(countPaymentsToSignDue).mockClear()
+    const given = await getWorklistCounts(supabase, 'company-1', {
+      paymentsToSignDue: Promise.resolve({ count: 2, to_approve: 2, next_date: '2026-11-20', amount: 5000, currency: 'SEK' }),
+    })
+    expect(given.counts.payments_to_sign).toBe(2)
+    expect(given.total).toBe(base + 1)
+    expect(countPaymentsToSignDue).not.toHaveBeenCalled()
   })
 
   it('says where the company\'s inbox lives: the new Inkorg in the rollout, else the workspace', async () => {

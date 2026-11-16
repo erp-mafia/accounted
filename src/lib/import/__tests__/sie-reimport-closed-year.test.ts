@@ -32,19 +32,26 @@ const line = (id: string, entryId: string, account: string, debit: number, credi
 /**
  * 2024: two sales (A1, A2), depreciation booked as a year_end entry (A3) and
  * the resultatavslut (A4), which zeroes 3001 and 7832 into 2099.
+ *
+ * 'through-8999' is the year as a previous system closes it (crm#1869): A4
+ * books the result as Dr 8999 / Cr 2099 and zeroes no account.
  */
-async function closedYearExport(): Promise<string> {
+async function closedYearExport(closing: 'zeroing' | 'through-8999' = 'zeroing'): Promise<string> {
+  const through8999 = closing === 'through-8999'
   const db = createLedgerFakeDb({
     companyId: COMPANY,
     tables: {
       fiscal_periods: [
-        { id: 'p-2024', company_id: COMPANY, period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null, closing_entry_id: 'e4', is_closed: true },
+        {
+          id: 'p-2024', company_id: COMPANY, period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null,
+          closing_entry_id: through8999 ? null : 'e4', is_closed: true, closed_externally: through8999,
+        },
       ],
       journal_entries: [
         entry('e1', 'p-2024', '2024-03-01'),
         entry('e2', 'p-2024', '2024-06-01'),
         entry('e3', 'p-2024', '2024-12-31', { source_type: 'year_end' }),
-        entry('e4', 'p-2024', '2024-12-31', { source_type: 'year_end' }),
+        entry('e4', 'p-2024', '2024-12-31', { source_type: through8999 ? 'import' : 'year_end' }),
       ],
       journal_entry_lines: [
         line('l1', 'e1', '1930', 500, 0),
@@ -53,8 +60,9 @@ async function closedYearExport(): Promise<string> {
         line('l4', 'e2', '3001', 0, 300),
         line('l5', 'e3', '7832', 100, 0),
         line('l6', 'e3', '1229', 0, 100),
-        line('l7', 'e4', '3001', 800, 0),
-        line('l8', 'e4', '7832', 0, 100),
+        ...(through8999
+          ? [line('l7', 'e4', '8999', 700, 0)]
+          : [line('l7', 'e4', '3001', 800, 0), line('l8', 'e4', '7832', 0, 100)]),
         line('l9', 'e4', '2099', 0, 700),
       ],
     },
@@ -134,6 +142,25 @@ describe('re-importing a closed year exported by Accounted (crm#1727)', () => {
       .replace('#RES 0 7832 100.00', '#RES 0 7832 0.00')
     const { closing, lines } = reimportSkippingA2(postClosing, true)
     expect(closing.size).toBeGreaterThan(0)
+    expect(Object.fromEntries(lines)).toEqual({ '1930': 300, '3001': -300 })
+  })
+})
+
+// crm#1869: the export used to take the Dr 8999 / Cr 2099 booking out of
+// #RES and write 8999 as 0.00. The importer reads a closing through 8999 as
+// already in #RES, so the two disagreed by the whole result on 8999.
+describe('re-importing a year closed through 8999, exported by Accounted (crm#1869)', () => {
+  it('the export carries the booked result on 8999 in #RES 0, next to the result accounts as they stand', async () => {
+    const records = (await closedYearExport('through-8999')).split('\r\n')
+    expect(records).toContain('#RES 0 3001 -800.00')
+    expect(records).toContain('#RES 0 7832 100.00')
+    expect(records).toContain('#RES 0 8999 700.00')
+    expect(records).toContain('#UB 0 2099 -700.00')
+  })
+
+  it('books only the skipped voucher in the migration adjustment, nothing on 8999', async () => {
+    const { closing, lines } = reimportSkippingA2(await closedYearExport('through-8999'), true)
+    expect(Object.fromEntries(closing)).toEqual({ '8999': 700, '2099': -700 })
     expect(Object.fromEntries(lines)).toEqual({ '1930': 300, '3001': -300 })
   })
 })

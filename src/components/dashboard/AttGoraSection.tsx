@@ -67,6 +67,7 @@ import type {
   AttestedToPayDue,
   BankSwitchDue,
   ExpensePayoutDue,
+  PaymentsToSignDue,
   SkattekontoPaymentDue,
   SupplierInvoiceAttestDue,
   WorklistCounts,
@@ -132,6 +133,12 @@ interface AttGoraSectionProps {
    * "Betala N leverantörsfakturor", the invoices the Att betala tab lists.
    */
   attestedToPay?: AttestedToPayDue | null
+  /**
+   * Bank payments that wait for a person's approval or BankID signature
+   * (lib/worklist payments_to_sign): one Betala row, "Signera N betalningar",
+   * opening Betalningar, where they are approved and signed.
+   */
+  paymentsToSign?: PaymentsToSignDue | null
   /**
    * Bank connections still to switch from Enable Banking to Open Payments
    * (lib/worklist bank_switch): one row each, in Bevaka while the deadline
@@ -335,6 +342,7 @@ export default function AttGoraSection({
   documentsToSign = [],
   skattekontoPayment = null,
   attestedToPay = null,
+  paymentsToSign = null,
   bankSwitches = [],
   paymentsVerification = null,
   supplierPayeeChanges = [],
@@ -657,6 +665,33 @@ export default function AttGoraSection({
       // The row's own label is the action, the object and the count.
       stepGo: { label: t('row_supplier_invoices_to_pay', { count: attestedToPay.count }) },
       facts: [...fact('due', formatDate(attestedToPay.next_due))],
+    })
+  }
+  // Prepared and not signed (by a person, the API or an agent), or back from
+  // a BankID that ended unsigned: nothing reaches the bank until someone signs.
+  if (paymentsToSign) {
+    const label = t('row_payments_to_sign', { count: paymentsToSign.count })
+    const paymentDay = formatDate(paymentsToSign.next_date)
+    add({
+      key: 'payments-to-sign',
+      group: 'pay',
+      icon: PencilSquareIcon,
+      label,
+      hint: t('row_payments_to_sign_hint', { count: paymentsToSign.count }),
+      detail:
+        paymentsToSign.to_approve > 0
+          ? t('row_payments_to_sign_detail_approve', { count: paymentsToSign.to_approve, date: paymentDay })
+          : t('row_payments_to_sign_detail', { date: paymentDay }),
+      href: PAYMENTS_PAGE_PATH,
+      due: paymentsToSign.next_date,
+      things: paymentsToSign.count,
+      amount: paymentsToSign.amount !== null ? { value: paymentsToSign.amount, currency: paymentsToSign.currency } : undefined,
+      // The row's own label is the action, the object and the count.
+      stepGo: { label },
+      facts: [
+        ...fact('to_approve', paymentsToSign.to_approve > 0 ? String(paymentsToSign.to_approve) : null),
+        ...fact('payment_day', paymentDay),
+      ],
     })
   }
   if (skattekontoPayment) {

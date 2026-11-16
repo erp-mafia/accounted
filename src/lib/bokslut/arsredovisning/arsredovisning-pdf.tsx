@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { pdfTextDeep } from '@/lib/pdf/number-text'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
@@ -219,12 +220,16 @@ function PageChrome({
  *   fill in by hand), 'draft' otherwise: see signature-pages.ts.
  */
 export function ArsredovisningPDF({
-  data,
+  data: reportData,
   mode = 'draft',
 }: {
   data: ArsredovisningData
   mode?: ArsredovisningPdfMode
 }) {
+  // Every text below prints in Helvetica, which has no U+2212 glyph: the
+  // typed texts (förvaltningsberättelse, resultatdisposition, notes) are
+  // made safe here, once, like the amounts are in fmt (crm#1887).
+  const data = pdfTextDeep(reportData)
   // An ekonomisk förening adopts the statements at its ordinarie
   // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and must add
   // the ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.

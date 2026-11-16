@@ -22,9 +22,11 @@ import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
  *
  * The aliases (PAGE_ALIASES in CommandPalette.tsx) are what the tree cannot say: the words people type for a page
  * (its old menu name, "verifikat per konto"), and the few destinations that
- * are not a row of their own (single reports, Inställningar, Hjälp). An alias
- * whose href is a row of the tree lends that row its words; any other alias
- * is an entry of its own, filed under the area the shell lights for its URL.
+ * are not a row of their own (single reports, Inställningar and the settings
+ * pages people look for by name, Hjälp). An alias whose href is a row of the
+ * tree, or the page an area's create button opens, lends that entry its
+ * words; any other alias is an entry of its own, filed under the area the
+ * shell lights for its URL.
  */
 
 export type PalettePage = {
@@ -44,10 +46,14 @@ export type PageAlias = {
   id: string
   label: string
   hint?: string
-  icon: AppIcon
+  /** Shown where the alias is an entry of its own; absent, the entry takes its area's icon. A row keeps its own. */
+  icon?: AppIcon
   href: string
   keywords?: string
 }
+
+/** A section of Inställningar (/settings/banking), as opposed to Inställningar itself. */
+const SETTINGS_SECTION_PATH = /^\/settings\/[^/]/
 
 /** The new Inkorg page is a page of the invoice-inbox extension, outside /e/. */
 const PAGE_EXTENSION: Record<string, { sector: string; id: string }> = {
@@ -79,29 +85,31 @@ function listedAreas({ passes, hasCompany, isByraMember, areas = NAV_V3_AREAS }:
 export function palettePages(input: PalettePagesInput): PalettePage[] {
   const { navLabel, aliases: PAGE_ALIASES } = input
   const areas = listedAreas(input)
-  const areaLabel = (id: NavAreaId): string => navLabel((input.areas ?? NAV_V3_AREAS).find((a) => a.id === id)!.labelKey)
+  const allAreas = input.areas ?? NAV_V3_AREAS
+  const areaOf = (id: NavAreaId): NavV3Area => allAreas.find((a) => a.id === id)!
+  // The aliases of an address: their labels are words people still type
+  // ("Kundfakturor", "Granskning", "API och MCP"), so they join the keywords.
+  const aliasWords = (href: string): string[] =>
+    PAGE_ALIASES.filter((alias) => alias.href === href).flatMap((alias) => [alias.label, alias.hint ?? '', alias.keywords ?? ''])
 
   const pages: PalettePage[] = []
   const rowHrefs = new Set<string>()
   for (const area of areas) {
     for (const item of areaItems(area)) {
       rowHrefs.add(item.href)
-      // The aliases of the row: their labels are words people still type
-      // ("Kundfakturor", "Granskning"), so they join the keywords.
-      const aliases = PAGE_ALIASES.filter((alias) => alias.href === item.href)
-      const words = aliases.flatMap((alias) => [alias.label, alias.hint ?? '', alias.keywords ?? ''])
       pages.push({
         id: `nav:${area.id}:${item.href}`,
         label: navLabel(item.labelKey),
         icon: item.icon,
         href: item.href,
-        keywords: [navLabel(area.labelKey), ...words].filter(Boolean).join(' '),
+        keywords: [navLabel(area.labelKey), ...aliasWords(item.href)].filter(Boolean).join(' '),
         group: navLabel(area.labelKey),
         extension: PAGE_EXTENSION[item.href],
       })
     }
     // A page the area reaches only through its create button (Koppla en
-    // agent) has no row to list: it is offered under the area by that name.
+    // agent) has no row to list: it is offered under the area by that name,
+    // and answers to its aliases as a row does.
     const createPage = areaCreatePage(area)
     if (createPage) {
       rowHrefs.add(createPage.href)
@@ -110,7 +118,7 @@ export function palettePages(input: PalettePagesInput): PalettePage[] {
         label: navLabel(createPage.labelKey),
         icon: area.icon,
         href: createPage.href,
-        keywords: navLabel(area.labelKey),
+        keywords: [navLabel(area.labelKey), ...aliasWords(createPage.href)].filter(Boolean).join(' '),
         group: navLabel(area.labelKey),
       })
     }
@@ -118,15 +126,23 @@ export function palettePages(input: PalettePagesInput): PalettePage[] {
 
   // The destinations with no row: filed under the area the shell lights for
   // them, and offered only while that area is on the rail (Inställningar
-  // always is). An alias of a row that is gated away goes with its row.
-  const allRowHrefs = new Set((input.areas ?? NAV_V3_AREAS).flatMap((area) => areaItems(area).map((item) => item.href)))
+  // always is; a section of it named here, Bank or Abonnemang, is the
+  // company's and needs one open). An alias of a row or a create page that is
+  // gated away goes with it.
+  const allRowHrefs = new Set(allAreas.flatMap((area) => areaItems(area).map((item) => item.href)))
+  for (const area of allAreas) {
+    const createPage = areaCreatePage(area)
+    if (createPage) allRowHrefs.add(createPage.href)
+  }
   const shown = new Set<NavAreaId>([...areas.map((area) => area.id), 'settings'])
   for (const alias of PAGE_ALIASES) {
     if (rowHrefs.has(alias.href) || allRowHrefs.has(alias.href)) continue
     const [path, search = ''] = alias.href.split('?')
     const place = resolveNavPlace(hrefPath(path), search)
     if (!place || !shown.has(place.area)) continue
-    pages.push({ ...alias, group: areaLabel(place.area) })
+    if (place.area === 'settings' && !input.hasCompany && SETTINGS_SECTION_PATH.test(path)) continue
+    const area = areaOf(place.area)
+    pages.push({ ...alias, icon: alias.icon ?? area.icon, group: navLabel(area.labelKey) })
   }
   return pages
 }

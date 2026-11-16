@@ -29,8 +29,13 @@ export interface ListTabInvoice {
   waits_for_attest?: boolean | null
 }
 
-/** The markers that say the payment is with the bank: such an invoice waits for nobody. */
-const AT_THE_BANK: ReadonlySet<OpenPaymentMarker> = new Set(['bank_payment', 'bank_entered'])
+/**
+ * The markers that keep an invoice out of Att betala: a bank payment order
+ * covers it (at the bank, or prepared and waiting for its signature on
+ * Betalningar, where Att göra's Signera row leads), or the tick holds. No new
+ * payment is made of such an invoice.
+ */
+const AT_THE_BANK: ReadonlySet<OpenPaymentMarker> = new Set(['bank_payment', 'bank_payment_unsigned', 'bank_entered'])
 
 /**
  * Registrerade: what can still be attested (canApproveSupplierInvoice: not
@@ -54,9 +59,9 @@ export function isAttestedInList(invoice: ListTabInvoice): boolean {
 /**
  * Att betala is what waits for someone to pay it (lib/supplier-invoices/to-pay.ts
  * waitsToBePaid), the same invoices the Att göra Betala row counts. At the bank
- * is an open bank payment (crm#1243) or the "Inlagd i banken" tick until the
- * invoice falls due (crm#1824, bankEnteredHolds); an invoice in a payment file
- * stays, a generated file may never have reached the bank.
+ * is an open bank payment, signed or not (crm#1243), or the "Inlagd i banken"
+ * tick until the invoice falls due (crm#1824, bankEnteredHolds); an invoice in
+ * a payment file stays, a generated file may never have reached the bank.
  */
 export function isToPayInList(invoice: ListTabInvoice): boolean {
   const marker = openPaymentMarker(invoice)

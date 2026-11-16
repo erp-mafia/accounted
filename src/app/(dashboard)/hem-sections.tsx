@@ -24,6 +24,7 @@ import {
   listDocumentsToSign,
   listExpensePayoutsDue,
   listPaymentsFailedDue,
+  listPaymentsToSignDue,
   listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
@@ -325,6 +326,9 @@ export async function HemPanesSection({
   // And the supplier invoices that wait to be paid: one Betala row, without
   // the ones the failed-payment rows above already show.
   const attestedToPayPromise = listAttestedToPayDue(supabase, companyId, { paymentsFailed: paymentsFailedPromise })
+  // And the bank payments that wait for a person's approval or BankID
+  // signature: one Signera row, the count comes from the same read.
+  const paymentsToSignPromise = listPaymentsToSignDue(supabase, companyId)
   // And the open suggestions: one Förslag card each (at most three); the
   // count is the list's length.
   const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
@@ -356,6 +360,7 @@ export async function HemPanesSection({
     documentsToSign,
     paymentsFailed,
     attestedToPay,
+    paymentsToSign,
     nextDeadlineRes,
   ] =
     await Promise.all([
@@ -373,6 +378,7 @@ export async function HemPanesSection({
         openSuggestions: openSuggestionsPromise,
         documentsToSign: documentsToSignPromise,
         attestedToPayDue: attestedToPayPromise,
+        paymentsToSignDue: paymentsToSignPromise,
       }),
       expensePayoutsPromise,
       skattekontoPaymentPromise,
@@ -395,6 +401,7 @@ export async function HemPanesSection({
       documentsToSignPromise,
       paymentsFailedPromise,
       attestedToPayPromise,
+      paymentsToSignPromise,
       // Hem's glance line: the next open deadline from today on (the same
       // rows /deadlines lists; its stored title is shown as it is there).
       view === 'hem'
@@ -490,6 +497,7 @@ export async function HemPanesSection({
       documentsToSign={documentsToSign}
       skattekontoPayment={skattekontoPayment}
       attestedToPay={attestedToPay}
+      paymentsToSign={paymentsToSign}
       missingUnderlag={missingUnderlag}
       bankSwitches={bankSwitches}
       paymentsVerification={paymentsVerification}

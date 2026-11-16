@@ -19,8 +19,8 @@ import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { BankMark } from '@/components/banks/BankMark'
 import { BANK_CONNECT_SIGNATORY_TARGET } from '@/lib/bank-feed/return-url'
 import { FlowHelp, FlowSteps, flowPosition, flowShowsBankMark, flowTitle } from './BankConnectSteps'
-import type { FlowBank, FlowReturn } from './connect-flow-reducer'
-import { dismissPolicy, type FlowMode } from './flow-steps'
+import { closeOutcome, type FlowBank, type FlowReturn } from './connect-flow-reducer'
+import type { FlowMode } from './flow-steps'
 import type { OpenPaymentsBank } from './open-payments-client'
 import { parseBankConnectReturn, stripBankConnectReturn } from './return-link'
 import { createSignatoryBackend, recallSignatoryPersonalNumber } from './signatory-client'
@@ -176,10 +176,13 @@ function SignatoryFlow({
   }, [resumedId, token, dispatch])
 
   function requestCancel() {
-    if (dismissPolicy(state.step) === 'confirm') {
+    const closing = closeOutcome(state)
+    if (closing === 'confirm') {
       setConfirmCancel(true)
       return
     }
+    // A refused BankID cancels at once; its half-made connection is removed behind the cancel.
+    if (closing === 'remove') void controller.abandon()
     setOutcome('cancelled')
   }
 

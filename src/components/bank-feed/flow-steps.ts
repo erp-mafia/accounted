@@ -6,6 +6,8 @@
  * yet verified, so the "Steg n av N" line counts it only then.
  */
 
+import { BANK_CONNECT_SIGNATORY_TARGET, type BankConnectReturnTarget } from '@/lib/bank-feed/return-url'
+
 export type FlowMode = 'new' | 'switch' | 'renew' | 'resume'
 
 export type FlowStep = 'intro' | 'bank' | 'bankid' | 'accounts' | 'payments' | 'done'
@@ -54,10 +56,23 @@ export type DismissPolicy = 'free' | 'confirm'
  * Whether Esc and a click outside close the dialog at once. The intro, the
  * bank list and the finished screen have nothing in flight. A BankID that is
  * running or a selection being activated asks first: closing there leaves a
- * half-made connection behind. The payments offer closes freely: the
- * connection is already live and the verification can be done from the
- * settings later.
+ * half-made connection behind. A BankID the bank has refused (`consentRefused`)
+ * has nothing running to interrupt, so it closes at once; its half-made
+ * connection still goes (connect-flow-reducer.ts closeOutcome). The payments
+ * offer closes freely: the connection is already live and the verification
+ * can be done from the settings later.
  */
-export function dismissPolicy(step: FlowStep): DismissPolicy {
-  return step === 'bankid' || step === 'accounts' ? 'confirm' : 'free'
+export function dismissPolicy(step: FlowStep, consentRefused = false): DismissPolicy {
+  if (step === 'bankid') return consentRefused ? 'free' : 'confirm'
+  return step === 'accounts' ? 'confirm' : 'free'
+}
+
+/**
+ * Whether a refused BankID points on to bank file import from this entry
+ * point. Onboarding does not: its own way on without a bank waits right
+ * behind the dialog, and a link out would leave the journey. The signatory
+ * page does not: its reader has no login to import with.
+ */
+export function offersFileImport(entryPoint: BankConnectReturnTarget | null): boolean {
+  return entryPoint !== 'onboarding' && entryPoint !== BANK_CONNECT_SIGNATORY_TARGET
 }

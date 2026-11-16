@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankDetailsSettled, displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
+import { bankDetailsSettled, closeOutcome, consentRefused, displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
 import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
 import { selectionBlocker } from '../account-selection'
 
@@ -461,6 +461,61 @@ describe('removesConnectionOnClose', () => {
   it('a connection resumed for the second signatory stays; one the person came back to from the bank goes', () => {
     expect(removesConnectionOnClose(openFlow('resume', { connectionId: 'c-1' }))).toBe(false)
     expect(removesConnectionOnClose(openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } }))).toBe(true)
+  })
+})
+
+/**
+ * A bank's refusal left only Avbryt, which asked "Avbryt kopplingen?
+ * BankID-signeringen avbryts" although nothing was running.
+ */
+describe('closing the flow: what a request to close does', () => {
+  const running = run(
+    openFlow('new'),
+    { type: 'bank_picked', bank: SWEDBANK },
+    { type: 'to_bankid' },
+    { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } },
+  )
+  const refused = flowReducer(running, { type: 'polled', poll: poll({ state: 'failed', failure_code: 'PSU_OPEN_BANKING_RIGHTS_MISSING' }) })
+
+  it('asks before closing over a running BankID, a BankID not yet started and an unsaved selection', () => {
+    expect(consentRefused(running)).toBe(false)
+    expect(closeOutcome(running)).toBe('confirm')
+    expect(closeOutcome(run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'to_bankid' }))).toBe('confirm')
+    const atAccounts = flowReducer(running, { type: 'polled', poll: poll({ state: 'valid', accounts: [account()] }) })
+    expect(closeOutcome(atAccounts)).toBe('confirm')
+  })
+
+  it('closes at once when the bank has refused, and still removes the half-made connection', () => {
+    expect(consentRefused(refused)).toBe(true)
+    expect(closeOutcome(refused)).toBe('remove')
+    // Refused at the start itself (the attempt came back failed).
+    const refusedAtStart = run(
+      openFlow('new'),
+      { type: 'bank_picked', bank: SWEDBANK },
+      { type: 'to_bankid' },
+      { type: 'started', result: { connection_id: 'c-1', attempt: attempt({ state: 'failed', failure_code: 'KYC_INVALID' }) } },
+    )
+    expect(closeOutcome(refusedAtStart)).toBe('remove')
+    // Back from the bank's own page with an error: the connection is the person's own and goes.
+    expect(closeOutcome(openFlow('resume', { connectionId: 'c-1', returned: { result: 'error', code: 'SCA_FAILED' } }))).toBe('remove')
+  })
+
+  it('asks again once Försök igen has a new BankID running', () => {
+    const restarted = run(refused, { type: 'start' }, { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } })
+    expect(consentRefused(restarted)).toBe(false)
+    expect(closeOutcome(restarted)).toBe('confirm')
+  })
+
+  it('leaves the first signatory\'s connection alone when the second signatory closes over a refusal', () => {
+    const second = flowReducer(openFlow('resume', { connectionId: 'c-1' }), { type: 'polled', poll: poll({ state: 'failed' }) })
+    expect(closeOutcome(second)).toBe('close')
+  })
+
+  it('just closes where nothing is in flight or the connection is live', () => {
+    expect(closeOutcome(openFlow('switch', { bank: SWEDBANK, replaceConnectionId: 'old' }))).toBe('close')
+    expect(closeOutcome(openFlow('new'))).toBe('close')
+    expect(closeOutcome({ ...running, step: 'payments', connection: view() })).toBe('close')
+    expect(closeOutcome({ ...running, step: 'done', connection: view() })).toBe('close')
   })
 })
 

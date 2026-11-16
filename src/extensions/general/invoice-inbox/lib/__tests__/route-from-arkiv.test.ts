@@ -536,6 +536,16 @@ describe('inboxSawABill: where the readers disagree, the item stays in Underlag'
     expect(inboxSawABill({ documentKind: 'other', totals: { total: 16.4 } }, 'other')).toBe(true)
   })
 
+  it('keeps an amount paid out: a negative total is an amount too (crm#1887)', () => {
+    // A bank's advice of a payout, a refund decision, a credit the reader could not name.
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: -1500 } }, 'other')).toBe(true)
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: '-1500' } }, 'other')).toBe(true)
+    expect(inboxSawABill({ documentKind: 'government_letter', totals: { total: -86 } }, 'decision.skatteverket')).toBe(true)
+    // Still only where the readers leave it open: a typed document goes to its page.
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: -1500 } }, 'minutes.board')).toBe(false)
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: 0 } }, 'other')).toBe(false)
+  })
+
   it('lets go of a letter with nothing to pay, an agreement with an amount in it, and anything the inbox never read', () => {
     expect(inboxSawABill({ documentKind: 'government_letter', totals: { total: null } }, 'registration.bolagsverket')).toBe(false)
     expect(inboxSawABill({ documentKind: 'other', totals: { total: 5000 } }, 'minutes.board')).toBe(false)
@@ -551,11 +561,29 @@ describe('routing a bill the inbox saw', () => {
     expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
   })
 
+  // crm#1887: a bank's advice of a dividend paid out, typed "other" by Arkiv, left Underlag as if nothing
+  // were to be booked, because its amount is negative.
+  it('leaves a payout advice Arkiv could only call other in the queue', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [item({ extracted_data: { documentKind: 'other', totals: { total: -1500 } } })] })
+    expect(await classified('other')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
+  })
+
+  it('still routes an other document with no amount on it', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [item({ extracted_data: { documentKind: 'other', totals: { total: null } } })] })
+    enqueue({})
+    expect(await classified('other')).toBe('routed_to_arkiv')
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: expect.any(String), routed_doc_type: 'other' })
+  })
+
   it('is left in the queue by the nightly catch-up too', async () => {
     enqueue({
       data: [
         { id: 'bill', document_id: 'd1', extracted_data: { documentKind: 'receipt' }, document_attachments: { doc_type: 'other', admission_state: 'admitted' } },
         { id: 'deal', document_id: 'd2', extracted_data: { documentKind: 'other' }, document_attachments: { doc_type: 'agreement.loan', admission_state: 'admitted' } },
+        { id: 'payout', document_id: 'd3', extracted_data: { documentKind: 'other', totals: { total: -1500 } }, document_attachments: { doc_type: 'other', admission_state: 'admitted' } },
       ],
     })
     enqueue({})

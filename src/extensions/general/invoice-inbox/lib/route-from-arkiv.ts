@@ -31,6 +31,8 @@ export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_not
  * congestion-tax bills typed as Skatteverket decisions, credit notes typed "other" and supplier invoices typed
  * as customer invoices left the queue for a section their companies could not open. The company's own sales
  * invoice stays too (crm#1830): Underlag is where it is linked to the payment it brought in, or dropped.
+ * The amount counts whatever its sign (crm#1887): a bank's advice of money paid out reads as a negative total,
+ * and it is as much a verifikat's underlag as a bill is.
  */
 export function inboxSawABill(extracted: Record<string, unknown> | null | undefined, arkivType: string): boolean {
   if (!extracted) return false
@@ -39,7 +41,7 @@ export function inboxSawABill(extracted: Record<string, unknown> | null | undefi
   if (kind === 'receipt' || kind === 'supplier_invoice' || kind === 'credit_note') return true
   const totals = extracted.totals as { total?: unknown } | null | undefined
   const total = typeof totals?.total === 'number' ? totals.total : Number(totals?.total ?? 0)
-  if (!(Number.isFinite(total) && total > 0)) return false
+  if (!(Number.isFinite(total) && total !== 0)) return false
   return kind === 'government_letter' || arkivType === 'other'
 }
 

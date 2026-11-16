@@ -48,7 +48,7 @@ function makeClient() {
   } as any
 }
 
-import { generateSIEExport } from '../sie-export'
+import { encodeSIEToCP437, generateSIEExport } from '../sie-export'
 import { createLedgerFakeDb } from '@/tests/ledger-fake-db'
 
 let supabase: ReturnType<typeof makeClient>
@@ -1269,5 +1269,47 @@ describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', (
     expect(records).toContain('#VER "J" 2 20251231 "Storno J1"')
     expect(records).toContain('#RES 0 7832 0.00')
     expect(records).toContain('#UB 0 1229 0.00')
+  })
+})
+
+// The CP437 file (#FORMAT PC8) the routes serve with encoding=cp437.
+describe('encodeSIEToCP437', () => {
+  const bytesOf = (text: string) => [...encodeSIEToCP437(text)]
+
+  it('passes ASCII through unchanged', () => {
+    expect(bytesOf('#VER "A" 1 20250101 "Hyra"')).toEqual([...Buffer.from('#VER "A" 1 20250101 "Hyra"', 'ascii')])
+  })
+
+  it('writes the Swedish letters on their CP437 bytes', () => {
+    expect(bytesOf('åäöÅÄÖéü')).toEqual([0x86, 0x84, 0x94, 0x8f, 0x8e, 0x99, 0x82, 0x81])
+  })
+
+  // crm#1869: a "·" in a verifikat text came out as "?". Every character of
+  // the code page has its byte; the anchors sit one or two per row of 16.
+  it.each<[string, number]>([
+    ['·', 0xfa],
+    ['°', 0xf8],
+    ['²', 0xfd],
+    ['÷', 0xf6],
+    ['ß', 0xe1],
+    ['µ', 0xe6],
+    ['█', 0xdb],
+    ['─', 0xc4],
+    ['│', 0xb3],
+    ['½', 0xab],
+    ['á', 0xa0],
+    ['£', 0x9c],
+    ['É', 0x90],
+    ['Ç', 0x80],
+    ['\u00A0', 0xff],
+  ])('carries %s as byte %i', (char, byte) => {
+    expect(bytesOf(char)).toEqual([byte])
+  })
+
+  it('writes "?" only for what the code page cannot represent', () => {
+    expect(bytesOf('€')).toEqual([0x3f])
+    expect(bytesOf('Hyra · mars € 10')).toEqual([
+      ...Buffer.from('Hyra ', 'ascii'), 0xfa, ...Buffer.from(' mars ? 10', 'ascii'),
+    ])
   })
 })

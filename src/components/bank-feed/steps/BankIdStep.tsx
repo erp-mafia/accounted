@@ -9,8 +9,8 @@ import { BankIdChallengeView } from '@/components/bankid/BankIdChallengeView'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
 import { isPermanentConsentFailure } from '@/lib/bank-feed/failure-text'
-import type { SigningApproach } from '../bank-help'
-import { redirectInFlight, type FlowAction, type FlowState } from '../connect-flow-reducer'
+import { bankGuideUrl, bankPrerequisiteKey, type SigningApproach } from '../bank-help'
+import { consentRefused, redirectInFlight, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { ConnectMethod } from '../open-payments-client'
 import { useBankFeedFailureText } from '../use-bank-feed-failure-text'
 
@@ -47,8 +47,13 @@ interface BankIdStepProps {
   onContinueToBank: (url: string) => void
   /** Copy the link a second signatory opens; absent where no such link exists (the signatory page), and the offer is not shown. */
   onCopyReminder?: () => void
+  /** Close the flow and open the bank file import, the way on under a refusal; absent where the entry point offers none, and the line is not shown. */
+  onImportFile?: () => void
   closeButton: React.ReactNode
 }
+
+/** A quiet link under a refusal, as the bank step draws its guide link. */
+const QUIET_LINK = 'text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground'
 
 /**
  * Step 2, BankID: before the start, the BankID mark and (when unknown) the
@@ -59,7 +64,10 @@ interface BankIdStepProps {
  * page gets one line and one button, Fortsätt till {bank}; coming back from
  * it, the step waits for the bank's answer without a QR or a countdown. A
  * refusal shows the bank's text and offers a restart (none when the bank's
- * code names something to fix in the online bank); a consent waiting for a
+ * code names something to fix in the online bank), and under it what to do
+ * next: the bank's prerequisite and its guide where we know them (the same
+ * two the bank step shows before the BankID) and the way to bank file
+ * import; a consent waiting for a
  * second signatory says so and hands over a link to copy. Opened from that
  * link (resume), the second signatory gets the personnummer field and
  * Signera som firmatecknare, which starts their own BankID on the same
@@ -84,6 +92,7 @@ export function BankIdStep({
   onSignAsSignatory,
   onContinueToBank,
   onCopyReminder,
+  onImportFile,
   closeButton,
 }: BankIdStepProps) {
   const t = useTranslations('bank_connect')
@@ -155,7 +164,11 @@ export function BankIdStep({
     )
   }
 
-  const failed = state.pollState === 'failed'
+  const failed = consentRefused(state)
+  // What prevents a refusal at this bank, and its guide: said before the
+  // BankID on the bank step, and again here where the bank said no.
+  const prerequisite = state.bank ? bankPrerequisiteKey(state.bank) : null
+  const guideUrl = state.bank ? bankGuideUrl(state.bank) : null
   // The poll gave up (crm#1355): the connection is gone or nothing answers.
   const pollError = state.pollError
   // A refusal the person resolves in the online bank: the text, no Försök igen.
@@ -196,11 +209,30 @@ export function BankIdStep({
         <div className="space-y-3 text-center">
           {/* One attention line: a restart that failed replaces the bank's earlier refusal. */}
           <AttnLine className="text-center">{state.startError ?? failureText}</AttnLine>
+          {prerequisite && <p className="text-[13px] leading-relaxed">{t(`help_${prerequisite}`)}</p>}
           {!permanent && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
           {!permanent && (
             <Button onClick={onRestart} loading={state.starting}>
               {t('try_again')}
             </Button>
+          )}
+          {guideUrl && state.bank && (
+            <p className="text-xs">
+              <a href={guideUrl} target="_blank" rel="noopener noreferrer" className={QUIET_LINK}>
+                {t('guide_link', { bank: state.bank.name })}
+              </a>
+            </p>
+          )}
+          {onImportFile && (
+            <p className="text-xs text-muted-foreground">
+              {t.rich('failed_import_file', {
+                link: (chunks) => (
+                  <button type="button" onClick={onImportFile} className={QUIET_LINK}>
+                    {chunks}
+                  </button>
+                ),
+              })}
+            </p>
           )}
         </div>
       ) : secondSignatory ? (

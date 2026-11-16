@@ -11,6 +11,7 @@
  */
 
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { paymentOrderWaitsFor } from '@/lib/payments/orders/status'
 import { companyAttestsSupplierInvoices, isOverduePayable } from './lifecycle'
 import { isSupplierInvoiceAttested } from './reported-status'
 
@@ -104,15 +105,29 @@ export interface OpenPaymentInstruction {
 /**
  * What a person deciding what to pay is told about an unsettled invoice that
  * a payment instruction already covers. 'bank_payment': a bank payment order
- * is open (prepared, sent, signed, or executed and not yet matched), so every
- * payment channel refuses the invoice and it is not waiting for a payment.
- * 'bank_entered': a person ticked "Inlagd i banken" (the payment was typed
- * into the internet bank by hand) and the invoice has not fallen due
- * (bankEnteredHolds, crm#1824). 'payment_file': it sits in a payment file
+ * is open and has gone to the bank (sent, signed, or executed and not yet
+ * matched), so every payment channel refuses the invoice and it is not
+ * waiting for a payment. 'bank_payment_unsigned': a bank payment order is
+ * open and waits for a person, prepared and not approved or approved and not
+ * signed (paymentOrderWaitsFor): every payment channel refuses the invoice
+ * all the same, but nothing is at the bank and nothing is paid until someone
+ * signs on Betalningar (crm#1925: it read as I betalning, as if nothing more
+ * was needed). 'bank_entered': a person ticked "Inlagd i banken" (the payment
+ * was typed into the internet bank by hand) and the invoice has not fallen
+ * due (bankEnteredHolds, crm#1824). 'payment_file': it sits in a payment file
  * that was generated, which may or may not have reached the bank. Null when
  * nothing covers it or it is settled.
  */
-export type OpenPaymentMarker = 'bank_payment' | 'bank_entered' | 'payment_file'
+export type OpenPaymentMarker = 'bank_payment' | 'bank_payment_unsigned' | 'bank_entered' | 'payment_file'
+
+/**
+ * True when an open bank payment order covers the invoice, at the bank or
+ * still waiting for its signature: no new payment of the invoice is offered
+ * while one stands (the server refuses it in every channel anyway).
+ */
+export function hasOpenBankPaymentOrder(marker: OpenPaymentMarker | null): boolean {
+  return marker === 'bank_payment' || marker === 'bank_payment_unsigned'
+}
 
 /** Nothing left to pay on these: no payment instruction is relevant to them. */
 export const SETTLED_SUPPLIER_INVOICE_STATUSES: ReadonlySet<string> = new Set(['paid', 'credited', 'reversed'])
@@ -157,16 +172,18 @@ export function bankEnteredHolds(invoice: BankEnteredFacts, today: string): bool
 
 /**
  * The marker of an invoice, the strongest evidence first: a bank payment
- * order the system follows, then a standing "Inlagd i banken" tick, then a
- * payment file. A tick beside a file reads as the tick: the person says the
- * payment is at the bank, which is the one thing a file cannot tell.
+ * order the system follows (one that still waits for a person reads as
+ * unsigned), then a standing "Inlagd i banken" tick, then a payment file. A
+ * tick beside a file reads as the tick: the person says the payment is at the
+ * bank, which is the one thing a file cannot tell.
  */
 export function openPaymentMarker(
   invoice: BankEnteredFacts & { open_payment?: OpenPaymentInstruction | null },
   today: string = todayIsoStockholm(),
 ): OpenPaymentMarker | null {
   if (invoice.is_credit_note || SETTLED_SUPPLIER_INVOICE_STATUSES.has(invoice.status)) return null
-  if (invoice.open_payment?.payment_order) return 'bank_payment'
+  const order = invoice.open_payment?.payment_order
+  if (order) return paymentOrderWaitsFor(order) ? 'bank_payment_unsigned' : 'bank_payment'
   if (bankEnteredHolds(invoice, today)) return 'bank_entered'
   if (invoice.open_payment?.batch) return 'payment_file'
   return null
@@ -174,10 +191,12 @@ export function openPaymentMarker(
 
 /**
  * The chip label per marker, in the `supplier_invoices` namespace: a bank
- * payment reads as the ladder's own step, a tick as the tick's own label.
+ * payment reads as the ladder's own step, one nobody has signed as waiting
+ * for its signature, a tick as the tick's own label.
  */
 export const OPEN_PAYMENT_MARKER_LABEL_KEYS: Record<OpenPaymentMarker, string> = {
   bank_payment: 'stage_in_file',
+  bank_payment_unsigned: 'bank_payment_unsigned_chip',
   bank_entered: 'bank_entered_label',
   payment_file: 'in_batch_chip',
 }
