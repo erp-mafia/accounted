@@ -17,8 +17,6 @@ export const StockCountRowSchema = z.object({
     .describe('Write-down to net realisable value in percent of cost (inkurans), 0 when none.'),
 })
 
-export type StockCountRowBody = z.input<typeof StockCountRowSchema>
-
 /** A new or changed draft count: its dates, notes and every row (the rows replace the old ones). */
 export const SaveStockCountSchema = z
   .object({
@@ -43,5 +41,3 @@ export const BankIdStockCountSchema = z.object({
   signer_name: z.string().trim().min(1).max(200),
   email: z.string().trim().email().max(254).nullish(),
 })
-
-export const BookStockCountSchema = z.object({}).strict()

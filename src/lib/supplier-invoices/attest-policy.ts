@@ -147,8 +147,6 @@ export interface AttestationRecord {
 /** The attesters' limits in SEK (company_attest_limits, scope supplier_invoice): user id to limit, null = no limit. A user without an entry has no limit. */
 export type AttestLimits = ReadonlyMap<string, number | null>
 
-export const NO_ATTEST_LIMITS: AttestLimits = new Map()
-
 /** Who attests and through what: the levels' inputs beside the policy. */
 export interface AttestLevels {
   limits?: AttestLimits

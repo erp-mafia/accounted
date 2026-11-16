@@ -48,9 +48,6 @@ export function personRefusalText(raw: string | null | undefined): string | null
   return cleaned && isSwedishUserMessage(cleaned) ? cleaned : null
 }
 
-/** Where a refused approval left its proposal, when the route said. */
-export type RefusedOperationStatus = 'pending' | 'rejected' | 'failed_partial' | 'unknown'
-
 export interface ApprovalRefusal {
   /** The structured code, when the refusal has one. */
   code: string | null

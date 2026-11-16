@@ -22,11 +22,6 @@ export function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())
 }
 
-// Check if date is before another
-export function isBefore(date1: Date, date2: Date): boolean {
-  return startOfDay(date1).getTime() < startOfDay(date2).getTime()
-}
-
 // Check if invoice is overdue
 // The one overdue rule (lib/invoices/overdue.ts): an owed invoice past its
 // due date with an open remainder, whatever its stored status.

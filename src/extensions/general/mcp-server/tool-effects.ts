@@ -49,7 +49,3 @@ export function publicToolAnnotations<T extends { effect?: McpToolEffect }>(
 export function isReadOnlyTool(tool: { annotations: { effect: McpToolEffect } }): boolean {
   return tool.annotations.effect === 'read_only'
 }
-
-export function isDestructiveTool(tool: { annotations: { effect: McpToolEffect } }): boolean {
-  return tool.annotations.effect === 'destructive'
-}
