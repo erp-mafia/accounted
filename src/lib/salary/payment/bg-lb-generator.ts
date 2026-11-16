@@ -211,12 +211,14 @@ export function generateBankgiroPaymentBgLb(
 
   const records: string[] = [
     openingRecord(senderBg, paymentDateYyMmDd),
-    // TK14 to a bankgiro: pos 3-12 receiver bankgiro, 13-37 OCR (zero-filled),
-    // 38-49 amount in öre, 50-55 payment date, 56-60 blank, 61-80 information
-    // to the sender.
+    // TK14 to a bankgiro: pos 3-12 receiver bankgiro, 13-37 OCR (left-justified
+    // and blank-filled, the same field style as the supplier payment file in
+    // lib/payments/bg-lb.ts: a zero-filled OCR reads as another number and the
+    // bank refuses the file, crm#1952), 38-49 amount in öre, 50-55 payment
+    // date, 56-60 blank, 61-80 information to the sender.
     '14' +
       padNumber(receiverBg, 10) +
-      padNumber(ocrDigits, 25) +
+      padText(ocrDigits, 25) +
       padNumber(String(amountOre), 12) +
       paymentDateYyMmDd +
       pad('', 5) +
