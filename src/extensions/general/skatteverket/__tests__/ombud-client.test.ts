@@ -203,6 +203,15 @@ describe('roles and deep links', () => {
     await expect(createUtseOmbudDeepLink('165560000000', ACTOR, ['lasombud'])).rejects.toBeInstanceOf(OmbudApiError)
   })
 
+  it('createUtseOmbudDeepLink: a 503 from Skatteverket throws OBR_HTTP_ERROR carrying the status (the deep link route reads it as the service being down)', async () => {
+    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
+    mockSkvRequestWithAuth.mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Service Unavailable' }), { status: 503 }))
+    await expect(createUtseOmbudDeepLink('165560000000', ACTOR, ['lasombud'])).rejects.toMatchObject({
+      code: 'OBR_HTTP_ERROR',
+      status: 503,
+    })
+  })
+
   it('createUtseOmbudDeepLink refuses a deep link that is not an https skatteverket.se URL (open redirect)', async () => {
     process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
     for (const bad of [

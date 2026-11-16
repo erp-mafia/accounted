@@ -9738,6 +9738,17 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_en:
       'The organisation number is confirmed with BankID in more than one company, and the ombud connection can only apply to one of them. Archive the other companies with the same organisation number, or ask whoever manages them to, then try again.',
   },
+  // Skatteverket's Ombudshantering could not be reached when the appoint
+  // button asked it for the deep link: a 502/503/504, no answer within the
+  // timeout, or no connection. Its own text (status, operation, body) is for
+  // the log: passed on to the page it read "Något gick fel. Försök igen."
+  // (2026-11-14, 13 tries in two hours while the service answered 503).
+  SKATTEVERKET_OMBUD_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Skatteverkets ombudstjänst är inte tillgänglig just nu. Försök igen om en stund.',
+    message_en: "Skatteverket's ombud service is unavailable right now. Try again in a while.",
+    retryable: true,
+  },
   // A Skatteverket request named a redovisare other than the active company's
   // own: a stale page after a company switch, or a crafted URL.
   SKV_REDOVISARE_NOT_COMPANY: {

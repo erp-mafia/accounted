@@ -73,11 +73,13 @@ afterEach(() => {
 })
 
 describe('GET /system-connection', () => {
-  it('refuses when the capability gate blocks', async () => {
+  it('a company without the Skatteverket feature hears "not available", as with system auth off: an availability read, not a refusal', async () => {
     const { NextResponse } = await import('next/server')
     mockRequireCapability.mockResolvedValue(NextResponse.json({ error: 'capability_blocked' }, { status: 403 }))
     const res = await findRoute().handler(request(), ctx)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ available: false, mode: 'on' })
+    expect(mockGetConnection).not.toHaveBeenCalled()
   })
 
   it('reports unavailable while system auth is off', async () => {

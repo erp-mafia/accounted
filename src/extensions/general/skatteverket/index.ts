@@ -6,7 +6,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
-import { TimeoutError } from '@/lib/http/fetch-with-timeout'
+import { isTimeoutError, TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
@@ -1061,11 +1061,12 @@ export const skatteverketExtension: Extension = {
       method: 'GET',
       path: '/system-connection',
       handler: async (_request: Request, ctx: ExtensionContext) => {
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-
+        // An availability read: a company without the Skatteverket feature
+        // hears "not available", the answer it gets with system auth off, not
+        // a refusal (docs/decisions/2026-11/2026-11-12-availability-reads-answer-200.md).
+        const entitled = (await requireSkvCapability(ctx)) === null
         const mode = getSystemAuthMode()
-        const available = mode !== 'off' && isSystemAuthConfigured()
+        const available = entitled && mode !== 'off' && isSystemAuthConfigured()
         if (!available) {
           return NextResponse.json({ available: false, mode })
         }
@@ -1251,6 +1252,17 @@ export const skatteverketExtension: Extension = {
         } catch (err) {
           if (err instanceof OmbudApiError) {
             log.warn('ombud deep link failed', { companyId: ctx.companyId, code: err.code, message: err.message })
+          }
+          // Ombudshantering itself unreachable: the person hears that it is
+          // Skatteverket's service and to try again in a while, not the
+          // upstream text (that stays in the log).
+          if (ombudServiceDown(err)) {
+            return errorResponseFromCode('SKATTEVERKET_OMBUD_UNAVAILABLE', log, {
+              requestId: ctx.requestId,
+              reason: err instanceof Error ? err.message : undefined,
+            })
+          }
+          if (err instanceof OmbudApiError) {
             return NextResponse.json({ error: err.message, code: err.code }, { status: 502 })
           }
           return handleSkvError(err)
@@ -2818,6 +2830,21 @@ function skvActionFailureResponse(failure: SkvActionFailure): NextResponse {
     { error: failure.error, code: details.skv_kod ?? failure.code },
     { status },
   )
+}
+
+/** A gateway or unavailable answer: the service is down, not refusing this request. */
+const OMBUD_DOWN_STATUSES = new Set([502, 503, 504])
+
+/**
+ * Ombudshantering itself unreachable: a 502/503/504 from it, no answer within
+ * the data call's timeout, or no connection at all (undici's "fetch failed").
+ * A 500 is left out: one that comes back every time is not cured by waiting.
+ */
+function ombudServiceDown(err: unknown): boolean {
+  if (err instanceof OmbudApiError) {
+    return err.code === 'OBR_HTTP_ERROR' && err.status !== undefined && OMBUD_DOWN_STATUSES.has(err.status)
+  }
+  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
 }
 
 function handleSkvError(err: unknown): NextResponse {
