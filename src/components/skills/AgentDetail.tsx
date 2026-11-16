@@ -75,7 +75,7 @@ export function AgentDetail({ segment, backHref = '/skills' }: { segment: string
 
 function Detail({ companyId, companyName, agentId, backHref }: { companyId: string; companyName: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const locale = useLocale()
   const router = useRouter()

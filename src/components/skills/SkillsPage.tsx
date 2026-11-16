@@ -39,7 +39,7 @@ export function SkillsPage({ hrefBase = '/skills' }: { hrefBase?: string }) {
 
 function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string }) {
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()

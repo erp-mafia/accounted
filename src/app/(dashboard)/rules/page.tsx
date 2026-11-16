@@ -7,9 +7,9 @@ import BookingBlocks from '@/components/rules/BookingBlocks'
 export const dynamic = 'force-dynamic'
 
 /**
- * Regler (UI v2 PR 5): the company's counterparty rules on the trust
- * ladder. Reachable from the sidebar
- * (Transaktioner › Regler); the v1 settings panel keeps working beside it.
+ * Bokföringsregler (UI v2 PR 5): the company's counterparty rules on the
+ * trust ladder. Reachable from the sidebar
+ * (Agenter › Bokföringsregler); the v1 settings panel keeps working beside it.
  * Below them, Spärrar (accounted#130): what is never booked without a
  * person's review.
  */

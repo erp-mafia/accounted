@@ -19,7 +19,7 @@ import styles from './skills.module.css'
 export function CreatorProfile({ handle, backHref }: { handle: string; backHref: string }) {
   const { company } = useCompany()
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const catalog = useSWR(company ? ['/api/skills', company.id] : null, ([url]) => readCatalog(url))
   const items = (catalog.data ?? []).filter((s) => s.tier === 'community' && communityMeta(s)?.author === handle)

@@ -3,6 +3,7 @@ import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboa
 import {
   NAV_V3_AREAS,
   areaCreate,
+  areaCreatePage,
   areaItems,
   gateAreas,
   hrefPath,
@@ -243,7 +244,11 @@ function areaTrail(pathname: string, search: string, areas: NavV3Area[], labels:
   const area = areas.find((a) => a.id === place.area)
   if (!area) return null
   const row = place.href ? areaItems(area).find((item) => item.href === place.href) : undefined
-  return row ? [navLabel(labels, area.labelKey), navLabel(labels, row.labelKey)] : [navLabel(labels, area.labelKey)]
+  if (row) return [navLabel(labels, area.labelKey), navLabel(labels, row.labelKey)]
+  // The page the area's create button opens (Koppla en agent) has no row: it is named by the button.
+  const createPage = areaCreatePage(area)
+  const onCreatePage = !!createPage && (pathname === createPage.href || pathname.startsWith(`${createPage.href}/`))
+  return onCreatePage ? [navLabel(labels, area.labelKey), navLabel(labels, createPage.labelKey)] : [navLabel(labels, area.labelKey)]
 }
 
 function insidePages(areas: NavV3Area[], ctx: NavGateContext, labels: UiLabels): Place[] {
@@ -288,8 +293,8 @@ function placeForRoute(route: string, menu: VisibleMenu, labels: UiLabels): stri
   const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath
 
   // The longest match over the whole tree decides, as in the shell: a
-  // settings route that is a row of an area (Agenter's Instruktioner) is
-  // named there, every other settings route by its section below.
+  // settings route an area owns (Agenter's Koppla en agent) is named there,
+  // every other settings route by its section below.
   const place = resolveNavPlace(path, search)
 
   // A page inside another page (the income declaration under Bokslut) is
@@ -340,7 +345,7 @@ interface VisibleMenu {
 }
 
 function visibleMenu({ ctx, labels, hasMcpExtension = false }: UiMapInput): VisibleMenu {
-  // The row "Koppla en agent" follows the same switch as its settings section.
+  // The button "Koppla en agent" follows the same switch as its settings section.
   const gateCtx: NavGateContext = { ...ctx, mcpExtensionEnabled: ctx.mcpExtensionEnabled ?? hasMcpExtension }
   const areas = companyAreas(gateCtx)
   // The assistant runs inside a company, never in the byrå cockpit scope.

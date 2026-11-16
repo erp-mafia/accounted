@@ -92,7 +92,7 @@ export function CreateItem({ backHref, edit }: { backHref: string; edit?: EditTa
 
 function Create({ companyId, companyName, backHref, edit }: { companyId: string; companyName: string; backHref: string; edit?: EditTarget }) {
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const router = useRouter()
   const { mutate } = useSWRConfig()

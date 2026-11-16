@@ -12,7 +12,7 @@ import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { BOLAGET_TABS } from '@/lib/bolaget/hub'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags } from '../nav-v2'
-import { NAV_V3_AREAS, areaCreate, areaItems, createOpenForRole, gateAreas, resolveNavPlace, type NavAreaId } from '../nav-v3'
+import { NAV_V3_AREAS, areaCreate, areaCreatePage, areaItems, createOpenForRole, gateAreas, resolveNavPlace, type NavAreaId } from '../nav-v3'
 
 const DASHBOARD = join(process.cwd(), 'src/app/(dashboard)')
 
@@ -95,10 +95,13 @@ describe('resolveNavPlace', () => {
     expect(place('/wiki/party/1', 'view=map')).toEqual({ area: 'agents', href: '/wiki' })
   })
 
-  it('keeps settings in Inställningar, except the two pages Agenter lists', () => {
+  it('keeps settings in Inställningar, except the page Agenter opens from its create button', () => {
     expect(place('/settings/company')).toEqual({ area: 'settings', href: null })
-    expect(place('/settings/api')).toEqual({ area: 'agents', href: '/settings/api' })
-    expect(place('/settings/assistant')).toEqual({ area: 'agents', href: '/settings/assistant' })
+    // Koppla en agent has no row: Agenter owns the page and lights no row for it.
+    expect(place('/settings/api')).toEqual({ area: 'agents', href: null })
+    expect(place('/settings/api', 'ctx=byra')).toEqual({ area: 'agents', href: null })
+    // The old Assistenten page only redirects into the wiki.
+    expect(place('/settings/assistant')).toEqual({ area: 'settings', href: null })
     expect(place('/help')).toEqual({ area: 'settings', href: null })
     expect(place('/extensions/general')).toEqual({ area: 'settings', href: null })
     expect(place('/e/general/invoice-inbox')).toEqual({ area: 'documents', href: '/e/general/invoice-inbox' })
@@ -254,12 +257,48 @@ describe('the tree', () => {
   it('offers a viewer no create action in a company', () => {
     const offered = (role: string | null) =>
       NAV_V3_AREAS.flatMap((area) => (area.create ?? []).filter((create) => createOpenForRole(create, role)).map((create) => create.href))
-    // The byrå's own create follows the byrå role; Koppla en agent stays a row of Agenter.
+    // The byrå's own create follows the byrå role; Koppla en agent stays listed as a page of Agenter
+    // (the command palette, the phone menu), which is how a viewer reaches it.
     expect(offered('viewer')).toEqual(['/clients'])
-    expect(areaItems(NAV_V3_AREAS.find((area) => area.id === 'agents')!).map((item) => item.href)).toContain('/settings/api')
+    expect(areaCreatePage(NAV_V3_AREAS.find((area) => area.id === 'agents')!)?.href).toBe('/settings/api')
     for (const role of ['owner', 'admin', 'member', 'invoicer', null]) {
       expect(offered(role)).toEqual(NAV_V3_AREAS.flatMap((area) => (area.create ?? []).map((create) => create.href)))
     }
+  })
+
+  it('has the Agenter menu of the founder decision 2026-11-16: Styr, Vad agenten vet, Chatt', () => {
+    const agents = NAV_V3_AREAS.find((a) => a.id === 'agents')!
+    const nav = sv.nav as Record<string, string>
+    const enNav = en.nav as Record<string, string>
+    const menu = (table: Record<string, string>) =>
+      agents.groups.map((g) => [g.labelKey ? table[g.labelKey] : null, g.items.map((item) => table[item.labelKey])])
+    expect(menu(nav)).toEqual([
+      ['Styr', ['Bokföringsregler', 'Arbetssätt']],
+      ['Vad agenten vet', ['Kontext', 'Bokföringsprofil', 'Fakta', 'Minne', 'Arbetssätt']],
+      [null, ['Chatt']],
+    ])
+    expect(menu(enNav)).toEqual([
+      ['Steer', ['Bookkeeping rules', 'Ways of working']],
+      ['What the agent knows', ['Context', 'Bookkeeping profile', 'Facts', 'Memory', 'Ways of working']],
+      [null, ['Chat']],
+    ])
+    // Arbetssätt is one row at a time: the Agenter page where it is open, the wiki view elsewhere.
+    const skills = areaItems(agents).filter((item) => item.labelKey === 'v3_skills')
+    expect(skills.map((item) => [item.href, !!item.requiresAgents, !!item.hiddenWithAgents])).toEqual([
+      ['/skills', true, false],
+      ['/wiki?view=skills', false, true],
+    ])
+    // Instruktioner and the Koppla en agent row are gone; the create button stays with its gate.
+    expect(areaItems(agents).map((item) => item.href)).not.toEqual(expect.arrayContaining(['/settings/assistant']))
+    expect(areaItems(agents).map((item) => item.href)).not.toContain('/settings/api')
+    expect(agents.create).toEqual([{ href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', requiresMcpExtension: true }])
+  })
+
+  it('lists the page a create button opens only where the area owns it without a row', () => {
+    expect(NAV_V3_AREAS.filter((area) => areaCreatePage(area)).map((area) => area.id)).toEqual(['agents'])
+    // Gated like the button: no MCP extension, no entry.
+    const gated = gateAreas(NAV_V3_AREAS, (item) => !item.requiresMcpExtension)
+    expect(areaCreatePage(gated.find((a) => a.id === 'agents')!)).toBeUndefined()
   })
 
   it('uploads to the one inbox the company has, and to the archive when it has no inbox', () => {

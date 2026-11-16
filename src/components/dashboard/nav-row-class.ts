@@ -26,5 +26,5 @@ export function navRowClass(active: boolean, opts?: { quiet?: boolean; disabled?
 /** A row's leading glyph: 16px, a step quieter than the label. */
 export const NAV_ROW_ICON_CLASS = 'h-4 w-4 flex-shrink-0 text-foreground/70 group-hover:text-foreground'
 
-/** A group label over rows ("Register", "Kunskap", the settings groups): 12px/500, sentence case. */
+/** A group label over rows ("Register", "Styr", the settings groups): 12px/500, sentence case. */
 export const NAV_GROUP_LABEL_CLASS = 'flex h-7 items-center px-2 text-[12px] font-medium text-muted-foreground'

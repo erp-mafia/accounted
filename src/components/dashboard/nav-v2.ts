@@ -46,7 +46,7 @@ export interface NavGateFlags {
   requiresMcpExtension?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
-  /** What the Agenter page replaces (the Kompetens view of the wiki): hidden where that page is open. */
+  /** What the Agenter page replaces (the Arbetssätt view of the wiki): hidden where that page is open. */
   hiddenWithAgents?: boolean
   /** Fakta in the wiki: only where Arkiv reads the company's documents (lib/arkiv/flag.ts isArkivBrainEnabled). */
   requiresArkivBrain?: boolean

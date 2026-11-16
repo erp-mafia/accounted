@@ -116,19 +116,15 @@ export function SettingsRail({ display }: SettingsRailProps) {
     searchParams.get('ctx') === 'byra' && href.startsWith('/settings/') ? `${href}?ctx=byra` : href
 
   if (display === 'select') {
-    // The picker names the page as the top bar does. Koppla en agent and
-    // Instruktioner are rows of Agenter inside a company, and a page with no
-    // row in this scope (a byrå section opened inside a company) names itself.
+    // The picker names the page as the top bar does. Koppla en agent belongs
+    // to Agenter inside a company, and a page with no row in this scope (a
+    // byrå section opened inside a company) names itself.
     const byraScope = searchParams.get('ctx') === 'byra'
     const [, root, segment] = pathname.split('/')
     const ownKey = segment ? settingsMessageKey(segment) : null
     const own =
-      root === 'settings' && segment && !allItems.some((i) => i.id === segment) &&
-      (segment === 'assistant' ? !byraScope : !(segment in SETTINGS_SECTION_PARENT))
-        ? {
-            href: `/settings/${segment}`,
-            label: segment === 'assistant' ? tNav('v3_instructions') : ownKey && t.has(ownKey as never) ? t(ownKey as never) : null,
-          }
+      root === 'settings' && segment && !allItems.some((i) => i.id === segment) && !(segment in SETTINGS_SECTION_PARENT)
+        ? { href: `/settings/${segment}`, label: ownKey && t.has(ownKey as never) ? t(ownKey as never) : null }
         : null
     const labelOf = (i: SettingsNavItem) => (i.id === 'api' && !byraScope ? tNav('v3_connect_agent') : i.label)
     const activeHref = (own?.label ? own.href : undefined) ?? allItems.find((i) => i.id === activeId)?.href ?? allItems[0]?.href

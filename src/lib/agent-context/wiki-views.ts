@@ -1,7 +1,7 @@
 /**
  * The wiki's views and their addresses (src/components/wiki/WikiViews.tsx):
  * Kontext (what the agent receives, the landing), Karta (the konteringskarta
- * and ledger profile, formerly Kunskap), Fakta, Minne and Kompetens. Pure, so
+ * and ledger profile, formerly Kunskap), Fakta, Minne and Arbetssätt. Pure, so
  * the server redirect from /agent-knowledge and the client page share it.
  */
 export const WIKI_VIEWS = ['context', 'map', 'facts', 'memory', 'skills'] as const

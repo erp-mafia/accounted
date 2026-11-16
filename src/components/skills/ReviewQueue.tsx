@@ -31,7 +31,7 @@ async function readReview(url: string): Promise<ReviewData> {
  */
 export function ReviewQueue({ mfaRequired = false }: { mfaRequired?: boolean }) {
   const t = useTranslations('skills_registry')
-  // The top bar carries the menu row's name (Agenter › Kompetens).
+  // The top bar carries the menu row's name (Agenter › Arbetssätt).
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   // The review routes refuse a session without MFA (CASA 3.3.1); do not ask.

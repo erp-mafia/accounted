@@ -44,7 +44,7 @@ import { useNeedCount } from './need-count'
 import { useInboxUpload } from '@/components/inkorg/UploadButton'
 import { NAV_ROW_ICON_CLASS } from './nav-row-class'
 import type { NavGateFlags } from './nav-v2'
-import { NAV_V3_AREAS, areaCreate, areaItems, createOpenForRole, gateAreas, hrefPath, resolveNavPlace, type NavAreaId, type NavV3Area, type NavV3Item } from './nav-v3'
+import { NAV_V3_AREAS, areaCreate, areaCreatePage, areaItems, createOpenForRole, gateAreas, hrefPath, resolveNavPlace, type NavAreaId, type NavV3Area, type NavV3Item } from './nav-v3'
 import { useNavRowClaim } from './nav-row-claim'
 import { openCommandPalette } from '@/components/common/open-command-palette'
 
@@ -653,6 +653,7 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
                     const open = openPhoneArea === area.id
                     const current = area.id === activeAreaId
                     const panelId = `phone-area-${area.id}`
+                    const createPage = areaCreatePage(area)
                     return (
                       <div key={area.id}>
                         <button
@@ -673,8 +674,9 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
                         </button>
                         {open && (
                           <div id={panelId} className="mb-1 ml-[21px] space-y-0.5 border-l-hairline pl-2.5">
-                            {areaItems(area).map((item) => {
-                              const active = isActive(item.href)
+                            {/* The phone has no create button: the page an area's create opens (Koppla en agent) is listed last. */}
+                            {[...areaItems(area), ...(createPage ? [createPage] : [])].map((item) => {
+                              const active = isActive(item.href) || (item === createPage && current && pathname === hrefPath(item.href))
                               const enabled = isItemEnabled(item.href) && !item.comingSoon
                               const badge = badgeFor(item.href)
                               const tag = rowTag(item)
