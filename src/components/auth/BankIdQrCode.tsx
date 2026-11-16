@@ -72,7 +72,7 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
 
   if (!svgData) {
     return (
-      <div className="flex h-[200px] w-[200px] items-center justify-center rounded-lg border bg-white">
+      <div className="flex h-[200px] w-[200px] items-center justify-center rounded-lg bg-white shadow-raised">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     )
@@ -80,7 +80,7 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
 
   return (
     <div
-      className="inline-flex rounded-lg border bg-white p-2"
+      className="inline-flex rounded-lg bg-white p-2 shadow-raised"
       dangerouslySetInnerHTML={{ __html: svgData }}
     />
   )

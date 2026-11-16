@@ -63,9 +63,9 @@ export function DeletedCompaniesExport() {
             })}
           </SettingsRowNote>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <a href={`/api/account/deleted-companies/${company.id}/archive`} download>
-                <ArrowDownTrayIcon className="mr-2 h-3.5 w-3.5" />
+                <ArrowDownTrayIcon className="h-3.5 w-3.5" />
                 {t('download')}
               </a>
             </Button>

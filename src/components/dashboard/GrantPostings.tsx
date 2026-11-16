@@ -151,7 +151,7 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
         {postings.map((p) => {
           const undone = p.entry_status === 'reversed'
           return (
-            <div key={p.use_id} className="flex flex-wrap items-center gap-3 border-b border-border px-1 py-3 text-[13px]">
+            <div key={p.use_id} className="flex flex-wrap items-center gap-3 border-b-hairline px-1 py-3 text-[13px]">
               <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
                 <BoltIcon className="h-[15px] w-[15px]" />
               </span>
@@ -177,12 +177,12 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
               {p.pattern_verified === false && <Badge variant="warning">{t('grant_mismatch_chip')}</Badge>}
               <span className="shrink-0 text-right tabular-nums">{formatCurrency(p.amount_sek)}</span>
               {!undone && p.transaction_id && (
-                <Button size="sm" variant="outline" onClick={() => setUndoing(p)}>
+                <Button variant="outline" onClick={() => setUndoing(p)}>
                   {t('grant_undo')}
                 </Button>
               )}
               {p.supplier_invoice_id && (
-                <Button size="sm" variant="outline" asChild>
+                <Button variant="outline" asChild>
                   <Link href={`/supplier-invoices/${p.supplier_invoice_id}`}>{t('grant_open_invoice')}</Link>
                 </Button>
               )}
@@ -213,7 +213,7 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
                 {rule.revoked && ` ${t('grant_rule_revoked')}`}
               </span>
               {!rule.revoked && (
-                <Button size="sm" variant="ghost" onClick={() => setRevoking(rule)}>
+                <Button variant="ghost" onClick={() => setRevoking(rule)}>
                   {t('grant_revoke')}
                 </Button>
               )}
@@ -223,11 +223,11 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
       )}
       <div className="flex flex-wrap items-center gap-2 px-1 pt-3">
         {postings.length > 0 && (
-          <Button size="sm" variant="outline" loading={busy === 'review'} disabled={busy !== null} onClick={() => void markReviewed()}>
+          <Button variant="outline" loading={busy === 'review'} disabled={busy !== null} onClick={() => void markReviewed()}>
             {t('grant_mark_reviewed')}
           </Button>
         )}
-        <Button size="sm" variant="ghost" loading={busy === 'pause'} disabled={busy !== null} onClick={() => void togglePause()}>
+        <Button variant="ghost" loading={busy === 'pause'} disabled={busy !== null} onClick={() => void togglePause()}>
           {paused ? t('grant_resume_all') : t('grant_pause_all')}
         </Button>
       </div>

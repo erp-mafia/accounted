@@ -293,7 +293,7 @@ describe('the supplier-invoice files note', () => {
       expect(note).toContain(ext.ext_arcim_documents_reconnect_action)
       // Neutral: an outline button and muted text, never the failure colour
       // or a second primary next to the state's own action.
-      expect(note).toContain('border-input')
+      expect(note).toContain('shadow-raised')
       expect(note).not.toContain('bg-primary')
       expect(note).not.toContain('text-destructive')
       // Named as Fortnox shows it, never by API scope id.

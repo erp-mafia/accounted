@@ -69,9 +69,9 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
 
   return (
     <Card>
-      <CardContent className="space-y-4 pt-6">
+      <CardContent className="space-y-4">
         <div>
-          <p className="font-display text-xl">{summary?.applied ? t('bgmax_result_title') : t('bgmax_title')}</p>
+          <p className="text-[15px] font-medium leading-[22px] text-strong">{summary?.applied ? t('bgmax_result_title') : t('bgmax_title')}</p>
           {!summary?.applied && <p className="mt-1 text-sm text-muted-foreground">{t('bgmax_intro')}</p>}
         </div>
 
@@ -83,7 +83,7 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
         )}
 
         {error && (
-          <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+          <div className="bg-destructive/8 flex gap-3 rounded-lg p-4">
             <ExclamationCircleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
             <div>
               <p className="font-medium text-destructive">{t('bgmax_error_title')}</p>
@@ -123,7 +123,7 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
 
         {unmatched.length > 0 && (
           <div className="space-y-1">
-            <ul className="divide-y divide-border rounded-lg border border-border text-[13px]">
+            <ul className="divide-y divide-border text-[13px]">
               {unmatched.map((o, index) => (
                 <li key={`${o.date}-${o.amount}-${index}`} className="flex items-center justify-between gap-3 px-3 py-1.5">
                   <span className="tabular-nums">{formatDate(o.date)}</span>
@@ -134,7 +134,7 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
                 </li>
               ))}
             </ul>
-            <p className="text-[12.5px] text-muted-foreground">{t('bgmax_unmatched_note', { count: unmatched.length })}</p>
+            <p className="text-xs text-muted-foreground">{t('bgmax_unmatched_note', { count: unmatched.length })}</p>
           </div>
         )}
 

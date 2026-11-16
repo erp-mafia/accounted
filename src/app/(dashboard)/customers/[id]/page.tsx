@@ -16,11 +16,14 @@ import {
   maskCustomerPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordAction, RecordHeader } from '@/components/ui/record-header'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { CustomerMergeDialog } from '@/components/customers/CustomerMergeDialog'
 import type { CustomerMergeResult } from '@/lib/customers/merge-customers'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { EyeIcon, EyeSlashIcon, LockClosedIcon } from '@/components/icons'
+import { EyeIcon, EyeSlashIcon, TrashIcon } from '@/components/icons'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -90,6 +93,7 @@ export default function CustomerDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('customer_detail')
+  const tCustomers = useTranslations('customers')
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
@@ -114,6 +118,11 @@ export default function CustomerDetailPage({
     <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
   ) : null
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no customer on screen the page says so in
+  // place of it; a customer already on screen stays, with one line above.
+  // A customer that does not exist (404) is not a failure to retry.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [notFound, setNotFound] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isMergeOpen, setIsMergeOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -165,18 +174,18 @@ export default function CustomerDetailPage({
     setRevealedPersonalNumber(null)
     try {
       const response = await fetch(`/api/customers/${id}`)
+      if (response.status === 404) {
+        setNotFound(true)
+        return
+      }
       if (!response.ok) {
-        throw new Error('Not found')
+        throw new Error('Load failed')
       }
       const { data } = await response.json()
       setCustomer(data)
+      setLoadFailed(false)
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-      router.push('/customers')
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -298,60 +307,47 @@ export default function CustomerDetailPage({
     return <DetailPageSkeleton />
   }
 
-  if (!customer) return null
+  if (!customer) {
+    if (!loadFailed && !notFound) return null
+    return (
+      <div className="space-y-8">
+        <PageHeader title={tCustomers('title')} />
+        {notFound ? (
+          <NotFoundState title={t('not_found')} backHref="/customers" backLabel={t('back')} />
+        ) : (
+          <LoadError title={t('load_failed_title')} onRetry={() => void fetchCustomer()} />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
       <div>
-        <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="page-header-lead min-w-0">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-              {t(CUSTOMER_TYPE_KEY[customer.customer_type])}
-            </p>
-          </div>
-
-          <div className="page-header-action flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditOpen(true)}
-              className="text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
-              {t('edit')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsMergeOpen(true)}
-              className="text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : t('merge_tooltip')}
-            >
-              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
-              {t('merge')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              className="text-muted-foreground hover:text-destructive"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
-              {t('delete')}
-            </Button>
-          </div>
-        </div>
+        <RecordHeader
+          parent={{ label: tCustomers('title'), href: '/customers' }}
+          title={customer.name}
+          facts={t(CUSTOMER_TYPE_KEY[customer.customer_type])}
+          actions={<>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsEditOpen(true)}>{t('edit')}</RecordAction>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsMergeOpen(true)} title={t('merge_tooltip')}>{t('merge')}</RecordAction>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={handleDelete} destructive icon={<TrashIcon className="h-4 w-4" />}>{t('delete')}</RecordAction>
+          </>}
+        />
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
-      <div className="space-y-8">
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchCustomer() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
+      {/* The invoices fill the left; the facts sit in a capped column on the
+          right (V7 register detail: label-value rows do not stretch). Below
+          lg the facts come first, as in the markup. */}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-x-12">
+      <div className="min-w-0 space-y-8 lg:order-2">
       {/* Empty optional rows are left out rather than drawn as "–". The
           e-mail row stays: without it an invoice cannot be e-mailed. */}
       <DetailSection kicker={t('section_contact')}>
@@ -437,10 +433,10 @@ export default function CustomerDetailPage({
                 )}
               </Button>
             )}
-            {isUnreadablePersonalNumber && (
+            {isUnreadablePersonalNumber && !loadFailed && (
               <AttnLine
                 className="mt-1"
-                action={{ label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) }}
+                action={canWrite ? { label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) } : undefined}
               >
                 {t('personal_number_unreadable')}
               </AttnLine>
@@ -491,12 +487,12 @@ export default function CustomerDetailPage({
       )}
 
       </div>
-      <div className="space-y-8">
+      <div className="min-w-0 space-y-8 lg:order-1">
       <DetailSection
         kicker={t('section_invoices')}
         aside={
           customer.invoices?.length > 0 ? (
-            <span className="text-[11px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {t('invoice_count', { count: customer.invoices.length })}
             </span>
           ) : undefined
@@ -568,7 +564,7 @@ export default function CustomerDetailPage({
 
       {/* Edit dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>

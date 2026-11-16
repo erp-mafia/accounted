@@ -153,7 +153,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         {created ? (
           <div className="space-y-4">
             <DialogHeader>
@@ -162,7 +162,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
             </DialogHeader>
             <ul className="m-0 list-none space-y-3 p-0 text-[13px]">
               {created.signers.map((s) => (
-                <li key={s.signer_id} className="space-y-2 border-b border-border pb-3 last:border-b-0">
+                <li key={s.signer_id} className="space-y-2 border-b-hairline pb-3 last:border-b-0">
                   <p className="m-0" data-ph-mask="">
                     <span>{s.name}</span>
                     <span className="text-muted-foreground">
@@ -173,7 +173,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                 </li>
               ))}
             </ul>
-            {created.signers.some((s) => s.url) && <p className="text-[12.5px] text-muted-foreground">{t('created_link_hint')}</p>}
+            {created.signers.some((s) => s.url) && <p className="text-xs text-muted-foreground">{t('created_link_hint')}</p>}
             <DialogFooter>
               <Button onClick={close}>{t('close')}</Button>
             </DialogFooter>
@@ -202,7 +202,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                 const errors = rowErrors[i]!
                 const member = r.userId ? members.find((m) => m.user_id === r.userId) : null
                 return (
-                  <div key={r.key} className="space-y-2 rounded-lg border border-border p-3">
+                  <div key={r.key} className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
                     <div className="flex items-start gap-2">
                       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row">
                         <Input
@@ -225,11 +225,11 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                           className="min-w-0"
                         />
                       </div>
-                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeRow(r.key)} aria-label={t('signer_remove', { n: i + 1 })}>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => removeRow(r.key)} aria-label={t('signer_remove', { n: i + 1 })}>
                         <XMarkIcon className="h-4 w-4" />
                       </Button>
                     </div>
-                    {member && <p className="m-0 text-[12.5px] text-muted-foreground">{t('signer_is_member')}</p>}
+                    {member && <p className="m-0 text-xs text-muted-foreground">{t('signer_is_member')}</p>}
                     {r.locking ? (
                       <div className="space-y-1">
                         <Input
@@ -242,7 +242,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                           aria-invalid={errors.personalNumber || undefined}
                           className="max-w-xs tabular-nums"
                         />
-                        <p className="m-0 text-[12.5px] text-muted-foreground">{errors.personalNumber ? t('signer_pn_invalid') : t('signer_pn_hint')}</p>
+                        <p className="m-0 text-xs text-muted-foreground">{errors.personalNumber ? t('signer_pn_invalid') : t('signer_pn_hint')}</p>
                       </div>
                     ) : (
                       <button type="button" className={QUIET_LINK_CLASS} onClick={() => update(r.key, { locking: true })}>
@@ -258,13 +258,13 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                 (pickable.length > 0 ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button type="button" variant="secondary" size="sm">
+                      <Button type="button" variant="outline">
                         <PlusIcon className="h-4 w-4" />
                         {t('signer_add')}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="min-w-[260px]">
-                      <DropdownMenuLabel className="text-[12.5px] font-normal text-muted-foreground">{t('signer_add_members_label')}</DropdownMenuLabel>
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t('signer_add_members_label')}</DropdownMenuLabel>
                       {pickable.map((m) => (
                         <DropdownMenuItem key={m.user_id} onSelect={() => addRow({ userId: m.user_id, email: m.email })}>
                           <span data-ph-mask="">{m.is_current_user ? t('member_you', { email: m.email }) : m.email}</span>
@@ -275,7 +275,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : (
-                  <Button type="button" variant="secondary" size="sm" onClick={() => addRow()}>
+                  <Button type="button" variant="outline" onClick={() => addRow()}>
                     <PlusIcon className="h-4 w-4" />
                     {t('signer_add')}
                   </Button>
@@ -300,12 +300,12 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                 aria-describedby="signing-days-hint"
                 className="w-24 tabular-nums"
               />
-              <span id="signing-days-hint" className="block text-[12.5px] text-muted-foreground">
+              <span id="signing-days-hint" className="block text-xs text-muted-foreground">
                 {t('field_days_hint', { max: SIGNING_MAX_TTL_DAYS })}
               </span>
             </label>
 
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {mailed === rows.length
                 ? t('outcome_all_mailed', { count: rows.length, days: daysValid ? daysNumber : SIGNING_DEFAULT_TTL_DAYS })
                 : t('outcome_some_links', { count: rows.length, mailed, days: daysValid ? daysNumber : SIGNING_DEFAULT_TTL_DAYS })}
@@ -317,7 +317,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
             ) : null}
 
             <DialogFooter>
-              <Button type="button" variant="secondary" onClick={close} disabled={busy}>
+              <Button type="button" variant="outline" onClick={close} disabled={busy}>
                 {t('cancel')}
               </Button>
               <Button type="submit" loading={busy} disabled={busy || (showErrors && !formValid)}>

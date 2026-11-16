@@ -145,7 +145,7 @@ export function InvoiceEmailRecipientsSettings({
       </SettingsRow>
 
       <div className="flex justify-end px-1 pt-4">
-        <Button type="button" size="sm" onClick={save} disabled={isSaving}>
+        <Button type="button" onClick={save} disabled={isSaving}>
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>

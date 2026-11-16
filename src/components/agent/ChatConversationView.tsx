@@ -57,7 +57,7 @@ export default function ChatConversationView({
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b border-border px-5 py-4 shrink-0">
+      <header className="flex items-center gap-3 border-b-hairline px-5 py-4 shrink-0">
         {/* Mobile-only back-to-list arrow. On desktop the sidebar is always
             visible so a back button would be redundant. */}
         <Link
@@ -73,7 +73,7 @@ export default function ChatConversationView({
           alt={identity.displayName ?? 'Assistent'}
         />
         <div className="min-w-0">
-          <h1 className="font-display text-lg leading-tight tracking-tight truncate">{title}</h1>
+          <h1 className="text-lg leading-tight truncate">{title}</h1>
           {/* Was printing context_ref raw, so the subtitle read
               "invoice:5f3a-9c21-...": a database identifier, shown to an
               accountant, under the title of their own conversation. */}

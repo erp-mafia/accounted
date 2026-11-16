@@ -114,7 +114,7 @@ export default function RegisterEditStep({
       </CardHeader>
       <CardContent className="space-y-4">
         {matchedCount > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg px-4 py-3 bg-control shadow-raised">
             <ArrowPathIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
@@ -147,9 +147,9 @@ export default function RegisterEditStep({
           fields={config.reviewFields}
         />
 
-        <div className="overflow-x-auto rounded-lg border">
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+            <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
                 {config.columns.map((col) => (
                   <th key={col.key} className={cn('px-3 py-2 text-left', col.headClassName)}>
@@ -198,7 +198,7 @@ export default function RegisterEditStep({
                         ) : row.duplicate_match ? (
                           <span
                             className={cn(
-                              'text-[11px] font-medium px-1.5 py-0.5 rounded-full',
+                              'text-xs font-medium px-1.5 py-0.5 rounded-md',
                               updateDuplicates
                                 ? 'bg-muted text-warning'
                                 : 'bg-muted text-muted-foreground',
@@ -211,7 +211,7 @@ export default function RegisterEditStep({
                             {updateDuplicates ? t('status_updated') : t('status_skipped')}
                           </span>
                         ) : (
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded-md bg-success/15 text-success">
                             {t('status_new')}
                           </span>
                         )}
@@ -225,7 +225,7 @@ export default function RegisterEditStep({
                         />
                         <Button
                           variant="ghost"
-                          size="icon-sm"
+                          size="icon"
                           aria-label={t('delete_row')}
                           onClick={() => deleteRow(row.id)}
                         >
@@ -256,7 +256,7 @@ export default function RegisterEditStep({
         <ImportNotices notices={allNotices} />
 
         {error && (
-          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <div className="bg-destructive/8 flex items-start gap-3 rounded-lg px-4 py-3">
             <ExclamationTriangleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>

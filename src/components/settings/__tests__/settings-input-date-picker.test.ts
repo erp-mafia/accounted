@@ -50,6 +50,7 @@ describe('SettingsInput: a click on a date field opens its calendar', () => {
     expect(html).toContain('type="date"')
     expect(html).toContain('id="fp_end"')
     expect(html).toContain('value="2026-12-31"')
-    expect(html).toContain('h-9')
+    expect(html).toContain('field-surface')
+    expect(html).toContain('h-8')
   })
 })

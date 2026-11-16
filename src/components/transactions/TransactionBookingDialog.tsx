@@ -5,8 +5,9 @@ import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, holdEscapeWhileUnsaved, useDashShellInert, useEditedSinceOpen } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowDownRightIcon, ArrowUpRightIcon, InboxIcon } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { InboxIcon } from '@/components/icons'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
@@ -301,18 +302,23 @@ export default function TransactionBookingDialog({
     setPickedInboxDocs((prev) => prev.filter((d) => d.document_id !== released))
   }
 
-  // Secondary intake path, styled as the dropzone's footer so "drop a file"
-  // and "pick from the inbox" read as one surface.
+  // Secondary intake path beside the upload zone: underlag already in the
+  // inkorg, picked instead of uploaded again.
   const pickFromInbox = (
-    <button
-      type="button"
-      onClick={() => setInboxPickerOpen(true)}
-      className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground"
-    >
+    <Button variant="ghost" className="-ml-2.5 self-start" onClick={() => setInboxPickerOpen(true)}>
       <InboxIcon className="h-4 w-4" />
-      <span>{t('doc_pick_existing_inline')}</span>
-    </button>
+      {t('doc_pick_inbox')}
+    </Button>
   )
+
+  // The header's context line (Stil v3): the row, its date and its amount.
+  const contextLine = [
+    transaction.description,
+    formatDate(transaction.date),
+    `${isIncome ? '+' : ''}${formatCurrency(transaction.amount, transaction.currency)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <Dialog open={open} onOpenChange={(o) => {
@@ -331,11 +337,17 @@ export default function TransactionBookingDialog({
         // stray drop from navigating the tab to the file.
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => e.preventDefault()}
-        // Width caps at the space left of a docked agent sheet so the form's
-        // right edge, and the Granska button, never end up unreachable under
-        // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
-        // the sheet closed this is exactly the old max-w-6xl.
-        className="max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto"
+        // Stil v3 widths: wide (720px) holds the kontering lines on their
+        // own; with a document to read beside them the dialog takes the
+        // document size, since a page and a four-column line editor do not
+        // fit 720px. The primitive centres every size in the space left of a
+        // docked agent sheet, but its document width does not subtract the
+        // sheet: capped here so the form's right edge, and the Granska
+        // button, never end up unreachable under the sheet (z-60 over z-50).
+        // --agent-sheet-w is docked-only, so with the sheet closed this is
+        // the primitive's own width.
+        size={viewerDocId ? 'document' : 'wide'}
+        className={cn(viewerDocId && 'sm:max-w-[min(1120px,calc(100vw-var(--agent-sheet-w,0px)-4rem))]')}
         // Non-modal so the agent sheet (fixed z-[60], portaled outside this
         // dialog) stays interactive beside a booking in progress; a click in
         // its text field must not count as outside-dismissal. Same convention
@@ -352,69 +364,55 @@ export default function TransactionBookingDialog({
       >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {t('description')}
-          </DialogDescription>
+          {/* The row's own text and amount: user data in session replays. */}
+          <DialogDescription data-ph-mask="">{contextLine}</DialogDescription>
         </DialogHeader>
 
-        {/* Transaction summary */}
-        <div className="flex items-center gap-3 rounded-lg border p-3">
-          <div
-            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
-              isIncome
-                ? 'text-success'
-                : 'text-destructive'
-            }`}
-          >
-            {isIncome ? (
-              <ArrowUpRightIcon className="h-4 w-4" />
-            ) : (
-              <ArrowDownRightIcon className="h-4 w-4" />
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm truncate">{transaction.description}</p>
-            <p className="text-xs text-muted-foreground">{formatDate(transaction.date)}</p>
-          </div>
-          <p className={`font-medium text-sm flex-shrink-0 ${isIncome ? 'text-success' : ''}`}>
-            {isIncome ? '+' : ''}
-            {formatCurrency(transaction.amount, transaction.currency)}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          {/* Underlag column: one coherent surface. Empty state sizes to its
-              content (dropzone + attached inbox-picker row) and top-aligns;
-              once a document exists the viewer takes a fixed height and the
-              column stays sticky on desktop while the form scrolls. Stacks
-              above the form on smaller screens. Same underlag as the Bokför
-              review: the first document attached is the row's own at once
-              (closing keeps it), every one has its x, more can be added. */}
+        <div
+          className={
+            viewerDocId
+              ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]'
+              : 'flex flex-col gap-5'
+          }
+        >
+          {/* The underlag: a section above the form while there is none (the
+              upload zone and the inkorg pick, the whole dialog takes a drop),
+              and once a document exists its own column beside the form: the
+              viewer takes a fixed height and the column stays sticky on
+              desktop while the form scrolls, stacked above the form on
+              smaller screens. Same underlag as the Bokför review: the first
+              document attached is the row's own at once (closing keeps it),
+              every one has its x, more can be added. */}
           <div
             className={
               viewerDocId
-                ? 'flex flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start'
-                : 'flex flex-col gap-2 lg:sticky lg:top-0 lg:self-start'
+                ? 'flex flex-col gap-3 lg:sticky lg:top-0 lg:h-[min(72vh,calc(100dvh-15rem))] lg:self-start'
+                : 'flex flex-col gap-2'
             }
           >
             {viewerDocId ? (
+              // The one object in the dialog: the raised surface.
               <DocumentViewerPane
                 documentId={viewerDocId}
                 mime={viewerMime}
                 fileName={viewerName}
-                className="h-[45vh] lg:h-auto lg:min-h-0 lg:flex-1"
+                className="h-[45vh] rounded-lg bg-control shadow-raised lg:h-auto lg:min-h-0 lg:flex-1"
               />
             ) : (
-              <DocumentUploadZone
-                files={uploadedFiles}
-                onFilesChange={handleFilesChange}
-                onUploaded={claimUpload}
-                dropSurfaceRef={dropSurfaceRef}
-              />
+              <>
+                <h3 className="text-[12px] font-medium leading-4 text-muted-foreground">{t('doc_label')}</h3>
+                <DocumentUploadZone
+                  files={uploadedFiles}
+                  onFilesChange={handleFilesChange}
+                  onUploaded={claimUpload}
+                  compact
+                  dropSurfaceRef={dropSurfaceRef}
+                />
+              </>
             )}
 
             {viewerDocId ? (
-              <div className="shrink-0 space-y-2">
+              <div className="flex shrink-0 flex-col gap-2">
                 {ownFromBefore && (
                   <UnderlagFileRow
                     name={underlag.fileName ?? tUnderlag('file_fallback')}
@@ -445,7 +443,8 @@ export default function TransactionBookingDialog({
             )}
           </div>
 
-          {/* Booking form */}
+          {/* Booking form: its kontering lines and its own Granska step,
+              which states the outcome before anything is booked. */}
           <div className="space-y-4" {...editProps}>
             {bankAccount !== null && (
               <JournalEntryForm

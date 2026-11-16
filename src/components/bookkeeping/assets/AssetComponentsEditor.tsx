@@ -151,7 +151,7 @@ export function AssetComponentsEditor({ drafts, onChange, targetCost, onReplace,
   return (
     <div className="space-y-2">
       {drafts.map((draft, index) => (
-        <div key={draft.key} className="grid grid-cols-12 items-end gap-2 rounded-lg border border-border bg-background p-2">
+        <div key={draft.key} className="grid grid-cols-12 items-end gap-2 rounded-lg p-2 bg-control shadow-raised">
           <div className="col-span-12 space-y-1 sm:col-span-4">
             <Label htmlFor={`cmp-name-${draft.key}`} className="text-xs text-muted-foreground">
               {t('components.name')}
@@ -215,7 +215,7 @@ export function AssetComponentsEditor({ drafts, onChange, targetCost, onReplace,
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 onClick={() => onReplace(draft.componentId!)}
                 aria-label={t('components.replace', { name: draft.name })}
                 disabled={disabled}
@@ -226,7 +226,7 @@ export function AssetComponentsEditor({ drafts, onChange, targetCost, onReplace,
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               onClick={() => remove(draft.key)}
               aria-label={t('components.remove', { name: draft.name })}
               disabled={disabled || drafts.length === 1 || draft.basisLocked}
@@ -293,10 +293,10 @@ export function AssetComponentsEditor({ drafts, onChange, targetCost, onReplace,
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => onChange([...drafts, newComponentDraft()])} disabled={disabled}>
-            <PlusIcon className="mr-1 h-4 w-4" /> {t('components.add')}
+          <Button type="button" variant="outline" onClick={() => onChange([...drafts, newComponentDraft()])} disabled={disabled}>
+            <PlusIcon className="h-4 w-4" /> {t('components.add')}
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setDetails((value) => !value)}>
+          <Button type="button" variant="ghost" onClick={() => setDetails((value) => !value)}>
             {details ? t('components.details_hide') : t('components.details_show')}
           </Button>
         </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +12,9 @@ import {
   searchUnmatchedOutgoingTransactions,
   type UnmatchedOutgoingTransaction,
 } from '@/lib/transactions/outgoing-transaction-search'
-import { ArrowDownRightIcon, MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
+import { ArrowDownRightIcon, MagnifyingGlassIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -44,7 +47,11 @@ export default function BankTransactionPicker({
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   const [transactions, setTransactions] = useState<UnmatchedOutgoingTransaction[]>([])
+  const tCommon = useTranslations('common')
   const [isLoading, setIsLoading] = useState(false)
+  // The rows could not be read: said in place of them, with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [searchTerm, setSearchTerm] = useState('')
   // The term the database was asked for, trailing the input by a short pause.
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -72,9 +79,15 @@ export default function BankTransactionPicker({
       // find an older payment.
       try {
         const { rows } = await searchUnmatchedOutgoingTransactions(supabase, companyId, appliedSearch)
-        if (!cancelled) setTransactions(rows)
+        if (!cancelled) {
+          setTransactions(rows)
+          setLoadFailed(false)
+        }
       } catch {
-        if (!cancelled) setTransactions([])
+        if (!cancelled) {
+          setTransactions([])
+          setLoadFailed(true)
+        }
       } finally {
         if (!cancelled) setIsLoading(false)
       }
@@ -83,7 +96,7 @@ export default function BankTransactionPicker({
     return () => {
       cancelled = true
     }
-  }, [open, company, supabase, appliedSearch])
+  }, [open, company, supabase, appliedSearch, attempt])
 
   const filtered = useMemo(() => {
     const matches = [...transactions]
@@ -103,7 +116,7 @@ export default function BankTransactionPicker({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
+      <DialogContent size="wide" className="flex flex-col">
         <DialogHeader>
           <DialogTitle>Välj banktransaktion</DialogTitle>
           <DialogDescription>
@@ -124,17 +137,24 @@ export default function BankTransactionPicker({
 
         <div className="flex-1 overflow-y-auto space-y-2 -mx-1 px-1">
           {isLoading ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              <SpinnerIcon className="h-4 w-4 animate-spin mr-2" />
-              Laddar transaktioner…
-            </div>
+            <LateReveal aria-label="Laddar transaktioner" className="space-y-2">
+              {[1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} className="h-12 w-full rounded-lg" />
+              ))}
+            </LateReveal>
+          ) : loadFailed ? (
+            <LoadError onRetry={() => setAttempt((n) => n + 1)} />
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-sm text-muted-foreground">
-              <ArrowDownRightIcon className="h-8 w-8 mb-2" />
-              {appliedSearch === ''
-                ? 'Inga okategoriserade utgifts­transaktioner hittades.'
-                : `Inga transaktioner matchar "${appliedSearch}".`}
-            </div>
+            appliedSearch === '' ? (
+              <EmptyState icon={ArrowDownRightIcon} title="Inga okategoriserade utgifts­transaktioner hittades." />
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+                <span data-ph-mask="">{`Inga transaktioner matchar "${appliedSearch}".`}</span>
+                <Button variant="link" onClick={() => setSearchTerm('')}>
+                  {tCommon('clear_search')}
+                </Button>
+              </div>
+            )
           ) : (
             filtered.map((tx) => {
               const sameCurrency = tx.currency === targetCurrency
@@ -146,7 +166,7 @@ export default function BankTransactionPicker({
                   key={tx.id}
                   type="button"
                   onClick={() => onPick(tx.id)}
-                  className="w-full text-left rounded-lg border p-3 hover:border-primary/50 hover:bg-secondary/60 transition-colors"
+                  className="w-full text-left rounded-lg p-3 hover:border-primary/50 hover:bg-secondary/60 transition-colors bg-control shadow-raised"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

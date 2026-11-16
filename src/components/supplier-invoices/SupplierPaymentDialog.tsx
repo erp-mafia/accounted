@@ -335,7 +335,7 @@ export function SupplierPaymentDialog({
                           {markPaidPreviewError?.message ?? tMatch('booking_unavailable')}
                         </p>
                         {markPaidPreviewError?.code === 'SI_PAID_SEK_UNRESOLVED' && (
-                          <Button variant="outline" size="sm" onClick={() => setPayTab('existing')}>
+                          <Button variant="outline" onClick={() => setPayTab('existing')}>
                             {t('preview_use_existing_voucher')}
                           </Button>
                         )}
@@ -393,7 +393,7 @@ export function SupplierPaymentDialog({
                   ? t('duplicate_payment_description_one')
                   : t('duplicate_payment_description_many')}
             </p>
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {duplicateCandidates?.map((c) => {
                 // A row that is already a verifikat: "link it" is the wrong
                 // remedy (the money would be booked twice), so point at the
@@ -417,7 +417,6 @@ export function SupplierPaymentDialog({
                     </div>
                     <Button
                       variant="outline"
-                      size="sm"
                       onClick={() =>
                         router.push(
                           alreadyBooked

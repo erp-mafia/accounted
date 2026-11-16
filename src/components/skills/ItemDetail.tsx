@@ -7,7 +7,6 @@ import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  ArrowLeftIcon,
   ArrowUpRightIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -82,6 +81,8 @@ export function ItemDetail({ segment, backHref }: { segment: string; backHref: s
 
 function Detail({ companyId, companyName, segment, backHref }: { companyId: string; companyName: string; segment: string; backHref: string }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Kompetens).
+  const tNav = useTranslations('nav')
   const locale = useLocale()
   const { canWrite } = useCanWrite()
   const { appName } = useBranding()
@@ -182,8 +183,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   if (!item) {
     return (
       <div className={styles.apage}>
-        <PageHeader title={t('title')} />
-        <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <PageHeader title={tNav('v3_skills')} />
         {loaded && <p className={styles.muted}>{t('not_found')}</p>}
       </div>
     )
@@ -249,8 +249,8 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
 
   return (
     <div className={styles.apage}>
-      <PageHeader title={t('title')} />
-      <Link href={back} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {/* The list this item sits under, then its name: the way back is the breadcrumb. */}
+      <PageHeader title={item.own ? <span data-ph-mask="">{item.name}</span> : item.name} parent={{ label: tNav('v3_skills'), href: back }} />
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={item.name}>

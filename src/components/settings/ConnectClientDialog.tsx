@@ -221,7 +221,7 @@ export function ConnectClientDialog({
 
   return (
     <Dialog open={target !== null} onOpenChange={(open) => !open && close()}>
-      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('connect_dialog_title', { name })}</DialogTitle>
           <DialogDescription>{t('connect_dialog_description')}</DialogDescription>
@@ -241,7 +241,7 @@ export function ConnectClientDialog({
             <ol className="space-y-2">
               {Array.from({ length: mode.steps }, (_, i) => i + 1).map((n) => (
                 <li key={n} className="grid grid-cols-[20px_minmax(0,1fr)] items-baseline gap-3 text-sm">
-                  <span className="inline-grid h-5 w-5 place-items-center rounded-full border border-border text-[11px] tabular-nums text-muted-foreground">
+                  <span className="inline-grid h-5 w-5 place-items-center rounded-full border border-border text-xs tabular-nums text-muted-foreground">
                     {n}
                   </span>
                   <span>

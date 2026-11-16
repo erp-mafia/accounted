@@ -18,7 +18,7 @@ export function RunFoldSection({ kicker, children }: { kicker: string; children:
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 border-b border-border pb-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        className="flex w-full items-center gap-2 border-b-hairline pb-2 text-left text-xs font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground"
       >
         <ChevronRightIcon className={cn('h-3 w-3 transition-transform duration-150', open && 'rotate-90')} aria-hidden />
         <span data-ph-unmask="">{kicker}</span>

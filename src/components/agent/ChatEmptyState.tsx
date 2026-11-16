@@ -33,8 +33,8 @@ export default function ChatEmptyState() {
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <AgentAvatar avatarId={identity.avatarId} size="lg" alt={name} className="mb-5" />
-        <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
-        <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
+        <h1 className="text-2xl mb-2">Fråga {name}</h1>
+        <div className="rounded-lg bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left bg-control shadow-raised">
           <div className="flex items-center gap-2 text-sm font-medium">
             <SparklesIcon className="h-4 w-4" />
             Avstängd i sandlådan
@@ -57,8 +57,8 @@ export default function ChatEmptyState() {
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <AgentAvatar avatarId={identity.avatarId} size="lg" alt={name} className="mb-5" />
-        <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
-        <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
+        <h1 className="text-2xl mb-2">Fråga {name}</h1>
+        <div className="rounded-lg bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left bg-control shadow-raised">
           <div className="flex items-center gap-2 text-sm font-medium">
             <SparklesIcon className="h-4 w-4" />
             Ingår i abonnemanget

@@ -14,7 +14,8 @@ import { KvittojaktenButton } from '@/components/dashboard/KvittojaktenButton'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { isDocType } from '@/lib/documents/classify/taxonomy'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
@@ -43,7 +44,6 @@ import {
   InboxIcon,
   LinkIcon,
   MagnifyingGlassIcon,
-  PlusIcon,
   QuestionMarkCircleIcon,
   SparklesIcon,
   SpinnerIcon,
@@ -444,7 +444,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
   const tArkiv = useTranslations('arkiv')
+  const tNav = useTranslations('nav')
   const tStart = useTranslations('start_cards')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const companyId = useCompanyOptional()?.company?.id ?? null
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1451,7 +1453,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <InboxIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-          <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
+          <h1 className="text-sm shrink-0">{tNav('v3_incoming')}</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               is a thing people look up when something seems wrong, not
               something they read every visit. A mailbox that has stopped
@@ -1461,7 +1463,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {sourceCount > 0 || mailboxNeedsReconnect ? (
             <Button
               variant="ghost"
-              size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
               className={cn(
                 'font-normal shrink-0',
@@ -1469,13 +1470,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               )}
               aria-expanded={sourcesOpen}
             >
-              {mailboxNeedsReconnect && <ExclamationTriangleIcon className="h-3 w-3 mr-1.5" />}
+              {mailboxNeedsReconnect && <ExclamationTriangleIcon className="h-3 w-3" />}
               {mailboxNeedsReconnect
                 ? t('source_gmail_reconnect_chip')
                 : sourceCount === 1
                   ? t('sources_one', { count: sourceCount })
                   : t('sources_many', { count: sourceCount })}
-              <ChevronDownIcon className="h-3 w-3 ml-1 opacity-60" />
+              <ChevronDownIcon className="h-3 w-3 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
             // We do not know whether an address exists, so we offer a retry
@@ -1490,12 +1491,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ) : (
             <Button
               variant="outline"
-              size="sm"
               onClick={handleRotateAddress}
               loading={isRotating}
               className="ml-2 shrink-0"
             >
-              {!isRotating && <EnvelopeIcon className="h-3.5 w-3.5 mr-1.5" />}
+              {!isRotating && <EnvelopeIcon className="h-3.5 w-3.5" />}
               Aktivera inkorgsadress
             </Button>
           )}
@@ -1517,11 +1517,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
           <Button
             variant="outline"
-            size="sm"
             onClick={() => fileInputRef.current?.click()}
             loading={isUploading}
           >
-            {!isUploading && <PlusIcon className="h-3.5 w-3.5 mr-1.5" />}
+            {!isUploading && <ArrowUpTrayIcon className="h-3.5 w-3.5" />}
             {uploadWaitSec !== null
               ? t('upload_waiting', { seconds: uploadWaitSec })
               : uploadQueue
@@ -1567,7 +1566,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       {sourcesOpen && (
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
+            <div className="flex items-center gap-3 px-4 py-2 border-b-hairline">
               <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               {/* The address once, where the copy button is. Plus-addressing
                   (#2129) as a rule, not spelled out per variant: the tag is
@@ -1586,7 +1585,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               it and it is not there" gets an answer instead of a shrug. */}
           {inboxAddress && (
             <details
-              className="group border-b border-border"
+              className="group border-b-hairline"
               onToggle={(e) => {
                 if (e.currentTarget.open && inboundMails === null && !inboundMailsFailed) {
                   void fetchInboundMails()
@@ -1601,7 +1600,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 )}
                 <ChevronRightIcon className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
               </summary>
-              <div className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-1.5">
+              <div className="px-4 pb-2.5 pl-11 text-xs text-muted-foreground space-y-1.5">
                 <p>
                   {inboundMailsTruncated && inboundMails
                     ? t('inbound_mail_truncated', { count: inboundMails.length, days: INBOUND_MAIL_DAYS })
@@ -1614,10 +1613,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     {t('inbound_mail_load_failed')}
                   </AttnLine>
                 ) : inboundMails === null ? (
-                  <span className="flex items-center gap-1.5">
-                    <SpinnerIcon className="h-3 w-3 animate-spin" />
-                    {t('inbound_mail_loading')}
-                  </span>
+                  <LateReveal aria-label={t('inbound_mail_loading')} className="space-y-1.5">
+                    <Skeleton className="h-3.5 w-2/3" />
+                    <Skeleton className="h-3.5 w-1/2" />
+                  </LateReveal>
                 ) : inboundMails.length === 0 ? (
                   <p>{t('inbound_mail_empty', { days: INBOUND_MAIL_DAYS })}</p>
                 ) : (
@@ -1641,13 +1640,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
 
           {whatsapp?.linked && (
-            <details className="group border-b border-border">
+            <details className="group border-b-hairline">
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">WhatsApp</span>
                 <ChevronRightIcon className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
               </summary>
-              <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
+              <dl className="px-4 pb-2.5 pl-11 text-xs text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">{t('source_whatsapp_number')}</dt>
                   <dd className="tabular-nums">{whatsapp.phoneMasked ?? '-'}</dd>
@@ -1695,7 +1694,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               {/* Primary action: the one solid button */}
               <Button
                 variant="default"
-                size="sm"
                 className="w-full"
                 onClick={() => setBulkBookOpen(true)}
                 disabled={isBulkDeleting || bookableSelectedCount === 0}
@@ -1705,7 +1703,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     : undefined
                 }
               >
-                <CheckIcon className="h-3.5 w-3.5 mr-1.5" />
+                <CheckIcon className="h-3.5 w-3.5" />
                 Bokför valda
               </Button>
               {/* Secondary actions: outlined, so they read as buttons */}
@@ -1713,7 +1711,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 {identity.isVerified && assistantAvailable && (
                   <Button
                     variant="outline"
-                    size="sm"
                     className="flex-1 px-2 text-muted-foreground hover:text-foreground"
                     onClick={() =>
                       openAgentSheet({
@@ -1724,13 +1721,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     }
                     disabled={isBulkDeleting}
                   >
-                    <SparklesIcon className="h-3.5 w-3.5 mr-1.5" />
+                    <SparklesIcon className="h-3.5 w-3.5" />
                     Fråga assistenten
                   </Button>
                 )}
                 <Button
                   variant="outline"
-                  size="sm"
                   className={cn(
                     'px-2 text-muted-foreground hover:text-destructive hover:border-destructive/40',
                     identity.isVerified ? 'flex-none' : 'flex-1'
@@ -1738,7 +1734,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   onClick={handleBulkDelete}
                   loading={isBulkDeleting}
                 >
-                  {!isBulkDeleting && <TrashIcon className="h-3.5 w-3.5 mr-1.5" />}
+                  {!isBulkDeleting && <TrashIcon className="h-3.5 w-3.5" />}
                   Ta bort
                 </Button>
               </div>
@@ -1747,17 +1743,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {itemsUnknown ? (
             // The list read failed. "Inkorgen är tom" would be a claim we
             // cannot back: a mailed-in invoice may be sitting there unread.
-            <div className="p-6 text-center text-sm text-muted-foreground space-y-2">
-              <ExclamationTriangleIcon className="h-5 w-5 mx-auto text-attn" />
-              <p>{t('items_load_failed')}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { void fetchItems() }}
-              >
-                {t('retry')}
-              </Button>
-            </div>
+            <LoadError className="px-4" title={t('items_load_failed')} onRetry={() => { void fetchItems() }} />
           ) : !hasAnyItem ? (
             // On desktop the preview pane is always visible alongside this
             // column, so showing the onboarding card here would duplicate it.
@@ -1779,33 +1765,38 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     dismissLabel={tStart('inbox_dismiss')}
                   />
                 </div>
-                <div className="hidden xl:block p-6 text-center text-sm text-muted-foreground">
-                  <InboxIcon className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                  Inkorgen är tom.
+                <div className="hidden xl:block">
+                  <EmptyState className="px-4" icon={InboxIcon} title="Inkorgen är tom." />
                 </div>
               </>
             ) : (
-              <div className="p-6 text-center text-sm text-muted-foreground">
-                <InboxIcon className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                Inkorgen är tom.
-              </div>
+              <EmptyState className="px-4" icon={InboxIcon} title="Inkorgen är tom." />
             )
           ) : (filter === 'missing' || filter === 'portal' ? filteredPurchases.length : filteredItems.length) === 0 ? (
-            <div className="p-6 text-center text-xs text-muted-foreground">
-              {/* A leftover search term makes every one of these false: the
-                  trigger above still shows the unsearched count, so the page
-                  would claim every purchase has its underlag while the button
-                  beside it reads 50. */}
-              {searchTerm.trim() !== ''
-                ? `Inga träffar på ”${searchTerm.trim()}”.`
-                : filter === 'todo'
-                  ? 'Inget att åtgärda; allt är bearbetat.'
-                  : filter === 'portal'
-                    ? 'Inga köp väntar på en faktura från en portal.'
-                    : filter === 'missing'
-                      ? 'Varje köp har sitt underlag.'
-                      : 'Inga poster matchar filtret.'}
-            </div>
+            // A leftover search term makes every one of these false: the
+            // trigger above still shows the unsearched count, so the page
+            // would claim every purchase has its underlag while the button
+            // beside it reads 50. No hits is one muted line; a handled queue
+            // says so with the green check.
+            searchTerm.trim() !== '' ? (
+              <div className="flex flex-wrap items-center gap-x-3 px-4 py-3 text-[13px] text-muted-foreground">
+                <span data-ph-mask="">{`Inga träffar på ”${searchTerm.trim()}”.`}</span>
+                <Button variant="link" onClick={() => setSearchTerm('')}>
+                  {tCommon('clear_search')}
+                </Button>
+              </div>
+            ) : filter === 'todo' || filter === 'missing' ? (
+              <EmptyState
+                className="px-4"
+                tone="done"
+                icon={CheckIcon}
+                title={filter === 'todo' ? 'Inget att åtgärda; allt är bearbetat.' : 'Varje köp har sitt underlag.'}
+              />
+            ) : (
+              <p className="px-4 py-3 text-[13px] text-muted-foreground">
+                {filter === 'portal' ? 'Inga köp väntar på en faktura från en portal.' : 'Inga poster matchar filtret.'}
+              </p>
+            )
           ) : (
             <ul>
               {filter === 'missing' || filter === 'portal'
@@ -1861,7 +1852,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 </p>
 
                 {selectedPurchase.portal && (
-                  <Button size="sm" variant="outline" className="mt-4" asChild>
+                  <Button variant="outline" className="mt-4" asChild>
                     <a href={selectedPurchase.portal.url} target="_blank" rel="noopener noreferrer">
                       Öppna {selectedPurchase.portal.vendor}
                       <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 ml-1.5" />
@@ -2477,33 +2468,30 @@ export function DocumentPreview({
     )
   }
   if (state === 'loading') {
+    // The page's own shape while it loads, hidden for the first 300ms.
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        <SpinnerIcon className="h-6 w-6 animate-spin" />
-        <span>{t('document_loading')}</span>
-      </div>
+      <LateReveal aria-label={t('document_loading')} className="flex h-full w-full justify-center p-4">
+        <Skeleton className="h-full w-full max-w-3xl rounded-lg" />
+      </LateReveal>
     )
   }
   if (state === 'error' || (state === 'ready' && !docUrl)) {
     // The row points at a stored document: say that it could not be shown, not
     // that there is nothing attached.
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-        <ExclamationTriangleIcon className="h-5 w-5 text-attn" />
-        <span>{t('document_load_failed')}</span>
-        {onRetry && (
-          <Button variant="outline" size="sm" onClick={onRetry}>
-            {t('retry')}
-          </Button>
+      <div className="px-6">
+        {onRetry ? (
+          <LoadError title={t('document_load_failed')} onRetry={onRetry} />
+        ) : (
+          <EmptyState tone="error" icon={ExclamationTriangleIcon} title={t('document_load_failed')} />
         )}
       </div>
     )
   }
   if (!docUrl) {
     return (
-      <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-        <DocumentTextIcon className="h-5 w-5 mr-2" />
-        Inget underlag bifogat
+      <div className="px-6">
+        <EmptyState icon={DocumentTextIcon} title="Inget underlag bifogat" />
       </div>
     )
   }
@@ -2528,12 +2516,12 @@ export function DocumentPreview({
     <div className="h-full w-full p-4 flex items-start justify-center overflow-hidden">
       {kind === 'image' ? (
         // Image: frame hugs the image, capped at the parent's visible box.
-        <div className="max-h-full max-w-3xl bg-background rounded-lg border overflow-hidden flex">
+        <div className="max-h-full max-w-3xl overflow-hidden flex">
           {preview('', 'block max-h-[calc(100vh-9rem)] max-w-full w-auto h-auto object-contain')}
         </div>
       ) : (
         // PDF and mail HTML: the frame needs an explicit height and fills the pane.
-        <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
+        <div className="h-full w-full max-w-3xl overflow-hidden">
           {preview('w-full h-full border-0')}
         </div>
       )}
@@ -2554,30 +2542,27 @@ function EmptyPreview({
   isActivating: boolean
 }) {
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center px-6 gap-3">
-      <InboxIcon className="h-10 w-10 text-muted-foreground/40" />
-      <div>
-        <p className="text-sm font-medium">
-          {onActivateInbox ? 'Aktivera din inkorgsadress' : 'Välj ett dokument från listan'}
-        </p>
-        <p className="text-xs text-muted-foreground mt-1">
-          {onActivateInbox
+    <div className="px-6">
+      <EmptyState
+        icon={InboxIcon}
+        title={onActivateInbox ? 'Aktivera din inkorgsadress' : 'Välj ett dokument från listan'}
+        description={
+          onActivateInbox
             ? 'Ditt bolag får en unik e-postadress som leverantörer kan skicka fakturor till.'
-            : 'Eller dra och släpp en fil var som helst på sidan för att ladda upp.'}
-        </p>
-      </div>
-      <div className="flex gap-2">
+            : 'Eller dra och släpp en fil var som helst på sidan för att ladda upp.'
+        }
+      >
         {onActivateInbox && (
-          <Button size="sm" onClick={onActivateInbox} loading={isActivating}>
-            {!isActivating && <EnvelopeIcon className="h-3.5 w-3.5 mr-1.5" />}
+          <Button onClick={onActivateInbox} loading={isActivating}>
+            {!isActivating && <EnvelopeIcon className="h-3.5 w-3.5" />}
             Aktivera inkorgsadress
           </Button>
         )}
-        <Button variant="outline" size="sm" onClick={onUploadClick}>
-          <PlusIcon className="h-3.5 w-3.5 mr-1.5" />
+        <Button variant="outline" onClick={onUploadClick}>
+          <ArrowUpTrayIcon className="h-3.5 w-3.5" />
           Ladda upp en fil
         </Button>
-      </div>
+      </EmptyState>
     </div>
   )
 }
@@ -2637,7 +2622,7 @@ function PurchaseRow({
           {/* A chip only when the row deviates: here, when we can actually
               tell the user where to go. */}
           {purchase.portal && (
-            <Badge data-ph-mask="" variant="outline" className="text-[11px] font-normal">
+            <Badge data-ph-mask="" variant="outline" className="text-xs font-normal">
               {purchase.portal.vendor}
             </Badge>
           )}
@@ -2685,7 +2670,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
           </p>
           {/* We never log in for anyone. Knowing where the invoice is costs no
               password and is most of the value. */}
-          <Button size="sm" className="w-full" asChild>
+          <Button className="w-full" asChild>
             <a href={purchase.portal.url} target="_blank" rel="noopener noreferrer">
               Öppna {purchase.portal.vendor}
               <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 ml-1.5" />
@@ -2828,7 +2813,7 @@ function ProposedBooking({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-xs">{t('proposal_title')}</h3>
         {data.entry_date && (
-          <span className="text-[11px] text-muted-foreground tabular-nums">
+          <span className="text-xs text-muted-foreground tabular-nums">
             {t('proposal_entry_date', { date: formatDate(data.entry_date) })}
           </span>
         )}
@@ -2840,10 +2825,10 @@ function ProposedBooking({
           construction, so a mismatch here means something upstream is wrong
           and the user should see it (the Summa row shows both sides) before
           booking. */}
-      {!balanced && <p className="text-[11px] text-warning">{t('proposal_unbalanced')}</p>}
+      {!balanced && <p className="text-xs text-warning">{t('proposal_unbalanced')}</p>}
 
       {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
-        <details className="text-[11px] text-muted-foreground">
+        <details className="text-xs text-muted-foreground">
           <summary className="cursor-pointer hover:text-foreground">{t('proposal_why')}</summary>
           <div className="pt-1.5 space-y-1">
             {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
@@ -3024,7 +3009,7 @@ function FieldsRail({
     <div className="flex flex-col h-full">
       {arkivQuestion && (
         <div className="border-b px-4 pb-1 pt-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{tArkivRail('question_rail_title')}</div>
+          <div className="text-xs font-medium text-muted-foreground">{tArkivRail('question_rail_title')}</div>
           <QuestionCard key={arkivQuestion.id} question={arkivQuestion} compact onMore={onArkivMore} onAnswered={onArkivAnswered} />
         </div>
       )}
@@ -3065,7 +3050,7 @@ function FieldsRail({
       {/* WhatsApp chat context (see waCtx derivation above). */}
       {showWaBlock && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+          <h3 className="text-xs text-muted-foreground mb-2">
             {t('wa_block_title')}
           </h3>
           {waCaption && (
@@ -3166,7 +3151,7 @@ function FieldsRail({
       )}
 
       {item.error_message && (
-        <div className="border-b border-destructive/30 bg-destructive/5 px-4 py-3 text-xs space-y-2">
+        <div className="bg-destructive/8 border-b px-4 py-3 text-xs space-y-2">
           <div className="flex items-start gap-2">
             <ExclamationTriangleIcon className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
             <div>
@@ -3177,12 +3162,11 @@ function FieldsRail({
           {item.document_id && (
             <Button
               variant="outline"
-              size="sm"
               className="w-full"
               onClick={handleRetry}
               loading={isRetrying}
             >
-              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3 mr-1.5" />}
+              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3" />}
               Försök igen
             </Button>
           )}
@@ -3197,7 +3181,7 @@ function FieldsRail({
           the code can be copied out. */}
       {item.source === 'email' && !item.document_id && (
         <div className="border-b px-4 py-3">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+          <h3 className="text-xs text-muted-foreground mb-2">
             {t('email_body_label')}
           </h3>
           {item.email_body_text?.trim() ? (
@@ -3257,12 +3241,11 @@ function FieldsRail({
           <div className="border-b px-4 py-2">
             <Button
               variant="outline"
-              size="sm"
               className="w-full"
               onClick={handleRetry}
               loading={isRetrying}
             >
-              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3 mr-1.5" />}
+              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3" />}
               {t('retry_extraction')}
             </Button>
           </div>
@@ -3291,7 +3274,7 @@ function FieldsRail({
         )}
 
         <details className="group" open={!isLinkedToTransaction}>
-          <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
+          <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs text-muted-foreground font-medium hover:text-foreground">
             <ChevronRightIcon className="h-3 w-3 transition-transform group-open:rotate-90" />
             <span className="flex-1">{t('fields_summary')}</span>
             {/* A count, not a score. "5 av 12" read as a bad extraction even
@@ -3338,7 +3321,7 @@ function FieldsRail({
           // No fields were extracted (AI never ran) and the company doesn't have
           // the AI capability. Show an upsell in place of the blank field list:
           // upload and manual entry stay available via the actions below.
-          <div className="rounded-lg border border-border bg-secondary/40 px-4 py-3 text-left">
+          <div className="rounded-lg bg-secondary/40 px-4 py-3 text-left bg-control shadow-raised">
             <div className="flex items-center gap-2 text-sm font-medium">
               <SparklesIcon className="h-4 w-4" />
               AI-tolkning ingår i abonnemanget
@@ -3348,7 +3331,7 @@ function FieldsRail({
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>
-            <Button size="sm" className="mt-3" asChild>
+            <Button className="mt-3" asChild>
               <Link href="/settings/billing">Uppgradera</Link>
             </Button>
           </div>
@@ -3370,16 +3353,16 @@ function FieldsRail({
       <div className="border-t px-4 py-3 space-y-2">
         {isProcessed && item.created_supplier_invoice_id ? (
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">
-            <Button variant="default" size="sm" className="w-full">
-              <ArrowRightIcon className="h-3.5 w-3.5 mr-1.5" />
+            <Button variant="default" className="w-full">
+              <ArrowRightIcon className="h-3.5 w-3.5" />
               Öppna leverantörsfaktura
             </Button>
           </Link>
         ) : isBookedDirectly && bookedEntryId ? (
           <>
             <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
-              <Button variant="default" size="sm" className="w-full">
-                <ArrowRightIcon className="h-3.5 w-3.5 mr-1.5" />
+              <Button variant="default" className="w-full">
+                <ArrowRightIcon className="h-3.5 w-3.5" />
                 Öppna verifikation
               </Button>
             </Link>
@@ -3413,7 +3396,6 @@ function FieldsRail({
             {showBookingBridge && onAskAssistant && (
               <Button
                 variant="default"
-                size="sm"
                 className="w-full"
                 onClick={() => onAskAssistant(item.matched_transaction_id!)}
               >
@@ -3428,7 +3410,6 @@ function FieldsRail({
             {showBookingBridge && (
               <Button
                 variant="outline"
-                size="sm"
                 className="w-full"
                 onClick={() => setEditOpen(true)}
               >
@@ -3480,15 +3461,15 @@ function FieldsRail({
                 verifikat editor stays reachable below as the escape hatch. */}
             <PayerChoiceSelect value={payer} onChange={setPayer} accountingMethod={accountingMethod} />
             {payer === 'company' ? (
-              <Button variant="default" size="sm" className="w-full" onClick={onMatchTransaction}>
+              <Button variant="default" className="w-full" onClick={onMatchTransaction}>
                 Matcha mot transaktion
               </Button>
             ) : payer === 'unpaid' ? (
-              <Button variant="default" size="sm" className="w-full" onClick={onCreateSupplierInvoice}>
+              <Button variant="default" className="w-full" onClick={onCreateSupplierInvoice}>
                 Skapa leverantörsfaktura
               </Button>
             ) : (
-              <Button variant="default" size="sm" className="w-full" onClick={() => onRegisterExpense(payer)}>
+              <Button variant="default" className="w-full" onClick={() => onRegisterExpense(payer)}>
                 {t('payer_book_expense')}
               </Button>
             )}
@@ -3503,7 +3484,6 @@ function FieldsRail({
         )}
         <Button
           variant="ghost"
-          size="sm"
           className="w-full"
           onClick={onDelete}
           disabled={isResolved}
@@ -3518,17 +3498,17 @@ function FieldsRail({
                   : undefined
           }
         >
-          {!isDeleting && <TrashIcon className="h-3.5 w-3.5 mr-1.5" />}
+          {!isDeleting && <TrashIcon className="h-3.5 w-3.5" />}
           Ta bort
         </Button>
         {isProcessed && (
-          <Badge variant="secondary" className="w-full justify-center text-[11px]">
+          <Badge variant="secondary" className="w-full justify-center text-xs">
             <CheckIcon className="h-2.5 w-2.5 mr-1" />
             Bearbetad
           </Badge>
         )}
         {isBookedDirectly && (
-          <Badge variant="secondary" className="w-full justify-center text-[11px]">
+          <Badge variant="secondary" className="w-full justify-center text-xs">
             <CheckIcon className="h-2.5 w-2.5 mr-1" />
             Bokförd
           </Badge>
@@ -3541,14 +3521,14 @@ function FieldsRail({
             >
               <Badge
                 variant="secondary"
-                className="w-full justify-center text-[11px] hover:bg-secondary/60"
+                className="w-full justify-center text-xs hover:bg-secondary/60"
               >
                 <LinkIcon className="h-2.5 w-2.5 mr-1" />
                 Kopplad till transaktion
               </Badge>
             </Link>
           ) : (
-            <Badge variant="secondary" className="w-full justify-center text-[11px]">
+            <Badge variant="secondary" className="w-full justify-center text-xs">
               <LinkIcon className="h-2.5 w-2.5 mr-1" />
               Kopplad till transaktion
             </Badge>
@@ -3595,7 +3575,7 @@ function FieldsRail({
       {/* Expanded fields editor: same autosaving list as the rail, at a
           readable size. Convention 13: centered modal. */}
       <Dialog open={fieldsExpanded} onOpenChange={setFieldsExpanded}>
-        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('fields_summary')}</DialogTitle>
           </DialogHeader>
@@ -3882,8 +3862,8 @@ export function EditableFieldsList({
               // time: the variant keeps the input ids unique between them.
               htmlFor={`field-${variant}-${f.key}`}
               className={cn(
-                'uppercase tracking-wide text-muted-foreground/80',
-                variant === 'expanded' ? 'text-xs' : 'text-[11px]'
+                'text-muted-foreground',
+                variant === 'expanded' ? 'text-xs' : 'text-xs'
               )}
             >
               {f.label}
@@ -3906,7 +3886,7 @@ export function EditableFieldsList({
               variant === 'expanded'
                 ? 'h-9 text-sm border-border bg-transparent px-3 focus-visible:border-ring'
                 : 'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
-              drafts[f.key] === '' && 'text-muted-foreground/50 italic'
+              drafts[f.key] === '' && 'text-muted-foreground italic'
             )}
           />
         </div>
@@ -3916,7 +3896,7 @@ export function EditableFieldsList({
           type="button"
           onClick={() => setShowAllFields(true)}
           className={cn(
-            'text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1 text-left',
+            'text-xs text-muted-foreground hover:text-foreground hover:underline pt-1 text-left',
             variant === 'expanded' && 'sm:col-span-2'
           )}
         >
@@ -3925,7 +3905,7 @@ export function EditableFieldsList({
       )}
       {vatRows.length > 0 && (
         <div className={cn('pt-2 border-t mt-3', variant === 'expanded' && 'sm:col-span-2 mt-1')}>
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
+          <p className="text-xs text-muted-foreground mb-1.5">
             Momsfördelning
           </p>
           <div className="space-y-1">
@@ -3944,7 +3924,7 @@ export function EditableFieldsList({
       {disabled && (
         <p
           className={cn(
-            'text-[11px] text-muted-foreground/70 pt-2',
+            'text-xs text-muted-foreground pt-2',
             variant === 'expanded' && 'sm:col-span-2 text-xs'
           )}
         >

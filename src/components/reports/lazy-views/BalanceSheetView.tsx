@@ -1,7 +1,7 @@
 'use client'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import {
   ReportEmptyState,
@@ -18,7 +18,7 @@ import type { AccountDrilldown } from '@/components/reports/drilldown-click'
 
 export default function BalanceSheetView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange)
-  const { data, loading, error } = useReportData<BalanceSheetReport>(
+  const { data, loading, error, refetch } = useReportData<BalanceSheetReport>(
     `/api/reports/balance-sheet?${reportQs}`,
     'Kunde inte hämta balansräkning',
   )
@@ -28,7 +28,7 @@ export default function BalanceSheetView({ periodId, dateRange, drilldown }: { p
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data) {
@@ -56,11 +56,11 @@ export default function BalanceSheetView({ periodId, dateRange, drilldown }: { p
         <CardHeader>
           <CardTitle className="text-base">Tillgångar</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <ReportSectionTable
             sections={data.asset_sections}
             drilldown={drilldown}
-            footer={{ label: 'Summa tillgångar', amount: data.total_assets }}
+            footer={{ label: 'Summa tillgångar', amount: data.total_assets, headline: true }}
           />
         </CardContent>
       </Card>
@@ -70,38 +70,35 @@ export default function BalanceSheetView({ periodId, dateRange, drilldown }: { p
         <CardHeader>
           <CardTitle className="text-base">Eget kapital och skulder</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <ReportSectionTable
             sections={data.equity_liability_sections}
             drilldown={drilldown}
-            footer={{ label: 'Summa eget kapital och skulder', amount: data.total_equity_liabilities }}
+            footer={{ label: 'Summa eget kapital och skulder', amount: data.total_equity_liabilities, headline: true }}
           />
         </CardContent>
       </Card>
 
-      {/* Balance check */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex justify-between items-center">
-            <span className="text-sm font-medium">Balanscheck</span>
-            {isBalanced ? (
-              <span className="text-sm text-muted-foreground">Balanserar</span>
-            ) : (
-              <div className="text-right">
-                <Badge variant="destructive">Balanserar ej</Badge>
-                <p className="text-sm text-destructive mt-1 tabular-nums">
-                  Differens: {formatAmount(Math.abs(data.total_assets - data.total_equity_liabilities))} kr
-                </p>
-              </div>
-            )}
-          </div>
-          {!isBalanced && data.imbalance_diagnosis && (
-            <p className="text-sm text-muted-foreground mt-3 pt-3 border-t">
-              {data.imbalance_diagnosis.message}
-            </p>
+      {/* Balance check: one line under the totals (board Rapporter-v3). */}
+      <div className="border-t-hairline pt-4">
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] font-medium text-strong">Balanscheck</span>
+          {isBalanced ? (
+            <span className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
+              <StatusGlyph tone="ok" />
+              Balanserar
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-[13px] text-destructive tabular-nums">
+              <StatusGlyph tone="error" />
+              Balanserar ej: differens {formatAmount(Math.abs(data.total_assets - data.total_equity_liabilities))} kr
+            </span>
           )}
-        </CardContent>
-      </Card>
+        </div>
+        {!isBalanced && data.imbalance_diagnosis && (
+          <p className="mt-2 text-[13px] text-muted-foreground">{data.imbalance_diagnosis.message}</p>
+        )}
+      </div>
     </div>
   )
 }

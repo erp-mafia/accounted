@@ -40,8 +40,8 @@ import {
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -65,7 +65,7 @@ import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate, formatAmount } from '@/lib/utils'
+import { formatCurrency, formatDate, formatAmount, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import {
@@ -166,6 +166,7 @@ type UploadState =
 
 export default function ExpenseClaimsPage() {
   const t = useTranslations('expense_claims')
+  const tCommon = useTranslations('common')
   // The document inbox (AI reading) is refused for a company without the AI
   // capability; the receipt is then stored through the plain documents upload.
   const receiptRoute = underlagUploadRoute({ hasAiCapability: useCapability(CAPABILITY.ai) })
@@ -737,7 +738,8 @@ export default function ExpenseClaimsPage() {
   // the create dialog with that receipt picked and its extraction applied.
   useEffect(() => {
     if (appliedDeepLink.current) return
-    if (searchParams.get('new') !== '1') return
+    // The link opens nothing for a read-only member.
+    if (!canWrite || searchParams.get('new') !== '1') return
     const wanted = searchParams.get('inbox_item')
     if (wanted && !inboxLoaded) return // wait for the inbox answer (may be empty)
     appliedDeepLink.current = true
@@ -750,7 +752,7 @@ export default function ExpenseClaimsPage() {
       }
     }
     router.replace('/expenses')
-  }, [searchParams, inboxOptions, inboxLoaded, applyExtraction, router])
+  }, [searchParams, inboxOptions, inboxLoaded, applyExtraction, router, canWrite])
 
   const startUpload = useCallback(
     async (file: File) => {
@@ -1027,10 +1029,13 @@ export default function ExpenseClaimsPage() {
         description={t('description')}
         action={
           canWrite ? (
-            <Button size="sm" onClick={() => setCreating(true)}>{t('new_claim')}</Button>
+            <Button size="toolbar" onClick={() => setCreating(true)}>
+              <PlusIcon className="h-4 w-4" />
+              {t('new_claim')}
+            </Button>
           ) : (
-            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
+            <Button size="toolbar" disabled title={t('viewer_disabled_tooltip')}>
+              <LockClosedIcon className="h-4 w-4" />
               {t('new_claim')}
             </Button>
           )
@@ -1080,7 +1085,7 @@ export default function ExpenseClaimsPage() {
           ]}
         />
         {canWrite && selected.size > 0 && (
-          <Button size="sm"
+          <Button size="toolbar"
             variant="outline"
             disabled={!selectionValid}
             title={selectionValid ? undefined : t('payout_selection_invalid')}
@@ -1091,19 +1096,29 @@ export default function ExpenseClaimsPage() {
         )}
       </div>
 
+      {/* A failed reload keeps the claims on screen, with one line above them. */}
+      {loadError && !loading && claims.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      ) : loadError ? (
-        <div className="space-y-3 rounded-lg border border-border px-4 py-6 text-center text-sm text-muted-foreground">
-          <p>{t('load_failed')}</p>
-          <Button type="button" variant="outline" size="sm" onClick={() => load()}>
-            {t('load_retry')}
-          </Button>
-        </div>
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="hidden h-3.5 w-32 md:block" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : loadError && claims.length === 0 ? (
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
+      ) : visibleClaims.length === 0 && claims.length > 0 ? (
+        <p className="py-3 text-[13px] text-muted-foreground">{t('no_claims_in_filter')}</p>
       ) : visibleClaims.length === 0 ? (
         <EmptyState
           icon={ReceiptRefundIcon}
@@ -1113,7 +1128,7 @@ export default function ExpenseClaimsPage() {
           onAction={canWrite ? () => setCreating(true) : undefined}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -1191,10 +1206,10 @@ export default function ExpenseClaimsPage() {
                 {/* One-line rows (convention 4): the original-currency amount
                     sits inline after the SEK amount instead of a second line. */}
                 <td className={`${TD_CLASS} whitespace-nowrap text-right tabular-nums`}>
-                  {formatCurrency(c.amount_sek)}
+                  {formatRowAmount(c.amount_sek)}
                   {c.currency !== 'SEK' && c.amount_in_currency != null && (
                     <span className="ml-1.5 text-xs text-muted-foreground">
-                      {formatCurrency(c.amount_in_currency, c.currency)}
+                      {formatRowAmount(c.amount_in_currency, c.currency)}
                     </span>
                   )}
                 </td>
@@ -1221,7 +1236,7 @@ export default function ExpenseClaimsPage() {
       {payoutBatches.length > 0 && (
         <div className="space-y-2 pt-4">
           <h2 className="text-sm font-medium text-muted-foreground">{t('payouts_heading')}</h2>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -1239,7 +1254,7 @@ export default function ExpenseClaimsPage() {
                   <td className={TD_CLASS}>{b.claimant_name}</td>
                   <td className={`${TD_CLASS} hidden tabular-nums sm:table-cell`}>{b.cash_account}</td>
                   <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                    {formatCurrency(b.total_sek)}
+                    {formatRowAmount(b.total_sek)}
                   </td>
                   <td className={`${TD_CLASS} text-right`}>
                     {b.journal_entry_id && (
@@ -1288,8 +1303,8 @@ export default function ExpenseClaimsPage() {
 
           {receiptDoc && (
             <div className="flex shrink-0 justify-end">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setShowReceipt((v) => !v)}>
-                <DocumentTextIcon className="mr-1.5 h-3.5 w-3.5" />
+              <Button type="button" variant="ghost" onClick={() => setShowReceipt((v) => !v)}>
+                <DocumentTextIcon className="h-3.5 w-3.5" />
                 {showReceipt ? t('hide_receipt') : t('show_receipt')}
               </Button>
             </div>
@@ -1319,7 +1334,7 @@ export default function ExpenseClaimsPage() {
                 <Label>{t('form_receipt_upload')}</Label>
                 {upload.phase === 'idle' && inboxChoice !== NO_RECEIPT_VALUE ? (
                   // A receipt picked from the inbox: one line, like an upload.
-                  <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                  <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                     <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate">
                       {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
@@ -1392,7 +1407,7 @@ export default function ExpenseClaimsPage() {
                     )}
                   </>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                  <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                     {upload.phase === 'done' && receiptRoute !== 'inbox' ? (
                       <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                     ) : upload.phase === 'done' ? (
@@ -1545,7 +1560,7 @@ export default function ExpenseClaimsPage() {
                   />
                   <button
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-secondary/35 bg-control shadow-raised"
                     onClick={chooseManual}
                   >
                     <PencilSquareIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -1558,7 +1573,7 @@ export default function ExpenseClaimsPage() {
                   <div className="max-h-[340px] space-y-3 overflow-y-auto">
                     {!templateSearch.trim() && (templateSections.recommended.length > 0 || aiPending) && (
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2 px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <div className="flex items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground">
                           {t('templates_recommended')}
                           {templateSections.recommendedSource === 'ai' && !aiPending && (
                             <span className="flex items-center gap-1">
@@ -1597,7 +1612,7 @@ export default function ExpenseClaimsPage() {
                       list.length === 0 ? null : (
                         <div key={labelKey} className="space-y-1">
                           {(templateSections.recommended.length > 0 || templateSections.recent.length > 0 || aiPending) && (
-                            <p className="px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            <p className="px-3 pt-1 text-xs font-medium text-muted-foreground">
                               {t(labelKey)}
                             </p>
                           )}
@@ -1737,7 +1752,6 @@ export default function ExpenseClaimsPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
                       onClick={() => setShowSaveTemplate(true)}
                       disabled={templateSeedLines.length < 2}
                     >
@@ -1746,7 +1760,6 @@ export default function ExpenseClaimsPage() {
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       onClick={() => setShowRowEditor((v) => !v)}
                     >
                       {showRowEditor ? t('hide_row_editor') : t('edit_rows')}
@@ -1798,7 +1811,7 @@ export default function ExpenseClaimsPage() {
                           <Button
                             type="button"
                             variant="ghost"
-                            size="icon-sm"
+                            size="icon"
                             aria-label={t('remove_row')}
                             onClick={() => removeRow(row.key)}
                           >
@@ -1840,8 +1853,8 @@ export default function ExpenseClaimsPage() {
                   <tr>
                     <td className={`${TD_CLASS} font-medium`}>
                       {showRowEditor && (
-                        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
-                          <PlusIcon className="mr-1 h-3.5 w-3.5" />
+                        <Button type="button" variant="ghost" className="-ml-2" onClick={addRow}>
+                          <PlusIcon className="h-3.5 w-3.5" />
                           {t('add_row')}
                         </Button>
                       )}
@@ -1936,7 +1949,7 @@ export default function ExpenseClaimsPage() {
 
           {showSaveTemplate && (
             <Dialog open onOpenChange={(open) => !open && setShowSaveTemplate(false)}>
-              <DialogContent className="sm:max-w-lg">
+              <DialogContent size="form">
                 <DialogHeader>
                   <DialogTitle>{t('save_as_template')}</DialogTitle>
                 </DialogHeader>
@@ -1972,7 +1985,7 @@ export default function ExpenseClaimsPage() {
 
       {/* Delete confirmation */}
       <Dialog open={!!deleting} onOpenChange={(open) => !open && !submitting && setDeleting(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('delete_title')}</DialogTitle>
             <DialogDescription>
@@ -2001,7 +2014,7 @@ export default function ExpenseClaimsPage() {
 
       {/* Payout dialog */}
       <Dialog open={paying} onOpenChange={(open) => !open && !submitting && setPaying(false)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('payout_title')}</DialogTitle>
             <DialogDescription>

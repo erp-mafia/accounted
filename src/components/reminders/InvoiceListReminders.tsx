@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { BellAlertIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -99,14 +98,14 @@ export function RemindersOfferRow({ count, onOpen, onDismiss }: { count: number;
   return (
     <section
       aria-label={t('kicker')}
-      className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-3 rounded-lg px-4 py-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised"
     >
       <p className="min-w-0 text-[13px]">{t('offer', { count, appName })}</p>
       <div className="flex shrink-0 items-center gap-2">
-        <Button variant="outline" size="sm" onClick={onOpen}>
+        <Button variant="outline" onClick={onOpen}>
           {t('offer_action')}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>
+        <Button variant="ghost" onClick={onDismiss}>
           {t('offer_dismiss')}
         </Button>
       </div>
@@ -114,13 +113,3 @@ export function RemindersOfferRow({ count, onOpen, onDismiss }: { count: number;
   )
 }
 
-/** "Påminnelser på" in the top bar: opens the same sheet, where reminders are turned off. */
-export function RemindersStatusButton({ onOpen }: { onOpen: () => void }) {
-  const t = useTranslations('reminders_setup')
-  return (
-    <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={onOpen}>
-      <BellAlertIcon className="mr-2 h-4 w-4" />
-      {t('status_control')}
-    </Button>
-  )
-}

@@ -133,7 +133,7 @@ export function SkattekontoAccountSetting() {
               {t('draft_open')}
             </Link>
           ) : (
-            <Button variant="outline" size="sm" loading={drafting} onClick={() => void draftTransfer()}>
+            <Button variant="outline" loading={drafting} onClick={() => void draftTransfer()}>
               {t('draft_button', { from: other, to: state.account })}
             </Button>
           )}

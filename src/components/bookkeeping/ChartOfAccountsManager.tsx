@@ -5,12 +5,15 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -48,6 +51,7 @@ import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -138,6 +142,7 @@ export default function ChartOfAccountsManager() {
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
   const [showInactive, setShowInactive] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
   // Row selection for the bulk inactivate (#2186) is useBulkSelection below,
   // keyed by account number (the PUT/deactivate routes key on it too).
@@ -151,6 +156,8 @@ export default function ChartOfAccountsManager() {
   const [referenceAccounts, setReferenceAccounts] = useState<ReferenceAccount[]>([])
   const [usageCounts, setUsageCounts] = useState<Map<string, number>>(new Map())
   const [loading, setLoading] = useState(true)
+  // The user's chart could not load: said in the page with "Försök igen" (Stil v3 states).
+  const [loadFailed, setLoadFailed] = useState(false)
   // The BAS catalog + K2 default are fetched lazily the first time the user
   // opens that tab, so they never block the default "Mina konton" view.
   const [referenceLoaded, setReferenceLoaded] = useState(false)
@@ -180,11 +187,20 @@ export default function ChartOfAccountsManager() {
   const fetchAccounts = useCallback(async () => {
     // `?active=false` disables the filter entirely (active + inactive), it does
     // not select inactive rows only — see list_company_accounts.
-    const res = await fetch(
-      showInactiveRef.current ? '/api/bookkeeping/accounts?active=false' : '/api/bookkeeping/accounts',
-    )
-    const { data } = await res.json()
-    setAccounts(data || [])
+    try {
+      const res = await fetch(
+        showInactiveRef.current ? '/api/bookkeeping/accounts?active=false' : '/api/bookkeeping/accounts',
+      )
+      if (!res.ok) {
+        setLoadFailed(true)
+        return
+      }
+      const { data } = await res.json()
+      setAccounts(data || [])
+      setLoadFailed(false)
+    } catch {
+      setLoadFailed(true)
+    }
   }, [])
 
   // The server sends only the company's per-account activation status; the BAS
@@ -555,25 +571,26 @@ export default function ChartOfAccountsManager() {
   const header = (
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+        <h1 className="page-header-title">{tNav('chart_of_accounts')}</h1>
         {/* Convention 7: the SRU / NE-bilaga explanation that used to sit in
             the footer lives behind the "?". */}
         <HelpPopover>
           <p>{t('help_text')}</p>
         </HelpPopover>
       </div>
-      <div className="flex items-center gap-4">
+      <PageHeaderActions className="flex items-center gap-2">
         {/* Which BAS edition the chart follows: a fact, not a choice, so
             muted text rather than a chip that reads as a picker (conv 8). */}
-        <span className="text-[12.5px] text-muted-foreground">{t('bas_version_chip')}</span>
-        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
+        <span className="mr-2 text-xs text-muted-foreground">{t('bas_version_chip')}</span>
+        <Button variant="outline" size="toolbar" onClick={() => setPruneDialogOpen(true)} disabled={!canWrite} title={lockedTitle}>
+          <TrashIcon className="h-4 w-4" />
           {t('prune_button')}
-        </button>
-        <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-          <PlusIcon className="mr-2 h-4 w-4" />
+        </Button>
+        <Button size="toolbar" onClick={() => setAddDialogOpen(true)} disabled={!canWrite} title={lockedTitle}>
+          <PlusIcon className="h-4 w-4" />
           {t('add_own')}
         </Button>
-      </div>
+      </PageHeaderActions>
     </div>
   )
 
@@ -596,12 +613,12 @@ export default function ChartOfAccountsManager() {
     colSpan: number,
   ) => (
     <tr key={`band-${cls}`}>
-      <td colSpan={colSpan} className="border-b border-border p-0">
+      <td colSpan={colSpan} className="border-b-hairline p-0">
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex w-full items-center gap-1.5 bg-muted/40 px-3 py-[7px] text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground transition-colors duration-150 hover:bg-secondary/35"
+          className="flex w-full items-center gap-1.5 bg-muted/40 px-3 py-[7px] text-left text-xs font-semibold text-muted-foreground transition-colors duration-150 hover:bg-secondary/35"
         >
           <ChevronRightIcon className={cn('h-3 w-3 shrink-0 transition-transform duration-150', open && 'rotate-90')} />
           {t('class_heading', { cls, label: classLabel(cls) })}
@@ -614,7 +631,8 @@ export default function ChartOfAccountsManager() {
     <div className="space-y-8">
       {header}
 
-      {/* Toolbar: seg + search; the K2 filter rides far right in catalog view */}
+      {/* Toolbar in the V7 order: the view, its one filter switch, then the
+          search at the right end. */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={view}
@@ -624,14 +642,8 @@ export default function ChartOfAccountsManager() {
             { value: 'bas-catalog', label: t('tab_bas_catalog') },
           ]}
         />
-        <ToolbarSearch
-          placeholder={t('search_placeholder')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          containerClassName="min-w-[190px] max-w-xs flex-1"
-        />
         {view === 'my-accounts' && (
-          <label className="ml-auto flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-sm">
             <Switch
               checked={showInactive}
               onCheckedChange={setShowInactive}
@@ -641,7 +653,7 @@ export default function ChartOfAccountsManager() {
           </label>
         )}
         {view === 'bas-catalog' && (
-          <label className="ml-auto flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-sm">
             <Switch
               checked={hideK2Excluded ?? false}
               onCheckedChange={setHideK2Excluded}
@@ -650,19 +662,49 @@ export default function ChartOfAccountsManager() {
             <span className="text-muted-foreground">{t('hide_k2_excluded')}</span>
           </label>
         )}
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
+      {/* A failed refresh keeps the rows under one line (Stil v3 states). */}
+      {!loading && view === 'my-accounts' && loadFailed && accounts.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchAccounts() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-2 py-2">
+        <LateReveal className="space-y-2 py-2">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Skeleton key={i} className="h-8 w-full" />
           ))}
-        </div>
+        </LateReveal>
       ) : view === 'my-accounts' ? (
-        filteredAccounts.length === 0 ? (
-          <p className="px-1 py-12 text-center text-sm text-muted-foreground">
-            {searchQuery || usageFilter !== 'all' ? t('no_matches') : t('no_accounts')}
-          </p>
+        loadFailed && accounts.length === 0 ? (
+          <LoadError title={t('load_failed')} onRetry={() => void fetchAccounts()} />
+        ) : filteredAccounts.length === 0 ? (
+          searchQuery || usageFilter !== 'all' ? (
+            // No hits: one muted line with the quiet way back.
+            <p className="px-1 py-3 text-[13px] text-muted-foreground">
+              {t('no_matches')}{' '}
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  setSearchQuery('')
+                  setUsageFilter('all')
+                }}
+              >
+                {tCommon('clear_search')}
+              </button>
+            </p>
+          ) : (
+            <EmptyState title={t('no_accounts')} />
+          )
         ) : (
           <div>
             {/* Bulk bar: appears with the first selection, carries the count
@@ -675,11 +717,11 @@ export default function ChartOfAccountsManager() {
               clearLabel={t('bulk_clear_selection')}
               busy={bulkDeactivating}
             >
-              <Button size="sm" onClick={bulkDeactivate} loading={bulkDeactivating}>
+              <Button onClick={bulkDeactivate} loading={bulkDeactivating} disabled={!canWrite} title={lockedTitle}>
                 {t('deactivate_confirm_action')}
               </Button>
             </BulkSelectionBar>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -768,12 +810,12 @@ export default function ChartOfAccountsManager() {
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{account.account_name}</span>
                                   {account.is_system_account && (
-                                    <span className="shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
+                                    <span className="shrink-0 text-xs text-muted-foreground">
                                       {t('system_badge')}
                                     </span>
                                   )}
                                   {!isStandardBASAccountNumber(account.account_number) && (
-                                    <span className="shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
+                                    <span className="shrink-0 text-xs text-muted-foreground">
                                       {t('own_badge')}
                                     </span>
                                   )}
@@ -810,26 +852,31 @@ export default function ChartOfAccountsManager() {
                                     type="button"
                                     className={cn(QUIET_LINK_CLASS, 'mr-2 disabled:opacity-50')}
                                     onClick={() => toggleActive(account)}
-                                    disabled={togglingAccount === account.account_number}
+                                    disabled={!canWrite || togglingAccount === account.account_number}
+                                    title={lockedTitle}
                                     aria-label={`${account.is_active ? t('deactivate_confirm_action') : t('reactivate')} ${account.account_number}`}
                                   >
                                     {account.is_active ? t('deactivate_confirm_action') : t('reactivate')}
                                   </button>
                                   <Button
                                     variant="ghost"
-                                    size="icon-sm"
+                                    size="icon"
                                     aria-label={tCommon('edit')}
                                     onClick={() => setEditAccount(account)}
+                                    disabled={!canWrite}
+                                    title={lockedTitle}
                                   >
                                     <PencilIcon className="h-3.5 w-3.5" />
                                   </Button>
                                   {!account.is_system_account && (
                                     <Button
                                       variant="ghost"
-                                      size="icon-sm"
+                                      size="icon"
                                       className="text-destructive hover:text-destructive"
                                       aria-label={t('delete_confirm_action')}
                                       onClick={() => deleteAccount(account)}
+                                      disabled={!canWrite}
+                                      title={lockedTitle}
                                       loading={deletingAccount === account.account_number}
                                     >
                                       {deletingAccount !== account.account_number && (
@@ -852,15 +899,26 @@ export default function ChartOfAccountsManager() {
       ) : (
         <div>
           {referenceLoading && referenceAccounts.length === 0 ? (
-            <div className="space-y-2 py-2">
+            <LateReveal className="space-y-2 py-2">
               {[1, 2, 3, 4, 5, 6].map((i) => (
                 <Skeleton key={i} className="h-8 w-full" />
               ))}
-            </div>
+            </LateReveal>
           ) : filteredReference.length === 0 ? (
-            <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
+            // No hits: one muted line with the quiet way back.
+            <p className="px-1 py-3 text-[13px] text-muted-foreground">
+              {t('no_matches')}
+              {searchQuery && (
+                <>
+                  {' '}
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearchQuery('')}>
+                    {tCommon('clear_search')}
+                  </button>
+                </>
+              )}
+            </p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -917,15 +975,16 @@ export default function ChartOfAccountsManager() {
                                   ) : (
                                     <Button
                                       variant="outline"
-                                      size="sm"
                                       className={cn(
                                         !activatingAccounts.has(account.account_number) && HOVER_REVEAL_CLASS,
                                       )}
                                       onClick={() => activateBASAccount(account.account_number)}
+                                      disabled={!canWrite}
+                                      title={lockedTitle}
                                       loading={activatingAccounts.has(account.account_number)}
                                     >
                                       {!activatingAccounts.has(account.account_number) && (
-                                        <PlusIcon className="mr-1 h-3 w-3" />
+                                        <PlusIcon className="h-3 w-3" />
                                       )}
                                       {account.is_activated ? t('reactivate') : t('add')}
                                     </Button>
@@ -954,6 +1013,7 @@ export default function ChartOfAccountsManager() {
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
       <AddAccountDialog
+        drawer
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
         onCreated={refreshAll}

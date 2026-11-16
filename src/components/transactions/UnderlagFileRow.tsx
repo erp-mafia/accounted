@@ -27,7 +27,7 @@ export default function UnderlagFileRow({
       </span>
       <Button
         variant="ghost"
-        size="icon-sm"
+        size="icon"
         className="shrink-0"
         aria-label={removeLabel}
         disabled={disabled}

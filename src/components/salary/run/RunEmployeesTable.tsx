@@ -227,7 +227,7 @@ export function RunEmployeesTable({
                 const showDegreeHint =
                   isDraft && basis.salaryType === 'monthly' && Number.isFinite(degree) && degree < 100
                 const degreeHint = showDegreeHint ? (
-                  <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                  <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                     {t('degree_hint', {
                       degree: degree.toLocaleString('sv-SE'),
                       amount: formatRunAmount(roundOre((basis.monthlySalary || 0) * (degree / 100))),
@@ -302,7 +302,6 @@ export function RunEmployeesTable({
                         {showAddClaims && (
                           <Button
                             variant="ghost"
-                            size="sm"
                             className="text-muted-foreground hover:text-foreground"
                             onClick={e => {
                               e.stopPropagation()
@@ -312,7 +311,7 @@ export function RunEmployeesTable({
                             title={t('add_expense_claims_title')}
                             aria-label={t('add_expense_claims_aria', { name })}
                           >
-                            {!addingClaims && <ReceiptRefundIcon className="mr-2 h-4 w-4" />}
+                            {!addingClaims && <ReceiptRefundIcon className="h-4 w-4" />}
                             <span className="tabular-nums">
                               {t('add_expense_claims', {
                                 count: openClaims.count,
@@ -340,7 +339,7 @@ export function RunEmployeesTable({
                         {canRemoveEmployee && (
                           <Button
                             variant="ghost"
-                            size="icon-sm"
+                            size="icon"
                             className="text-muted-foreground hover:text-destructive"
                             onClick={e => {
                               e.stopPropagation()

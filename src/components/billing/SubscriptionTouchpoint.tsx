@@ -86,7 +86,7 @@ export function SubscriptionTouchpoint({
           <span className="block text-sm">{label}</span>
           {sublabel && <span className="block text-xs text-muted-foreground">{sublabel}</span>}
         </span>
-        <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+        <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
       </Link>
     )
   }
@@ -95,12 +95,12 @@ export function SubscriptionTouchpoint({
     <div className="flex-shrink-0 px-3 pb-2">
       <Link
         href="/settings/billing"
-        className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+        className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150 bg-control shadow-raised"
       >
         <Icon className="h-3.5 w-3.5 shrink-0" />
         <span className="min-w-0 flex-1">
           <span className="block truncate">{label}</span>
-          {sublabel && <span className="block truncate text-[11px] opacity-80">{sublabel}</span>}
+          {sublabel && <span className="block truncate text-xs opacity-80">{sublabel}</span>}
         </span>
         <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 opacity-50" />
       </Link>

@@ -13,14 +13,14 @@ import {
   PercentBadgeIcon,
 } from '@/components/icons'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
-import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
+import { StepBar } from '@/components/ui/step-bar'
 import { Table, TableBody } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, holdEscapeWhileUnsaved, useEditedSinceOpen } from '@/components/ui/dialog'
 import {
@@ -44,6 +44,7 @@ import { useVatSettlementProposal } from '@/components/reports/use-vat-settlemen
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
+import { vatLandingStep } from '@/lib/vat/landing-step'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { fiscalPeriodForVatYear } from '@/lib/reports/period-dates'
 import { fiscalYearEndMonthIn, fiscalYearEndMonthOn } from '@/lib/tax/deadline-config'
@@ -113,7 +114,7 @@ function VatFilingDownloadMenu({ xmlHref, pdfHref }: { xmlHref: string; pdfHref:
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
+        <Button variant="outline" className="gap-2">
           <DocumentArrowDownIcon className="h-4 w-4" />
           Ladda ner
           <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
@@ -359,7 +360,7 @@ function VatBookingCard({
         )}
         {markable && canWrite && (
           <div className="pl-6">
-            <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setMarkOpen(true)}>
+            <Button variant="link" onClick={() => setMarkOpen(true)}>
               {t('vat_not_settlement_action', { voucher: formatVoucher(markable) })}
             </Button>
             <ConfirmDialog
@@ -382,12 +383,7 @@ function VatBookingCard({
               >
                 <span>{t('vat_not_settlement_marked', { voucher: formatVoucher(entry) })}</span>
                 {canWrite && (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto px-0"
-                    onClick={() => void undoMark(entry.journal_entry_id)}
-                  >
+                  <Button variant="link" onClick={() => void undoMark(entry.journal_entry_id)}>
                     {t('vat_not_settlement_undo')}
                   </Button>
                 )}
@@ -419,21 +415,18 @@ function VatBookingCard({
         )}
 
         {checksBlocked && (
-          <p className="text-[12.5px] leading-5 text-attn">
+          <p className="text-xs leading-5 text-attn">
             Det finns fel under steg 1, Kontrollera. Du kan bokföra momsen ändå, men
             åtgärda felen innan du lämnar in.
           </p>
         )}
 
         {failed ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-sm text-destructive">Kunde inte hämta verifikatförslaget.</p>
-            <Button variant="outline" onClick={onRetry}>
-              Försök igen
-            </Button>
-          </div>
+          <LoadError title="Kunde inte hämta verifikatförslaget" onRetry={onRetry} />
         ) : !upToDate ? (
-          <Skeleton className="h-10 w-40" />
+          <LateReveal>
+            <Skeleton className="h-10 w-40" />
+          </LateReveal>
         ) : proposal?.is_empty ? (
           <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
         ) : (
@@ -458,17 +451,17 @@ function VatBookingCard({
 
       {proposal && (
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent
-            className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-            // Escape closes it while the proposal is as it opened (the form
-            // opens filled, so "changed since open" decides:
-            // useEditedSinceOpen). An adjusted proposal survives a stray
-            // Escape: then closing is explicit via the header X. A backdrop
-            // click never closes it.
-            onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
-            onPointerDownOutside={(e) => e.preventDefault()}
-            onInteractOutside={(e) => e.preventDefault()}
-          >
+          <DialogContent size="wide"
+
+ // Escape closes it while the proposal is as it opened (the form
+ // opens filled, so "changed since open" decides:
+ // useEditedSinceOpen). An adjusted proposal survives a stray
+ // Escape: then closing is explicit via the header X. A backdrop
+ // click never closes it.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
             <DialogHeader>
               <DialogTitle>Bokför momsrapport</DialogTitle>
             </DialogHeader>
@@ -616,7 +609,7 @@ function VatStepper({
             <span className="leading-tight">
               <span
                 className={cn(
-                  'block text-[12.5px] transition-colors duration-150',
+                  'block text-xs transition-colors duration-150',
                   active === step.n
                     ? 'font-medium'
                     : 'text-muted-foreground group-hover:text-foreground',
@@ -627,7 +620,7 @@ function VatStepper({
               {step.sub && (
                 <span
                   className={cn(
-                    'block text-[11px] tabular-nums',
+                    'block text-xs tabular-nums',
                     step.warn ? 'text-attn' : 'text-muted-foreground',
                   )}
                 >
@@ -666,6 +659,7 @@ function MomsPeriodInlineSetup({
 }) {
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const { canWrite } = useCanWrite()
 
   const choose = async (value: 'monthly' | 'quarterly' | 'yearly') => {
     if (saving) return
@@ -703,11 +697,10 @@ function MomsPeriodInlineSetup({
           <Button
             key={opt.value}
             variant="outline"
-            size="sm"
             // The clicked button stays enabled (aria-busy) so keyboard focus
             // survives the save; the `if (saving) return` guard in choose()
             // prevents a double submit.
-            disabled={saving !== null && saving !== opt.value}
+            disabled={!canWrite || (saving !== null && saving !== opt.value)}
             aria-busy={saving === opt.value}
             onClick={() => choose(opt.value)}
           >
@@ -1130,11 +1123,13 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // their feet. The period-change effect below resets chosenStep to null,
   // which re-arms this latch for the next period. It also waits for the gap
   // scan: latching on the aggregate alone landed the user on Granska while
-  // steg 1 still held a blocking worklist.
+  // steg 1 still held a blocking worklist. A period with no amount in any
+  // ruta opens on Kontrollera too (lib/vat/landing-step): Granska would lead
+  // with "Nästa: Bokför momsen" for nothing. Every step stays in the stepper.
   if (chosenStep === null && upToDate && data && !error && gapScanSettled) {
-    setChosenStep(checksBlocked ? 1 : 2)
+    setChosenStep(vatLandingStep({ checksBlocked, rutor: data.rutor }))
   }
-  const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)
+  const activeStep = chosenStep ?? (data ? vatLandingStep({ checksBlocked, rutor: data.rutor }) : checksBlocked ? 1 : 2)
 
   // Settings not settled yet: the picker defaults and the gate both depend
   // on them, so hold the whole view in a skeleton.
@@ -1337,8 +1332,8 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         <PageHeader
           title={pageTitle}
           action={
-            // Three controls: on a phone they wrap inside the bar rather
-            // than push past the panel edge.
+            // Three controls: on a phone Exportera folds into the bar's
+            // "more" and the period pickers stay (PageHeaderActions).
             <div className="flex flex-wrap items-center justify-end gap-2">
               <ReportExportMenu
                 variant="outline"
@@ -1362,17 +1357,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         </div>
       )}
 
-      {error && (
-        <Card>
-          <CardContent className="flex flex-col items-center p-8 text-center">
-            <ExclamationCircleIcon className="mb-2 h-6 w-6 text-destructive" />
-            <p className="mb-4 text-sm text-destructive">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
-              Försök igen
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      {error && <LoadError title={error} onRetry={() => setRetryKey((k) => k + 1)} />}
 
       {filingsReady && filings.changed.length > 0 && (
         <VatFiledChangesLine
@@ -1394,7 +1379,8 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         >
           {/* Stegen (concept): the filing pipeline as a horizontal stepper
               (kontrollera, granska, bokför, lämna in), showing one step's
-              content at a time. Errors land on step 1, otherwise Granska. */}
+              content at a time. Errors and a period with nothing in any ruta
+              land on step 1, otherwise Granska. */}
           <VatStepper
             active={activeStep}
             onSelect={setChosenStep}
@@ -1419,11 +1405,6 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               rcBasisAdvisory={rcBasisAdvisory}
               onReviewsChanged={() => setReviewsRefreshKey((k) => k + 1)}
             />
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => setChosenStep(2)}>
-                  Nästa: Granska deklarationen →
-                </Button>
-              </div>
             </section>
           )}
 
@@ -1432,14 +1413,14 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               <div>
             {/* The title and the period picker already name the declaration
                 and its period; only the basis counts are new here. */}
-            <p className="px-1 text-[11px] tabular-nums text-muted-foreground">
+            <p className="px-1 text-xs tabular-nums text-muted-foreground">
               {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
             </p>
             <div className="mt-4 space-y-8">
               <div>
                 {/* Utgående moms */}
                 <div>
-                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <h3 className="mb-3 font-sans text-xs font-medium text-muted-foreground">
                     Utgående moms (försäljning)
                   </h3>
                   <Table>
@@ -1545,7 +1526,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
                   {(data.rutor.ruta20 !== 0 || data.rutor.ruta21 !== 0 || data.rutor.ruta22 !== 0 || data.rutor.ruta23 !== 0 || data.rutor.ruta24 !== 0 ||
                     data.rutor.ruta30 !== 0 || data.rutor.ruta31 !== 0 || data.rutor.ruta32 !== 0) && (
                     <>
-                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium text-muted-foreground">
                         Omvänd skattskyldighet (inköp)
                       </h3>
                       <Table>
@@ -1575,7 +1556,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
                     data.rutor.ruta38 !== 0 || data.rutor.ruta39 !== 0 || data.rutor.ruta40 !== 0 ||
                     data.rutor.ruta41 !== 0 || data.rutor.ruta42 !== 0) && (
                     <>
-                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium text-muted-foreground">
                         Försäljning undantagen från moms
                       </h3>
                       <Table>
@@ -1598,7 +1579,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
                   {/* Moms vid import */}
                   {(data.rutor.ruta50 !== 0 || data.rutor.ruta60 !== 0 || data.rutor.ruta61 !== 0 || data.rutor.ruta62 !== 0) && (
                     <>
-                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium text-muted-foreground">
                         Moms vid import
                       </h3>
                       <Table>
@@ -1616,7 +1597,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               <div>
                 {/* Ingående moms */}
                 <div>
-                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <h3 className="mb-3 font-sans text-xs font-medium text-muted-foreground">
                     Ingående moms (avdragsgill)
                   </h3>
                   <Table>
@@ -1678,11 +1659,6 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               </p>
             )}
           </div>
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => setChosenStep(3)}>
-                  Nästa: Bokför momsen →
-                </Button>
-              </div>
             </section>
           )}
 
@@ -1712,11 +1688,6 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               }
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
             />
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>
-                  Nästa: Lämna in →
-                </Button>
-              </div>
             </section>
           )}
 
@@ -1786,6 +1757,25 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               )}
             </section>
           )}
+          {/* The step's bar (V7 guided steps): fixed to the bottom, the way
+              on as the one filled button. Each step's own action (Korrigera,
+              Bokför momsen, Skicka) stays with its content above; on step 3
+              the way on is quiet until the VAT is booked, so the booking
+              stays the filled button there. Step 4 ends the sequence. */}
+          {activeStep < 4 && (
+            <StepBar note={tReports('step_of', { current: activeStep, total: 4 })}>
+              <Button
+                variant={activeStep === 3 && !settlement.booked ? 'outline' : 'default'}
+                onClick={() => setChosenStep(activeStep + 1)}
+              >
+                {activeStep === 1
+                  ? 'Nästa: Granska deklarationen'
+                  : activeStep === 2
+                    ? 'Nästa: Bokför momsen'
+                    : 'Nästa: Lämna in'}
+              </Button>
+            </StepBar>
+          )}
         </div>
       )}
 
@@ -1796,7 +1786,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           own label, which the panel no longer draws. */}
       {!awaitingFiscalPeriod && !data && SKATTEVERKET_DIRECT_FILING && (
         <section className="space-y-3">
-          <h3 className="px-1 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="px-1 font-sans text-xs font-medium text-muted-foreground">
             Skatteverket
           </h3>
           <SkatteverketPanel

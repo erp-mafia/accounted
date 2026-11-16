@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import dynamic from 'next/dynamic'
 import { usePathname } from 'next/navigation'
 import { useLocale } from 'next-intl'
 import { ChatBubbleLeftIcon, ExclamationTriangleIcon, PaperAirplaneIcon } from '@/components/icons'
@@ -12,6 +11,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { composerMayAutoFocus } from './composer-focus'
+import { MarkdownMessage, useMarkdownReady } from './lazy-markdown'
 
 /**
  * The single-call chat console for general.help (audit Option A / rip).
@@ -34,46 +34,8 @@ import { composerMayAutoFocus } from './composer-focus'
  * single-call ones.
  */
 
-// Same lazy markdown chunk AgentChat uses, so a resumed thread renders links,
-// lists and tables. Loaded on demand; a plain-text fallback covers the frame
-// before the chunk resolves.
-const MarkdownMessage = dynamic(() => import('./MarkdownMessage'), {
-  ssr: false,
-  loading: () => null,
-})
-
-let markdownReady = false
-let markdownPromise: Promise<unknown> | null = null
-function prefetchMarkdown(): Promise<unknown> {
-  if (!markdownPromise) {
-    markdownPromise = import('./MarkdownMessage')
-      .then((mod) => {
-        markdownReady = true
-        return mod
-      })
-      .catch(() => {
-        // Keep the plain-text fallback; a failed chunk load must not blank the answer.
-      })
-  }
-  return markdownPromise
-}
-function useMarkdownReady(): boolean {
-  const [ready, setReady] = useState(markdownReady)
-  useEffect(() => {
-    if (ready) return
-    let alive = true
-    void prefetchMarkdown().then(() => {
-      if (alive) setReady(true)
-    })
-    return () => {
-      alive = false
-    }
-  }, [ready])
-  return ready
-}
-
 const ANSWER_PROSE =
-  'prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0'
+  'prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-sans prose-headings:font-medium prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:tracking-wider [&_th]:text-xs [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0'
 
 // The suggested questions of the empty console. The /chat start page mounts
 // this console directly, so this is the one list.
@@ -260,7 +222,7 @@ export default function AskConsole({
         {unconfigured && <UnconfiguredNotice />}
 
         {error && (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg px-4 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
@@ -269,12 +231,12 @@ export default function AskConsole({
       {/* Paywall parity with AgentChat: the ask endpoint 403s without CAPABILITY.ai,
           so replace the composer with an upsell rather than offer an input that can't send. */}
       {!hasAi ? (
-        <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+        <div className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
         </div>
       ) : (
         <form
-          className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
+          className="border-t-hairline px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
           onSubmit={(e) => {
             e.preventDefault()
             void send(input)
@@ -288,7 +250,7 @@ export default function AskConsole({
               placeholder="Skriv din fråga…"
               rows={1}
               disabled={pending}
-              className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto disabled:opacity-60"
+              className="flex-1 resize-none px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto disabled:opacity-60"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -305,7 +267,7 @@ export default function AskConsole({
               <PaperAirplaneIcon className="h-4 w-4" />
             </Button>
           </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">
+          <p className="mt-2 text-xs text-muted-foreground">
             Enter att skicka · Shift+Enter för ny rad
           </p>
         </form>
@@ -374,7 +336,7 @@ function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; can
               key={s.label}
               type="button"
               onClick={() => onPick(s.prompt)}
-              className="rounded-lg border border-border bg-card px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-secondary/60 hover:text-foreground"
+              className="rounded-lg px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-secondary/60 hover:text-foreground bg-control shadow-raised"
             >
               {s.label}
             </button>
@@ -387,7 +349,7 @@ function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; can
 
 function UnconfiguredNotice() {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-sm">
+    <div className="flex items-start gap-3 rounded-lg bg-secondary/40 px-4 py-3 text-sm bg-control shadow-raised">
       <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div>
         <strong className="font-medium">Assistenten är inte konfigurerad</strong>

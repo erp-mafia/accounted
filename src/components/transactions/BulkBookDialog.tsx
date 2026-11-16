@@ -9,6 +9,7 @@ import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
 import type { CashAccount } from '@/types'
 import {
   Dialog,
+  DialogConsequence,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -21,22 +22,17 @@ import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { StatusGlyph } from '@/components/ui/status-glyph'
+import { TOTAL_TD_CLASS, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatAmount, formatCurrency, formatDate, cn } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
-import {
-  CheckIcon,
-  DocumentTextIcon,
-  ExclamationTriangleIcon,
-  PaperClipIcon,
-  PlusIcon,
-  TrashIcon,
-} from '@/components/icons'
+import { PlusIcon, XMarkIcon } from '@/components/icons'
 import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -52,6 +48,23 @@ interface BulkBookDialogProps {
 
 type Mode = 'one_line_per_tx' | 'sum_per_account'
 type Tab = 'template' | 'manual'
+
+/** A section label (Stil v3): 12px/500 in sentence case, the same look as a field label. */
+const SECTION_LABEL_CLASS = 'text-[12px] font-medium leading-4 text-foreground/80'
+/** A help or status line under a section: 12px, muted unless it reports a problem. */
+const HELP_CLASS = 'text-[12px] leading-4 text-muted-foreground'
+/** A cell of the manual line editor: a 44px row holding a 32px field, over a hairline. */
+const MANUAL_TD_CLASS = 'h-11 border-b-hairline py-1.5 pr-2 align-middle'
+
+/**
+ * A choice chip (Stil v3 dialog anatomy): a 28px 6px rectangle on a hairline
+ * at rest, on the wash while chosen. aria-pressed carries the state.
+ */
+const CHOICE_CHIP_CLASS =
+  'inline-flex h-7 items-center whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium transition-[background-color,box-shadow,color,transform] duration-150 active:scale-[0.97] active:duration-100 motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1'
+const CHOICE_CHIP_REST_CLASS =
+  'text-muted-foreground shadow-[inset_0_0_0_0.5px_hsl(var(--line-strong))] hover:bg-secondary/60 hover:text-foreground'
+const CHOICE_CHIP_PRESSED_CLASS = 'bg-secondary text-strong'
 
 interface PreviewLine {
   account_number: string
@@ -84,6 +97,7 @@ export default function BulkBookDialog({
 }: BulkBookDialogProps) {
   const { toast } = useToast()
   const t = useTranslations('tx_bulk_book')
+  const tVoucher = useTranslations('voucher_lines')
 
   const [tab, setTab] = useState<Tab>('template')
   // Session-cached and scoped to the active company (system + company + its
@@ -104,6 +118,9 @@ export default function BulkBookDialog({
   const [description, setDescription] = useState('')
   const [manualLines, setManualLines] = useState<ManualLine[]>([])
   const [submitting, setSubmitting] = useState(false)
+  // A refused or failed submit, said in the footer's consequence spot (the
+  // toast still fires): the dialog stays open with the person's choices.
+  const [submitError, setSubmitError] = useState<string | null>(null)
   // Booking-time duplicate guard fired for one of the selected txs
   // (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): surface the candidate for review
   // with "Bokför ändå" (re-runs the whole batch with force=true) instead of
@@ -168,6 +185,7 @@ export default function BulkBookDialog({
       setDescription('')
       setManualLines([])
       setDefaultDims({})
+      setSubmitError(null)
     } else if (sharedDate) {
       // Pre-fill description with a sensible default the user can edit.
       setDescription(t('default_description', { date: sharedDate }))
@@ -270,7 +288,8 @@ export default function BulkBookDialog({
 
   // Balance + bank-leg match are the two invariants the RPC will check; we
   // surface them here so the user knows whether confirm will succeed.
-  const { difference: previewDifference } = useMemo(() => lineBalance(previewLines), [previewLines])
+  const previewBalance = useMemo(() => lineBalance(previewLines), [previewLines])
+  const previewDifference = previewBalance.difference
   const isBalanced = previewDifference === 0
   // The bank side is measured as the RPC measures it (bankNetAccountTest): on
   // the ledgers the selected rows settle on, resolved the way the bank lines
@@ -353,6 +372,7 @@ export default function BulkBookDialog({
     if (!canConfirm) return
     const force = opts?.force === true
     setSubmitting(true)
+    setSubmitError(null)
     try {
       // Build the payload per the active tab. Template path uses the
       // existing schema branch (template_id + mode). Manual path sends
@@ -401,9 +421,11 @@ export default function BulkBookDialog({
           setDuplicateCandidate(candidate)
           return
         }
+        const message = getErrorMessage(body, { statusCode: response.status })
+        setSubmitError(message)
         toast({
           title: t('error_title'),
-          description: getErrorMessage(body, { statusCode: response.status }),
+          description: message,
           variant: 'destructive',
         })
         return
@@ -423,9 +445,11 @@ export default function BulkBookDialog({
       onSuccess()
       onOpenChange(false)
     } catch (err) {
+      const message = getErrorMessage(err)
+      setSubmitError(message)
       toast({
         title: t('error_title'),
-        description: getErrorMessage(err),
+        description: message,
         variant: 'destructive',
       })
     } finally {
@@ -445,7 +469,7 @@ export default function BulkBookDialog({
   if (isMixedCurrency) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>
               {t('title', { count: txCount, date: sharedDate ? formatDate(sharedDate) : '' })}
@@ -453,26 +477,23 @@ export default function BulkBookDialog({
             <DialogDescription>{t('mixed_currency_description')}</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="rounded-lg border bg-card p-3">
-              <p className="text-xs font-medium text-muted-foreground">
-                {t('mixed_currency_totals_label')}
-              </p>
-              <ul className="mt-2 space-y-1">
-                {currencyTotals.map(([code, total]) => (
-                  <li
-                    key={code}
-                    className="flex items-center justify-between text-sm tabular-nums"
-                  >
-                    <span className="font-mono text-xs text-muted-foreground">{code}</span>
-                    <span>{formatCurrency(total, code)}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <div className="space-y-5">
+            <section>
+              <h3 className={SECTION_LABEL_CLASS}>{t('mixed_currency_totals_label')}</h3>
+              <table className="mt-1 w-full border-collapse text-[13px] tabular-nums">
+                <tbody>
+                  {currencyTotals.map(([code, total]) => (
+                    <tr key={code}>
+                      <td className={cn(VTD_CLASS, 'font-mono text-[12px] text-muted-foreground')}>{code}</td>
+                      <td className={cn(VTD_CLASS, 'pr-0 text-right')}>{formatCurrency(total, code)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
 
-            <div className="flex items-start gap-2 text-xs text-destructive">
-              <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0" />
+            <div className="flex items-start gap-2 text-[12px] leading-4 text-destructive">
+              <StatusGlyph tone="error" className="mt-px" />
               <span>{t('mixed_currency_blocked')}</span>
             </div>
           </div>
@@ -487,9 +508,38 @@ export default function BulkBookDialog({
     )
   }
 
+  // The selection's dimension tags beside the lines' label ("KS01 · P001").
+  const dimsBadge = dimensionsEnabled && dimsSummary ? (
+    <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
+      {dimsSummary}
+    </Badge>
+  ) : null
+
+  // The two invariants the RPC checks, said under the lines: muted while they
+  // hold, red when confirm would be refused.
+  const invariants = (
+    <div className="space-y-1" aria-live="polite">
+      <p className={cn(HELP_CLASS, !isBalanced && 'text-destructive')}>
+        {isBalanced
+          ? t('balance_ok')
+          : t('balance_off', {
+              delta: formatCurrency(Math.abs(previewDifference)),
+            })}
+      </p>
+      <p className={cn(HELP_CLASS, !bankMatches && 'text-destructive')}>
+        {bankMatches ? t('bank_ok') : t('bank_off')}
+      </p>
+    </div>
+  )
+
+  const modeOptions: { value: Mode; label: string }[] = [
+    { value: 'one_line_per_tx', label: t('mode_per_tx') },
+    { value: 'sum_per_account', label: t('mode_sum') },
+  ]
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[680px] max-h-[85vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>
             {t('title', { count: txCount, date: sharedDate ? formatDate(sharedDate) : '' })}
@@ -499,227 +549,118 @@ export default function BulkBookDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Selection summary */}
-          <div className="rounded-lg border bg-card p-3 flex items-center justify-between">
-            <div className="text-sm">
-              <p className="font-medium">
-                {t('summary_count', { count: txCount })}
-              </p>
-              <p className="text-xs text-muted-foreground tabular-nums">
-                {sharedDate ? formatDate(sharedDate) : ''}
-              </p>
+        <div className="space-y-5">
+          {/* How the verifikat is built: Mall (a booking template) or Manuell
+              (hand-built lines, the "I want to book it myself" escape hatch
+              asked for after PR #606). Default template. */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className={SECTION_LABEL_CLASS}>{t('template_label')}</h3>
+              <SegmentedControl
+                value={tab}
+                onChange={setTab}
+                aria-label={t('template_label')}
+                options={[
+                  { value: 'template', label: t('tab_template') },
+                  { value: 'manual', label: t('tab_manual') },
+                ]}
+              />
             </div>
-            <p className="font-medium tabular-nums">
-              {direction === 'income' ? '+' : '−'}
-              {formatCurrency(txSumAbs, sharedCurrency)}
-            </p>
-          </div>
 
-          {/* Tab: Mall (template) / Manuell (hand-built lines). Default
-              template; manual is the "I want to book it myself" escape
-              hatch the user asked for after PR #606. */}
-          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="space-y-4">
-            <TabsList className="grid grid-cols-2 w-full">
-              <TabsTrigger value="template">{t('tab_template')}</TabsTrigger>
-              <TabsTrigger value="manual">{t('tab_manual')}</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="template" className="space-y-4 mt-0">
-          {/* Template picker */}
-          <div className="space-y-2">
-            <Label>{t('template_label')}</Label>
-            {loadingTemplates ? (
-              <div className="space-y-2">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-              </div>
-            ) : templates.length === 0 ? (
-              <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                {t('no_templates')}
-              </div>
-            ) : (
-              <ul className="space-y-1 max-h-[180px] overflow-y-auto">
-                {templates.map((tpl) => (
-                  <li key={tpl.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTemplateId(tpl.id)}
-                      className={cn(
-                        'w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-secondary/60',
-                        selectedTemplateId === tpl.id
-                          ? 'border-foreground'
-                          : 'border-border',
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <DocumentTextIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                            <span className="text-sm font-medium truncate">{tpl.name}</span>
-                            {tpl.is_system && (
-                              <span className="flex-shrink-0 text-[11px] text-muted-foreground">
-                                {t('system_badge')}
-                              </span>
-                            )}
-                          </div>
-                          {tpl.description && (
-                            <p className="mt-1 text-xs text-muted-foreground truncate">
-                              {tpl.description}
-                            </p>
+            {tab === 'template' &&
+              (loadingTemplates ? (
+                <LateReveal className="space-y-1">
+                  <Skeleton className="h-11 w-full" />
+                  <Skeleton className="h-11 w-full" />
+                </LateReveal>
+              ) : templates.length === 0 ? (
+                <p className="py-2 text-[13px] text-muted-foreground">{t('no_templates')}</p>
+              ) : (
+                <div
+                  role="radiogroup"
+                  aria-label={t('template_label')}
+                  className="max-h-[220px] overflow-y-auto border-t-hairline"
+                >
+                  {templates.map((tpl) => {
+                    const selected = selectedTemplateId === tpl.id
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setSelectedTemplateId(tpl.id)}
+                        className={cn(
+                          'flex min-h-11 w-full items-center gap-2.5 border-b-hairline px-2 py-1.5 text-left transition-colors duration-150',
+                          selected ? 'bg-secondary/70' : 'hover:bg-secondary/35',
+                        )}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            'size-3.5 shrink-0 rounded-full transition-shadow duration-150',
+                            selected
+                              ? 'shadow-[inset_0_0_0_4px_hsl(var(--foreground)/0.88)]'
+                              : 'shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.3)]',
                           )}
-                        </div>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium text-strong">{tpl.name}</span>
+                          {tpl.description && (
+                            <span className="block truncate text-[12px] leading-4 text-muted-foreground">
+                              {tpl.description}
+                            </span>
+                          )}
+                        </span>
+                        {tpl.is_system && (
+                          <Badge variant="secondary" className="shrink-0">
+                            {t('system_badge')}
+                          </Badge>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
+          </section>
 
-          {/* Mode toggle: segmented control pattern (no RadioGroup primitive
-              in the design system; two outlined buttons act as a selectable
-              pair) */}
-          {selectedTemplate && (
-            <div className="space-y-2">
-              <Label>{t('mode_label')}</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode('one_line_per_tx')}
-                  className={cn(
-                    'rounded-lg border bg-card p-3 text-left transition-colors hover:bg-secondary/60',
-                    mode === 'one_line_per_tx' ? 'border-foreground' : 'border-border',
-                  )}
-                >
-                  <p className="text-sm font-medium">{t('mode_per_tx')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{t('mode_per_tx_hint')}</p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode('sum_per_account')}
-                  className={cn(
-                    'rounded-lg border bg-card p-3 text-left transition-colors hover:bg-secondary/60',
-                    mode === 'sum_per_account' ? 'border-foreground' : 'border-border',
-                  )}
-                >
-                  <p className="text-sm font-medium">{t('mode_sum')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{t('mode_sum_hint')}</p>
-                </button>
-              </div>
-            </div>
-          )}
-            </TabsContent>
-
-            <TabsContent value="manual" className="space-y-4 mt-0">
-              {/* Manual line editor. Lines are pre-filled from txs on first
-                  switch to this tab (one line per tx on 1930 + counterpart
-                  line on 3001/5800). User adjusts accounts, amounts, and
-                  descriptions. Live balance + bank-leg checks below drive
-                  the confirm button. */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>{t('manual_lines_label')}</Label>
-                  <Button
+          {/* Grouping: two choices, so chips; the hint says what the chosen one does. */}
+          {tab === 'template' && selectedTemplate && (
+            <section className="space-y-2">
+              <h3 className={SECTION_LABEL_CLASS}>{t('mode_label')}</h3>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label={t('mode_label')}>
+                {modeOptions.map((opt) => (
+                  <button
+                    key={opt.value}
                     type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={addManualLine}
+                    aria-pressed={mode === opt.value}
+                    onClick={() => setMode(opt.value)}
+                    className={cn(
+                      CHOICE_CHIP_CLASS,
+                      mode === opt.value ? CHOICE_CHIP_PRESSED_CLASS : CHOICE_CHIP_REST_CLASS,
+                    )}
                   >
-                    <PlusIcon className="mr-1 h-3.5 w-3.5" />
-                    {t('manual_add_line')}
-                  </Button>
-                </div>
-                {/* overflow-x-auto, not overflow-hidden: the fixed columns
-                    need ~350px, so on a phone the Kredit field and the
-                    remove button were clipped instead of scrollable. */}
-                <div className="rounded-lg border bg-card overflow-x-auto">
-                  <table className="w-full text-xs tabular-nums">
-                    <thead>
-                      <tr className="border-b text-muted-foreground bg-muted/30">
-                        <th className="px-2 py-2 text-left font-medium w-[90px]">{t('col_account')}</th>
-                        <th className="px-2 py-2 text-left font-medium">{t('col_description')}</th>
-                        <th className="px-2 py-2 text-right font-medium w-[110px]">{t('col_debit')}</th>
-                        <th className="px-2 py-2 text-right font-medium w-[110px]">{t('col_credit')}</th>
-                        <th className="w-8" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {manualLines.map((line) => (
-                        <tr key={line.id} className="border-b border-border last:border-b-0">
-                          <td className="px-2 py-1">
-                            <Input
-                              value={line.account_number}
-                              onChange={(e) =>
-                                updateManualLine(line.id, { account_number: e.target.value.replace(/\D/g, '').slice(0, 4) })
-                              }
-                              placeholder="1930"
-                              className="h-8 text-xs font-mono"
-                            />
-                          </td>
-                          <td className="px-2 py-1">
-                            <Input
-                              value={line.line_description}
-                              onChange={(e) =>
-                                updateManualLine(line.id, { line_description: e.target.value.slice(0, 200) })
-                              }
-                              placeholder={t('manual_description_placeholder')}
-                              className="h-8 text-xs"
-                            />
-                          </td>
-                          <td className="px-2 py-1">
-                            <Input
-                              inputMode="decimal"
-                              value={line.debit_amount}
-                              onChange={(e) =>
-                                updateManualLine(line.id, { debit_amount: e.target.value })
-                              }
-                              placeholder="0,00"
-                              className="h-8 text-xs text-right"
-                            />
-                          </td>
-                          <td className="px-2 py-1">
-                            <Input
-                              inputMode="decimal"
-                              value={line.credit_amount}
-                              onChange={(e) =>
-                                updateManualLine(line.id, { credit_amount: e.target.value })
-                              }
-                              placeholder="0,00"
-                              className="h-8 text-xs text-right"
-                            />
-                          </td>
-                          <td className="px-1 py-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              className="text-muted-foreground hover:text-destructive"
-                              onClick={() => removeManualLine(line.id)}
-                              aria-label={t('manual_remove_line')}
-                            >
-                              <TrashIcon className="h-3.5 w-3.5" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    {opt.label}
+                  </button>
+                ))}
               </div>
-            </TabsContent>
-          </Tabs>
+              <p className={HELP_CLASS}>
+                {mode === 'one_line_per_tx' ? t('mode_per_tx_hint') : t('mode_sum_hint')}
+              </p>
+            </section>
+          )}
 
           {/* Description: shared by both tabs once the user has either a
               template selected or manual lines drafted. */}
           {tabReady && (
-            <div className="space-y-2">
+            <div className="space-y-1">
               <Label htmlFor="bulk-description">{t('description_label')}</Label>
               <Input
                 id="bulk-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 maxLength={500}
+                aria-invalid={description.trim().length === 0 || undefined}
               />
             </div>
           )}
@@ -733,74 +674,148 @@ export default function BulkBookDialog({
                 onChange={setDefaultDimension}
                 inputClassName="h-8"
               />
-              <p className="text-xs text-muted-foreground">{t('dimensions_hint')}</p>
+              <p className={HELP_CLASS}>{t('dimensions_hint')}</p>
             </div>
           )}
 
-          {/* Document inheritance hint: informs the user which receipts
-              follow the txs onto the combined verifikat. Zero is fine
-              (txs without docs don't break anything); we only render
-              when the count is non-zero to avoid clutter. */}
-          {docCount > 0 && tabReady && (
-            <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
-              <span>{t('docs_inherit_hint', { count: docCount })}</span>
-            </div>
-          )}
-
-          {/* Live preview */}
-          {tabReady && previewLines.length > 0 && (
-            <div className="space-y-2">
+          {tab === 'manual' ? (
+            /* Manual lines: the table is both the editor and the preview.
+               Lines are pre-filled from the txs on the first switch to this
+               tab (one bank line per tx plus an empty counterpart line); the
+               user sets accounts, amounts and descriptions, and the balance
+               and bank-leg checks under it drive the confirm button. */
+            <section className="space-y-2">
               <div className="flex items-center gap-2">
-                <Label>
-                  {t('preview_label', { count: previewLines.length })}
-                </Label>
-                {dimensionsEnabled && dimsSummary && (
-                  <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
-                    {dimsSummary}
-                  </Badge>
-                )}
+                <h3 className={SECTION_LABEL_CLASS}>{t('manual_lines_label')}</h3>
+                {dimsBadge}
               </div>
-              <VoucherLinesTable
-                withCurrency
-                showTotals
-                maxRows={30}
-                lines={voucherLineViews(previewLines)}
-              />
+              {/* overflow-x-auto: the fixed columns need ~350px, so on a phone the
+                  Kredit field and the remove button scroll instead of clipping. */}
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-[13px] tabular-nums">
+                  <thead>
+                    <tr>
+                      <th className={cn(VTH_CLASS, 'w-[92px] pr-2')}>{t('col_account')}</th>
+                      <th className={cn(VTH_CLASS, 'pr-2')}>{t('col_description')}</th>
+                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>{t('col_debit')}</th>
+                      <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>{t('col_credit')}</th>
+                      <th className={cn(VTH_CLASS, 'w-8 pr-0')}>
+                        <span className="sr-only">{t('manual_remove_line')}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {manualLines.map((line) => (
+                      <tr key={line.id}>
+                        <td className={MANUAL_TD_CLASS}>
+                          <Input
+                            value={line.account_number}
+                            onChange={(e) =>
+                              updateManualLine(line.id, { account_number: e.target.value.replace(/\D/g, '').slice(0, 4) })
+                            }
+                            placeholder="1930"
+                            aria-label={t('col_account')}
+                            aria-invalid={(line.account_number.length > 0 && line.account_number.length < 4) || undefined}
+                            className="font-mono"
+                          />
+                        </td>
+                        <td className={MANUAL_TD_CLASS}>
+                          <Input
+                            value={line.line_description}
+                            onChange={(e) =>
+                              updateManualLine(line.id, { line_description: e.target.value.slice(0, 200) })
+                            }
+                            placeholder={t('manual_description_placeholder')}
+                            aria-label={t('col_description')}
+                          />
+                        </td>
+                        <td className={MANUAL_TD_CLASS}>
+                          <Input
+                            inputMode="decimal"
+                            value={line.debit_amount}
+                            onChange={(e) => updateManualLine(line.id, { debit_amount: e.target.value })}
+                            placeholder="0,00"
+                            aria-label={t('col_debit')}
+                            className="text-right"
+                          />
+                        </td>
+                        <td className={MANUAL_TD_CLASS}>
+                          <Input
+                            inputMode="decimal"
+                            value={line.credit_amount}
+                            onChange={(e) => updateManualLine(line.id, { credit_amount: e.target.value })}
+                            placeholder="0,00"
+                            aria-label={t('col_credit')}
+                            className="text-right"
+                          />
+                        </td>
+                        <td className={cn(MANUAL_TD_CLASS, 'pr-0 text-right')}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground"
+                            onClick={() => removeManualLine(line.id)}
+                            aria-label={t('manual_remove_line')}
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2')} />
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2 font-normal text-muted-foreground')}>
+                        {tVoucher('total')}
+                      </td>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(previewBalance.totalDebit)}</td>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(previewBalance.totalCredit)}</td>
+                      <td className={cn(TOTAL_TD_CLASS, 'pr-0')} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <Button type="button" variant="ghost" onClick={addManualLine} className="-ml-2.5">
+                <PlusIcon className="h-3.5 w-3.5" />
+                {t('manual_add_line')}
+              </Button>
+              {previewLines.length > 0 && invariants}
+            </section>
+          ) : (
+            tabReady &&
+            previewLines.length > 0 && (
+              /* Det här bokförs: the template's lines for this selection. */
+              <section className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <h3 className={SECTION_LABEL_CLASS}>{t('preview_label', { count: previewLines.length })}</h3>
+                  {dimsBadge}
+                </div>
+                <VoucherLinesTable
+                  withCurrency
+                  showTotals
+                  maxRows={30}
+                  lines={voucherLineViews(previewLines)}
+                />
+                {invariants}
+              </section>
+            )
+          )}
 
-              {/* Invariant indicators */}
-              <div className="space-y-1">
-                {isBalanced ? (
-                  <div className="flex items-center gap-2 text-xs text-success">
-                    <CheckIcon className="h-3.5 w-3.5" />
-                    <span>{t('balance_ok')}</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-xs text-destructive">
-                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                    <span>{t('balance_off', {
-                      delta: formatCurrency(Math.abs(previewDifference)),
-                    })}</span>
-                  </div>
-                )}
-                {bankMatches ? (
-                  <div className="flex items-center gap-2 text-xs text-success">
-                    <CheckIcon className="h-3.5 w-3.5" />
-                    <span>{t('bank_ok')}</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-xs text-destructive">
-                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                    <span>{t('bank_off')}</span>
-                  </div>
-                )}
-              </div>
-            </div>
+          {/* Document inheritance: which receipts follow the txs onto the
+              combined verifikat. Zero is fine (txs without docs don't break
+              anything), so it only renders when there are some. */}
+          {docCount > 0 && tabReady && (
+            <p className={HELP_CLASS}>{t('docs_inherit_hint', { count: docCount })}</p>
           )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <DialogConsequence aria-live="polite" className={submitError ? 'text-destructive' : undefined}>
+            {submitError ?? t('consequence', { count: txCount, amount: formatCurrency(txSumAbs, sharedCurrency) })}
+          </DialogConsequence>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
           <Button onClick={() => handleConfirm()} disabled={!canConfirm} loading={submitting}>

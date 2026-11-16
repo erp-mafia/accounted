@@ -11,15 +11,15 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { usePosHealthText } from '@/components/pos-sales/reason-text'
 import { tenderAmount, type PosClearingBalanceJson, type PosConnectionJson, type PosDayJson } from '@/components/pos-sales/types'
 
@@ -159,7 +159,7 @@ export default function PosSalesPage() {
         help={<HelpPopover>{t('help')}</HelpPopover>}
         action={
           activeConnections.length > 0 && canWrite ? (
-            <Button size="sm" loading={fetching} onClick={() => void fetchNow()}>
+            <Button size="toolbar" variant="outline" loading={fetching} onClick={() => void fetchNow()}>
               {t('fetch_now')}
             </Button>
           ) : undefined
@@ -203,18 +203,20 @@ export default function PosSalesPage() {
       ) : null}
 
       {loading ? (
-        <div className="space-y-2">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-        </div>
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="hidden h-3.5 w-16 sm:block" />
+              <Skeleton className="hidden h-3.5 w-16 md:block" />
+              <Skeleton className="hidden h-3.5 w-16 md:block" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
       ) : loadFailed ? (
-        <div className="space-y-4 py-8 text-center">
-          <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {t('retry')}
-          </Button>
-        </div>
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
       ) : noConnection ? (
         <EmptyState
           icon={BuildingStorefrontIcon}
@@ -225,15 +227,15 @@ export default function PosSalesPage() {
         />
       ) : days.length === 0 ? (
         <div role="status" aria-live="polite">
-          <EmptyState
-            icon={BuildingStorefrontIcon}
-            title={filter === 'all' && !venue ? t('empty_title') : t('empty_filtered_title')}
-            description={filter === 'all' && !venue ? t('empty_description') : undefined}
-          />
+          {filter === 'all' && !venue ? (
+            <EmptyState icon={BuildingStorefrontIcon} title={t('empty_title')} description={t('empty_description')} />
+          ) : (
+            <p className="py-3 text-[13px] text-muted-foreground">{t('empty_filtered_title')}</p>
+          )}
         </div>
       ) : (
         <div className="stagger-enter">
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -257,12 +259,12 @@ export default function PosSalesPage() {
                     className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                     onClick={() => setOpenDayId(day.id)}
                   >
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(day.business_date)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(day.business_date)}</td>
                     {multiVenue ? (
                       <td className={cn(TD_CLASS, 'max-w-[160px] truncate text-muted-foreground')}>{venueNames.get(day.connection_id) ?? ''}</td>
                     ) : null}
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatCurrency(day.gross)}</td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums text-muted-foreground')}>{formatCurrency(day.vat)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{formatRowAmount(day.gross)}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums text-muted-foreground')}>{formatRowAmount(day.vat)}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{amountCell(tenderAmount(day, 'card'))}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{amountCell(tenderAmount(day, 'swish'))}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{amountCell(tenderAmount(day, 'cash'))}</td>
@@ -271,10 +273,10 @@ export default function PosSalesPage() {
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       <DayStatus day={day} t={t} />
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')} onClick={(e) => e.stopPropagation()}>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right date-figures')} onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         {canWrite && !day.journal_entry_id && day.status !== 'empty' ? (
-                          <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={() => setOpenDayId(day.id)}>
+                          <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={() => setOpenDayId(day.id)}>
                             {day.status === 'ready' ? t('action_book') : t('action_review')}
                           </Button>
                         ) : null}
@@ -283,7 +285,7 @@ export default function PosSalesPage() {
                             <Button
                               type="button"
                               variant="ghost"
-                              size="icon-sm"
+                              size="icon"
                               className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                               aria-label={t('row_menu_aria', { date: formatDate(day.business_date) })}
                             >
@@ -311,13 +313,13 @@ export default function PosSalesPage() {
             </table>
           </div>
           {total > PAGE_SIZE ? (
-            <div className="mt-4 flex items-center justify-between text-[12.5px] text-muted-foreground">
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
               <span>{t('pagination', { from: page * PAGE_SIZE + 1, to: Math.min((page + 1) * PAGE_SIZE, total), total })}</span>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+                <Button variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
                   {t('prev')}
                 </Button>
-                <Button variant="outline" size="sm" disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage((p) => p + 1)}>
+                <Button variant="outline" disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage((p) => p + 1)}>
                   {t('next')}
                 </Button>
               </div>
@@ -364,7 +366,7 @@ function ClearingLine({ balance, t }: { balance: PosClearingBalanceJson; t: Retu
   if (parts.length === 0) return null
   return (
     <InfoTooltip content={t('clearing_help', { accounts })} className="ml-2" align="start">
-      <span className="text-[12.5px] text-muted-foreground tabular-nums">{parts.join(', ')}</span>
+      <span className="text-xs text-muted-foreground tabular-nums">{parts.join(', ')}</span>
     </InfoTooltip>
   )
 }
@@ -384,7 +386,7 @@ function DayStatus({ day, t }: { day: PosDayJson; t: ReturnType<typeof useTransl
       <Link
         href={`/bookkeeping/${day.journal_entry_id}`}
         onClick={(e) => e.stopPropagation()}
-        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
       >
         {t('status_booked')}
       </Link>

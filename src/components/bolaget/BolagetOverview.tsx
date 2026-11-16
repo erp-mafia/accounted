@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ChevronRightIcon } from '@/components/icons'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { LIST_BLEED_CLASS } from '@/components/ui/dry-table'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { BolagetHubAccess } from '@/lib/bolaget/hub'
 import { BolagetHeader } from './BolagetHeader'
@@ -43,7 +45,15 @@ interface Loaded {
  */
 export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
   const t = useTranslations('bolaget_hub')
+  const tCommon = useTranslations('common')
+  const tNav = useTranslations('nav')
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  // Bumped by "Försök igen" to read the registers again.
+  const [attempt, setAttempt] = useState(0)
+  const retry = () => {
+    setLoaded(null)
+    setAttempt((n) => n + 1)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -63,7 +73,7 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
     return () => {
       cancelled = true
     }
-  }, [access.registers, access.agreements])
+  }, [access.registers, access.agreements, attempt])
 
   const facts = useMemo(
     () => (loaded ? overviewFacts({ today: todayIsoStockholm(), register: loaded.register, meetings: loaded.meetings, commitments: loaded.commitments }) : null),
@@ -130,7 +140,7 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
           <span className="text-muted-foreground">{t('meeting_none')}</span>
         ) : (
           <>
-            <span className="tabular-nums">{formatDate(m.date)}</span> <span data-ph-mask="">{m.title}</span>
+            <span className="date-figures">{formatDate(m.date)}</span> <span data-ph-mask="">{m.title}</span>
           </>
         ),
     })
@@ -145,7 +155,7 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
         <>
           {p.next ? (
             <>
-              <span className="tabular-nums">{formatDate(p.next.due_on)}</span> <span data-ph-mask="">{p.next.title}</span>{' '}
+              <span className="date-figures">{formatDate(p.next.due_on)}</span> <span data-ph-mask="">{p.next.title}</span>{' '}
               <span className="whitespace-nowrap tabular-nums">{formatCurrency(p.next.amount, p.next.currency)}</span>
               {p.others > 0 && <span className="text-muted-foreground"> · {t('more', { count: p.others })}</span>}
             </>
@@ -173,25 +183,30 @@ export function BolagetOverview({ access }: { access: BolagetHubAccess }) {
 
   return (
     <div className="space-y-8">
-      <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} />
+      <BolagetHeader title={tNav('v3_overview')} subtitle={t('subtitle')} help={t('help')} />
       {!loaded ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loaded.failed && lines.length === 0 ? (
+        <LoadError onRetry={retry} />
       ) : (
         <div className="space-y-3">
-          {loaded.failed && <AttnLine>{t('load_failed')}</AttnLine>}
-          <ul className="stagger-enter border-t border-border text-[13px]">
+          {loaded.failed && <AttnLine action={{ label: tCommon('retry'), onClick: retry }}>{t('load_failed')}</AttnLine>}
+          <ul className={cn(LIST_BLEED_CLASS, 'stagger-enter border-t-hairline text-[13px]')}>
             {lines.map((line) => (
-              <li key={line.key} className="border-b border-border">
+              <li key={line.key} className="border-b-hairline">
                 <Link
                   href={line.href}
-                  className="flex min-w-0 items-center gap-4 px-4 py-3 transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex min-h-11 min-w-0 items-center gap-4 px-2 py-3 transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <span className="w-40 shrink-0 text-muted-foreground">{line.label}</span>
-                  <span className="min-w-0 flex-1 truncate">{line.text}</span>
+                  {/* The fact wraps instead of being cut (a firmateckning is read whole); on a phone it sits under its label. */}
+                  <span className="grid min-w-0 flex-1 gap-x-4 gap-y-0.5 sm:grid-cols-[10rem_minmax(0,1fr)]">
+                    <span className="text-muted-foreground">{line.label}</span>
+                    <span className="min-w-0 text-foreground">{line.text}</span>
+                  </span>
                   <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </Link>
               </li>

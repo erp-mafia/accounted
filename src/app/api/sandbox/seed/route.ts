@@ -382,7 +382,9 @@ export async function POST(request: Request) {
 
     const invoiceMap = Object.fromEntries(invoices.map(i => [i.invoice_number, i.id]))
 
-    // 7. Create invoice items
+    // 7. Create invoice items. Each line carries its own vat_amount (the
+    // column defaults to 0): the send dialog builds the 26xx line from the
+    // lines, so a line without it left the demo kontering 2 000 kr off.
     const { error: itemsError } = await supabase
       .from('invoice_items')
       .insert([
@@ -394,6 +396,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 15000,
           vat_rate: 25,
+          vat_amount: 3750,
         },
         {
           invoice_id: invoiceMap['F-2026002'],
@@ -403,6 +406,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 20000,
           vat_rate: 0,
+          vat_amount: 0,
         },
         {
           invoice_id: invoiceMap['F-2026003'],
@@ -412,6 +416,7 @@ export async function POST(request: Request) {
           unit_price: 5000,
           line_total: 5000,
           vat_rate: 25,
+          vat_amount: 1250,
         },
         {
           invoice_id: invoiceMap['F-2026004'],
@@ -421,6 +426,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 8000,
           vat_rate: 25,
+          vat_amount: 2000,
         },
       ])
 

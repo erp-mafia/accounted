@@ -107,7 +107,7 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
             {orders.map((o, index) => {
               const needsConfirmation = toConfirm.includes(o)
               return (
-                <li key={o.id} className="space-y-1 border-b border-border py-2.5">
+                <li key={o.id} className="space-y-1 border-b-hairline py-2.5">
                   <div className="flex items-center justify-between gap-3">
                     <span className="min-w-0 truncate">{orderInvoiceLabel(o)}</span>
                     <span className="flex shrink-0 items-center gap-2 tabular-nums">
@@ -131,7 +131,7 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
         <InvoiceDocumentSheet payment={payments.find((p) => p.key === documentKey) ?? null} onClose={() => setDocumentKey(null)} />
         {/* Three buttons can outgrow one line (a longer count, English): let the footer wrap instead of clipping the first button. */}
         <DialogFooter className="sm:flex-wrap sm:gap-y-2">
-          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {t('cancel')}
           </Button>
           {onRequestSignature && (

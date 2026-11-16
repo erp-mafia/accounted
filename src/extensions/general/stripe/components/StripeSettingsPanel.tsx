@@ -95,7 +95,7 @@ export default function StripeSettingsPanel() {
         return (
           <div>
             <Button onClick={handleConnect} disabled={connecting}>
-              <LinkIcon className="mr-2 h-4 w-4" />
+              <LinkIcon className="h-4 w-4" />
               {connecting ? tf('connecting') : t('connect')}
             </Button>
             <p className="mt-3 text-sm text-muted-foreground">{t('connect_hint')}</p>

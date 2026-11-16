@@ -222,7 +222,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
       <DialogContent className={cn('sm:min-w-[460px]', selected ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
         <DialogHeader>
           {/* data-ph-mask: the template name is user data */}
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="" className="text-lg">
             {selectedName ?? t('tpl_dialog_title')}
           </DialogTitle>
         </DialogHeader>
@@ -275,7 +275,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
             {/* Live kontering: the mall's lines, editable before booking */}
             {(selected.kind === 'static' && staticPreview.error) || lines.length === 0 ? (
-              <div className="rounded-lg border border-border">
+              <div className="rounded-lg bg-control shadow-raised">
                 {selected.kind === 'static' && staticPreview.error ? (
                   <p role="alert" className="px-3 py-4 text-center text-[13px] text-destructive">
                     {staticPreview.error}
@@ -320,8 +320,8 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
                   }}
                   toolbar={
                     edited ? (
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setEdits(null)}>
-                        <ArrowUturnLeftIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
+                      <Button type="button" variant="ghost" onClick={() => setEdits(null)}>
+                        <ArrowUturnLeftIcon className="h-3.5 w-3.5" aria-hidden />
                         {t('tpl_reset_lines')}
                       </Button>
                     ) : undefined
@@ -329,7 +329,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
                 />
                 <div
                   className={cn(
-                    'flex items-center justify-between border-t border-border px-1 pt-2 text-[12.5px]',
+                    'flex items-center justify-between border-t-hairline px-1 pt-2 text-xs',
                     balanced ? 'text-success' : 'text-destructive',
                   )}
                 >

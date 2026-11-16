@@ -48,7 +48,7 @@ function CollectionsSettingsBody({ data, reload }: { data: CollectionsSettingsDa
   const { availability, connection } = data
 
   const header = <SettingsSectionHeader title={t('title')} intro={tp('intro')} />
-  const sandbox = availability.sandbox ? <p className="pt-4 text-[12.5px] text-muted-foreground">{tCollections('sandbox_note')}</p> : null
+  const sandbox = availability.sandbox ? <p className="pt-4 text-xs text-muted-foreground">{tCollections('sandbox_note')}</p> : null
   const health =
     connection && (connection.health === 'degraded' || connection.health === 'action_required') ? (
       <AttnLine className="pt-4">

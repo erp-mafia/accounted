@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslations, useLocale } from 'next-intl'
 import { ArrowUpTrayIcon, SpinnerIcon, SwatchIcon, TrashIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -36,6 +36,10 @@ export function BrandSettingsContent() {
   const { toast } = useToast()
   const [brand, setBrand] = useState<ByraBrand | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  // The server's answer that this user has no brand to manage here (403/404):
+  // said as it is, with nothing to retry.
+  const [refusal, setRefusal] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -45,8 +49,14 @@ export function BrandSettingsContent() {
 
   useEffect(() => {
     let cancelled = false
+    setLoadFailed(false)
     fetch('/api/byra/brand')
       .then(async (res) => {
+        if (res.status === 403 || res.status === 404) {
+          const body = await res.json().catch(() => null)
+          if (!cancelled) setRefusal(getUserErrorMessage(body, { locale: errorLocale, fallback: t('load_failed') }))
+          return
+        }
         if (!res.ok) throw new Error()
         const body = (await res.json()) as { data: ByraBrand }
         if (!cancelled) {
@@ -60,7 +70,7 @@ export function BrandSettingsContent() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [errorLocale, t, loadAttempt])
 
   const appNameDirty =
     !!brand?.hasBrand &&
@@ -156,8 +166,11 @@ export function BrandSettingsContent() {
     setIsDragging(false)
   }
 
+  if (refusal) {
+    return <EmptyState title={refusal} />
+  }
   if (loadFailed) {
-    return <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
+    return <LoadError onRetry={() => setLoadAttempt((n) => n + 1)} />
   }
   if (!brand) {
     return <SettingsLoadingSkeleton />
@@ -177,7 +190,7 @@ export function BrandSettingsContent() {
       <SettingsRow label={t('logo_label')} help={t('logo_help')}>
         {brand.logoUrl ? (
           <>
-            <span className="inline-flex rounded-lg border border-border bg-muted/30 p-2">
+            <span className="inline-flex rounded-lg p-2 bg-control shadow-raised">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={brand.logoUrl}
@@ -189,7 +202,6 @@ export function BrandSettingsContent() {
               <>
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => inputRef.current?.click()}
                   loading={isUploading}
                   className="text-muted-foreground hover:text-foreground"
@@ -198,12 +210,11 @@ export function BrandSettingsContent() {
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={handleDelete}
                   loading={isDeleting}
                   className="text-muted-foreground hover:text-destructive"
                 >
-                  {!isDeleting && <TrashIcon className="mr-2 h-3.5 w-3.5" />}
+                  {!isDeleting && <TrashIcon className="h-3.5 w-3.5" />}
                   {t('logo_remove')}
                 </Button>
               </>
@@ -225,7 +236,7 @@ export function BrandSettingsContent() {
             {isUploading ? (
               <SpinnerIcon className="h-4 w-4 animate-spin" />
             ) : (
-              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground/60" />
+              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
           </button>
@@ -254,7 +265,7 @@ export function BrandSettingsContent() {
               }}
             />
             {appNameDirty && (
-              <Button size="sm" onClick={handleSaveAppName} loading={isSavingName}>
+              <Button onClick={handleSaveAppName} loading={isSavingName}>
                 {t('app_name_save')}
               </Button>
             )}

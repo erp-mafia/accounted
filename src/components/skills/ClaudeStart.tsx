@@ -28,7 +28,7 @@ const TARGET_ICONS: Record<ClaudeTarget, AppIcon> = { web: GlobeAltIcon, desktop
  * has only the web, so it gets the plain button. Only for Claude; other
  * clients keep their one button.
  */
-export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => Promise<StartOutcome> | void; size?: 'lg' | 'sm' }) {
+export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => Promise<StartOutcome> | void; size?: 'lg' | 'default' }) {
   const t = useTranslations('skills_registry')
   const [target, setTarget, targets] = useClaudeTarget()
   const logo = AI_CLIENTS.find((c) => c.id === 'claude')!.logo
@@ -65,7 +65,7 @@ export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: Claude
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] text-foreground">{t(`open_in_${o}`)}</span>
-                  <span className="block text-[11px] leading-snug text-muted-foreground">{t(`open_in_${o}_note`)}</span>
+                  <span className="block text-xs leading-snug text-muted-foreground">{t(`open_in_${o}_note`)}</span>
                 </span>
                 {o === target && <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />}
               </DropdownMenuItem>

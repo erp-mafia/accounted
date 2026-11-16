@@ -62,7 +62,7 @@ export function AccountsStep({ state, dispatch, onActivate, closeButton }: Accou
               <Checkbox id={id} checked={enabled} onCheckedChange={() => dispatch({ type: 'account_toggled', uid: account.uid })} disabled={state.activating} />
               <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
                 <span className={cn('block truncate text-[13px]', enabled ? 'text-foreground' : 'text-muted-foreground')}>{name}</span>
-                <span className="block truncate text-[12.5px] text-muted-foreground">
+                <span className="block truncate text-xs text-muted-foreground">
                   {privateAccount ? t('account_private') : [account.iban ?? account.bban, account.currency !== 'SEK' ? account.currency : null].filter(Boolean).join(', ')}
                 </span>
               </label>
@@ -72,7 +72,7 @@ export function AccountsStep({ state, dispatch, onActivate, closeButton }: Accou
                 // picker is compact and stays at the right from sm up.
                 <div className={ledgerLocked(account) && choice?.ledger ? 'basis-full pl-8' : 'basis-full pl-8 sm:basis-auto sm:pl-0'}>
                   {ledgerLocked(account) && choice?.ledger ? (
-                    <span className="text-[12.5px] text-muted-foreground">{t('ledger_same', { ledger: ledgerLabel(choice.ledger, chart, fallbackName) })}</span>
+                    <span className="text-xs text-muted-foreground">{t('ledger_same', { ledger: ledgerLabel(choice.ledger, chart, fallbackName) })}</span>
                   ) : (
                     <Select value={choice?.ledger ?? undefined} onValueChange={(ledger) => dispatch({ type: 'ledger_set', uid: account.uid, ledger })} disabled={state.activating}>
                       <SelectTrigger aria-label={t('ledger_label', { name })} className="h-8 w-[220px] text-[13px]">
@@ -97,11 +97,11 @@ export function AccountsStep({ state, dispatch, onActivate, closeButton }: Accou
       {state.activateError ? (
         <AttnLine>{state.activateError}</AttnLine>
       ) : state.activating ? (
-        <p role="status" className="text-[12.5px] text-muted-foreground">
+        <p role="status" className="text-xs text-muted-foreground">
           {t('activating')}
         </p>
       ) : blocker ? (
-        <p className="text-[12.5px] text-muted-foreground">{t(blocker === 'none_enabled' ? 'no_account_enabled' : 'ledger_missing')}</p>
+        <p className="text-xs text-muted-foreground">{t(blocker === 'none_enabled' ? 'no_account_enabled' : 'ledger_missing')}</p>
       ) : null}
 
       <DialogFooter>

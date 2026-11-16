@@ -85,30 +85,29 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
   }
 
   return (
+    // Att göra V8: Fortsätt is a section of Hem like Först and Rutin (a 15px
+    // title over hairline rows with the list bleed).
     <section aria-label={t('resume_title')}>
-      {/* Pane header: Geist title over a hairline */}
-      <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
-        <h2 className="font-sans text-sm font-medium">{t('resume_title')}</h2>
-      </div>
-      <div>
+      <h2 className="text-[15px] font-medium text-strong">{t('resume_title')}</h2>
+      <ul className="-mx-2 mt-2 border-t-hairline">
         {items.map((item) => {
           const row = rowFor(item)
           const Icon = row.icon
           const edited = relativeLabel(item.updated_at)
           return (
+            <li key={item.ref}>
             <Link
-              key={item.ref}
               href={item.href}
-              className="group flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/35"
+              className="group flex min-h-11 w-full items-center gap-3 border-b-hairline px-2 py-2 transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
             >
-              <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
+              <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
                 <Icon className="h-[15px] w-[15px]" />
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px]">
                 {row.title}
                 {row.meta && <span className="text-muted-foreground"> · {row.meta}</span>}
               </span>
-              <span className="ml-auto flex shrink-0 items-center gap-2.5 pt-px">
+              <span className="ml-auto flex shrink-0 items-center gap-2.5">
                 {item.late && (
                   <Badge variant="warning" className="font-normal">
                     {t('resume_late')}
@@ -127,9 +126,10 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
                 />
               </span>
             </Link>
+            </li>
           )
         })}
-      </div>
+      </ul>
     </section>
   )
 }

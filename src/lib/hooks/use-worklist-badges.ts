@@ -2,24 +2,20 @@
 
 import { useCallback } from 'react'
 import useSWR, { mutate as globalMutate, type SWRConfiguration } from 'swr'
-import { createClient } from '@/lib/supabase/client'
-import { DAILY_BATCH_TYPES_FILTER } from '@/lib/pending-operations/daily-batches'
 
 export interface WorklistBadges {
   /**
-   * Rows waiting in the Transaktioner inbox: unbooked bank transactions
-   * (lib/worklist countUnbookedTransactions) plus unbooked skattekonto rows
-   * (countUnbookedSkattekontoRows). The badge sits on /transactions, which
-   * lists both, so the number must cover both (#2180).
-   */
-  uncategorized: number
-  /**
-   * Agent-staged operations awaiting review: same predicate as
-   * countPendingOperations, so the daily batches (the collections run and
-   * the reminders, rows of their own in Att göra, not agent proposals) are
-   * left out.
+   * Agent-staged operations awaiting review, the Agentförslag row: the Att
+   * göra predicate (lib/worklist countPendingOperations), so the daily
+   * batches and system suggestions, rows of their own, are left out.
    */
   pendingOperations: number
+  /**
+   * Documents waiting in Inkorg, the Inkorg row: the Att göra predicate
+   * (countInboxDocuments with the pairing read), so a receipt riding on its
+   * invoice is one item, as on the page.
+   */
+  inbox: number
 }
 
 const BADGES_KEY = 'worklist-badges'
@@ -86,47 +82,23 @@ export function badgesAreStale(lastAt: number | undefined, now: number): boolean
 }
 
 /**
- * Client-side nav badge counts. These used to be fetched by the dashboard
- * layout on the critical path of every server navigation; two head-count
- * queries nobody needs before first paint. Now they load after mount and
- * refresh on return to the tab, on navigation (when stale), on a 60 s
- * backstop while visible, and on demand from the live list pages.
- *
- * The predicates deliberately mirror lib/worklist/categories.ts so the badge
- * shows the same number as every other "att göra" surface; RLS scopes both
- * tables, and the explicit company_id filter is defense in depth.
+ * Client-side nav badge counts (Stil v3: Agentförslag and Inkorg only). They
+ * load after mount from /api/worklist/badges, which runs the same predicates
+ * as Att göra so the menu and the home page never disagree, and refresh on
+ * return to the tab, on navigation (when stale), on a 60 s backstop while
+ * visible, and on demand from the live list pages.
  */
 export function useWorklistBadges(companyId: string | null | undefined) {
   const { data, mutate } = useSWR<WorklistBadges>(
     companyId ? [BADGES_KEY, companyId] : null,
     async ([, id]: [string, string]) => {
-      const supabase = createClient()
-      const [tx, skv, ops] = await Promise.all([
-        supabase
-          .from('transactions')
-          .select('id', { count: 'exact', head: true })
-          .eq('company_id', id)
-          .is('is_business', null)
-          .eq('is_ignored', false),
-        supabase
-          .from('skattekonto_transactions')
-          .select('id', { count: 'exact', head: true })
-          .eq('company_id', id)
-          .eq('status', 'booked')
-          .is('journal_entry_id', null)
-          .eq('is_ignored', false),
-        supabase
-          .from('pending_operations')
-          .select('id', { count: 'exact', head: true })
-          .eq('company_id', id)
-          .eq('status', 'pending')
-          .not('operation_type', 'in', DAILY_BATCH_TYPES_FILTER),
-      ])
+      const res = await fetch('/api/worklist/badges')
       lastFetchedAt.set(id, Date.now())
-      return {
-        uncategorized: (tx.error ? 0 : (tx.count ?? 0)) + (skv.error ? 0 : (skv.count ?? 0)),
-        pendingOperations: ops.error ? 0 : (ops.count ?? 0),
-      }
+      // A failed read keeps the last counts (keepPreviousData) rather than
+      // blanking the menu; SWR retries on the next trigger.
+      if (!res.ok) throw new Error(`worklist badges ${res.status}`)
+      const body = (await res.json()) as { data: { pending_operations: number; inbox: number } }
+      return { pendingOperations: body.data.pending_operations, inbox: body.data.inbox }
     },
     WORKLIST_BADGES_SWR_OPTIONS,
   )
@@ -139,8 +111,8 @@ export function useWorklistBadges(companyId: string | null | undefined) {
   }, [companyId, mutate])
 
   return {
-    uncategorized: data?.uncategorized ?? 0,
     pendingOperations: data?.pendingOperations ?? 0,
+    inbox: data?.inbox ?? 0,
     // SWR's bound mutate is referentially stable, so consumers can list it in
     // effect deps without re-subscribing on every render.
     refresh: mutate,

@@ -49,6 +49,7 @@ describe('passesNavGates', () => {
     ['entityOnly', item({ entityOnly: 'aktiebolag' }), { entityType: 'enskild_firma' }],
     ['entityOnly list', item({ entityOnly: ['aktiebolag', 'ekonomisk_forening'] }), { entityType: 'enskild_firma' }],
     ['branding hidden href', item({ href: '/kpi' }), { hiddenNavHrefs: new Set(['/kpi']) }],
+    ['branding hidden href, a view or create link of the page', item({ href: '/kpi?new' }), { hiddenNavHrefs: new Set(['/kpi']) }],
   ]
 
   it.each(cases)('%s: shown when the company has it, hidden when not', (_name, flags, off) => {

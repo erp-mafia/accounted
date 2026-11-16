@@ -80,15 +80,12 @@ export function DoorMark({
   door,
   size = 22,
   className,
-  mailProvider = null,
 }: {
   door: IntakeSourceId
   size?: 22 | 28 | 40
   className?: string
-  /** A connected mailbox is Gmail unless its items say Microsoft. */
-  mailProvider?: MailProvider
 }) {
-  const vendor = door === 'mailbox' && mailProvider === 'microsoft' ? 'microsoft' : DOOR_VENDOR[door]
+  const vendor = DOOR_VENDOR[door]
   if (vendor) {
     return <BrandMark name={door} vendor={vendor} variant="mark" size={size} className={className} logoUrl={DOOR_ICON_URL[door] ?? null} />
   }

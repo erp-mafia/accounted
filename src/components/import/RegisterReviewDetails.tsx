@@ -45,7 +45,7 @@ export function RegisterColumnSummary<K extends string>({
 
   return (
     <div className="space-y-2">
-      <p className="text-[12.5px] leading-5 text-muted-foreground">
+      <p className="text-xs leading-5 text-muted-foreground">
         {ignored.length === 0
           ? t('columns_all_imported', { total: fileColumns.length })
           : t('columns_imported', { used: fileColumns.length - ignored.length, total: fileColumns.length })}{' '}
@@ -63,7 +63,7 @@ export function RegisterColumnSummary<K extends string>({
         </button>
       </p>
       {open && (
-        <table className="animate-fade-in border-collapse text-[12.5px]">
+        <table className="animate-fade-in border-collapse text-xs">
           <thead>
             <tr>
               <th className={VTH_CLASS}>{t('file_column')}</th>
@@ -119,7 +119,7 @@ export function RowExpandButton({
     <Button
       type="button"
       variant="ghost"
-      size="icon-sm"
+      size="icon"
       aria-expanded={expanded}
       aria-label={expanded ? t('hide_fields') : t('show_fields')}
       onClick={(e) => onToggle(e.currentTarget)}
@@ -154,7 +154,7 @@ export function RegisterRowDetails<R>({
       <td colSpan={colSpan} className="p-0">
         <RowFoldout>
           {errors.length > 0 && (
-            <ul className="space-y-1 px-3 pt-2 text-[12.5px] leading-5 text-destructive">
+            <ul className="space-y-1 px-3 pt-2 text-xs leading-5 text-destructive">
               {errors.map((e) => <li key={e}>{e}</li>)}
             </ul>
           )}
@@ -163,7 +163,7 @@ export function RegisterRowDetails<R>({
               const value = field.value(row)
               return (
                 <div key={key} className="min-w-0">
-                  <dt className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                  <dt className="text-xs text-muted-foreground">
                     {field.label}
                   </dt>
                   <dd

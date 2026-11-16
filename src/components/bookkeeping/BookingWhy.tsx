@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDownIcon } from '@/components/icons'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
@@ -86,13 +86,15 @@ export default function BookingWhy({
 
   if (variant === 'inline') {
     if (!view?.summary) return null
-    return <SummaryLine summary={view.summary} className={cn('text-[12.5px] text-muted-foreground', className)} />
+    return <SummaryLine summary={view.summary} className={cn('text-xs text-muted-foreground', className)} />
   }
 
   if (loading) {
     return (
       <DetailSection kicker={t('title')} className={className}>
-        <Skeleton className="h-5 w-72 max-w-full" />
+        <LateReveal>
+          <Skeleton className="h-5 w-72 max-w-full" />
+        </LateReveal>
       </DetailSection>
     )
   }

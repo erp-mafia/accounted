@@ -31,13 +31,14 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   ArrowDownTrayIcon,
   ArrowLeftIcon,
+  ArrowUpTrayIcon,
   BuildingLibraryIcon,
   ChevronRightIcon,
   CreditCardIcon,
   ShoppingBagIcon,
   ShoppingCartIcon,
-  SpinnerIcon,
 } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
@@ -92,11 +93,12 @@ import dynamic from 'next/dynamic'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
+import { useViewerLock, ViewerLock } from '@/components/ui/viewer-lock'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
-  { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><SpinnerIcon className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
+  { ssr: false, loading: () => <ImportStepLoading /> }
 )
 // Renders nothing unless the company moved invoices from Visma, so no
 // loading placeholder: it would flash on every other company's landing.
@@ -105,11 +107,15 @@ const MigratedDeductionCard = dynamic(
   { ssr: false }
 )
 
+// The step's silhouette while its chunk loads: a heading, the body, the
+// action row. Hidden for the first 300ms, so a cached chunk never flashes it.
 function ImportStepLoading() {
   return (
-    <div className="flex min-h-48 items-center justify-center" role="status">
-      <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
-    </div>
+    <LateReveal role="status" className="space-y-4 py-2">
+      <Skeleton className="h-4 w-48" />
+      <Skeleton className="h-32 w-full rounded-lg" />
+      <Skeleton className="h-7 w-28" />
+    </LateReveal>
   )
 }
 
@@ -1663,10 +1669,10 @@ function CSVDataImportWizard({
                 onClick={() => setEntity(opt.value)}
                 aria-pressed={selected}
                 className={cn(
-                  'relative h-9 rounded-lg border px-4 text-sm font-medium transition-colors',
+                  'relative h-9 rounded-lg px-4 text-sm font-medium transition-colors bg-control shadow-raised',
                   selected
-                    ? 'border-foreground bg-foreground text-background'
-                    : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-secondary/60',
+                    ? 'ring-[1.5px] ring-strong bg-foreground text-background'
+                    : 'bg-card text-foreground hover:ring-1 hover:ring-foreground/30 hover:bg-secondary/60',
                 )}
               >
                 {opt.label}
@@ -1727,6 +1733,7 @@ const WIZARD_MODES: ReadonlySet<ImportMode> = new Set<ImportMode>(['bank', 'skat
 
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [initialCsvEntity, setInitialCsvEntity] = useState<CsvDataEntity | null>(null)
@@ -1749,6 +1756,9 @@ export default function ImportPage() {
   // older desktop programs that read #FORMAT PC8 literally.
   const [exportCp437, setExportCp437] = useState(false)
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
@@ -1763,7 +1773,10 @@ export default function ImportPage() {
     const allowedModes = isSandbox
       ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
       : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
-    if (!isSandbox && searchParams.get('migration')) {
+    // A read-only member gets no import wizard from a deep link.
+    if (!canWrite) {
+      // stays on the choices
+    } else if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
       const modeParam = searchParams.get('mode')
@@ -1801,7 +1814,7 @@ export default function ImportPage() {
           ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       }, 80)
     }
-  }, [isSandbox, searchParams])
+  }, [isSandbox, searchParams, canWrite])
 
   // Hash-based deep links: all live on the export tab; #sie-export opens
   // the SIE dialog, #full-archive opens the archive download dialog, and
@@ -1888,7 +1901,7 @@ export default function ImportPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={t('title')}
+        title={tNav('v3_import')}
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
@@ -1918,63 +1931,74 @@ export default function ImportPage() {
                 {hasBankingExtension && (
                   <ImportRow
                     title={t('psd2_title')}
+                    action={tCommon('open')}
                     sub={t('psd2_description')}
                     chip={
                       hasBankSync ? (
                         <span className="text-xs text-muted-foreground">{t('psd2_recommended')}</span>
                       ) : (
-                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+                        <span className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium leading-none text-muted-foreground">
                           {t('psd2_requires_subscription')}
                         </span>
                       )
                     }
                     chips={<LogoChip src="/logos/enable-banking-icon.png" name="Enable Banking" mono />}
-                    disabled={isSandbox}
+                    disabled={!canWrite || isSandbox}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('psd2')}
                   />
                 )}
                 {hasStripeExtension && (
                   <ImportRow
                     title={t('stripe_title')}
+                    action={tCommon('open')}
                     sub={t('stripe_description')}
                     chips={<LogoChip src="/logos/stripeicon.jpeg" name="Stripe" />}
-                    disabled={stripeDisabled}
+                    disabled={!canWrite || stripeDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('stripe')}
                   />
                 )}
                 {hasWooCommerceExtension && (
                   <ImportRow
                     title={t('woocommerce_title')}
+                    action={tCommon('open')}
                     sub={t('woocommerce_description')}
                     chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/woocommerce.svg" name="WooCommerce" />}
-                    disabled={woocommerceDisabled}
+                    disabled={!canWrite || woocommerceDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('woocommerce')}
                   />
                 )}
                 {hasShopifyExtension && (
                   <ImportRow
                     title={t('shopify_title')}
+                    action={tCommon('open')}
                     sub={t('shopify_description')}
                     chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
-                    disabled={shopifyDisabled}
+                    disabled={!canWrite || shopifyDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('shopify')}
                   />
                 )}
                 {hasZettleExtension && (
                   <ImportRow
                     title={t('zettle_title')}
+                    action={tCommon('open')}
                     sub={t('zettle_description')}
                     chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/zettle.svg" name="Zettle" />}
-                    disabled={zettleDisabled}
+                    disabled={!canWrite || zettleDisabled}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('zettle')}
                   />
                 )}
                 {hasMigrationExtension && (
                   <ImportRow
                     title={t('migration_title')}
+                    action={tCommon('open')}
                     sub={t('migration_description')}
                     chips={
                       <>
@@ -1986,39 +2010,56 @@ export default function ImportPage() {
                         <LogoChip src="/logos/wint.png" name="WINT" />
                       </>
                     }
-                    disabled={isSandbox}
+                    disabled={!canWrite || isSandbox}
+                    lockTitle={lockedTitle}
                     onClick={() => setMode('migration')}
                   />
                 )}
                 <ImportRow
                   title={t('bankfile_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('bankfile_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('bank')}
                 />
                 <ImportRow
                   title={t('skattekonto_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('skattekonto_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('skattekonto')}
                 />
                 <ImportRow
                   title={t('csv_data_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('csv_data_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('csv_data')}
                 />
                 <ImportRow
                   title={t('sie_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('sie_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('sie')}
                 />
                 {/* Optional follow-up to a SIE import, never a step inside it:
                     the receipts usually arrive later and from another export. */}
                 <ImportRow
                   title={t('underlag_title')}
+                  action={t('tab_import')} icon="upload"
                   sub={t('underlag_description')}
+                  disabled={!canWrite}
+                  lockTitle={lockedTitle}
                   onClick={() => setMode('underlag')}
                 />
                 <ImportRow
                   title={t('history_title')}
+                  action={tCommon('open')}
                   sub={t('history_description')}
                   expanded={historyOpen}
                   onClick={() => setHistoryOpen((v) => !v)}
@@ -2048,6 +2089,7 @@ export default function ImportPage() {
                 <ImportRow
                   id="sie-export"
                   title={t('export_sie_title')}
+                  action={t('tab_export')} icon="download"
                   sub={t('export_sie_description')}
                   onClick={() => setSieDialogOpen(true)}
                 />
@@ -2058,6 +2100,7 @@ export default function ImportPage() {
                   <ImportRow
                     id="full-archive"
                     title={t('export_archive_title')}
+                    action={t('tab_export')} icon="download"
                     sub={t('export_archive_description')}
                     onClick={() => setArchiveDialogOpen(true)}
                   />
@@ -2065,6 +2108,7 @@ export default function ImportPage() {
                 {hasCloudBackup && (
                   <ImportRow
                     title={t('cloud_row_title')}
+                    action={tCommon('open')}
                     sub={t('cloud_row_description')}
                     expanded={cloudOpen}
                     onClick={() => setCloudOpen((v) => !v)}
@@ -2073,7 +2117,7 @@ export default function ImportPage() {
               </div>
               {hasCloudBackup && cloudOpen && (
                 <div id="cloud-backup" className="mt-6 scroll-mt-24">
-                  <CloudBackupCard />
+                  <ViewerLock><CloudBackupCard /></ViewerLock>
                 </div>
               )}
             </div>
@@ -2085,9 +2129,9 @@ export default function ImportPage() {
 
           {/* SIE export as a small centered dialog (concept overlay convention) */}
           <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>
-            <DialogContent className="sm:max-w-md">
+            <DialogContent size="confirm">
               <DialogHeader>
-                <DialogTitle className="font-display text-lg tracking-tight">
+                <DialogTitle className="text-lg">
                   {t('export_sie_title')}
                 </DialogTitle>
                 <DialogDescription className="text-[13px] leading-relaxed">
@@ -2133,7 +2177,7 @@ export default function ImportPage() {
                   }}
                   disabled={!exportPeriodId}
                 >
-                  <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
+                  <ArrowDownTrayIcon className="h-4 w-4" />
                   {t('export_sie_button')}
                 </Button>
               </DialogFooter>
@@ -2144,8 +2188,8 @@ export default function ImportPage() {
 
       {/* The file wizards carry this as their rail's first crumb. */}
       {mode !== null && !WIZARD_MODES.has(mode) && (
-        <Button variant="ghost" size="sm" onClick={backToChoices}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+        <Button variant="ghost" size="toolbar" onClick={backToChoices}>
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('back_to_choices')}
         </Button>
       )}
@@ -2236,51 +2280,64 @@ function ImportRow({
   chip,
   chips,
   disabled = false,
+  lockTitle,
   expanded,
   onClick,
   id,
+  action,
+  icon,
 }: {
   title: string
   sub: string
   chip?: React.ReactNode
-  /** Logo chips under the sub line (provider marks, as on the live page). */
+  /** Provider marks at the end of the line. */
   chips?: React.ReactNode
   disabled?: boolean
-  /** For rows that fold a panel open below the grid (cloud backup). */
+  /** Hover text on the row's button (why it is locked). */
+  lockTitle?: string
+  /** For rows that fold a panel open below the list (history, cloud backup). */
   expanded?: boolean
   onClick: () => void
   id?: string
+  /** The row's button: what it does ("Importera", "Exportera", "Öppna"). */
+  action: string
+  /** The symbol on the button: the upload arrow on a file import, the download arrow on an export. */
+  icon?: 'upload' | 'download'
 }) {
+  // One line per way in (canvas "Import och flytt"): the name, what it is in
+  // the muted ink, the provider marks, and the row's own button at the right
+  // end. The button carries the action, so the row itself is not a control.
   return (
-    <button
-      type="button"
-      id={id}
-      onClick={onClick}
-      disabled={disabled}
-      aria-expanded={expanded}
-      className={cn(
-        'group flex w-full items-center justify-between gap-4 border-b border-border px-1 py-3 text-left',
-        'transition-colors duration-150 hover:bg-secondary/35',
-        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
-      )}
-    >
-      <span className="min-w-0">
-        <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
+    <div id={id} className="flex min-h-11 items-center gap-3 border-b-hairline py-1.5">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="flex items-center gap-2 text-sm font-medium text-strong">
           {title}
           {chip}
         </span>
-        <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{sub}</span>
-        {chips && <span className="mt-2 flex flex-wrap gap-2">{chips}</span>}
-      </span>
-      <ChevronRightIcon
-        className={cn(
-          'h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150',
-          'group-hover:translate-x-0.5 group-hover:text-muted-foreground',
-          expanded && 'rotate-90',
+        <span className="min-w-0 text-sm text-muted-foreground">{sub}</span>
+        {chips && <span className="flex flex-wrap items-center gap-2">{chips}</span>}
+      </div>
+      <Button
+        type="button"
+        variant={expanded === undefined ? 'outline' : 'ghost'}
+        className="shrink-0"
+        onClick={onClick}
+        disabled={disabled}
+        title={lockTitle}
+        aria-expanded={expanded}
+        aria-label={`${action}: ${title}`}
+      >
+        {icon === 'upload' && <ArrowUpTrayIcon className="h-4 w-4" />}
+        {icon === 'download' && <ArrowDownTrayIcon className="h-4 w-4" />}
+        {action}
+        {expanded !== undefined && (
+          <ChevronRightIcon
+            className={cn('h-3.5 w-3.5 transition-transform duration-150', expanded && 'rotate-90')}
+            aria-hidden="true"
+          />
         )}
-        aria-hidden="true"
-      />
-    </button>
+      </Button>
+    </div>
   )
 }
 
@@ -2288,7 +2345,7 @@ function ImportRow({
 // so "Beta" reads identically wherever it appears.
 function BetaChip({ label }: { label: string }) {
   return (
-    <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+    <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
       {label}
     </span>
   )
@@ -2300,20 +2357,18 @@ function BetaChip({ label }: { label: string }) {
 // site's grayscale+brightness treatment makes them read on a light ground,
 // with the inverse lift in dark mode.
 function LogoChip({ src, name, mono = false }: { src?: string; name: string; mono?: boolean }) {
+  // A provider's own mark at 16px with its name as the tooltip; a provider
+  // without a mark file is named in text.
+  if (!src) return <span className="text-xs font-medium text-muted-foreground">{name}</span>
   return (
-    <span className="flex items-center gap-2 rounded-sm border border-border bg-muted/30 px-2 py-1">
-      {src && (
-        <img
-          src={src}
-          alt=""
-          className={cn(
-            'h-4 w-4 shrink-0 rounded-sm object-contain',
-            mono &&
-              'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
-          )}
-        />
+    <img
+      src={src}
+      alt={name}
+      title={name}
+      className={cn(
+        'h-4 w-4 shrink-0 rounded-sm object-contain',
+        mono && 'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
       )}
-      <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
-    </span>
+    />
   )
 }

@@ -33,11 +33,14 @@ describe('classifyToken', () => {
     ['[&_th]:text-[10.5px]', 'off-scale-text'],
     ['animate-bounce', 'decorative-animation'],
     ['animate-scale-in', 'decorative-animation'],
+    ['text-[12.5px]', 'off-scale-text'],
   ])('%s -> %s', (token, rule) => {
     expect(classifyToken(token, 'components/x/Thing.tsx')).toBe(rule)
   })
 
   it.each([
+    'duration-100',
+    'active:duration-100',
     'duration-150',
     'duration-300',
     'data-[state=closed]:duration-150',
@@ -53,9 +56,13 @@ describe('classifyToken', () => {
     'focus-visible:ring-2',
     'focus:ring-0',
     'text-[11px]',
-    'text-[12.5px]',
+    'text-[12px]',
     'text-[13px]',
     'text-[15px]',
+    'text-[20px]',
+    'shadow-raised',
+    'shadow-float',
+    'rounded-full',
     'text-xs',
     'animate-spin',
     'animate-typing-dot',
@@ -70,7 +77,7 @@ describe('classifyToken', () => {
 
 describe('findInSource', () => {
   it('flags a height override on a Button, including through cn()', () => {
-    expect(rules(`const a = <Button className="h-7 px-2">x</Button>`)).toEqual(['button-height-override'])
+    expect(rules(`const a = <Button className="h-9 px-2">x</Button>`)).toEqual(['button-height-override'])
     expect(rules(`const a = <Button className={cn('min-h-11', busy && 'w-full')}>x</Button>`)).toEqual([
       'button-height-override',
     ])
@@ -99,16 +106,27 @@ describe('findInSource', () => {
     expect(rules(`const a = <p>Bara text, <strong>ingen</strong> ikon.</p>`)).toEqual([])
   })
 
-  it('flags a button that is not toolbar-sized beside a picker, and accepts sm / icon-sm', () => {
+  it('flags labels set in tracked capitals, not an input that uppercases its value', () => {
+    expect(rules(`const a = <h2 className="text-xs uppercase tracking-wider">Kund</h2>`)).toEqual(['small-caps-label'])
+    expect(rules(`const a = <span className="text-[11px] uppercase">Ny</span>`)).toEqual(['small-caps-label'])
+    expect(rules(`const a = <input className="uppercase" />`)).toEqual([])
+  })
+
+  it('flags a pill on a Button: buttons are 6px rectangles', () => {
+    expect(rules(`const a = <Button className="rounded-full">x</Button>`)).toEqual(['pill-button'])
+    expect(rules(`const a = <span className="h-2 w-2 rounded-full bg-success" />`)).toEqual([])
+  })
+
+  it('flags a button that is not toolbar-sized beside a picker, and accepts toolbar / icon-toolbar', () => {
     expect(rules(`const a = <div><FyPicker /><Button variant="outline">Anpassa</Button></div>`)).toEqual([
       'toolbar-button-size',
     ])
-    expect(rules(`const a = <div>{open && <ToolbarSearch />}<Button size="sm">Ny</Button><Button size="icon-sm" /></div>`)).toEqual([])
+    expect(rules(`const a = <div>{open && <ToolbarSearch />}<Button size="toolbar">Ny</Button><Button size="icon-toolbar" /></div>`)).toEqual([])
     expect(rules(`const a = <div><Input /><Button>Spara</Button></div>`)).toEqual([])
   })
 
   it('flags top-bar buttons in a PageHeader action or a hand-rolled .page-header', () => {
-    expect(rules(`const a = <PageHeader title="x" action={<><Button>Ny</Button><Button size="sm">Export</Button></>} />`)).toEqual([
+    expect(rules(`const a = <PageHeader title="x" action={<><Button>Ny</Button><Button size="toolbar">Export</Button></>} />`)).toEqual([
       'toolbar-button-size',
     ])
     expect(rules(`const a = <div className="page-header flex"><h1 /><Button size="icon" /></div>`)).toEqual([
@@ -118,7 +136,7 @@ describe('findInSource', () => {
 
   it('does not count buttons inside an overlay opened from the top bar', () => {
     expect(
-      rules(`const a = <div className="page-header"><Button size="sm">Öppna</Button><Dialog><DialogContent><Button>Spara</Button></DialogContent></Dialog></div>`),
+      rules(`const a = <div className="page-header"><Button size="toolbar">Öppna</Button><Dialog><DialogContent><Button>Spara</Button></DialogContent></Dialog></div>`),
     ).toEqual([])
   })
 

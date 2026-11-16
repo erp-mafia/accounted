@@ -65,15 +65,15 @@ export function SecuritySettingsContent() {
       <SettingsGroup label={tNav('group_session')}>
         <SettingsRow label={tCommon('logout')} help={tCommon('logout_description')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              <ArrowRightStartOnRectangleIcon className="mr-2 h-3.5 w-3.5" />
+            <Button variant="outline" onClick={handleLogout}>
+              <ArrowRightStartOnRectangleIcon className="h-3.5 w-3.5" />
               {tCommon('logout')}
             </Button>
           </SettingsRowEnd>
         </SettingsRow>
         <SettingsRow label={tCommon('logout_everywhere')} help={tCommon('logout_everywhere_description')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={() => setConfirmEverywhere(true)}>
+            <Button variant="outline" onClick={() => setConfirmEverywhere(true)}>
               {tCommon('logout_everywhere')}
             </Button>
           </SettingsRowEnd>

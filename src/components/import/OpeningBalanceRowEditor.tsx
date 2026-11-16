@@ -271,9 +271,9 @@ export default function OpeningBalanceRowEditor({
   return (
     <div className="space-y-4">
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b">
               <th className="px-3 py-2 text-left w-28">Konto</th>
               <th className="px-3 py-2 text-left">Kontonamn</th>
@@ -358,7 +358,7 @@ export default function OpeningBalanceRowEditor({
                 <td className="px-3 py-1.5">
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => deleteRow(row.id)}
                     aria-label={tCommon('delete')}
                   >
@@ -408,13 +408,13 @@ export default function OpeningBalanceRowEditor({
 
       {/* Actions row */}
       <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={addRow}>
-          <PlusIcon className="h-3.5 w-3.5 mr-1.5" />
+        <Button variant="outline" onClick={addRow}>
+          <PlusIcon className="h-3.5 w-3.5" />
           Lägg till rad
         </Button>
         {!totals.isBalanced && Math.abs(totals.diff) <= 1 && Math.abs(totals.diff) >= 0.01 && (
-          <Button variant="outline" size="sm" onClick={handleAutoBalance}>
-            <ScaleIcon className="h-3.5 w-3.5 mr-1.5" />
+          <Button variant="outline" onClick={handleAutoBalance}>
+            <ScaleIcon className="h-3.5 w-3.5" />
             Avrunda ({totals.diff > 0 ? '+' : ''}
             {formatAmount(totals.diff)} till 2099)
           </Button>

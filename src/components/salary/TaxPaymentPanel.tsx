@@ -289,8 +289,8 @@ export function TaxPaymentPanel({
             />
           )}
           {payable && (
-            <Button onClick={handleDownload} disabled={marking} loading={downloading}>
-              {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
+            <Button variant="outline" onClick={handleDownload} disabled={marking} loading={downloading}>
+              {!downloading && <ArrowDownTrayIcon className="h-4 w-4" />}
               {t('tax_download_button')}
             </Button>
           )}
@@ -301,7 +301,7 @@ export function TaxPaymentPanel({
               disabled={downloading}
               loading={marking}
             >
-              {!marking && <CheckCircleIcon className="mr-2 h-4 w-4" />}
+              {!marking && <CheckCircleIcon className="h-4 w-4" />}
               {t('tax_mark_paid_button')}
             </Button>
           )}

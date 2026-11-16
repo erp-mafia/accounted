@@ -83,7 +83,7 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
  */
 type View = 'loading' | 'list' | 'thread' | 'compose' | 'email' | 'sent'
 
-const SECTION_LABEL_CLASS = 'mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+const SECTION_LABEL_CLASS = 'mb-2 text-xs font-medium text-muted-foreground'
 
 const POLL_MS = 20_000
 
@@ -451,7 +451,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             >
               {x.lastMessage || t('no_messages')}
             </span>
-            <span className="mt-1 flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+            <span className="mt-1 flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
               {t('ticket_label', { date: fmtDay(x.createdAt) })}
               {fresh && (
                 <span className="inline-flex items-center gap-1 text-foreground">
@@ -471,7 +471,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     list.length > 0 && (
       <section>
         <p className={SECTION_LABEL_CLASS}>{label}</p>
-        <ul className="overflow-hidden rounded-lg border border-border divide-y divide-border">{list.map(ticketRow)}</ul>
+        <ul className="overflow-hidden divide-y divide-border">{list.map(ticketRow)}</ul>
       </section>
     )
 
@@ -532,7 +532,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           {attachments.map((file, index) => (
             <li
               key={`${file.name}-${file.size}-${index}`}
-              className="ph-no-capture flex min-w-0 items-center gap-2 rounded-lg border border-border px-3 py-1"
+              className="ph-no-capture flex min-w-0 items-center gap-2 rounded-lg px-3 py-1 bg-control shadow-raised"
             >
               <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate text-xs">
@@ -570,12 +570,11 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         <Button
           type="button"
           variant="outline"
-          size="sm"
           disabled={isSending || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
           loading={isPreparing}
           onClick={() => fileInputRef.current?.click()}
         >
-          {!isPreparing && <PaperClipIcon className="mr-2 h-3.5 w-3.5" />}
+          {!isPreparing && <PaperClipIcon className="h-3.5 w-3.5" />}
           {t('attach_label')}
         </Button>
         <span className="text-xs text-muted-foreground">
@@ -602,7 +601,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         >
           {isSending ? t('sending') : (
             <>
-              <PaperAirplaneIcon className="mr-2 h-4 w-4" />
+              <PaperAirplaneIcon className="h-4 w-4" />
               {t('send')}
             </>
           )}
@@ -627,7 +626,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           {t('cancel')}
         </Button>
         <Button type="submit" disabled={message.trim().length === 0} loading={isSending}>
-          {!isSending && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+          {!isSending && <PaperAirplaneIcon className="h-4 w-4" />}
           {isSending ? t('sending') : t('reply')}
         </Button>
       </DialogFooter>
@@ -640,13 +639,13 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       {/* Centered in, and capped to, the visual viewport: an on-screen
           keyboard shrinks only that one, so a dialog placed by the layout
           viewport sits half behind the keyboard on a tablet (PH 216). */}
-      <DialogContent
-        ref={panelRef}
-        className="sm:max-w-md"
-        style={dialogViewportStyle(viewport)}
-        onInteractOutside={guardDismiss}
-        onEscapeKeyDown={guardDismiss}
-      >
+      <DialogContent size="confirm"
+ ref={panelRef}
+ 
+ style={dialogViewportStyle(viewport)}
+ onInteractOutside={guardDismiss}
+ onEscapeKeyDown={guardDismiss}
+>
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
           <DialogDescription>
@@ -667,7 +666,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             {ticketSection(t('resolved_section'), resolvedTickets)}
             <DialogFooter>
               <Button type="button" onClick={() => startNewTicket('list')}>
-                <PlusIcon className="mr-2 h-4 w-4" />
+                <PlusIcon className="h-4 w-4" />
                 {t('new_ticket')}
               </Button>
             </DialogFooter>
@@ -691,11 +690,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             <Button
               type="button"
               variant="ghost"
-              size="sm"
               className="-ml-3"
               onClick={() => (composeBack === 'list' ? void showList() : setView('thread'))}
             >
-              <ChevronLeftIcon className="mr-1 h-4 w-4" />
+              <ChevronLeftIcon className="h-4 w-4" />
               {composeBack === 'list' ? t('all_tickets') : t('back_to_ticket')}
             </Button>
           </div>
@@ -710,7 +708,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className="-ml-2 shrink-0"
                   onClick={() => void showList()}
                   aria-label={t('all_tickets')}
@@ -725,7 +723,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                   </span>
                 )}
                 {thread && (
-                  <span className="inline-flex h-5 shrink-0 items-center rounded-full border border-border px-2 text-[11px] text-muted-foreground">
+                  <span className="inline-flex h-5 shrink-0 items-center rounded-md border border-border px-2 text-xs text-muted-foreground">
                     {statusLabel(displayStatus(thread.status, thread.messages))}
                   </span>
                 )}
@@ -734,7 +732,6 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
                   className="-mr-3 shrink-0"
                   onClick={() => startNewTicket('thread')}
                 >
@@ -749,7 +746,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               <div ref={listRef} className="mt-3 flex max-h-[45dvh] flex-col gap-3 overflow-y-auto pr-1">
                 {thread?.messages.map((m) => (
                   <div key={m.id} className={cn('flex flex-col gap-1', m.from === 'me' ? 'items-end' : 'items-start')}>
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-xs text-muted-foreground">
                       {m.from === 'me' ? t('you') : (m.authorName ?? t('support_name'))}
                     </span>
                     <div
@@ -760,7 +757,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                     >
                       {m.text}
                     </div>
-                    <span className="text-[11px] tabular-nums text-muted-foreground">{fmt(m.createdAt)}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">{fmt(m.createdAt)}</span>
                   </div>
                 ))}
               </div>
@@ -775,7 +772,6 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     className="shrink-0"
                     onClick={() => startNewTicket('thread')}
                   >

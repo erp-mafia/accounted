@@ -11,7 +11,7 @@ import { GMAIL_ACCESS_EMAIL, gmailAccessMailto } from './mail-connections'
  * mail program with the request to us already written. It goes to Accounted
  * on every host, a byrå's branded one included (GMAIL_ACCESS_EMAIL).
  */
-export function RequestGmailAccessButton({ variant = 'default' }: { variant?: 'default' | 'secondary' }) {
+export function RequestGmailAccessButton({ variant = 'default' }: { variant?: 'default' | 'outline' }) {
   const t = useTranslations('mail')
   const company = useCompanyOptional()?.company ?? null
   const name = company?.name ?? ''
@@ -22,7 +22,7 @@ export function RequestGmailAccessButton({ variant = 'default' }: { variant?: 'd
     t('request_access_body', { company: named }),
   )
   return (
-    <Button asChild variant={variant} size="sm">
+    <Button asChild variant={variant}>
       <a href={href}>{t('request_access_action')}</a>
     </Button>
   )

@@ -8,10 +8,11 @@ import { BanknotesIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
@@ -49,6 +50,8 @@ type PaymentAnswer = { outcome: 'booked' | 'needs_review'; journal_entry_id?: st
  */
 export default function SettlementsPage() {
   const t = useTranslations('settlements')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -145,34 +148,42 @@ export default function SettlementsPage() {
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v3_invoices'), href: '/invoices' }}
         title={overview ? tw('title') : t('nav_title')}
         help={<HelpPopover>{tw('help')}</HelpPopover>}
         action={
           canWrite && bookable.length > 0 ? (
-            <Button size="sm" onClick={() => setConfirm({ kind: 'book_all' })}>
+            <Button size="toolbar" onClick={() => setConfirm({ kind: 'book_all' })}>
               {t('payment_book_all', { count: bookable.length })}
             </Button>
           ) : undefined
         }
       />
 
-      {loadFailed && (
-        <div className="flex items-center gap-3 text-[13px] text-muted-foreground">
-          <span>{t('load_failed')}</span>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {t('retry')}
-          </Button>
-        </div>
-      )}
+      {loadFailed && !overview && <LoadError title={t('load_failed')} onRetry={() => void load()} />}
 
       {!overview && !loadFailed && (
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-56" />
-          <Skeleton className="h-32 w-full" />
-        </div>
+        <LateReveal>
+          <Skeleton className="mb-3 h-3 w-40" />
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
       )}
 
-      {overview && attention > 0 && <p className="attn text-[12.5px]">{t('attention', { count: attention })}</p>}
+      {/* A failed reload keeps the lists on screen and takes the place of the
+          softer attention line: one attention line per page. */}
+      {overview && loadFailed ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : (
+        overview && attention > 0 && <p className="attn text-xs">{t('attention', { count: attention })}</p>
+      )}
 
       {empty && <EmptyState icon={BanknotesIcon} title={t('empty_title')} description={tw('empty_description')} />}
 
@@ -181,8 +192,8 @@ export default function SettlementsPage() {
           {/* A provider that has collected nothing yet: no section, the payouts below are all there is. */}
           {overview.collectedPayments.length > 0 && (
             <section className="space-y-3">
-              <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tw('payments_heading')}</h2>
-              <div className="overflow-x-auto">
+              <h2 className="text-xs font-medium text-muted-foreground">{tw('payments_heading')}</h2>
+              <div className="-mx-2 overflow-x-auto">
                 <table className="stagger-enter w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -201,7 +212,7 @@ export default function SettlementsPage() {
                       const status = t(PAYMENT_STATUS_KEYS[payment.status])
                       return (
                         <tr key={payment.id} className={cn('hover:bg-secondary/35', markedPaymentId === payment.id && 'bg-secondary/35')}>
-                          <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(payment.paidAt)}</td>
+                          <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(payment.paidAt)}</td>
                           <td className={TD_CLASS}>
                             <Link href={`/invoices/${payment.invoiceId}`} className="underline-offset-4 hover:underline">
                               {payment.invoiceNumber ?? '-'}
@@ -226,12 +237,12 @@ export default function SettlementsPage() {
                           </td>
                           <td className={cn(TD_CLASS, 'text-right')}>
                             {canWrite && paymentBookable(payment) && (
-                              <Button variant="outline" size="sm" onClick={() => setConfirm({ kind: 'book', payment })}>
+                              <Button variant="outline" onClick={() => setConfirm({ kind: 'book', payment })}>
                                 {t('row_book')}
                               </Button>
                             )}
                             {canWrite && paymentRebookable(payment) && (
-                              <Button variant="ghost" size="sm" onClick={() => setConfirm({ kind: 'rebook', payment })}>
+                              <Button variant="ghost" onClick={() => setConfirm({ kind: 'rebook', payment })}>
                                 {t('payment_rebook')}
                               </Button>
                             )}
@@ -248,12 +259,12 @@ export default function SettlementsPage() {
           <section className="space-y-3">
             {/* Alone on the page the payouts need no heading: the page title names them. */}
             {overview.collectedPayments.length > 0 && (
-              <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('payouts_heading')}</h2>
+              <h2 className="text-xs font-medium text-muted-foreground">{t('payouts_heading')}</h2>
             )}
             {overview.settlements.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">{t('payouts_empty')}</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="stagger-enter w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -276,7 +287,7 @@ export default function SettlementsPage() {
                           onClick={() => openSettlement(settlement.id)}
                           title={reasonKey ? tw(reasonKey) : undefined}
                         >
-                          <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(settlement.paymentDate)}</td>
+                          <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(settlement.paymentDate)}</td>
                           <td className={TD_CLASS}>
                             <button
                               type="button"

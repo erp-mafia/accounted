@@ -1,15 +1,18 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react'
+import { useState, useMemo, useCallback, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useArticles } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { ListPageSkeleton } from '@/components/common/ListPageSkeleton'
 import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
 import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
@@ -20,10 +23,10 @@ import {
   useSubmitWithAccountActivation,
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatRowAmount } from '@/lib/utils'
 import { compareArticles } from '@/lib/articles/sort'
 import {
   ALL_CURRENCIES,
@@ -73,13 +76,18 @@ function ArticlesPageInner() {
   // The register from the session cache (lib/reference-data), inactive
   // articles included; /api/articles pages past PostgREST's 1000-row cap,
   // which the direct select here did not. A create refreshes every picker.
-  const { articles, isLoading, error: articlesError } = useArticles({ includeInactive: true })
+  const { articles, isLoading, error: articlesError, refresh: refreshArticles } = useArticles({ includeInactive: true })
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(articlesError) && articles.length === 0
+  const refreshFailed = Boolean(articlesError) && articles.length > 0
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const t = useTranslations('articles')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
@@ -96,15 +104,6 @@ function ArticlesPageInner() {
     'article_number',
     resetVisible,
   )
-
-  useEffect(() => {
-    if (!articlesError) return
-    toast({
-      title: t('load_failed_title'),
-      description: t('load_failed_description'),
-      variant: 'destructive',
-    })
-  }, [articlesError, toast, t])
 
   // Create runs through useSubmitWithAccountActivation so an ACCOUNTS_NOT_IN_CHART
   // response (revenue account not yet activated) opens the standard
@@ -214,54 +213,47 @@ function ArticlesPageInner() {
     <div className="space-y-8">
       {/* Page header (concept scene 27): title + import/export menu + Ny artikel */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <h1 className="page-header-title">{t('title')}</h1>
+        <PageHeaderActions className="flex flex-wrap items-center justify-end gap-2">
           <RegisterActionsMenu entity="articles" />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                size="sm"
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                ) : (
-                  <LockClosedIcon className="mr-2 h-4 w-4" />
-                )}
-                {t('new_article')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_article')}</DialogTitle>
-              </DialogHeader>
-              <ArticleForm
-                onSubmit={handleCreateArticle}
-                isLoading={isCreating}
-                onCancel={() => setIsDialogOpen(false)}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setIsDialogOpen(true)}
+          >
+            {canWrite ? (
+              <PlusIcon className="h-4 w-4" />
+            ) : (
+              <LockClosedIcon className="h-4 w-4" />
+            )}
+            {t('new_article')}
+          </Button>
+          {/* A small record is created in a drawer over its list (V7 creation
+              forms): the list stays in place behind it. */}
+          <CreateDrawer
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            title={t('new_article')}
+            formId="create-article-form"
+            submitLabel={t('create_submit')}
+            submitting={isCreating}
+          >
+            <ArticleForm
+              onSubmit={handleCreateArticle}
+              isLoading={isCreating}
+              formId="create-article-form"
+            />
+          </CreateDrawer>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: search, plus the currency scope far right (convention 8) */}
+      {/* Toolbar: the currency filter, then search at the right end (V7 list toolbars) */}
       <div className="flex flex-wrap items-center gap-2">
-        <ToolbarSearch
-          containerClassName="min-w-[190px]"
-          placeholder={t('search_placeholder')}
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value)
-            setVisibleCount(SHOW_MORE_STEP)
-          }}
-        />
         {/* A single-currency register needs no scope: the chip would be a
             control with one meaningful position. */}
         {availableCurrencies.length > 1 && (
           <ContextPicker
-            className="ml-auto"
             ariaLabel={t('currency_filter_aria')}
             value={currencyFilter}
             onChange={updateCurrencyFilter}
@@ -276,46 +268,69 @@ function ArticlesPageInner() {
             ]}
           />
         )}
+        <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(SHOW_MORE_STEP)
+          }}
+        />
       </div>
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshArticles() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-20 md:block" />
+              <Skeleton className="hidden h-3.5 w-10 sm:block" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="hidden h-3.5 w-10 sm:block" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshArticles()} />
       ) : sortedArticles.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={CubeIcon}
-            title={t('no_search_results_title')}
-            description={
-              // The currency scope is part of why nothing matched, so it has to
-              // be named: otherwise the register reads as empty of the term
-              // when it is only empty inside the active scope.
-              // data-ph-mask: the search term is what the user typed.
-              <span data-ph-mask="">
-                {currencyFilter === ALL_CURRENCIES
-                  ? t('no_search_results_description', { term: searchTerm })
-                  : t('no_search_results_in_currency_description', {
-                      term: searchTerm,
-                      currency: currencyFilter,
-                    })}
-              </span>
-            }
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            {/* The currency scope is part of why nothing matched, so it has to
+                be named: otherwise the register reads as empty of the term
+                when it is only empty inside the active scope.
+                data-ph-mask: the search term is what the user typed. */}
+            <span data-ph-mask="">
+              {currencyFilter === ALL_CURRENCIES
+                ? t('no_search_results_description', { term: searchTerm })
+                : t('no_search_results_in_currency_description', {
+                    term: searchTerm,
+                    currency: currencyFilter,
+                  })}
+            </span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : (
           <EmptyState
             icon={CubeIcon}
             title={t('empty_title')}
             description={t('empty_description')}
-            actionLabel={canWrite ? t('empty_action') : undefined}
+            actionLabel={canWrite ? t('new_article') : undefined}
             onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
           />
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -362,7 +377,7 @@ function ArticlesPageInner() {
                       {article.unit}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                      {formatCurrency(article.price_excl_vat, article.currency)}
+                      {formatRowAmount(article.price_excl_vat, article.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                       {article.vat_rate} %
@@ -399,21 +414,7 @@ function ArticlesPageInner() {
 
 export default function ArticlesPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="space-y-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <Skeleton className="h-9 w-40" />
-            <Skeleton className="h-10 w-32" />
-          </div>
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<ListPageSkeleton />}>
       <ArticlesPageInner />
     </Suspense>
   )

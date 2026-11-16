@@ -29,7 +29,7 @@ import {
 } from '@/lib/reminders/batch-dialog'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { AutomaticRemindersControl } from './AutomaticRemindersControl'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 
 /**
  * The daily reminder batch (accounted#104, phase 2): the overdue invoices
@@ -82,7 +82,7 @@ async function callBatch<T>(
 
 const HEAD = 'h-8 px-2'
 const CELL = 'px-2 py-2 align-top text-[13px]'
-const LABEL = 'text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+const LABEL = 'text-xs font-medium text-muted-foreground'
 
 /** One invoice under the table (left out today, or skipped at the send): its number, the customer, and why. */
 function InvoiceWithReason({ invoiceId, number, customer, reason }: { invoiceId: string; number: string; customer: string | null; reason: string }) {
@@ -91,7 +91,7 @@ function InvoiceWithReason({ invoiceId, number, customer, reason }: { invoiceId:
       <span className="min-w-0 truncate">
         <Link
           href={`/invoices/${encodeURIComponent(invoiceId)}`}
-          className="tabular-nums underline decoration-border underline-offset-4 transition-colors duration-150 hover:decoration-foreground"
+          className="tabular-nums underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:decoration-foreground"
         >
           {number}
         </Link>
@@ -193,9 +193,9 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
 
   return (
     <Dialog open={open} onOpenChange={(next) => !sending && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-4xl">
+      <DialogContent size="document">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">{title}</DialogTitle>
+          <DialogTitle className="text-lg">{title}</DialogTitle>
           {!result && pending && <DialogDescription>{t('batch_intro')}</DialogDescription>}
         </DialogHeader>
 
@@ -243,7 +243,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
             {items.length > 0 && (
               <section className="space-y-2">
                 {warnings.allKey && (
-                  <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                     {t(warnings.allKey)}
                   </div>
@@ -283,10 +283,10 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                             </TableCell>
                             <TableCell className={cn(CELL, 'max-w-[12rem] truncate')}>{item.customer_name ?? ''}</TableCell>
                             <TableCell className={cn(CELL, 'tabular-nums')}>{item.invoice_number ?? ''}</TableCell>
-                            <TableCell className={cn(CELL, 'tabular-nums')}>{formatDate(item.due_date)}</TableCell>
+                            <TableCell className={cn(CELL, 'date-figures')}>{formatDate(item.due_date)}</TableCell>
                             <TableCell className={CELL}>{t(reminderLevelKey(item.level))}</TableCell>
                             <TableCell className={cn(CELL, 'text-right tabular-nums')}>
-                              {formatCurrency(item.remaining_amount, item.currency)}
+                              {formatRowAmount(item.remaining_amount, item.currency)}
                             </TableCell>
                             <TableCell className={cn(CELL, 'max-w-[14rem] truncate')}>{item.recipient}</TableCell>
                           </TableRow>
@@ -294,7 +294,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                           {warningKey && (
                             <TableRow className={rowClass}>
                               <TableCell className="px-2 pb-2 pt-0" aria-hidden />
-                              <TableCell colSpan={6} className="px-2 pb-2 pt-0 text-[12.5px] text-muted-foreground">
+                              <TableCell colSpan={6} className="px-2 pb-2 pt-0 text-xs text-muted-foreground">
                                 <div className="flex items-center gap-2">
                                   <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                   {t(warningKey)}
@@ -311,7 +311,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
             )}
 
             {view.removed_invoice_ids.length > 0 && (
-              <p className="text-[12.5px] text-muted-foreground">{t('batch_removed_note', { count: view.removed_invoice_ids.length })}</p>
+              <p className="text-xs text-muted-foreground">{t('batch_removed_note', { count: view.removed_invoice_ids.length })}</p>
             )}
 
             {view.excluded.length > 0 && (
@@ -336,7 +336,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                 {ticked.length > 0 ? t('batch_total', { count: ticked.length, amount: totals }) : t('batch_none_ticked')}
               </p>
             )}
-            {pending && !canApprove && <p className="text-[12.5px] text-muted-foreground">{t('batch_admin_only')}</p>}
+            {pending && !canApprove && <p className="text-xs text-muted-foreground">{t('batch_admin_only')}</p>}
           </div>
         )}
 

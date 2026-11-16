@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -69,7 +70,7 @@ async function request<T>(path: string, method: 'GET' | 'PATCH' | 'POST', body: 
   }
 }
 
-const TH = 'px-2 py-1.5 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+const TH = 'px-2 py-1.5 text-left text-xs font-medium text-muted-foreground'
 const TD = 'px-2 py-2 align-top text-[13px]'
 
 export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitted }: Props) {
@@ -123,7 +124,8 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
 
   const items = view?.items ?? []
   const ticked = tickedItems(items, unticked)
-  const canSend = !!view && !sending && batchCanSend({ status: view.status, ticked: ticked.length, typed })
+  const { canWrite, lockedTitle } = useViewerLock()
+  const canSend = canWrite && !!view && !sending && batchCanSend({ status: view.status, ticked: ticked.length, typed })
 
   async function send() {
     if (!view) return
@@ -181,9 +183,9 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
 
   return (
     <Dialog open={open} onOpenChange={(next) => !sending && onOpenChange(next)}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent size="wide">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">{title}</DialogTitle>
+          <DialogTitle className="text-lg">{title}</DialogTitle>
           {!result && view?.status === 'pending' && <DialogDescription>{tp('batch_intro')}</DialogDescription>}
           {availability?.sandbox && <DialogDescription>{tp('sandbox_note')}</DialogDescription>}
         </DialogHeader>
@@ -208,7 +210,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
           <div className="space-y-4">
             {result.outcome.skipped.length > 0 && (
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('batch_skip_heading')}</p>
+                <p className="text-xs font-medium text-muted-foreground">{tp('batch_skip_heading')}</p>
                 <ul className="mt-2 divide-y divide-border border-y border-border" data-ph-mask="">
                   {skipLines(result.outcome, result.items).map((line) => (
                     <li key={line.invoice_id} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-4 py-2 text-[13px]">
@@ -231,11 +233,11 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
 
             {groupBatchItems(items).map((group) => (
               <section key={group.kind}>
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp(group.labelKey)}</p>
+                <p className="text-xs font-medium text-muted-foreground">{tp(group.labelKey)}</p>
                 <div className="mt-1.5 overflow-x-auto">
                   <table className="w-full min-w-[34rem] border-y border-border" data-ph-mask="">
                     <thead>
-                      <tr className="border-b border-border">
+                      <tr className="border-b-hairline">
                         <th className="w-8 px-2 py-1.5" aria-hidden />
                         <th className={TH}>{tp('batch_col_invoice')}</th>
                         <th className={TH}>{tp('batch_col_customer')}</th>
@@ -261,7 +263,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
                             </td>
                             <td className={cn(TD, 'tabular-nums')}>{item.invoice_number ?? ''}</td>
                             <td className={cn(TD, 'max-w-[12rem] truncate')}>{item.customer_name ?? ''}</td>
-                            <td className={cn(TD, 'tabular-nums')}>{formatDate(item.due_date)}</td>
+                            <td className={cn(TD, 'date-figures')}>{formatDate(item.due_date)}</td>
                             <td className={cn(TD, 'text-right tabular-nums')}>{formatKronor(item.remaining_amount)}</td>
                             <td className={TD}>{stepLabel(item)}</td>
                             {group.kind !== 'approve_step' && <td className={TD}>{feeLabel(item)}</td>}
@@ -275,12 +277,12 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
             ))}
 
             {view.removed.length > 0 && (
-              <p className="text-[12.5px] text-muted-foreground">{tp('batch_removed_note', { count: view.removed.length })}</p>
+              <p className="text-xs text-muted-foreground">{tp('batch_removed_note', { count: view.removed.length })}</p>
             )}
 
             {view.excluded.length > 0 && (
               <section>
-                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('batch_excluded_heading')}</p>
+                <p className="text-xs font-medium text-muted-foreground">{tp('batch_excluded_heading')}</p>
                 <ul className="mt-1.5 divide-y divide-border border-y border-border" data-ph-mask="">
                   {sortExcluded(view.excluded).map((row) => {
                     const line = excludedLine(row)
@@ -307,7 +309,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
                   {tp('batch_total', { count: ticked.length, amount: formatKronor(tickedTotal(items, unticked)) })}
                 </p>
                 {ticked.length === 0 && items.length > 0 && (
-                  <p className="text-attn text-[12.5px]">{tp('batch_none_ticked')}</p>
+                  <p className="text-attn text-xs">{tp('batch_none_ticked')}</p>
                 )}
                 <label className="block space-y-1.5 text-[13px]">
                   <span>{tp('batch_confirm_label', { word: BATCH_CONFIRMATION_WORD })}</span>
@@ -336,7 +338,7 @@ export function HandoverBatchDialog({ operationId, open, onOpenChange, onCommitt
                 {tp('send_cancel')}
               </Button>
               {view?.status === 'pending' && (
-                <Button onClick={() => void send()} loading={sending} disabled={!canSend}>
+                <Button onClick={() => void send()} loading={sending} disabled={!canSend} title={lockedTitle}>
                   {tp('batch_confirm', { count: ticked.length })}
                 </Button>
               )}

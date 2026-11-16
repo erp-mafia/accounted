@@ -17,11 +17,13 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 interface TransactionFormProps {
   onSubmit: (data: CreateTransactionInput) => Promise<void>
   isLoading: boolean
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 const currencies: readonly Currency[] = CURRENCIES
 
-export default function TransactionForm({ onSubmit, isLoading }: TransactionFormProps) {
+export default function TransactionForm({ onSubmit, isLoading, formId }: TransactionFormProps) {
   const t = useTranslations('tx_form')
   const schema = useMemo(
     () =>
@@ -75,7 +77,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="date">{t('date_label')}</Label>
@@ -137,7 +139,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -145,9 +147,11 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
         />
       </div>
 
-      <Button type="submit" className="w-full" loading={isLoading}>
-        {isLoading ? t('saving') : t('save')}
-      </Button>
+      {!formId && (
+        <Button type="submit" className="w-full" loading={isLoading}>
+          {isLoading ? t('saving') : t('save')}
+        </Button>
+      )}
     </form>
   )
 }

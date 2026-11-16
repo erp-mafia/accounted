@@ -153,10 +153,10 @@ export function PurchaseCategoryChip({
     <div className="flex flex-wrap items-center gap-2 text-xs">
       {label !== null && <span className="text-muted-foreground">{label ?? t('label')}</span>}
       {current ? (
-        <span className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5">
+        <span className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-md border border-border px-2.5 py-0.5">
           {/* A code this build does not know (an older or newer list) shows as itself, never as a message key. */}
           <span className="min-w-0 truncate">{isPurchaseCategoryCode(current.code) ? tc(purchaseCategoryNameKey(current.code)) : current.code}</span>
-          <span className="shrink-0 text-[11px] text-muted-foreground">{t(LEVEL_KEY[current.level])}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{t(LEVEL_KEY[current.level])}</span>
         </span>
       ) : prompt && !locked ? (
         <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={openDialog}>
@@ -221,7 +221,7 @@ export function PurchaseCategoryChip({
                   />
                   {t('every_time', { supplier: supplierName })}
                 </label>
-                <p id={hintId} className="pl-6 text-[12.5px] text-muted-foreground">
+                <p id={hintId} className="pl-6 text-xs text-muted-foreground">
                   {t('every_time_hint', { supplier: supplierName })}
                 </p>
               </div>

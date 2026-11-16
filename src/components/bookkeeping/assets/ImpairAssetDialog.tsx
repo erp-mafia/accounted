@@ -109,12 +109,12 @@ export function ImpairAssetDialog({ asset, open, onOpenChange, onPosted }: Impai
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('dialog_title', { name: asset.name })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-[12.5px] text-muted-foreground">{t('dialog_hint')}</p>
+          <p className="text-xs text-muted-foreground">{t('dialog_hint')}</p>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="impair-kind">{t('kind_label')}</Label>

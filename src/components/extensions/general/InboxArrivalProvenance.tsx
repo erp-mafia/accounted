@@ -24,7 +24,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 
 // Same budget as the document read beside it: one indexed lookup plus a
@@ -177,7 +178,7 @@ export function InboxArrivalProvenance({
 
   const originals = (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
           <DialogDescription>{t('dialog_description')}</DialogDescription>
@@ -274,21 +275,16 @@ function OriginalsBody({
 
   if (state.status === 'loading' || state.status === 'idle') {
     return (
-      <div className="space-y-2" aria-busy="true">
+      <LateReveal className="space-y-2">
         <Skeleton className="h-4 w-1/2" />
         <Skeleton className="h-4 w-2/3" />
         <Skeleton className="h-32 w-full" />
-      </div>
+      </LateReveal>
     )
   }
   if (state.status === 'error') {
     return (
-      <div className="space-y-2 text-[13px] text-muted-foreground">
-        <p>{t('load_failed')}</p>
-        <button type="button" className={QUIET_LINK_CLASS} onClick={onRetry}>
-          {t('retry')}
-        </button>
-      </div>
+      <LoadError title={t('load_failed')} onRetry={onRetry} />
     )
   }
 
@@ -301,9 +297,9 @@ function OriginalsBody({
       {showable.map((arrival, index) => {
         const line = provenanceLine(arrival, options)
         return (
-          <section key={arrival.id} className={cn('space-y-3', index > 0 && 'border-t border-border pt-6')}>
+          <section key={arrival.id} className={cn('space-y-3', index > 0 && 'border-t-hairline pt-6')}>
             {showable.length > 1 && (
-              <p className="text-[12.5px] text-muted-foreground">{t(line.key, line.values)}</p>
+              <p className="text-xs text-muted-foreground">{t(line.key, line.values)}</p>
             )}
             <OriginalViewBody view={originalViewFor(arrival)} />
           </section>
@@ -331,7 +327,7 @@ function MetaRows({ rows }: { rows: Array<[label: string, value: string | null |
 /** Every original is signed as a download (Content-Disposition: attachment), so the control says so. */
 function OriginalLink({ url, fileName, children }: { url: string; fileName?: string | null; children: ReactNode }) {
   return (
-    <Button variant="outline" size="sm" asChild>
+    <Button variant="outline" asChild>
       <a href={url} download={fileName ?? true} rel="noopener noreferrer">
         <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-2" />
         {children}
@@ -343,7 +339,7 @@ function OriginalLink({ url, fileName, children }: { url: string; fileName?: str
 function OriginalViewBody({ view }: { view: OriginalView }) {
   const t = useTranslations('inbox_arrivals')
   const locale = useLocale()
-  const unavailable = <p className="text-[12.5px] text-muted-foreground">{t('url_unavailable')}</p>
+  const unavailable = <p className="text-xs text-muted-foreground">{t('url_unavailable')}</p>
 
   if (view.kind === 'mail') {
     return (
@@ -358,14 +354,14 @@ function OriginalViewBody({ view }: { view: OriginalView }) {
           ]}
         />
         {view.text ? (
-          <pre className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border p-4 font-sans text-[13px] leading-relaxed">
+          <pre className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap break-words p-4 font-sans text-[13px] leading-relaxed">
             {view.text}
           </pre>
         ) : (
           <p className="text-[13px] text-muted-foreground">{t('mail_no_text')}</p>
         )}
         {!view.kept ? (
-          <p className="text-[12.5px] text-muted-foreground">{t('mail_not_kept')}</p>
+          <p className="text-xs text-muted-foreground">{t('mail_not_kept')}</p>
         ) : view.url ? (
           <OriginalLink url={view.url} fileName={view.fileName}>
             {t('mail_download')}
@@ -388,7 +384,7 @@ function OriginalViewBody({ view }: { view: OriginalView }) {
             [t('einvoice_date'), formatDateTime(view.receivedAt), true],
           ]}
         />
-        <p className="text-[12.5px] text-muted-foreground">{t('einvoice_note')}</p>
+        <p className="text-xs text-muted-foreground">{t('einvoice_note')}</p>
         {view.url ? (
           <OriginalLink url={view.url} fileName={view.fileName}>
             {t('einvoice_download')}

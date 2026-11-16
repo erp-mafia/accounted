@@ -19,7 +19,8 @@ import { Button } from '@/components/ui/button'
 import { formatDate } from '@/lib/utils'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -113,6 +114,10 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const { appName } = useBranding()
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
+  // The read failed: never show the empty form then, since a save from it
+  // would write over balances that exist but did not load.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const [locked, setLocked] = useState(false)
   const [lockedByRunId, setLockedByRunId] = useState<string | null>(null)
@@ -148,9 +153,13 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   useEffect(() => {
     async function load() {
       setLoading(true)
+      setLoadFailed(false)
       try {
         const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
-        if (!res.ok) return
+        if (!res.ok) {
+          setLoadFailed(true)
+          return
+        }
         const body = (await res.json()) as {
           data: OpeningBalancesData | null
           locked?: boolean
@@ -201,14 +210,13 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           setBaseline(fingerprint(values))
         }
       } catch {
-        // Network failure: the panel falls back to its empty form rather
-        // than holding the skeleton forever; a retry happens on remount.
+        setLoadFailed(true)
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [employeeId])
+  }, [employeeId, reloadKey])
 
   const currentValues: PanelValues = {
     cutoverDate,
@@ -277,10 +285,18 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   if (loading) {
     return (
       <DetailSection kicker={t('opening_balances_title')}>
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      </DetailSection>
+    )
+  }
+
+  if (loadFailed) {
+    return (
+      <DetailSection kicker={t('opening_balances_title')}>
+        <LoadError onRetry={() => setReloadKey((key) => key + 1)} />
       </DetailSection>
     )
   }
@@ -332,7 +348,6 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           <Button
             type="button"
             variant="outline"
-            size="sm"
             className="-my-1"
             aria-expanded={open}
             onClick={() => setExpanded(!open)}
@@ -510,7 +525,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
 
         {!readOnly && (
           <div className="mt-4 flex justify-end">
-            <Button type="submit" size="sm" disabled={saving || !dirty}>
+            <Button type="submit" disabled={saving || !dirty}>
               {saving
                 ? t('opening_balances_saving')
                 : hasRow

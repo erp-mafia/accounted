@@ -224,7 +224,7 @@ export function AddPayslipLineDialog({
         if (!next && !submitting) reset()
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('add_line')}</DialogTitle>
           <DialogDescription>{t('add_line_help')}</DialogDescription>

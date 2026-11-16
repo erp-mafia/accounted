@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews, type PostingLineLike, type VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -72,9 +72,9 @@ export function VacationLiabilityConfirmDialog({
   const tCommon = useTranslations('common')
   return (
     <Dialog open={open} onOpenChange={(next) => !confirming && onOpenChange(next)}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">{title}</DialogTitle>
+          <DialogTitle className="text-lg">{title}</DialogTitle>
           {state.kind === 'ready' && (
             <DialogDescription data-ph-mask="" className="text-[13px] leading-relaxed">
               {state.description}
@@ -85,11 +85,11 @@ export function VacationLiabilityConfirmDialog({
           )}
         </DialogHeader>
         {state.kind === 'loading' && (
-          <div className="space-y-2" aria-busy="true">
+          <LateReveal className="space-y-2">
             {[1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-4 w-full" />
             ))}
-          </div>
+          </LateReveal>
         )}
         {state.kind === 'ready' && state.lines.length > 0 && (
           <div className="overflow-x-auto" data-ph-mask="">

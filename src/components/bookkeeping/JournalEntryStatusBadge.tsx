@@ -80,7 +80,7 @@ export default function JournalEntryStatusBadge({ entry, showStatus = true }: Pr
     <span className="inline-flex items-center gap-1">
       {showStatus && statusVariant !== undefined && statusLabelKey && (
         statusVariant ? (
-          <Badge variant={statusVariant} className="text-[11px] px-1.5 py-0">
+          <Badge variant={statusVariant} className="text-xs px-1.5 py-0">
             {t(statusLabelKey)}
           </Badge>
         ) : (
@@ -88,7 +88,7 @@ export default function JournalEntryStatusBadge({ entry, showStatus = true }: Pr
         )
       )}
       {sourceVariant && sourceLabelKey && (
-        <Badge variant={sourceVariant} className="text-[11px] px-1.5 py-0">
+        <Badge variant={sourceVariant} className="text-xs px-1.5 py-0">
           {t(sourceLabelKey)}
         </Badge>
       )}

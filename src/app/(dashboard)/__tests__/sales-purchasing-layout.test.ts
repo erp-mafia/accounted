@@ -13,17 +13,15 @@ const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8')
 describe('sales and purchasing layout', () => {
   it('orders table bleeds exactly the panel padding (16px phone, 24px desktop)', () => {
     const src = read('app/(dashboard)/orders/page.tsx')
-    expect(src).toContain('-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6')
+    // Stil v3: the inner padding is 8px less than the panel padding (the 8px list bleed).
+    expect(src).toContain('-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4')
     expect(src).not.toMatch(/-mx-5|md:-mx-8/)
   })
 
   it.each([
-    'app/(dashboard)/customers/[id]/page.tsx',
-    'app/(dashboard)/suppliers/[id]/page.tsx',
-    'app/(dashboard)/supplier-invoices/[id]/page.tsx',
-    'app/(dashboard)/sales-orders/[id]/page.tsx',
+    // The customer, supplier, invoice, supplier invoice and order pages share it.
+    'components/ui/record-header.tsx',
     'app/(dashboard)/articles/[id]/page.tsx',
-    'app/(dashboard)/invoices/[id]/page.tsx',
   ])('%s top bar wraps its actions on a phone', (rel) => {
     expect(read(rel)).toContain('className="page-header page-header-wrap ')
   })

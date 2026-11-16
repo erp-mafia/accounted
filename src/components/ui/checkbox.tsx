@@ -12,7 +12,10 @@ const Checkbox = React.forwardRef<
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
-      "peer h-4 w-4 shrink-0 rounded-sm border border-input transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 focus-visible:border-primary/60 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground hover:border-primary/50",
+      // Stil v3: a 16px box on the control surface with a hairline ring at
+      // rest (strong enough for 3:1 against the panel), filled ink when
+      // checked; the check is drawn 1.8px.
+      "peer h-4 w-4 shrink-0 rounded-sm bg-control shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.45)] transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40 data-[state=checked]:bg-primary/88 data-[state=checked]:text-primary-foreground data-[state=checked]:shadow-none data-[state=indeterminate]:bg-primary/88 data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:shadow-none",
       className
     )}
     {...props}
@@ -20,7 +23,7 @@ const Checkbox = React.forwardRef<
     <CheckboxPrimitive.Indicator
       className={cn("flex items-center justify-center text-current")}
     >
-      <CheckIcon className="h-3 w-3" strokeWidth={2.25} />
+      <CheckIcon className="h-3 w-3" strokeWidth={1.8} />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ))

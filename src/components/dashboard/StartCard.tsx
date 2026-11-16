@@ -9,19 +9,16 @@ import { START_CARDS, type StartCardName } from './startkort-assets'
 
 // The start card is a self-contained dark surface: like LedgerGraph it carries
 // its own palette in both themes, because the strata image bakes its ground
-// color into the pixels. Warm white type and a white primary pill sit on top.
+// color into the pixels. Warm white type and a white primary sit on top.
 // Gradients here are image scrims inside a hero surface, not card chrome
-// (see DECISIONS.md 2026-08-13), and rounded-xl is the hero-surface allowance.
+// (see DECISIONS.md 2026-08-13).
 const TITLE_COLOR = '#FAF8F1'
 const BODY_COLOR = 'rgba(247, 244, 236, 0.72)'
 const EYEBROW_COLOR = 'rgba(247, 244, 236, 0.52)'
-// The rest of the self-contained palette, exposed as custom properties on the
-// card root so the action pills and the dismiss button read them by name.
-const CARD_PALETTE = {
-  '--startcard-ink': '#1A1410',
-  '--startcard-cream': '#F7F4EC',
-  '--startcard-dismiss': '#EBE5D3',
-} as CSSProperties
+const INK_COLOR = '#1A1410'
+const CREAM_COLOR = '#F7F4EC'
+// The focus ring sits on the image, so it is light, not the page's ring.
+const ON_IMAGE_FOCUS = 'focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
 
 interface StartCardAction {
   label: string
@@ -36,8 +33,10 @@ interface StartCardProps {
   layout: 'side-right' | 'bleed-left' | 'center'
   title: string
   body: string
+  /** A short kicker above the title ("Kom igång"). */
   eyebrow?: string
   primary: StartCardAction
+  /** A second, quieter way in, drawn as a text link. */
   secondary?: StartCardAction
   /** Floating channel badges over the right half (Underlag). */
   floatIcons?: boolean
@@ -48,20 +47,31 @@ interface StartCardProps {
   className?: string
 }
 
+// The Stil v3 button shapes (6px, the toolbar height, a text link for the
+// second way in) in the card's own colours: the primary is the light chip, as
+// on the dark theme.
 function ActionButton({ action, kind }: { action: StartCardAction; kind: 'primary' | 'secondary' }) {
-  const styles =
+  const props =
     kind === 'primary'
-      ? 'bg-white text-[var(--startcard-ink)] hover:bg-white/90 active:bg-white/90 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
-      : 'border border-white/30 bg-transparent text-[var(--startcard-cream)] hover:bg-white/10 active:bg-white/10 focus-visible:ring-white/60 focus-visible:ring-offset-transparent'
+      ? {
+          size: 'toolbar' as const,
+          className: cn('bg-white hover:bg-white/90 active:bg-white/90', ON_IMAGE_FOCUS),
+          style: { color: INK_COLOR },
+        }
+      : {
+          variant: 'link' as const,
+          className: cn('decoration-white/30 hover:decoration-white/70', ON_IMAGE_FOCUS),
+          style: { color: CREAM_COLOR },
+        }
   if (action.href) {
     return (
-      <Button asChild className={styles}>
+      <Button asChild {...props}>
         <Link href={action.href}>{action.label}</Link>
       </Button>
     )
   }
   return (
-    <Button className={styles} onClick={action.onClick}>
+    <Button {...props} onClick={action.onClick}>
       {action.label}
     </Button>
   )
@@ -137,6 +147,16 @@ const FLOAT_BADGES: Array<{ style: CSSProperties; icon: ReactNode }> = [
   },
 ]
 
+/**
+ * The first-time state of a page that has nothing yet: the painted start card
+ * (Bokföring, Kundfakturor, Löner, Skattekonto, Transaktioner, Underlag). Stil
+ * v3 keeps the painting (founder call 2026-11-02) and brings the rest to the
+ * system: Inter titles (Hedvig is for numbers), a sentence-case eyebrow, the
+ * 6px toolbar-height primary, a text link for the second way in and the 8px
+ * radius of a single object. One sentence, one primary, at most one link, as
+ * every v3 state. The ongoing empty, done and error states stay plain
+ * (EmptyState, LoadError).
+ */
 export function StartCard({
   card,
   layout,
@@ -169,9 +189,10 @@ export function StartCard({
       : `linear-gradient(90deg, rgba(${g}, 0.8) 0%, rgba(${g}, 0.8) 75%, rgba(${g}, 0) 100%)`
 
   return (
-    <div
-      className={cn('relative flex min-h-[216px] overflow-hidden rounded-xl', className)}
-      style={{ ...CARD_PALETTE, backgroundColor: asset.ground }}
+    <section
+      data-ph-unmask=""
+      className={cn('relative flex min-h-[216px] overflow-hidden rounded-lg', className)}
+      style={{ backgroundColor: asset.ground }}
     >
       {layout === 'side-right' ? (
         <div className="absolute inset-y-0 right-0 w-1/2">
@@ -223,20 +244,24 @@ export function StartCard({
         ))}
 
       {onDismiss && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onDismiss}
           aria-label={dismissLabel}
-          className="absolute right-4 top-3 z-[3] p-1 text-[var(--startcard-dismiss)]/50 transition-colors duration-150 hover:text-[var(--startcard-dismiss)]"
+          className={cn(
+            'absolute right-3 top-3 z-[3] text-white/55 hover:bg-white/10 hover:text-white active:bg-white/10 active:text-white',
+            ON_IMAGE_FOCUS,
+          )}
         >
-          <XMarkIcon className="h-4 w-4" />
-        </button>
+          <XMarkIcon className="h-3.5 w-3.5" />
+        </Button>
       )}
 
       <div
         className={cn(
           'relative z-[2] flex flex-col justify-center',
-          dense ? 'px-6 py-4' : 'px-7 py-5',
+          dense ? 'px-5 py-4' : 'px-6 py-5',
           layout === 'center'
             ? 'mx-auto max-w-[70%] items-center text-center'
             : floatIcons
@@ -245,27 +270,21 @@ export function StartCard({
         )}
       >
         {eyebrow && (
-          <div
-            className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em]"
-            style={{ color: EYEBROW_COLOR }}
-          >
+          <div className="mb-1.5 text-xs font-medium" style={{ color: EYEBROW_COLOR }}>
             {eyebrow}
           </div>
         )}
-        <h2
-          className={cn('font-display text-balance', dense ? 'text-xl leading-snug' : 'text-2xl leading-tight')}
-          style={{ color: TITLE_COLOR }}
-        >
+        <h2 className={cn('text-balance', dense ? 'text-lg' : 'text-xl')} style={{ color: TITLE_COLOR }}>
           {title}
         </h2>
-        <p className="mb-4 mt-2 text-[13px] leading-relaxed" style={{ color: BODY_COLOR }}>
+        <p className="mb-4 mt-1.5 text-pretty text-sm" style={{ color: BODY_COLOR }}>
           {body}
         </p>
-        <div className={cn('flex flex-wrap gap-2', layout === 'center' && 'justify-center')}>
+        <div className={cn('flex flex-wrap items-center gap-4', layout === 'center' && 'justify-center')}>
           <ActionButton action={primary} kind="primary" />
           {secondary && <ActionButton action={secondary} kind="secondary" />}
         </div>
       </div>
-    </div>
+    </section>
   )
 }

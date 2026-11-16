@@ -8,11 +8,11 @@ import { cn, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
-import { FyPicker } from '@/components/common/FyPicker'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
-import type { FiscalPeriod } from '@/types'
 import { AccountOverview, type ReconciliationWindow } from './AccountOverview'
 import { ManualMatchMode } from './ManualMatchMode'
 
@@ -24,32 +24,40 @@ import { ManualMatchMode } from './ManualMatchMode'
  * account the list does not know goes back there too. The open account lives
  * in the URL so a link lands on the right account and a reload keeps it.
  *
- * The period (räkenskapsår + range within it) scopes the bank bridge and the
- * item windows and sets the default sign-off date. It keeps its own preset
- * memory, separate from the reports: reconciling is a monthly ritual, so it
- * opens on this month rather than on whatever range a report left behind.
+ * The period (the app-wide räkenskapsår + a range within it) scopes the bank
+ * bridge and the item windows and sets the default sign-off date. The range
+ * keeps its own preset memory, separate from the reports: reconciling is a
+ * monthly ritual, so it opens on this month rather than on whatever range a
+ * report left behind.
  */
 
-const FY_STORAGE_KEY_PREFIX = 'Accounted:recon-fy:'
 const RANGE_STORAGE_KEY_PREFIX = 'Accounted:recon-page-range-preset:'
 const ACCOUNTS_HREF = '/accounts'
 
-interface ReconciliationWorkspaceProps {
-  initialPeriods: FiscalPeriod[]
-  initialCompanyId: string | null
-}
-
-export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: ReconciliationWorkspaceProps) {
+export function ReconciliationWorkspace() {
   const t = useTranslations('reconciliation')
+  const tCommon = useTranslations('common')
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [accounts, setAccounts] = useState<ReconciliationAccount[] | null>(null)
   const [loadError, setLoadError] = useState(false)
-  const [periodId, setPeriodId] = useState<string | null>(null)
-  const [periodBounds, setPeriodBounds] = useState<{ start: string; end: string } | null>(null)
+  // The year is app-wide context (the sidebar); reconciling needs one started year.
+  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const periodBounds = useMemo(
+    () => (period ? { start: period.period_start, end: period.period_end } : null),
+    [period],
+  )
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
+  // Another year starts on its own default range (adjusting state during render).
+  const [shownPeriodId, setShownPeriodId] = useState(periodId)
+  if (periodId !== shownPeriodId) {
+    setShownPeriodId(periodId)
+    setDateRange({})
+  }
   const [signoffSlot, setSignoffSlot] = useState<HTMLSpanElement | null>(null)
+  const [primarySlot, setPrimarySlot] = useState<HTMLSpanElement | null>(null)
 
   // The effective window: the range within the period, defaulting to the
   // period bounds. Null until the period picker has resolved.
@@ -106,6 +114,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
 
   const header = (
     <PageHeader
+      parent={flowAccount ? { label: tNav('v3_accounts_balance'), href: ACCOUNTS_HREF } : undefined}
       title={
         flowAccount ? (
           <span className="flex items-baseline gap-2">
@@ -132,23 +141,6 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
           <button type="button" onClick={closeFlow} className={cn(QUIET_LINK_CLASS, 'mr-1')}>
             {t('v2_close')}
           </button>
-          {/* On a phone the bar holds one picker: the month is the one a
-              person changes while reconciling; the year waits for a wider screen. */}
-          <div className="hidden sm:block">
-            <FyPicker
-              value={periodId}
-              onChange={(id, period) => {
-                setPeriodId(id)
-                setPeriodBounds(period ? { start: period.period_start, end: period.period_end } : null)
-                setDateRange({})
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-              initialPeriods={initialPeriods}
-              initialCompanyId={initialCompanyId}
-              storageKeyPrefix={FY_STORAGE_KEY_PREFIX}
-            />
-          </div>
           {periodBounds && (
             <ReportDateRange
               periodStart={periodBounds.start}
@@ -159,16 +151,19 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
               storageKeyPrefix={RANGE_STORAGE_KEY_PREFIX}
             />
           )}
+          {/* AccountOverview renders the page's primary (Markera som avstämd) here. */}
+          <span ref={setPrimarySlot} className="contents" />
         </div>
       }
     />
   )
 
-  if (loadError) {
+  // Nothing on screen yet: the load failure says so in place of the account.
+  if (loadError && !accounts) {
     return (
       <div className="space-y-6">
         {header}
-        <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>{t('load_failed')}</AttnLine>
+        <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
       </div>
     )
   }
@@ -178,14 +173,14 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       <div className="space-y-6" aria-busy>
         {header}
         {/* Shaped like the account's strip of figures it resolves into. */}
-        <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
+        <LateReveal className="grid grid-cols-2 gap-6 border-b-hairline pb-4 md:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="space-y-2">
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-6 w-28" />
             </div>
           ))}
-        </div>
+        </LateReveal>
       </div>
     )
   }
@@ -193,6 +188,10 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
   return (
     <div className="space-y-6">
       {header}
+      {/* A failed refresh keeps the account on screen under one line. */}
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
       {mode === 'match' ? (
         <div className="min-w-0 space-y-4">
           <button type="button" onClick={() => setMode('overview')} className={QUIET_LINK_CLASS}>
@@ -209,6 +208,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
           onChanged={() => void load()}
           onMatchManually={flowAccount.kind === 'manual' ? undefined : () => setMode('match')}
           headerSlot={signoffSlot}
+          primarySlot={primarySlot}
         />
       )}
     </div>

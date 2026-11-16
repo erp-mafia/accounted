@@ -23,7 +23,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
@@ -97,6 +99,9 @@ export function SkattekontoMatchDialog({
   // Matcha manuellt, never the default "use Bokför" (crm#1043).
   const [covered, setCovered] = useState(false)
   const [loading, setLoading] = useState(false)
+  // The candidate search failed: said in the dialog with "Försök igen" (Stil v3 states).
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [submittingId, setSubmittingId] = useState<string | null>(null)
   const group = rows && rows.length > 1 ? rows : null
   const groupTotal = group
@@ -136,6 +141,7 @@ export function SkattekontoMatchDialog({
     }
     let cancelled = false
     setLoading(true)
+    setLoadError(null)
     ;(async () => {
       try {
         const res = await fetch(...request)
@@ -145,24 +151,14 @@ export function SkattekontoMatchDialog({
           // Map the parsed body plus the status, never `new Error(json.error)`:
           // the Error constructor stringifies a non-string body field, and the
           // mapper would discard the route's own Swedish reason.
-          toast({
-            title: t('fetch_candidates_failed_title'),
-            description: getUserErrorMessage(json, { statusCode: res.status }),
-            variant: 'destructive',
-          })
-          onClose()
+          setLoadError(getUserErrorMessage(json, { statusCode: res.status }))
           return
         }
         setCandidates(json.data.candidates as MatchCandidate[])
         setCovered(Boolean(json.data.ledger_cover))
       } catch (err) {
         if (cancelled) return
-        toast({
-          title: t('fetch_candidates_failed_title'),
-          description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-          variant: 'destructive',
-        })
-        onClose()
+        setLoadError(err instanceof Error ? getUserErrorMessage(err) : t('fetch_candidates_failed_title'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -170,7 +166,7 @@ export function SkattekontoMatchDialog({
     return () => {
       cancelled = true
     }
-  }, [open, row, group, toast, onClose, t])
+  }, [open, row, group, loadAttempt, t])
 
   async function confirmMatch(candidate: MatchCandidate) {
     const primary = group ? group[0] : row
@@ -219,7 +215,7 @@ export function SkattekontoMatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle>{t('title')}</DialogTitle>
@@ -253,9 +249,23 @@ export function SkattekontoMatchDialog({
         </DialogHeader>
 
         {loading && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {t('searching')}
-          </p>
+          <LateReveal aria-label={t('searching')}>
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-16" />
+                <Skeleton className="h-3.5 w-48" />
+              </div>
+            ))}
+          </LateReveal>
+        )}
+
+        {!loading && loadError && (
+          <LoadError
+            title={t('fetch_candidates_failed_title')}
+            description={loadError}
+            onRetry={() => setLoadAttempt((n) => n + 1)}
+          />
         )}
 
         {!loading && candidates && candidates.length === 0 && covered && (
@@ -278,7 +288,7 @@ export function SkattekontoMatchDialog({
         )}
 
         {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
+          <div className="max-h-[420px] overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -292,24 +302,24 @@ export function SkattekontoMatchDialog({
               <TableBody>
                 {candidates.map(c => (
                   <TableRow key={candidateKey(c)}>
-                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
+                    <TableCell className="date-figures">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px]">
+                    <TableCell className="max-w-[260px] date-figures">
                       <span className="block truncate">{c.description}</span>
                       {c.combined_with && c.combined_with.length > 0 && (
                         /* data-ph-mask: event texts and amounts are user data */
                         <span className="mt-1 block text-xs text-muted-foreground" data-ph-mask="">
                           {t('combined_note', {
                             count: c.combined_with.length,
-                            total: formatCurrency(c.combined_total ?? 0),
+                            total: formatRowAmount(c.combined_total ?? 0),
                             skattekonto: skattekontoAccount,
                           })}
                           {c.combined_with.map((o) => (
                             <span key={o.id} className="block truncate tabular-nums">
                               {formatDate(o.transaktionsdatum)} {o.transaktionstext}{' '}
-                              {formatCurrency(o.belopp_skatteverket)}
+                              {formatRowAmount(o.belopp_skatteverket)}
                             </span>
                           ))}
                         </span>
@@ -332,7 +342,6 @@ export function SkattekontoMatchDialog({
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
-                        size="sm"
                         onClick={() => confirmMatch(c)}
                         disabled={submittingId === candidateKey(c)}
                       >

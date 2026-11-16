@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { SettingsGroup, SettingsRow, SettingsSelect } from '@/components/settings/SettingsRows'
 import { addDaysIso, addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -27,6 +28,7 @@ export function MonthlyFxRevaluationAction() {
   const t = useTranslations('settings_bookkeeping')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const monthEnds = useMemo(() => recentMonthEnds(todayIsoStockholm()), [])
   const [monthEnd, setMonthEnd] = useState(monthEnds[0])
   const [confirming, setConfirming] = useState(false)
@@ -69,7 +71,7 @@ export function MonthlyFxRevaluationAction() {
             </option>
           ))}
         </SettingsSelect>
-        <Button type="button" size="sm" variant="outline" onClick={() => setConfirming(true)}>
+        <Button type="button" variant="outline" onClick={() => setConfirming(true)} disabled={!canWrite} title={lockedTitle}>
           {t('fx_monthly_action')}
         </Button>
       </SettingsRow>

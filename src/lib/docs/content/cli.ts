@@ -36,10 +36,10 @@ The browser opens the Accounted sign-in; the address is printed in the terminal 
 
 Over SSH or in a container, the browser cannot reach the machine the command runs on. Open the printed address in any browser and approve; the browser then ends on a page that cannot load. Copy that page's whole address, paste it into the terminal and press Enter. \`accounted login --no-browser\` skips the browser and goes straight to pasting. The sign-in waits 5 minutes.
 
-The sign-in is saved in \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` when that is set, in \`%APPDATA%\\accounted\` on Windows), readable only by your user. It shows up as a connection under **Settings › API & MCP** (\`/settings/api\`).
+The sign-in is saved in \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` when that is set, in \`%APPDATA%\\accounted\` on Windows), readable only by your user. It shows up as a connection under **Agents › Connect an agent** (\`/settings/api\`).
 
 - \`accounted status\` shows the server, the sign-in and the companies it reaches. It exits with 3 when you are not signed in.
-- \`accounted logout\` removes the sign-in from this computer only. The key keeps working until you disconnect it in Settings › API & MCP; logout prints the key prefix to look for there.
+- \`accounted logout\` removes the sign-in from this computer only. The key keeps working until you disconnect it in Agents › Connect an agent; logout prints the key prefix to look for there.
 - \`accounted login --force\` replaces the sign-in, for example to grant other permissions. Disconnect the old key in Settings afterwards.
 
 ## Find and run tools
@@ -123,7 +123,7 @@ A key may make 100 calls a minute by default. At the limit the CLI exits with 4 
 
 ## API keys for CI and servers
 
-Where nobody can open a browser, use an API key instead of a sign-in. Create one under **Settings › API & MCP** (\`/settings/api\`), keep it in your CI's secret store, and set it as \`ACCOUNTED_API_KEY\`:
+Where nobody can open a browser, use an API key instead of a sign-in. Create one under **Agents › Connect an agent** (\`/settings/api\`), keep it in your CI's secret store, and set it as \`ACCOUNTED_API_KEY\`:
 
 \`\`\`bash
 export ACCOUNTED_API_KEY=gnubok_sk_...

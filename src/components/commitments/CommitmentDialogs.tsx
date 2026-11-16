@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
@@ -60,10 +60,12 @@ function useSubmit(onDone: (created: boolean) => Promise<void> | void) {
   return { saving, submit }
 }
 
-function Field({ id, label, children, wide = false }: { id: string; label: string; children: React.ReactNode; wide?: boolean }) {
+function Field({ id, label, children, wide = false, optional = false }: { id: string; label: string; children: React.ReactNode; wide?: boolean; optional?: boolean }) {
   return (
     <div className={wide ? 'space-y-1 sm:col-span-2' : 'space-y-1'}>
-      <Label htmlFor={id}>{label}</Label>
+      <Label htmlFor={id} optional={optional}>
+        {label}
+      </Label>
       {children}
     </div>
   )
@@ -139,12 +141,11 @@ export function AgreementDialog({
     submit(agreement ? `/api/commitments/agreements/${agreement.agreement_id}` : '/api/commitments/agreements', agreement ? 'PATCH' : 'POST', agreementBody(form))
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{agreement ? t('agreement_edit') : t('agreement_add')}</DialogTitle>
-        </DialogHeader>
-        <div className="grid max-h-[60vh] gap-4 overflow-y-auto sm:grid-cols-2">
+    <SlideOver open onOpenChange={(open) => !open && onClose()}>
+      <SlideOverContent aria-describedby={undefined}>
+        <SlideOverHeader title={agreement ? t('agreement_edit') : t('agreement_add')} />
+        <SlideOverBody>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field id="agreement-kind" label={t('field_kind')}>
             <SettingsSelect {...field('kind')}>
               {AGREEMENT_KINDS.map((k) => (
@@ -157,22 +158,22 @@ export function AgreementDialog({
           <Field id="agreement-title" label={t('field_title')}>
             <Input {...field('title')} maxLength={200} placeholder={t('field_title_placeholder')} />
           </Field>
-          <Field id="agreement-counterparty_name" label={t('field_counterparty')} wide>
+          <Field id="agreement-counterparty_name" label={t('field_counterparty')} optional wide>
             <Input {...field('counterparty_name')} maxLength={200} />
           </Field>
-          <Field id="agreement-starts_on" label={t('field_starts_on')}>
+          <Field id="agreement-starts_on" label={t('field_starts_on')} optional>
             <Input {...field('starts_on')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="agreement-ends_on" label={t('field_ends_on')}>
+          <Field id="agreement-ends_on" label={t('field_ends_on')} optional>
             <Input {...field('ends_on')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="agreement-notice_months" label={t('field_notice_months')}>
+          <Field id="agreement-notice_months" label={t('field_notice_months')} optional>
             <Input {...field('notice_months')} inputMode="numeric" className="tabular-nums" />
           </Field>
-          <Field id="agreement-renewal_terms" label={t('field_renewal_terms')}>
+          <Field id="agreement-renewal_terms" label={t('field_renewal_terms')} optional>
             <Input {...field('renewal_terms')} maxLength={500} placeholder={t('field_renewal_terms_placeholder')} />
           </Field>
-          <Field id="agreement-amount" label={t('field_amount')}>
+          <Field id="agreement-amount" label={t('field_amount')} optional>
             <Input {...field('amount')} inputMode="decimal" className="tabular-nums" />
           </Field>
           <Field id="agreement-period" label={t('field_period')}>
@@ -185,7 +186,7 @@ export function AgreementDialog({
               ))}
             </SettingsSelect>
           </Field>
-          <Field id="agreement-first_due_on" label={t('field_first_due_on')}>
+          <Field id="agreement-first_due_on" label={t('field_first_due_on')} optional>
             <Input {...field('first_due_on')} type="date" className="tabular-nums" />
           </Field>
           {form.kind === 'loan' && (
@@ -198,30 +199,31 @@ export function AgreementDialog({
               </Field>
             </>
           )}
-          <Field id="agreement-notes" label={t('field_notes')} wide>
+          <Field id="agreement-notes" label={t('field_notes')} optional wide>
             <Textarea {...field('notes')} maxLength={4000} rows={3} />
           </Field>
           <p className="text-xs text-muted-foreground sm:col-span-2">{t('agreement_schedule_hint')}</p>
         </div>
-        <DialogFooter className="sm:justify-between">
+        </SlideOverBody>
+        <SlideOverFooter className="justify-between">
           {agreement && agreement.status === 'active' ? (
             <Button variant="ghost" onClick={() => onEnd(agreement)} disabled={saving}>
               {t('agreement_end')}
             </Button>
           ) : (
-            <span className="hidden sm:block" />
+            <span />
           )}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row">
-            <Button variant="outline" onClick={onClose} disabled={saving}>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={saving}>
               {t('cancel')}
             </Button>
             <Button onClick={save} loading={saving} disabled={!form.title.trim()}>
-              {t('save')}
+              {agreement ? t('save') : t('agreement_create')}
             </Button>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SlideOverFooter>
+      </SlideOverContent>
+    </SlideOver>
   )
 }
 
@@ -323,12 +325,11 @@ export function SecurityDialog({
     submit(security ? `/api/commitments/securities/${security.security_id}` : '/api/commitments/securities', security ? 'PATCH' : 'POST', securityBody(form))
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{security ? t('security_edit') : t('security_add')}</DialogTitle>
-        </DialogHeader>
-        <div className="grid max-h-[60vh] gap-4 overflow-y-auto sm:grid-cols-2">
+    <SlideOver open onOpenChange={(open) => !open && onClose()}>
+      <SlideOverContent aria-describedby={undefined}>
+        <SlideOverHeader title={security ? t('security_edit') : t('security_add')} />
+        <SlideOverBody>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field id="security-kind" label={t('field_security_kind')}>
             <SettingsSelect {...field('kind')}>
               <optgroup label={t('security_group_pledged')}>
@@ -353,7 +354,7 @@ export function SecurityDialog({
           <Field id="security-description" label={t('field_description')} wide>
             <Input {...field('description')} maxLength={300} placeholder={t('field_description_placeholder')} />
           </Field>
-          <Field id="security-in_favour_of_name" label={t('field_in_favour_of')}>
+          <Field id="security-in_favour_of_name" label={t('field_in_favour_of')} optional>
             <Input {...field('in_favour_of_name')} maxLength={200} />
           </Field>
           <Field id="security-for_group_company" label={t('field_for_group_company')}>
@@ -373,27 +374,28 @@ export function SecurityDialog({
             </SettingsSelect>
           </Field>
           <span className="hidden sm:block" />
-          <Field id="security-valid_from" label={t('field_valid_from')}>
+          <Field id="security-valid_from" label={t('field_valid_from')} optional>
             <Input {...field('valid_from')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="security-valid_to" label={t('field_valid_to')}>
+          <Field id="security-valid_to" label={t('field_valid_to')} optional>
             <Input {...field('valid_to')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="security-notes" label={t('field_notes')} wide>
+          <Field id="security-notes" label={t('field_notes')} optional wide>
             <Textarea {...field('notes')} maxLength={4000} rows={3} />
           </Field>
           <p className="text-xs text-muted-foreground sm:col-span-2">{t('security_hint')}</p>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+        </SlideOverBody>
+        <SlideOverFooter>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
             {t('cancel')}
           </Button>
           <Button onClick={save} loading={saving} disabled={!form.description.trim() || !form.amount.trim()}>
-            {t('save')}
+            {security ? t('save') : t('security_create')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SlideOverFooter>
+      </SlideOverContent>
+    </SlideOver>
   )
 }
 
@@ -454,12 +456,11 @@ export function GroupLinkDialog({
     submit(link ? `/api/commitments/group-links/${link.group_link_id}` : '/api/commitments/group-links', link ? 'PATCH' : 'POST', groupLinkBody(form))
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{link ? t('group_edit') : t('group_add')}</DialogTitle>
-        </DialogHeader>
-        <div className="grid max-h-[60vh] gap-4 overflow-y-auto sm:grid-cols-2">
+    <SlideOver open onOpenChange={(open) => !open && onClose()}>
+      <SlideOverContent aria-describedby={undefined}>
+        <SlideOverHeader title={link ? t('group_edit') : t('group_add')} />
+        <SlideOverBody>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field id="group-relation" label={t('field_relation')}>
             <SettingsSelect {...field('relation')}>
               {GROUP_RELATIONS.map((r) => (
@@ -472,42 +473,43 @@ export function GroupLinkDialog({
           <Field id="group-counterparty_name" label={t('field_company_name')}>
             <Input {...field('counterparty_name')} maxLength={200} />
           </Field>
-          <Field id="group-counterparty_org_number" label={t('field_org_number')}>
+          <Field id="group-counterparty_org_number" label={t('field_org_number')} optional>
             <Input {...field('counterparty_org_number')} maxLength={40} className="tabular-nums" />
           </Field>
-          <Field id="group-counterparty_registered_office" label={t('field_registered_office')}>
+          <Field id="group-counterparty_registered_office" label={t('field_registered_office')} optional>
             <Input {...field('counterparty_registered_office')} maxLength={120} />
           </Field>
-          <Field id="group-ownership_percent" label={t('field_ownership')}>
+          <Field id="group-ownership_percent" label={t('field_ownership')} optional>
             <Input {...field('ownership_percent')} inputMode="decimal" className="tabular-nums" />
           </Field>
-          <Field id="group-voting_percent" label={t('field_votes')}>
+          <Field id="group-voting_percent" label={t('field_votes')} optional>
             <Input {...field('voting_percent')} inputMode="decimal" className="tabular-nums" />
           </Field>
-          <Field id="group-valid_from" label={t('field_valid_from')}>
+          <Field id="group-valid_from" label={t('field_valid_from')} optional>
             <Input {...field('valid_from')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="group-valid_to" label={t('field_valid_to')}>
+          <Field id="group-valid_to" label={t('field_valid_to')} optional>
             <Input {...field('valid_to')} type="date" className="tabular-nums" />
           </Field>
-          <Field id="group-bas_account" label={t('field_bas_account')}>
+          <Field id="group-bas_account" label={t('field_bas_account')} optional>
             <Input {...field('bas_account')} inputMode="numeric" maxLength={4} className="font-mono" placeholder={t('field_bas_account_placeholder')} />
           </Field>
           <span className="hidden sm:block" />
-          <Field id="group-notes" label={t('field_notes')} wide>
+          <Field id="group-notes" label={t('field_notes')} optional wide>
             <Textarea {...field('notes')} maxLength={4000} rows={3} />
           </Field>
           <p className="text-xs text-muted-foreground sm:col-span-2">{t('group_hint')}</p>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+        </SlideOverBody>
+        <SlideOverFooter>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
             {t('cancel')}
           </Button>
           <Button onClick={save} loading={saving} disabled={!form.counterparty_name.trim()}>
-            {t('save')}
+            {link ? t('save') : t('group_create')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SlideOverFooter>
+      </SlideOverContent>
+    </SlideOver>
   )
 }

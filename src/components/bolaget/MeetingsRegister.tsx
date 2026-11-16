@@ -11,12 +11,14 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { PHONE_HIDDEN, SUM_ROW_CLASS } from './register-table'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { fetchSigningAvailability } from '@/components/signing/signing-client'
@@ -27,6 +29,7 @@ import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { ATTENDEE_CAPACITIES, DECISION_KINDS, DECISION_OUTCOMES, MEETING_KINDS, type DecisionKind } from '@/lib/bolaget/meetings/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ArrowDownTrayIcon, PlusIcon, TrashIcon } from '@/components/icons'
 
 type Payload = Record<string, unknown>
 
@@ -186,6 +189,7 @@ function cleanPayload(kind: DecisionKind, draft: Payload): Payload {
 export function MeetingsRegister() {
   const t = useTranslations('bolaget_meetings')
   const tRoles = useTranslations('bolaget_roles')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -194,6 +198,10 @@ export function MeetingsRegister() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  // The list or the open meeting could not be read: said in the page, in
+  // place of what did not load (or as one line above a list on screen).
+  const [listFailed, setListFailed] = useState(false)
+  const [meetingFailed, setMeetingFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [people, setPeople] = useState<Person[]>([])
   const { periods: periodRows } = useFiscalPeriods()
@@ -228,23 +236,30 @@ export function MeetingsRegister() {
   }, [])
 
   const loadList = useCallback(async () => {
-    const res = await fetch('/api/bolaget/meetings')
+    const res = await fetch('/api/bolaget/meetings').catch(() => null) // unreachable: listFailed
+    if (!res?.ok) {
+      setListFailed(true)
+      return
+    }
     const body = await res.json().catch(() => ({}))
-    if (!res.ok) return fail(t('load_failed'), body)
     setMeetings((body.data?.meetings ?? []) as MeetingSummary[])
-  }, [fail, t])
+    setListFailed(false)
+  }, [])
 
   const loadMeeting = useCallback(
     async (id: string) => {
-      const res = await fetch(`/api/bolaget/meetings/${id}`)
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        fail(t('load_failed'), body)
-        return select(null)
+      setMeetingFailed(false)
+      const res = await fetch(`/api/bolaget/meetings/${id}`).catch(() => null) // unreachable: meetingFailed
+      // A meeting that no longer exists: back to the list.
+      if (res?.status === 404) return select(null)
+      if (!res?.ok) {
+        setMeetingFailed(true)
+        return
       }
+      const body = await res.json().catch(() => ({}))
       setMeeting(body.data as MeetingDetail)
     },
-    [fail, select, t],
+    [select],
   )
 
   useEffect(() => {
@@ -481,41 +496,53 @@ export function MeetingsRegister() {
           help={t('help')}
           action={
             canWrite ? (
-              <Button size="sm" onClick={() => setCreateForm({ kind: 'arsstamma', organ: 'bolagsstamma', meeting_date: todayIsoStockholm(), meeting_time: '', place: '', fiscal_period_id: periods[0]?.id ?? '' })}>
+              <Button onClick={() => setCreateForm({ kind: 'arsstamma', organ: 'bolagsstamma', meeting_date: todayIsoStockholm(), meeting_time: '', place: '', fiscal_period_id: periods[0]?.id ?? '' })}>
+                <PlusIcon className="h-4 w-4" />
                 {t('new_meeting')}
               </Button>
             ) : null
           }
         />
+        {listFailed && meetings ? (
+          <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadList() }}>{tCommon('refresh_failed')}</AttnLine>
+        ) : null}
         {loading && !meetings ? (
-          <div className="space-y-2">
+          <LateReveal className="space-y-2">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
-          </div>
+          </LateReveal>
+        ) : listFailed && !meetings ? (
+          <LoadError
+            title={t('load_failed')}
+            onRetry={() => {
+              setLoading(true)
+              void loadList().finally(() => setLoading(false))
+            }}
+          />
         ) : !meetings || meetings.length === 0 ? (
           <EmptyState title={t('empty_title')} description={t('empty_description')} />
         ) : (
-          <div className="overflow-x-auto">
+          <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
             <table className="stagger-enter w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <th className={TH_CLASS}>{t('col_date')}</th>
                   <th className={TH_CLASS}>{t('col_meeting')}</th>
-                  <th className={TH_CLASS}>{t('col_place')}</th>
+                  <th className={cn(TH_CLASS, PHONE_HIDDEN)}>{t('col_place')}</th>
                   <th className={TH_CLASS}>{t('col_status')}</th>
                 </tr>
               </thead>
               <tbody>
                 {meetings.map((m) => (
                   <tr key={m.corporate_meeting_id} className="cursor-pointer hover:bg-secondary/35" onClick={() => select(m.corporate_meeting_id)}>
-                    <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(m.meeting_date)}</td>
+                    <td className={cn(TD_CLASS, 'date-figures whitespace-nowrap')}>{formatDate(m.meeting_date)}</td>
                     <td className={TD_CLASS}>
-                      <button type="button" className="text-left" onClick={(e) => (e.stopPropagation(), select(m.corporate_meeting_id))}>
+                      <button type="button" className="text-left text-strong" onClick={(e) => (e.stopPropagation(), select(m.corporate_meeting_id))}>
                         {t(`kind_${m.kind}`)}
                         {m.sequence_number ? ` ${t('number', { n: m.sequence_number })}` : ''}
                       </button>
                     </td>
-                    <td className={cn(TD_CLASS, 'text-muted-foreground')}>{m.is_digital ? t('digital') : m.place ?? ''}</td>
+                    <td className={cn(TD_CLASS, PHONE_HIDDEN, 'text-muted-foreground')}>{m.is_digital ? t('digital') : m.place ?? ''}</td>
                     <td className={TD_CLASS}>{statusChip(m)}</td>
                   </tr>
                 ))}
@@ -524,11 +551,11 @@ export function MeetingsRegister() {
           </div>
         )}
 
-        <Dialog open={Boolean(createForm)} onOpenChange={(o) => (o ? null : setCreateForm(null))}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>{t('new_meeting')}</DialogTitle>
-            </DialogHeader>
+        {/* A new meeting starts as a small record: date, kind and place, in a drawer over the list (V7 creation forms). */}
+        <SlideOver open={Boolean(createForm)} onOpenChange={(o) => (o ? null : setCreateForm(null))}>
+          <SlideOverContent aria-describedby={undefined}>
+            <SlideOverHeader title={t('new_meeting')} />
+            <SlideOverBody>
             {createForm && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1 sm:col-span-2">
@@ -579,16 +606,17 @@ export function MeetingsRegister() {
                 <p className="text-xs text-muted-foreground sm:col-span-2">{createForm.kind === 'arsstamma' ? t('create_hint_arsstamma') : t('create_hint')}</p>
               </div>
             )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setCreateForm(null)} disabled={busy}>
+            </SlideOverBody>
+            <SlideOverFooter>
+              <Button variant="ghost" onClick={() => setCreateForm(null)} disabled={busy}>
                 {t('cancel')}
               </Button>
               <Button onClick={create} loading={busy} disabled={!createForm?.meeting_date || (createForm.kind === 'arsstamma' && !createForm.fiscal_period_id)}>
-                {t('create')}
+                {t('create_meeting')}
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </SlideOverFooter>
+          </SlideOverContent>
+        </SlideOver>
       </div>
     )
   }
@@ -606,61 +634,70 @@ export function MeetingsRegister() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={m ? m.title : t('title')}
+        parent={{ label: t('title'), href: '/bolaget/moten', onClick: () => select(null) }}
+        title={m ? m.title : ''}
+        meta={m ? [m.meeting_time, m.kind === 'per_capsulam' ? null : m.is_digital ? t('digital') : m.place].filter(Boolean).join(' · ') || undefined : undefined}
         help={
           <HelpPopover>
             <p>{t('help')}</p>
           </HelpPopover>
         }
         action={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button size="sm" variant="outline" onClick={() => select(null)}>
-              {t('back')}
-            </Button>
-            {m && (
-              <Button size="sm" variant="outline" asChild>
+          m ? (
+            <>
+              {canWrite && m.status === 'draft' && (
+                <Button size="toolbar" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setConfirmDelete(true)}>
+                  <TrashIcon className="h-4 w-4" />
+                  {t('delete_meeting')}
+                </Button>
+              )}
+              <Button size="toolbar" variant="outline" asChild>
                 <a href={`/api/bolaget/meetings/${m.corporate_meeting_id}/pdf`} target="_blank" rel="noreferrer">
+                  <ArrowDownTrayIcon className="h-4 w-4" />
                   {t('pdf')}
                 </a>
               </Button>
-            )}
-            {m && canWrite && m.status === 'draft' && (
-              <Button size="sm" onClick={() => setConfirmHold(true)} disabled={m.meeting_date > todayIsoStockholm()}>
-                {t('hold')}
-              </Button>
-            )}
-            {m && canWrite && m.status === 'held' && !m.signing_pending && (
-              <Button size="sm" onClick={() => setSignForm({ mode: bankIdAvailable ? 'bankid' : 'manual', signedOn: todayIsoStockholm(), names: m.signers.map((s) => s.name).join(', '), file: null })}>
-                {t('sign')}
-              </Button>
-            )}
-          </div>
+              {canWrite && m.status === 'draft' && (
+                <Button size="toolbar" onClick={() => setConfirmHold(true)} disabled={m.meeting_date > todayIsoStockholm()}>
+                  {t('hold')}
+                </Button>
+              )}
+              {canWrite && m.status === 'held' && !m.signing_pending && (
+                <Button size="toolbar" onClick={() => setSignForm({ mode: bankIdAvailable ? 'bankid' : 'manual', signedOn: todayIsoStockholm(), names: m.signers.map((s) => s.name).join(', '), file: null })}>
+                  {t('sign')}
+                </Button>
+              )}
+            </>
+          ) : undefined
         }
       />
 
-      {!m ? (
-        <div className="space-y-2">
+      {!m && meetingFailed ? (
+        <LoadError onRetry={() => (selectedId ? void loadMeeting(selectedId) : undefined)} />
+      ) : !m ? (
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-24 w-full" />
-        </div>
+        </LateReveal>
       ) : (
         <>
           {m.warnings[0] && m.status !== 'signed' ? <AttnLine>{locale === 'en' ? m.warnings[0].message_en : m.warnings[0].message_sv}</AttnLine> : null}
 
-          <section className="space-y-3">
+          <div className="grid gap-x-14 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]">
+          <section className="space-y-3 lg:col-start-2 lg:row-start-1">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_meeting')}</h2>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_meeting')}</h2>
               {editable && (
-                <button type="button" className={QUIET_LINK_CLASS} onClick={openEdit}>
+                <Button variant="ghost" onClick={openEdit}>
                   {t('edit')}
-                </button>
+                </Button>
               )}
             </div>
-            <dl className="grid gap-x-8 gap-y-2 text-[13px] sm:grid-cols-[180px_minmax(0,1fr)]">
+            <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-6 gap-y-2 text-[13px]">
               <dt className="text-muted-foreground">{t('field_status')}</dt>
               <dd>{statusChip(m)}</dd>
               <dt className="text-muted-foreground">{t('field_date')}</dt>
-              <dd className="tabular-nums">{formatDate(m.meeting_date)}{m.meeting_time ? ` ${m.meeting_time}` : ''}</dd>
+              <dd className="date-figures">{formatDate(m.meeting_date)}{m.meeting_time ? ` ${m.meeting_time}` : ''}</dd>
               {m.kind !== 'per_capsulam' && (
                 <>
                   <dt className="text-muted-foreground">{t('field_place')}</dt>
@@ -687,26 +724,72 @@ export function MeetingsRegister() {
               {m.fiscal_period && (
                 <>
                   <dt className="text-muted-foreground">{t('field_fiscal_period')}</dt>
-                  <dd className="tabular-nums">{`${formatDate(m.fiscal_period.period_start)} - ${formatDate(m.fiscal_period.period_end)}`}</dd>
+                  <dd className="date-figures">{`${formatDate(m.fiscal_period.period_start)} - ${formatDate(m.fiscal_period.period_end)}`}</dd>
                 </>
               )}
             </dl>
           </section>
 
+          <div className="min-w-0 space-y-8 lg:col-start-1 lg:row-span-2 lg:row-start-1">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_decisions')}</h2>
+              {editable && (
+                <Button variant="ghost" onClick={() => openDecision(null)}>
+                  <PlusIcon className="h-4 w-4" />
+                  {t('add_decision')}
+                </Button>
+              )}
+            </div>
+            {m.decisions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t('decisions_empty')}</p>
+            ) : (
+              <ol className={cn(LIST_BLEED_CLASS, 'stagger-enter border-t-hairline')}>
+                {m.decisions.map((d) => (
+                  <li key={d.corporate_decision_id} className="group border-b-hairline px-2 py-2 text-[13px] hover:bg-secondary/35">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="py-1 font-medium text-strong">
+                        § {d.item_number} {d.title}
+                        {d.outcome !== 'bifallen' ? (
+                          <Badge variant="outline" className="ml-2">
+                            {t(`outcome_${d.outcome}`)}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {editable && (
+                        <div className="flex shrink-0">
+                          <Button variant="row" onClick={() => openDecision(d)}>
+                            {t('edit')}
+                          </Button>
+                          <Button variant="row" onClick={() => setDeletingDecision(d)}>
+                            {t('remove')}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="max-w-[70ch] pb-1 text-muted-foreground" data-ph-mask="">
+                      {d.text_rendered}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+
           {m.voting_list && (
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-4">
-                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_voting_list')}</h2>
+                <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_voting_list')}</h2>
                 {editable && (
-                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void patch({ refresh_voting_list: true }, t('voting_list_refreshed'))}>
+                  <Button variant="ghost" onClick={() => void patch({ refresh_voting_list: true }, t('voting_list_refreshed'))}>
                     {t('refresh_voting_list')}
-                  </button>
+                  </Button>
                 )}
               </div>
               {m.voting_list.holders.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t('voting_list_empty')}</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
                   <table className="w-full border-collapse text-[13px]">
                     <thead>
                       <tr>
@@ -730,6 +813,12 @@ export function MeetingsRegister() {
                           </td>
                         </tr>
                       ))}
+                      <tr className={SUM_ROW_CLASS}>
+                        <td className={TD_CLASS}>{t('total_row')}</td>
+                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{m.voting_list.holders.reduce((sum, h) => sum + h.shares, 0).toLocaleString('sv-SE')}</td>
+                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{m.voting_list.holders.reduce((sum, h) => sum + h.votes, 0).toLocaleString('sv-SE')}</td>
+                        <td className={TD_CLASS} />
+                      </tr>
                     </tbody>
                   </table>
                 </div>
@@ -739,7 +828,7 @@ export function MeetingsRegister() {
 
           {m.attendees.length > 0 && (
             <section className="space-y-3">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_attendees')}</h2>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_attendees')}</h2>
               <div className="space-y-2">
                 {m.attendees.map((a, i) => (
                   <label key={`${a.party_id ?? a.name}-${i}`} className="flex items-center gap-2 text-sm">
@@ -752,53 +841,9 @@ export function MeetingsRegister() {
             </section>
           )}
 
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_decisions')}</h2>
-              {editable && (
-                <button type="button" className={QUIET_LINK_CLASS} onClick={() => openDecision(null)}>
-                  {t('add_decision')}
-                </button>
-              )}
-            </div>
-            {m.decisions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t('decisions_empty')}</p>
-            ) : (
-              <ol className="stagger-enter space-y-4">
-                {m.decisions.map((d) => (
-                  <li key={d.corporate_decision_id} className="text-[13px]">
-                    <div className="flex items-baseline justify-between gap-4">
-                      <div className="font-medium">
-                        § {d.item_number} {d.title}
-                        {d.outcome !== 'bifallen' ? (
-                          <Badge variant="outline" className="ml-2">
-                            {t(`outcome_${d.outcome}`)}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {editable && (
-                        <div className="flex shrink-0 gap-3">
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => openDecision(d)}>
-                            {t('edit')}
-                          </button>
-                          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setDeletingDecision(d)}>
-                            {t('remove')}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-muted-foreground" data-ph-mask="">
-                      {d.text_rendered}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-
           {effects && (changes.length > 0 || effects.applied.added.length > 0 || effects.applied.ended.length > 0) && (
             <section className="space-y-3">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_effects')}</h2>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_effects')}</h2>
               <div className="space-y-1 text-[13px]" data-ph-mask="">
                 {changes.map((e, i) => (
                   <div key={`p-${i}`}>
@@ -812,12 +857,13 @@ export function MeetingsRegister() {
                   <div key={`e-${i}`}>{t('effect_ended', { name: e.name, role: tRoles(`role_${e.role}`), date: e.date ? formatDate(e.date) : '' })}</div>
                 ))}
               </div>
-              {changes.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('effects_hint')}</p>}
+              {changes.length > 0 && <p className="text-xs text-muted-foreground">{t('effects_hint')}</p>}
             </section>
           )}
+          </div>
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('section_signatures')}</h2>
+          <section className="space-y-3 lg:col-start-2 lg:row-start-2">
+            <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('section_signatures')}</h2>
             {m.status === 'signed' ? (
               <div className="space-y-1 text-[13px]">
                 <div data-ph-mask="">{t('signed_by', { names: m.signature_names ?? '' })}</div>
@@ -850,14 +896,14 @@ export function MeetingsRegister() {
               </div>
             )}
             {m.warnings.length > 1 && m.status !== 'signed' && (
-              <ul className="space-y-1 pt-2 text-[12.5px] text-muted-foreground">
+              <ul className="space-y-1 pt-2 text-xs text-muted-foreground">
                 {m.warnings.slice(1).map((w) => (
                   <li key={w.code}>{locale === 'en' ? w.message_en : w.message_sv}</li>
                 ))}
               </ul>
             )}
             {signerLinks.length > 0 && (
-              <div className="space-y-1 pt-2 text-[12.5px]">
+              <div className="space-y-1 pt-2 text-xs">
                 <div className="text-muted-foreground">{t('signer_links')}</div>
                 {signerLinks.map((s) => (
                   <div key={s.url} data-ph-mask="">
@@ -869,12 +915,8 @@ export function MeetingsRegister() {
                 ))}
               </div>
             )}
-            {canWrite && m.status === 'draft' && (
-              <button type="button" className={cn(QUIET_LINK_CLASS, 'pt-4')} onClick={() => setConfirmDelete(true)}>
-                {t('delete_meeting')}
-              </button>
-            )}
           </section>
+          </div>
         </>
       )}
 
@@ -898,7 +940,7 @@ export function MeetingsRegister() {
       />
 
       <Dialog open={Boolean(editForm)} onOpenChange={(o) => (o ? null : setEditForm(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('edit_meeting')}</DialogTitle>
           </DialogHeader>
@@ -989,7 +1031,7 @@ export function MeetingsRegister() {
       </Dialog>
 
       <Dialog open={Boolean(decisionForm)} onOpenChange={(o) => (o ? null : setDecisionForm(null))}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{decisionForm?.id ? t('edit_decision') : t('add_decision')}</DialogTitle>
           </DialogHeader>
@@ -1132,7 +1174,7 @@ export function MeetingsRegister() {
       </Dialog>
 
       <Dialog open={Boolean(signForm)} onOpenChange={(o) => (o ? null : setSignForm(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('sign_title')}</DialogTitle>
           </DialogHeader>

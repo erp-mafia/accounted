@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { DocumentTextIcon, ExclamationTriangleIcon } from '@/components/icons'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { DocumentTextIcon } from '@/components/icons'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
@@ -84,27 +84,29 @@ export function FocusDocumentPreview({
 }) {
   const t = useTranslations('inbox_workspace')
   const tInk = useTranslations('inkorg')
-  const frame = cn('flex w-full overflow-hidden rounded-lg border border-border bg-background', className)
+  const frame = cn('flex w-full overflow-hidden', className)
   // Only a shown document is paper; the empty and failed states stay the page's own surface.
   const sheet = cn(frame, paper && 'bg-white shadow-[var(--shadow-lg)]')
 
-  if (state === 'loading') return <Skeleton className={cn('w-full rounded-lg', className)} />
+  if (state === 'loading') {
+    return (
+      <LateReveal className={cn('flex w-full', className)}>
+        <Skeleton className="w-full rounded-lg" />
+      </LateReveal>
+    )
+  }
+  // The frame's empty and failed states sit where the page would start, like a list's.
   if (state === 'none') {
     return (
-      <div className={cn(frame, 'items-center justify-center gap-2 text-[13px] text-muted-foreground')}>
-        <DocumentTextIcon aria-hidden="true" className="h-5 w-5" />
-        {tInk('no_document')}
+      <div className={cn(frame, 'px-6')}>
+        <EmptyState icon={DocumentTextIcon} title={tInk('no_document')} />
       </div>
     )
   }
   if (state === 'error' || !meta) {
     return (
-      <div className={cn(frame, 'flex-col items-center justify-center gap-3 px-6 text-center text-[13px] text-muted-foreground')}>
-        <ExclamationTriangleIcon aria-hidden="true" className="h-5 w-5 text-attn" />
-        <span>{t('document_load_failed')}</span>
-        <Button variant="outline" size="sm" onClick={onRetry}>
-          {t('retry')}
-        </Button>
+      <div className={cn(frame, 'px-6')}>
+        <LoadError title={t('document_load_failed')} onRetry={onRetry} />
       </div>
     )
   }

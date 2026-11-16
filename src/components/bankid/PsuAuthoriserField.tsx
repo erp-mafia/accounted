@@ -36,7 +36,7 @@ export function PsuAuthoriserField({ value, onChange, invalid = false, disabled 
         aria-describedby={hintId}
         className="w-[240px]"
       />
-      <span id={hintId} className={invalid ? 'block text-[12.5px] text-destructive' : 'block text-[12.5px] text-muted-foreground'}>
+      <span id={hintId} className={invalid ? 'block text-xs text-destructive' : 'block text-xs text-muted-foreground'}>
         {invalid ? t('invalid') : t('hint')}
       </span>
     </label>

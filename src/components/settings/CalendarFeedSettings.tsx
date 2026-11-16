@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { ArrowPathIcon, CalendarIcon, CheckIcon, Square2StackIcon } from '@/components/icons'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -27,6 +28,8 @@ export function CalendarFeedSettings() {
   const t = useTranslations('settings_calendar_feed')
   const locale = useLocale()
   const { toast } = useToast()
+  // The feed routes refuse a read-only member; copying and opening the link stay live.
+  const { canWrite, lockedTitle } = useViewerLock()
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -181,12 +184,12 @@ export function CalendarFeedSettings() {
       <SettingsGroup label={t('title')} help={t('description')}>
         <SettingsRow label={t('activate_sync')} help={t('empty_intro')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={createFeed} loading={isSaving}>
+            <Button variant="outline" onClick={createFeed} loading={isSaving} disabled={!canWrite} title={lockedTitle}>
               {isSaving ? (
                 t('creating')
               ) : (
                 <>
-                  <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+                  <CalendarIcon className="h-3.5 w-3.5" />
                   {t('activate_sync')}
                 </>
               )}
@@ -223,8 +226,8 @@ export function CalendarFeedSettings() {
             {copied ? <CheckIcon className="h-4 w-4" /> : <Square2StackIcon className="h-4 w-4" />}
           </Button>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={openWebcal}>
-              <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+            <Button variant="outline" onClick={openWebcal}>
+              <CalendarIcon className="h-3.5 w-3.5" />
               {t('add_to_apple_calendar')}
             </Button>
           </SettingsRowEnd>
@@ -247,15 +250,16 @@ export function CalendarFeedSettings() {
           <SettingsRowEnd>
             <Button
               variant="outline"
-              size="sm"
               onClick={regenerateToken}
               loading={isRegenerating}
+              disabled={!canWrite}
+              title={lockedTitle}
             >
               {isRegenerating ? (
                 t('creating_new_link')
               ) : (
                 <>
-                  <ArrowPathIcon className="mr-2 h-3.5 w-3.5" />
+                  <ArrowPathIcon className="h-3.5 w-3.5" />
                   {t('create_new_link')}
                 </>
               )}
@@ -277,7 +281,8 @@ export function CalendarFeedSettings() {
             onCheckedChange={(checked) =>
               updateFeed('include_tax_deadlines', checked)
             }
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
+            title={lockedTitle}
           />
         </SettingsRow>
 
@@ -292,7 +297,8 @@ export function CalendarFeedSettings() {
             onCheckedChange={(checked) =>
               updateFeed('include_invoices', checked)
             }
-            disabled={isSaving}
+            disabled={!canWrite || isSaving}
+            title={lockedTitle}
           />
         </SettingsRow>
       </SettingsGroup>

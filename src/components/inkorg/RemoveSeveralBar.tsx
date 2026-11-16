@@ -81,7 +81,7 @@ export function RemoveSeveralBar({
         clearLabel={t('bulk_clear')}
         busy={busy}
       >
-        <Button size="sm" variant="outline" onClick={() => void removeSelected()} disabled={busy}>
+        <Button variant="outline" onClick={() => void removeSelected()} disabled={busy}>
           {t('action_not_underlag')}
         </Button>
       </BulkSelectionBar>

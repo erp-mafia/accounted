@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Label } from '@/components/ui/label'
@@ -12,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import type { DispositionsProposal } from '@/lib/bokslut/types'
 import type { DeferredTaxSnapshot } from '@/lib/bokslut/tax-provision/deferred-tax-service'
 import { manualDifferencesOf, ManualDifferencesEditor, manualDraft, type ManualDraft } from './ManualDifferencesEditor'
@@ -33,6 +34,7 @@ export function DeferredTaxCard({
   onSaved: (proposal: DispositionsProposal) => void
 }) {
   const t = useTranslations('deferred_tax')
+  const { canWrite, lockedTitle } = useViewerLock()
   const [lossRecognised, setLossRecognised] = useState(snapshot.assessment.loss_recognised)
   const [lossReason, setLossReason] = useState(snapshot.assessment.loss_reason ?? '')
   const [manual, setManual] = useState<ManualDraft[]>(() => snapshot.assessment.manual_items.map(manualDraft))
@@ -109,14 +111,14 @@ export function DeferredTaxCard({
               {snapshot.items.map((item, index) => (
                 <TableRow key={`${item.kind}-${index}`}>
                   <TableCell>{item.kind === 'manual' ? item.label : kindLabel[item.kind]}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatCurrency(item.temporary_difference)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatCurrency(item.deferred_tax)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatRowAmount(item.temporary_difference)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatRowAmount(item.deferred_tax)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
-        <p className="text-[12.5px] tabular-nums text-muted-foreground">
+        <p className="text-xs tabular-nums text-muted-foreground">
           {t('summary', {
             opening: formatCurrency(snapshot.opening),
             closing: formatCurrency(snapshot.closing),
@@ -151,7 +153,7 @@ export function DeferredTaxCard({
 
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end">
-          <Button type="button" size="sm" onClick={() => void save()} loading={saving}>
+          <Button type="button" onClick={() => void save()} loading={saving} disabled={!canWrite} title={lockedTitle}>
             {t('save')}
           </Button>
         </div>

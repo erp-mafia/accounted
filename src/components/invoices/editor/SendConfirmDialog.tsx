@@ -8,6 +8,7 @@ import {
 } from '@/components/invoices/InvoiceAttachmentsSection'
 import {
   Dialog,
+  DialogConsequence,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -51,6 +52,11 @@ interface SendConfirmDialogProps {
  * The small confirm before a send (design convention 10): what goes where,
  * the number the document locks to, the amount, and the verifikation it
  * books, stated before anything happens. Enter confirms.
+ *
+ * Stil v3 anatomy: the question as the title, the facts as hairline rows,
+ * "the verifikat" as a flat ledger table, and when no verifikat is shown,
+ * why (kontantmetoden, deferred booking, a create without a send) as the
+ * consequence on the footer's left beside Avbryt and the one primary.
  */
 export function SendConfirmDialog({
   open,
@@ -102,11 +108,14 @@ export function SendConfirmDialog({
           <DialogDescription className="sr-only">{t('confirm_description')}</DialogDescription>
         </DialogHeader>
 
-        <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]" data-ph-mask="">
+        <dl className="border-t-hairline text-[13px]" data-ph-mask="">
           {rows.map((row) => (
-            <div key={row.label} className="contents">
+            <div
+              key={row.label}
+              className="grid min-h-9 grid-cols-[8rem_minmax(0,1fr)] items-baseline gap-x-4 border-b-hairline py-2"
+            >
               <dt className="text-muted-foreground">{row.label}</dt>
-              <dd className="tabular-nums">{row.value}</dd>
+              <dd className="min-w-0 tabular-nums">{row.value}</dd>
             </div>
           ))}
         </dl>
@@ -121,21 +130,23 @@ export function SendConfirmDialog({
         )}
 
         {voucher?.kind === 'lines' && (
-          <div>
-            <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="space-y-1.5">
+            <div className="text-[12px] font-medium leading-4 text-muted-foreground">
               {t('confirm_voucher_title', { date: voucher.date })}
-            </p>
+            </div>
             <div data-ph-mask="">
+              {/* Flush with the dialog's content edge: the table's own list
+                  bleed is for a page gutter, not a dialog inset. */}
               <VoucherLinesTable lines={voucher.lines} withCurrency showTotals />
             </div>
-            {voucher.note && <p className="pt-2 text-[13px] text-muted-foreground">{voucher.note}</p>}
+            {voucher.note && <p className="text-[12px] leading-4 text-muted-foreground">{voucher.note}</p>}
           </div>
         )}
-        {voucher?.kind === 'note' && <p className="text-[13px] text-muted-foreground">{voucher.text}</p>}
 
         {extra}
 
         <DialogFooter>
+          {voucher?.kind === 'note' && <DialogConsequence>{voucher.text}</DialogConsequence>}
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             {tCommon('cancel')}
           </Button>

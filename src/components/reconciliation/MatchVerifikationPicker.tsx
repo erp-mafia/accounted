@@ -121,28 +121,28 @@ export function MatchVerifikationPicker({
     const strength =
       (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
+      <div className="flex items-center gap-2 rounded-lg bg-secondary/40 px-3 py-2 text-sm bg-control shadow-raised">
         <span className="font-mono text-xs shrink-0">{formatVoucher(line)}</span>
         <span className="text-muted-foreground shrink-0 tabular-nums">{formatDate(line.entry_date)}</span>
         <span className="tabular-nums shrink-0">{formatCurrency(amount)}</span>
         <span className="truncate text-muted-foreground flex-1 min-w-0">{line.entry_description}</span>
         {strength && (
           strength.variant ? (
-            <Badge variant={strength.variant} className="shrink-0 text-[11px]">
+            <Badge variant={strength.variant} className="shrink-0 text-xs">
               {strength.label}
             </Badge>
           ) : (
-            <span className="shrink-0 text-[11px] text-muted-foreground">{strength.label}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{strength.label}</span>
           )
         )}
         {(line.linked_transaction_count ?? 0) > 0 && (
-          <Badge variant="secondary" className="shrink-0 text-[11px]">
+          <Badge variant="secondary" className="shrink-0 text-xs">
             Redan matchad
           </Badge>
         )}
         <Button
           type="button"
-          size="icon-sm"
+          size="icon"
           variant="ghost"
           className="shrink-0"
           onClick={onRemove}
@@ -201,15 +201,15 @@ export function MatchVerifikationPicker({
               </span>
               {strength && (
                 strength.variant ? (
-                  <Badge variant={strength.variant} className="shrink-0 text-[11px]">
+                  <Badge variant={strength.variant} className="shrink-0 text-xs">
                     {strength.label}
                   </Badge>
                 ) : (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{strength.label}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{strength.label}</span>
                 )
               )}
               {(line.linked_transaction_count ?? 0) > 0 && (
-                <Badge variant="secondary" className="shrink-0 text-[11px]">
+                <Badge variant="secondary" className="shrink-0 text-xs">
                   Matchad
                 </Badge>
               )}
@@ -217,7 +217,7 @@ export function MatchVerifikationPicker({
           )
         })}
         {glLines.length > filtered.length && (
-          <div className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border bg-secondary/30">
+          <div className="px-3 py-2 text-xs text-muted-foreground border-t-hairline bg-secondary/30">
             Visar {filtered.length} av {glLines.length}: sök för att filtrera fler.
           </div>
         )}
@@ -255,7 +255,7 @@ export function MatchVerifikationPicker({
     <div className="space-y-2">
       {chips}
       {searchBox}
-      <div className="overflow-hidden rounded-lg border border-border bg-popover">
+      <div className="overflow-hidden bg-popover">
         {listContent}
       </div>
     </div>

@@ -256,7 +256,7 @@ export default function BankFileConfirmStep({
       />
 
       {error && (
-        <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
+        <div className="bg-destructive/8 p-4 rounded-lg flex gap-3">
           <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
           <p className="text-sm text-muted-foreground">{error}</p>
         </div>
@@ -265,7 +265,7 @@ export default function BankFileConfirmStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button
@@ -282,7 +282,7 @@ export default function BankFileConfirmStep({
             'Importerar...'
           ) : (
             <>
-              <PlayIcon className="mr-2 h-4 w-4" />
+              <PlayIcon className="h-4 w-4" />
               {card
                 ? t('import_card_submit', { count: stats.parsed_rows - duplicateCount, card: card.name, ledger: card.ledger_account })
                 : <>Importera {stats.parsed_rows - duplicateCount} transaktioner</>}

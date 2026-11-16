@@ -15,7 +15,7 @@ import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsSectionHeader, SettingsViewerScope } from '@/components/settings/SettingsRows'
 import { ShareCapitalForm } from '@/components/settings/ShareCapitalForm'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
@@ -101,9 +101,9 @@ export function CompanySettingsContent() {
         title={tNav('company')}
         intro={tIntro('company')}
         action={isSandbox ? undefined : (
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="outline" size="toolbar" asChild>
             <Link href={addCompanyHref}>
-              <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
+              <PlusIcon className="h-4 w-4" aria-hidden />
               {tSwitcher('add_company')}
             </Link>
           </Button>
@@ -128,7 +128,10 @@ export function CompanySettingsContent() {
         onUpdate={(url) => updateSettings({ logo_url: url })}
       />
 
-      <CompanyProfileSection />
+      {/* Hämta writes the company's snapshot: locked for a read-only member. */}
+      <SettingsViewerScope>
+        <CompanyProfileSection />
+      </SettingsViewerScope>
 
       <div id="archive-start-fresh" ref={scrollToArchive}>
         <CompanyDangerZone deleteDoor={deleteDoor} onDeleteDoorChange={setDeleteDoor} />

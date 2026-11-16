@@ -22,7 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ArrowLeftIcon, ArrowRightIcon } from '@/components/icons'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { genericDecimalMark, getCSVPreview, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
 import { parseSwedishAmount } from '@/lib/money'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
@@ -204,7 +204,7 @@ export default function BankFileColumnMappingStep({
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Header row toggle */}
-          <div className="flex items-center justify-between rounded-lg border p-4">
+          <div className="flex items-center justify-between rounded-lg p-4 bg-control shadow-raised">
             <div className="space-y-0.5">
               <Label htmlFor="has-header">Har filen rubrikrad?</Label>
               <p className="text-xs text-muted-foreground">
@@ -410,7 +410,7 @@ export default function BankFileColumnMappingStep({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="rounded-lg border max-h-64 overflow-x-auto overflow-y-auto">
+            <div className="max-h-64 overflow-x-auto overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -438,7 +438,7 @@ export default function BankFileColumnMappingStep({
                           {/* SEK is safe here ONLY because generic-csv hardcodes
                               currency: 'SEK' (formats/generic-csv.ts). If the
                               mapper ever gains a currency column, pass it. */}
-                          {amount !== null ? formatCurrency(amount) : amountStr}
+                          {amount !== null ? formatRowAmount(amount) : amountStr}
                         </TableCell>
                       </TableRow>
                     )
@@ -453,12 +453,12 @@ export default function BankFileColumnMappingStep({
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={handleConfirm} disabled={!isValid}>
           Fortsätt
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

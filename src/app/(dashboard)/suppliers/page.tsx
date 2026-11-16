@@ -1,16 +1,18 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { useSuppliers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
 import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { useToast } from '@/components/ui/use-toast'
@@ -58,25 +60,21 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
 export default function SuppliersPage() {
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   // The roster from the session cache (lib/reference-data), the list every
   // supplier picker reads: a create here refreshes them all.
-  const { suppliers, isLoading, error: suppliersError } = useSuppliers()
+  const { suppliers, isLoading, error: suppliersError, refresh: refreshSuppliers } = useSuppliers()
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(suppliersError) && suppliers.length === 0
+  const refreshFailed = Boolean(suppliersError) && suppliers.length > 0
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-
-  useEffect(() => {
-    if (!suppliersError) return
-    toast({
-      title: t('load_failed_title'),
-      description: t('load_failed_description'),
-      variant: 'destructive',
-    })
-  }, [suppliersError, toast, t])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {
     setIsCreating(true)
@@ -131,40 +129,45 @@ export default function SuppliersPage() {
     <div className="space-y-8">
       {/* Page header (concept scene 26): title + import/export menu + Ny leverantör */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <h1 className="page-header-title">{t('title')}</h1>
+        <PageHeaderActions className="flex flex-wrap items-center justify-end gap-2">
           <RegisterActionsMenu entity="suppliers" />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                size="sm"
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <PlusIcon className="mr-2 h-4 w-4" />
-                ) : (
-                  <LockClosedIcon className="mr-2 h-4 w-4" />
-                )}
-                {t('new_supplier')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_supplier')}</DialogTitle>
-              </DialogHeader>
-              <SupplierForm
-                onSubmit={handleCreateSupplier}
-                isLoading={isCreating}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setIsDialogOpen(true)}
+          >
+            {canWrite ? (
+              <PlusIcon className="h-4 w-4" />
+            ) : (
+              <LockClosedIcon className="h-4 w-4" />
+            )}
+            {t('new_supplier')}
+          </Button>
+          {/* A small record is created in a drawer over its list (V7 creation
+              forms): the list stays in place behind it. */}
+          <CreateDrawer
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            title={t('new_supplier')}
+            formId="create-supplier-form"
+            submitLabel={t('create_submit')}
+            submitting={isCreating}
+          >
+            <SupplierForm
+              onSubmit={handleCreateSupplier}
+              isLoading={isCreating}
+              formId="create-supplier-form"
+            />
+          </CreateDrawer>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: search (concept) */}
+      {/* Toolbar: search at the right end (V7 list toolbars) */}
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
@@ -174,19 +177,33 @@ export default function SuppliersPage() {
         />
       </div>
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshSuppliers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-28 sm:block" />
+              <Skeleton className="hidden h-3.5 w-40 md:block" />
+              <Skeleton className="hidden h-3.5 w-24 lg:block" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshSuppliers()} />
       ) : filteredSuppliers.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={TruckIcon}
-            title={t('no_search_results_title')}
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : (
           <EmptyState
             icon={TruckIcon}
@@ -198,7 +215,7 @@ export default function SuppliersPage() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -223,12 +240,13 @@ export default function SuppliersPage() {
                           <Link
                             href={`/suppliers/${supplier.id}`}
                             className="min-w-0 truncate hover:underline"
+                            title={supplier.name}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {supplier.name}
                           </Link>
                           {typeSuffix && SUPPLIER_TYPE_KEYS[typeSuffix] && (
-                            <span className="shrink-0 text-[12.5px] text-muted-foreground">
+                            <span className="shrink-0 text-xs text-muted-foreground">
                               {t(SUPPLIER_TYPE_KEYS[typeSuffix])}
                             </span>
                           )}
@@ -237,7 +255,7 @@ export default function SuppliersPage() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
                         {payment ? `${payment.label} ${payment.value}` : ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')} title={supplier.email || undefined}>
                         {supplier.email || ''}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>

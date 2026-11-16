@@ -15,10 +15,16 @@ import {
 } from '@/lib/auth/session-client'
 import { getWebauthnCredential } from '@/lib/auth/webauthn-browser'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { TotpCodeField } from '@/components/auth/TotpCodeField'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowRightStartOnRectangleIcon, ShieldCheckIcon } from '@/components/icons'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import {
+  StandaloneHeading,
+  StandaloneOr,
+  StandalonePage,
+  StandaloneSmall,
+  StandaloneStack,
+} from '@/components/standalone/StandalonePage'
 import { SupportLink } from '@/components/ui/support-link'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
@@ -41,6 +47,9 @@ function MfaVerifyContent() {
   const tInvite = useTranslations('invite')
   const [code, setCode] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // Failures sit in the page: a wrong code under its field, the rest over the form.
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [panelError, setPanelError] = useState<string | null>(null)
   const [factorId, setFactorId] = useState<string | null>(null)
   // Verified security keys (crm#1448). Empty for everyone without one, and
   // then the page is exactly the TOTP page it always was.
@@ -112,6 +121,8 @@ function MfaVerifyContent() {
     if (!factorId || code.length !== 6) return
 
     setIsLoading(true)
+    setCodeError(null)
+    setPanelError(null)
 
     try {
       // Challenge + verify run on the server, which writes the raised (AAL2)
@@ -119,11 +130,7 @@ function MfaVerifyContent() {
       const { error: verifyError } = await verifyTotp(factorId, code)
 
       if (verifyError && verifyError.code?.startsWith('mfa_challenge')) {
-        toast({
-          title: t('verify_failed_title'),
-          description: t('verify_challenge_failed_description'),
-          variant: 'destructive',
-        })
+        setPanelError(t('verify_challenge_failed_description'))
         setIsLoading(false)
         return
       }
@@ -138,13 +145,11 @@ function MfaVerifyContent() {
           setLockoutUntil(Date.now() + delay)
         }
 
-        toast({
-          title: t('wrong_code_title'),
-          description: t('wrong_code_description'),
-          variant: 'destructive',
-        })
-        setCode('')
+        // The code stays so it can be compared with the app; it is selected,
+        // so typing the next one replaces it.
+        setCodeError(`${t('wrong_code_title')}. ${t('wrong_code_description')}`)
         inputRef.current?.focus()
+        inputRef.current?.select()
         setIsLoading(false)
         return
       }
@@ -172,11 +177,7 @@ function MfaVerifyContent() {
       // '/clients' or '/', so the navigation stays same-origin.
       window.location.assign(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
     } catch {
-      toast({
-        title: t('verify_failed_title'),
-        description: t('unexpected_error'),
-        variant: 'destructive',
-      })
+      setPanelError(t('unexpected_error'))
     } finally {
       setIsLoading(false)
     }
@@ -187,19 +188,17 @@ function MfaVerifyContent() {
   // HttpOnly cookie). Lands exactly where a verified TOTP code lands.
   const handleSecurityKey = async (keyId: string) => {
     setKeyBusyId(keyId)
+    setCodeError(null)
+    setPanelError(null)
     try {
       const started = await challengeWebauthn(keyId)
       if (started.error || !started.data) {
-        toast({
-          title: t('security_key_failed_title'),
-          description: t('verify_challenge_failed_description'),
-          variant: 'destructive',
-        })
+        setPanelError(t('verify_challenge_failed_description'))
         return
       }
       const credential = await getWebauthnCredential(started.data.publicKey)
       if (!credential) {
-        toast({ title: t('security_key_failed_title'), description: t('security_key_cancelled') })
+        setPanelError(t('security_key_cancelled'))
         return
       }
       const { error } = await verifyWebauthn({
@@ -209,11 +208,7 @@ function MfaVerifyContent() {
         credential,
       })
       if (error) {
-        toast({
-          title: t('security_key_failed_title'),
-          description: t('security_key_failed_description'),
-          variant: 'destructive',
-        })
+        setPanelError(`${t('security_key_failed_title')}. ${t('security_key_failed_description')}`)
         return
       }
       if (await acceptPendingInvite()) {
@@ -223,11 +218,7 @@ function MfaVerifyContent() {
       // Hard navigation for the same reasons as the TOTP path above.
       window.location.assign(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
     } catch {
-      toast({
-        title: t('verify_failed_title'),
-        description: t('unexpected_error'),
-        variant: 'destructive',
-      })
+      setPanelError(t('unexpected_error'))
     } finally {
       setKeyBusyId(null)
     }
@@ -237,99 +228,69 @@ function MfaVerifyContent() {
     await signOutAndNavigate('/login')
   }
 
-  return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <ShieldCheckIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="text-2xl tracking-tight">{t('verify_title')}</h1>
-          <p className="text-muted-foreground text-sm mt-2">
-            {t('verify_subtitle_full')}
-          </p>
-        </div>
+  const securityKeyButtons = securityKeys.map((key) => (
+    <Button
+      key={key.id}
+      type="button"
+      size="lg"
+      variant={factorId ? 'outline' : 'default'}
+      className="w-full"
+      onClick={() => handleSecurityKey(key.id)}
+      loading={keyBusyId === key.id}
+      disabled={keyBusyId !== null}
+    >
+      {securityKeys.length === 1 || !key.friendly_name
+        ? t('use_security_key')
+        : t('use_named_security_key', { name: key.friendly_name })}
+    </Button>
+  ))
 
-        <div className="rounded-lg border bg-card p-6">
-          {securityKeys.length > 0 && (
-            <div className="space-y-2">
-              {securityKeys.map((key) => (
-                <Button
-                  key={key.id}
-                  type="button"
-                  size="lg"
-                  variant={factorId ? 'outline' : 'default'}
-                  className="w-full"
-                  onClick={() => handleSecurityKey(key.id)}
-                  loading={keyBusyId === key.id}
-                  disabled={keyBusyId !== null}
-                >
-                  {securityKeys.length === 1 || !key.friendly_name
-                    ? t('use_security_key')
-                    : t('use_named_security_key', { name: key.friendly_name })}
-                </Button>
-              ))}
-              {factorId && (
-                <p className="pt-3 text-center text-xs text-muted-foreground">{t('security_key_or')}</p>
-              )}
-            </div>
-          )}
-          {(factorId || securityKeys.length === 0) && (
-          <form onSubmit={handleVerify} className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="code">{t('verify_code_label')}</Label>
-              <Input
-                ref={inputRef}
-                id="code"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                autoComplete="one-time-code"
-                placeholder="000000"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-                disabled={isLoading}
-                className="h-11 text-center text-lg tracking-[0.5em] font-mono"
-              />
-            </div>
+  return (
+    <StandalonePage>
+      <StandaloneHeading title={t('verify_title')} sub={t('verify_subtitle_full')} />
+      <StandaloneStack>
+        {panelError && <AuthFormError message={panelError} />}
+        {(factorId || securityKeys.length === 0) && (
+          <form onSubmit={handleVerify} className="flex flex-col gap-3">
+            <TotpCodeField
+              ref={inputRef}
+              label={t('verify_code_label')}
+              value={code}
+              onChange={(next) => {
+                setCode(next)
+                if (codeError) setCodeError(null)
+              }}
+              error={codeError}
+              disabled={isLoading}
+            />
             <Button
               type="submit"
-              size="lg" className="w-full"
+              size="lg"
+              className="w-full"
               loading={isLoading}
               disabled={code.length !== 6 || !!lockoutUntil}
             >
-              {isLoading ? (
-                t('verifying')
-              ) : lockoutUntil ? (
-                t('wait_seconds', { seconds: lockoutRemaining })
-              ) : (
-                t('verify_button')
-              )}
+              {isLoading
+                ? t('verifying')
+                : lockoutUntil
+                  ? t('wait_seconds', { seconds: lockoutRemaining })
+                  : t('verify_button')}
             </Button>
           </form>
-          )}
-        </div>
-
-        <Button
-          variant="ghost"
-          className="w-full mt-4 text-muted-foreground"
-          onClick={handleLogout}
-        >
-          <ArrowRightStartOnRectangleIcon className="mr-2 h-4 w-4" />
+        )}
+        {securityKeys.length > 0 && factorId && <StandaloneOr>{t('security_key_or')}</StandaloneOr>}
+        {securityKeyButtons}
+        {/* The way out of a session that cannot pass the second step. */}
+        <Button variant="ghost" size="lg" className="w-full" onClick={handleLogout}>
           {tCommon('logout')}
         </Button>
-
-        <p className="text-xs text-muted-foreground text-center mt-4">
-          {t('lost_authenticator')}{' '}
-          <SupportLink variant="muted" subject="MFA: cannot sign in" className="inline">
-            {t('contact_support')}
-          </SupportLink>
-        </p>
-      </div>
-    </div>
+      </StandaloneStack>
+      <StandaloneSmall>
+        {t('lost_authenticator')}{' '}
+        <SupportLink variant="muted" subject="MFA: cannot sign in" className="align-bottom">
+          {t('contact_support')}
+        </SupportLink>
+      </StandaloneSmall>
+    </StandalonePage>
   )
 }

@@ -3,9 +3,8 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { CheckCircleIcon, DocumentMagnifyingGlassIcon } from '@/components/icons'
-import { AttnLine } from '@/components/ui/attn-line'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import type { Expectation, PurchaseOnTheWay } from '@/lib/inkorg/expectations'
 import {
   bandByMonth,
@@ -29,7 +28,7 @@ import type { LoadState } from './use-inkorg-data'
  * h1 to h3 in the serif display face: a small label stays in the body face.
  */
 const GROUP_HEADING_CLASS = 'mb-2 flex items-baseline gap-2 px-2 font-sans text-[13px] font-medium'
-const GROUP_COUNT_CLASS = 'text-[12.5px] tabular-nums text-muted-foreground'
+const GROUP_COUNT_CLASS = 'text-xs tabular-nums text-muted-foreground'
 
 const NONE_ATTACHED: ReadonlyMap<string, readonly string[]> = new Map()
 
@@ -112,15 +111,19 @@ export function MissingUnderlagList({
 
   if (state === 'loading') {
     return (
-      <div className="space-y-3" aria-busy="true">
+      <LateReveal>
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+          <div key={i} className="flex h-11 items-center gap-4 border-b-hairline px-2">
+            <Skeleton className="h-6 w-6 shrink-0 rounded-full" />
+            <Skeleton className="h-3.5 w-48" />
+            <Skeleton className="ml-auto h-3.5 w-20" />
+          </div>
         ))}
-      </div>
+      </LateReveal>
     )
   }
   if (state === 'failed') {
-    return <AttnLine action={{ label: t('retry'), onClick: onRetry }}>{t('missing_load_failed')}</AttnLine>
+    return <LoadError title={t('missing_load_failed')} onRetry={onRetry} />
   }
   const later = expectations && expectations.length > 0 ? <ExpectedLaterList expectations={expectations} /> : null
 
@@ -179,12 +182,12 @@ export function MissingUnderlagList({
               <section key={band.month} aria-labelledby={`inkorg-month-${band.month}`}>
                 <h3
                   id={`inkorg-month-${band.month}`}
-                  className="mb-1 flex items-baseline gap-2 px-2 font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+                  className="mb-1 flex items-baseline gap-2 px-2 font-sans text-xs font-medium text-muted-foreground"
                 >
                   <span>{monthLabel(band.month, locale)}</span>
                   <span className="tabular-nums">{open(band.purchases)}</span>
                 </h3>
-                <ul className="border-t border-border">{band.purchases.map(row)}</ul>
+                <ul className="border-t-hairline">{band.purchases.map(row)}</ul>
               </section>
             ))}
           </div>
@@ -197,8 +200,8 @@ export function MissingUnderlagList({
             <span>{t('missing_group_way')}</span>
             <span className={GROUP_COUNT_CLASS}>{open(parts.onTheWay)}</span>
           </h3>
-          <p className="mb-2 px-2 text-[12.5px] text-muted-foreground">{t('missing_way_body')}</p>
-          <ul className="border-t border-border">{parts.onTheWay.map(row)}</ul>
+          <p className="mb-2 px-2 text-xs text-muted-foreground">{t('missing_way_body')}</p>
+          <ul className="border-t-hairline">{parts.onTheWay.map(row)}</ul>
         </section>
       )}
 

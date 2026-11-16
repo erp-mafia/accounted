@@ -1,15 +1,13 @@
-import { getTranslations } from 'next-intl/server'
-import { PageHeader } from '@/components/ui/page-header'
 import { SettingsShell } from '@/components/settings/SettingsShell'
-import { ActiveCompanyBadge } from '@/components/settings/ActiveCompanyBadge'
+import { SettingsTopBarProvider } from '@/components/settings/SettingsTopBar'
 
-export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
-  const t = await getTranslations('settings_nav')
-
+export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="space-y-8">
-      <PageHeader title={t('aria_label')} action={<ActiveCompanyBadge />} />
-      <SettingsShell>{children}</SettingsShell>
+      {/* The top bar names the section (SettingsTopBar.tsx); the section hands it its help and action. */}
+      <SettingsTopBarProvider>
+        <SettingsShell>{children}</SettingsShell>
+      </SettingsTopBarProvider>
     </div>
   )
 }

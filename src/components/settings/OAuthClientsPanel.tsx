@@ -3,6 +3,7 @@
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,6 +36,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
   const t = useTranslations('settings_oauth_clients')
   const locale = useLocale()
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
 
   const [clients, setClients] = useState<OAuthClient[]>([])
@@ -123,12 +125,12 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
             mirrors SettingsGroup's label line; the "?" holds the old panel
             description. */}
         <div className="flex items-center justify-between gap-4 px-1">
-          <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <span>{t('title')}</span>
             <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
           </p>
-          <Button size="sm" onClick={() => setShowCreateDialog(true)}>
-            <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
+          <Button onClick={() => setShowCreateDialog(true)} disabled={!canWrite} title={lockedTitle}>
+            <PlusIcon className="h-3.5 w-3.5" />
             {t('register_uri')}
           </Button>
         </div>
@@ -149,7 +151,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
           clients.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3"
+              className="flex items-center gap-3 border-b-hairline px-1 py-3"
             >
               <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="truncate text-sm">{c.client_name}</span>
@@ -162,8 +164,10 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
               </div>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
+                disabled={!canWrite}
+                title={lockedTitle}
                 onClick={() => handleRevoke(c.id, c.client_name)}
                 aria-label={t('revoke_aria', { name: c.client_name })}
               >
@@ -181,7 +185,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
             <DialogDescription>
               {t.rich('register_dialog_description', {
                 bold: (chunks) => <span className="font-medium">{chunks}</span>,
-                code: (chunks) => <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px]">{chunks}</code>,
+                code: (chunks) => <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">{chunks}</code>,
               })}
             </DialogDescription>
           </DialogHeader>

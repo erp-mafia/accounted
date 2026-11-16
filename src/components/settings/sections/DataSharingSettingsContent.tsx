@@ -12,7 +12,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { DATA_CHOICES, type CompanyDataChoices, type DataChoice } from '@/lib/legal/data-choices'
 
 /**
- * AI och kopplingar → Datadelning och AI: three company switches, each saved
+ * Kopplingar → Datadelning och AI: three company switches, each saved
  * the moment it moves (PATCH /api/settings/data-sharing), each change a dated
  * line in behandlingshistorik. Owners and admins switch; everyone else sees
  * the same states read-only.
@@ -65,7 +65,7 @@ export function DataSharingSettingsContent({ initialChoices }: { initialChoices:
             label={
               <span className="flex flex-col gap-1">
                 <span>{t(`${choice}_label`)}</span>
-                <span className="text-[12.5px] text-muted-foreground">{t(`${choice}_help`, { company: companyName })}</span>
+                <span className="text-xs text-muted-foreground">{t(`${choice}_help`, { company: companyName })}</span>
               </span>
             }
           >

@@ -42,7 +42,7 @@ const SlideOverContent = React.forwardRef<
     {/* A non-modal root renders no Radix Overlay, so the veil is ours. z-40
         sits under the panel (z-50), the assistant trigger (z-[45]) and the
         sheet (z-[60]); a click on it is outside the panel and closes it. */}
-    <div aria-hidden="true" className="fixed inset-0 z-40 bg-black/30 dark:bg-black/50 animate-in fade-in-0" />
+    <div aria-hidden="true" className="fixed inset-0 z-40 bg-veil animate-in fade-in-0 duration-300" />
     <DialogPrimitive.Content
       ref={ref}
       // Companion overlays portaled to <body> (data-dialog-companion) and the
@@ -66,10 +66,12 @@ const SlideOverContent = React.forwardRef<
         // md: right edge and width stop at a docked agent sheet, the way
         // DialogContent centers beside it. --agent-sheet-w exists only while
         // the sheet is docked open, so closed or floating this is the plain
-        // 18px inset. Below md the sheet covers the screen and is closable.
-        'fixed top-[18px] right-[18px] bottom-[18px] z-50 flex w-[480px] max-w-[calc(100vw-36px)] flex-col',
-        'md:right-[calc(18px+var(--agent-sheet-w,0px))] md:max-w-[calc(100vw-36px-var(--agent-sheet-w,0px))]',
-        'rounded-xl border border-border bg-background shadow-[var(--shadow-lg)]',
+        // 10px frame inset, flush with the page panel's edge (Stil v3: the
+        // drawer is a floating layer on the panel's right side). Below md
+        // the sheet covers the screen and is closable.
+        'fixed top-2.5 right-2.5 bottom-2.5 z-50 flex w-[480px] max-w-[calc(100vw-20px)] flex-col',
+        'md:right-[calc(10px+var(--agent-sheet-w,0px))] md:max-w-[calc(100vw-20px-var(--agent-sheet-w,0px))]',
+        'rounded-xl bg-popover text-popover-foreground shadow-drawer',
         'data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=open]:fade-in-0 data-[state=open]:duration-300 data-[state=open]:ease-drawer',
         'data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right-full data-[state=closed]:fade-out-0 data-[state=closed]:duration-150 data-[state=closed]:ease-drawer',
         className,
@@ -84,8 +86,9 @@ const SlideOverContent = React.forwardRef<
 SlideOverContent.displayName = 'SlideOverContent'
 
 /**
- * Header block: kicker line (actor · risk · time), serif title, close
- * button. Body scrolls; header and footer stay put.
+ * Header block (Stil v3): a 48px bar over a hairline with the optional
+ * kicker line (actor · risk · time), the 15px title and the close button.
+ * Body scrolls; header and footer stay put.
  */
 function SlideOverHeader({
   kicker,
@@ -100,17 +103,17 @@ function SlideOverHeader({
 }) {
   const t = useTranslations('common')
   return (
-    <div className={cn('flex-shrink-0 border-b border-border px-6 py-4', className)}>
-      <div className="flex items-start justify-between gap-3">
+    <div className={cn('flex min-h-12 flex-shrink-0 items-center border-b-hairline py-2 pl-5 pr-3', className)}>
+      <div className="flex w-full items-center justify-between gap-3">
         <div className="min-w-0">
           {kicker && (
-            <div className="mb-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+            <div className="text-[12px] leading-4 text-muted-foreground">
               {kicker}
             </div>
           )}
           {/* break-words: a title naming a file has no space to wrap at and
               ran past the panel's edge (crm#1003). */}
-          <DialogPrimitive.Title className="break-words font-display text-lg leading-6 tracking-tight">
+          <DialogPrimitive.Title className="break-words text-[15px] font-medium leading-[22px] text-strong">
             {title}
           </DialogPrimitive.Title>
         </div>
@@ -121,7 +124,7 @@ function SlideOverHeader({
         <DialogPrimitive.Close asChild>
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon"
             aria-label={closeLabel ?? t('close')}
             data-attr="dialog-close"
             className="pointer-events-auto flex-shrink-0 text-muted-foreground"
@@ -142,7 +145,7 @@ function SlideOverBody({
   className?: string
 }) {
   return (
-    <div className={cn('min-h-0 flex-1 overflow-y-auto scrollbar-visible px-6 py-4', className)}>
+    <div className={cn('min-h-0 flex-1 overflow-y-auto scrollbar-visible p-5', className)}>
       {children}
     </div>
   )
@@ -158,7 +161,7 @@ function SlideOverFooter({
   return (
     <div
       className={cn(
-        'flex flex-shrink-0 items-center justify-end gap-2 border-t border-border px-6 py-3',
+        'flex flex-shrink-0 items-center justify-end gap-2 border-t-hairline px-5 py-3',
         className,
       )}
     >

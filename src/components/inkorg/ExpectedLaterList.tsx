@@ -24,12 +24,12 @@ export function ExpectedLaterList({ expectations }: { expectations: Expectation[
       label={
         <span className="flex items-baseline gap-2 font-sans">
           <span>{t('expected_title')}</span>
-          <span className="text-[12.5px] font-normal tabular-nums text-muted-foreground">{expectations.length}</span>
+          <span className="text-xs font-normal tabular-nums text-muted-foreground">{expectations.length}</span>
         </span>
       }
     >
-      <p className="mb-2 px-2 text-[12.5px] text-muted-foreground">{t('expected_body')}</p>
-      <ul className="border-t border-border">
+      <p className="mb-2 px-2 text-xs text-muted-foreground">{t('expected_body')}</p>
+      <ul className="border-t-hairline">
         {expectations.map((expectation) => (
           <ExpectedRow key={expectation.key} expectation={expectation} />
         ))}
@@ -68,7 +68,7 @@ function ExpectedRow({ expectation }: { expectation: Expectation }) {
     : ''
 
   return (
-    <li className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-border px-2 py-3 text-[13px] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_7.5rem_1rem] sm:gap-x-4">
+    <li className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-3 border-b-hairline px-2 py-3 text-[13px] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_7.5rem_1rem] sm:gap-x-4">
       <BrandMark name={expectation.counterparty} variant="mark" size={28} logoUrl={expectation.logo_url} />
       <RowTitle name={readableName(expectation.counterparty)} meta={when} />
       <span className="hidden truncate text-muted-foreground sm:block">{how}</span>

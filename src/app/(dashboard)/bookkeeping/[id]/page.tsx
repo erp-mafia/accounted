@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { RecordHeader } from '@/components/ui/record-header'
+import { PageHeaderOverflowItems } from '@/components/ui/page-header-actions'
 import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeeping/VoucherLinesTable'
@@ -39,6 +41,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { AttnLine } from '@/components/ui/attn-line'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
@@ -120,6 +123,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
+  const tNav = useTranslations('nav')
   const tCorrection = useTranslations('journal_correction')
   const tAccruals = useTranslations('accruals')
   const { format: attribute } = useAttribution()
@@ -400,7 +404,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <ArrowLeftIcon className="h-4 w-4" />
           {t('back')}
         </Link>
-        <p className="py-12 text-center text-sm text-muted-foreground">{error || t('error_not_found')}</p>
+        {error ? (
+          <LoadError title={error} onRetry={() => void fetchData()} />
+        ) : (
+          <EmptyState title={t('error_not_found')} />
+        )}
       </div>
     )
   }
@@ -520,7 +528,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <button
         type="button"
         onClick={() => setRetagLine(line as unknown as RetagLine)}
-        className="rounded-sm p-1 text-muted-foreground/50 transition-colors hover:bg-secondary/60 hover:text-foreground"
+        className="rounded-sm p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
         aria-label="Ändra dimensioner"
         title="Ändra dimensioner (påverkar endast internredovisningen)"
       >
@@ -539,7 +547,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     return (
       <button
         type="button"
-        className="rounded-sm px-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        className="rounded-sm px-1 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
         onClick={() => setAccrualPrefill({
           direction,
           balance_account: line.account_number,
@@ -588,8 +596,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       attachmentCount > 0 ? t('attachments_count', { count: attachmentCount }) : null,
       references.length > 0 ? t('references_count', { count: references.length }) : null,
     ].filter(Boolean)
-    return <span className="text-[11px] tabular-nums text-muted-foreground">{parts.join(' · ')}</span>
+    return <span className="text-xs tabular-nums text-muted-foreground">{parts.join(' · ')}</span>
   })()
+
+  const statusChips = (
+    <>
+      <JournalEntryStatusBadge entry={entry} showStatus={entry.status !== 'posted'} />
+      {rattelseLog.length > 0 && (
+        <Badge variant="outline" title={t('rattelse_history_title')}>
+          Rättad
+        </Badge>
+      )}
+    </>
+  )
 
   return (
     <div className="space-y-8 stagger-enter">
@@ -598,28 +617,21 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           The page-header hooks turn it into the top bar, like the invoice
           detail page: the sidebar says where we are, so there is no back
           link, and the prev/next pager sits in the bar. */}
-      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* data-ph-mask: the title carries the voucher number */}
-            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
-            {/* Convention 7: which correction track applies when, behind the "?" */}
-            <HelpPopover>
-              <p>{t('help_rattelse_tracks_open')}</p>
-              <p className="mt-2">{t('help_rattelse_tracks_locked')}</p>
-            </HelpPopover>
-            <JournalEntryStatusBadge entry={entry} showStatus={entry.status !== 'posted'} />
-            {rattelseLog.length > 0 && (
-              <Badge variant="outline" title={t('rattelse_history_title')}>
-                Rättad
-              </Badge>
-            )}
-          </div>
-          {/* data-ph-mask: the meta line carries the entry description */}
-          <p data-ph-mask="" className="page-header-meta mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+      <RecordHeader
+        parent={{ label: tNav('v3_vouchers'), href: '/bookkeeping' }}
+        title={title}
+        // The title carries the voucher number, the facts the entry description.
+        mask
+        help={
+          // Convention 7: which correction track applies when, behind the "?"
+          <HelpPopover>
+            <p>{t('help_rattelse_tracks_open')}</p>
+            <p className="mt-2">{t('help_rattelse_tracks_locked')}</p>
+          </HelpPopover>
+        }
+        status={statusChips}
+        facts={metaParts.join(' · ')}
+        actions={<>
           <DetailPager
             contextKey={listContextKey('bookkeeping', company?.id)}
             basePath="/bookkeeping"
@@ -633,57 +645,59 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           {showActions && (
             <div className="flex shrink-0 flex-wrap items-center gap-2">
               {entry.status === 'draft' && (
-                <Button size="sm"
+                <Button size="toolbar"
                   variant="outline"
                   onClick={() => setShowEdit(true)}
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <PencilIcon className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="h-4 w-4" /> : <PencilIcon className="h-4 w-4" />}
                   {t('edit_draft')}
                 </Button>
               )}
               {entry.status === 'draft' && (
-                <Button size="sm"
+                <Button size="toolbar"
                   onClick={openCommitConfirm}
                   disabled={!canWrite}
                   loading={isCommitting}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite && !isCommitting && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                  {!canWrite && !isCommitting && <LockClosedIcon className="h-4 w-4" />}
                   {t('post')}
                 </Button>
               )}
               {canCorrect && isOpeningBalance && (
-                <Button size="sm"
+                <Button size="toolbar"
                   variant="outline"
                   onClick={() => setShowCorrectIB(true)}
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <PencilIcon className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="h-4 w-4" /> : <PencilIcon className="h-4 w-4" />}
                   {t('correct_opening_balances')}
                 </Button>
               )}
               {showStrikeButton && (
-                <Button size="sm"
+                <Button size="toolbar"
                   variant="outline"
                   onClick={() => setShowStrikeLines(true)}
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <ScissorsIcon className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="h-4 w-4" /> : <ScissorsIcon className="h-4 w-4" />}
                   {t('strike_lines')}
                 </Button>
               )}
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                  <Button variant="ghost" size="icon-toolbar" aria-label={tCommon('more_options')} data-topbar-overflow-host="">
                     <EllipsisHorizontalIcon className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[240px]">
+                  {/* On a phone the bar's other actions are listed here first. */}
+                  <PageHeaderOverflowItems />
                   {/* Copy is not status-gated: it only prefills a fresh manual
                       draft (no voucher number, date or attachments carried over),
                       so it is offered on drafts too, matching the list surfaces. */}
@@ -766,8 +780,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               </DropdownMenu>
             </div>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       {/* Facts on the left, the internal note on the right. */}
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
@@ -867,14 +881,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <div className="flex justify-end gap-2">
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => setEditingNotes(false)}
                   disabled={savingNotes}
                 >
                   {tCommon('cancel')}
                 </Button>
                 <Button
-                  size="sm"
                   onClick={() => saveNotes(notesValue)}
                   loading={savingNotes}
                 >
@@ -910,7 +922,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <DetailSection
         kicker={t('lines_title')}
         aside={
-          <span className="text-[11px] tabular-nums text-muted-foreground">
+          <span className="text-xs tabular-nums text-muted-foreground">
             {t('lines_count', { count: lines.length })}
           </span>
         }
@@ -1055,7 +1067,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   <div className="space-y-1">
                     {(row.struck_lines ?? []).map((s) => (
                       <p key={s.id} className="tabular-nums text-muted-foreground">
-                        <span className="line-through decoration-muted-foreground/70">
+                        <span className="line-through decoration-foreground/25">
                           {s.account_number}
                           {' '}
                           {Number(s.debit_amount) > 0

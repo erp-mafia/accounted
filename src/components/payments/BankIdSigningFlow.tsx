@@ -648,7 +648,7 @@ export function BankIdSigningFlow({
         )}
         {psuAuthoriserField}
         {second && canSendLink && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {t('second_signer_elsewhere')}{' '}
             <button type="button" className={QUIET_LINK_CLASS} onClick={() => setLinkOrders(waitingOrders)}>
               {t('second_signer_send_link')}
@@ -668,7 +668,7 @@ export function BankIdSigningFlow({
         <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
         <DialogFooter>
           {closeButton}
-          <Button variant="secondary" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
+          <Button variant="outline" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
             {t('method_same_device')}
           </Button>
           <Button onClick={() => begin('qr')} loading={busy && method === 'qr'} disabled={disabled}>
@@ -698,7 +698,7 @@ export function BankIdSigningFlow({
       <>
         <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
         {secondsLeft !== null && (
-          <p className={cn('text-[12.5px] tabular-nums', secondsLeft > 0 ? 'text-muted-foreground' : 'text-foreground')}>
+          <p className={cn('text-xs tabular-nums', secondsLeft > 0 ? 'text-muted-foreground' : 'text-foreground')}>
             {secondsLeft > 0 ? t('qr_seconds_left', { seconds: secondsLeft }) : t('qr_maybe_expired')}
           </p>
         )}
@@ -737,7 +737,7 @@ export function BankIdSigningFlow({
             <img
               src={signing.challenge.qrImage}
               alt={t('qr_label')}
-              className={cn('mx-auto h-[200px] w-[200px] rounded-lg border bg-white p-1', anotherStep ? 'border-foreground' : 'border-border')}
+              className={cn('mx-auto h-[200px] w-[200px] rounded-lg bg-white p-1 shadow-raised', anotherStep ? 'ring-[1.5px] ring-strong' : '')}
             />
             {qrFooter}
           </>
@@ -772,7 +772,7 @@ export function BankIdSigningFlow({
             )}
             {signableAgain && !redirect && (
               <div className="flex flex-wrap justify-center gap-2">
-                <Button variant="secondary" onClick={() => signAgain('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
+                <Button variant="outline" onClick={() => signAgain('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
                   {t('method_same_device')}
                 </Button>
                 <Button onClick={() => signAgain('qr')} loading={busy && method === 'qr'} disabled={busy}>
@@ -814,7 +814,7 @@ export function BankIdSigningFlow({
           const order = orders.find((p) => p.id === o.id)
           const variant = PAYMENT_ORDER_STATUS_BADGE[o.status as PaymentOrderStatus]
           return (
-            <li key={o.id} className="flex items-center justify-between gap-3 border-b border-border py-2">
+            <li key={o.id} className="flex items-center justify-between gap-3 border-b-hairline py-2">
               <span className="truncate">{order?.payee_name ?? o.id}</span>
               <span className="flex shrink-0 items-center gap-3">
                 {order && <span className="tabular-nums">{formatCurrency(Number(order.amount), order.currency)}</span>}
@@ -833,23 +833,23 @@ export function BankIdSigningFlow({
         })}
       </ul>
       {confirming > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {signing?.follow_up ? t('result_bank_confirming', { count: confirming }) : t('result_bank_confirming_later', { count: confirming })}
         </p>
       )}
-      {anyWithBank && !awaitingSecond && <p className="text-[12.5px] text-muted-foreground">{t('result_hint')}</p>}
+      {anyWithBank && !awaitingSecond && <p className="text-xs text-muted-foreground">{t('result_hint')}</p>}
       {anyWithBank && awaitingSecond && (
         // The next step, not a footnote: whose signature the bank waits for,
         // where it is given, and how a company that wants one signature gets there.
         <div className="space-y-2">
           <p className="text-[13px] leading-relaxed">{t(secondHere ? 'result_second_signer_here' : 'result_second_signer', { bank: bankLabel })}</p>
-          <p className="text-[12.5px] text-muted-foreground">{t('result_sign_alone', { bank: bankLabel })}</p>
+          <p className="text-xs text-muted-foreground">{t('result_sign_alone', { bank: bankLabel })}</p>
         </div>
       )}
       <DialogFooter>
         {closeButton}
         {offerSecond && canSendLink && (
-          <Button variant="secondary" onClick={() => setLinkOrders(waitingOrders)}>
+          <Button variant="outline" onClick={() => setLinkOrders(waitingOrders)}>
             {t('second_signer_send_link')}
           </Button>
         )}

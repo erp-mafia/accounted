@@ -291,12 +291,12 @@ export const verifikationDraft = defineAgentIntent<
         // the owner can reopen (crm#1290).
         lines.push('PERIODEN ÄR STÄNGD (bokslut): ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Fråga om årsredovisningen för året är undertecknad, fastställd eller inskickad. Är den inte det hör händelsen hemma i det året: företagets ägare kan öppna året igen under Inställningar → Bokföring → Räkenskapsår (bokslutet återförs med storno), bokföra händelsen där och köra bokslutet igen. Är den det bokförs händelsen som rättelse i det öppna räkenskapsåret: vägled användaren att sätta verifikationsdatumet i en öppen period och hänvisa till det stängda året i texten.')
       } else if (periodState === 'locked') {
-        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden om datumet måste stå kvar: ett låst räkenskapsår under Inställningar → Bokföring → Räkenskapsår, bolagets låsdatum (Periodlåsning, "Bokföring låst t.o.m.") under Inställningar → Bokföring → Allmänt.')
+        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden om datumet måste stå kvar: ett låst räkenskapsår under Inställningar → Bokföring → Räkenskapsår, bolagets låsdatum (Periodlåsning, "Bokföring låst t.o.m.") under Inställningar → Bokföring → Bokföring.')
       } else if (periodState === 'unknown') {
         // Fail closed: the lock lookup failed, so we cannot claim the period is
         // open. Posting into a locked period is blocked by DB triggers anyway;
         // the agent must not promise the user that it will go through.
-        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera låsen innan något bokförs på detta datum: Periodlåsning under Inställningar → Bokföring → Allmänt och räkenskapsåret under Inställningar → Bokföring → Räkenskapsår.')
+        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera låsen innan något bokförs på detta datum: Periodlåsning under Inställningar → Bokföring → Bokföring och räkenskapsåret under Inställningar → Bokföring → Räkenskapsår.')
       } else if (periodState === 'open' && captured.period_status.period_id === null) {
         lines.push('INGET RÄKENSKAPSÅR TÄCKER DATUMET: periodlåset gick inte att avgöra. Kontrollera att verifikationsdatumet ligger inom ett upplagt räkenskapsår innan du föreslår bokföring.')
       }
@@ -311,7 +311,7 @@ export const verifikationDraft = defineAgentIntent<
     }
     lines.push('')
     lines.push('Arbetssätt:')
-    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta bland underlagen (sidomenyn: Inköp → Underlag) med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
+    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta bland underlagen (menyn: Dokument → Inkommande) med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
     lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart: kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
     lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort (i kategori-/kontonamn, inte kontonummer).')
     lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället: direktbokning skapar dubbletter.')

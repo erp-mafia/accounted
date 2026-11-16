@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,10 +46,13 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
   // template kind and kostnadsställe/projekt on the result leg.
   const [auditFee, setAuditFee] = useState<AuditFeeState>({ enabled: false, amount: '', liabilityAccount: '2992' })
   const [manual, setManual] = useState<ManualAccrualEntry[]>([])
+  const { canWrite } = useViewerLock()
   // EF defaults the fee to 2991 (bokslut): it has no revision to accrue for.
   // The company row loads async, so follow it until the user touches the fee.
   const feeAccount = auditFee.enabled || auditFee.amount !== '' ? auditFee.liabilityAccount : isEF ? '2991' : '2992'
   const [posting, setPosting] = useState(false)
+  // Bumped by "Försök igen" to fetch the same period's proposal again.
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -71,7 +77,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     return () => {
       cancelled = true
     }
-  }, [periodId])
+  }, [periodId, loadAttempt])
 
   const handleCommit = useCallback(async () => {
     if (!proposal) return
@@ -113,21 +119,15 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-2">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
+      <LateReveal className="space-y-2">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-20 w-full" />
+      </LateReveal>
     )
   }
 
   if (error && !proposal) {
-    return (
-      <Card>
-        <CardContent className="p-6 text-destructive">{error}</CardContent>
-      </Card>
-    )
+    return <LoadError title={error} onRetry={() => setLoadAttempt((n) => n + 1)} />
   }
 
   if (!proposal) return null
@@ -200,7 +200,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="rounded-lg border border-border p-3 space-y-3">
+          <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
             <div className="flex items-center gap-2">
               <Checkbox
                 id="accrue-audit-fee"
@@ -227,7 +227,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
                 <div className="space-y-1">
                   <Label className="text-xs">Konto</Label>
                   <select
-                    className="border border-border rounded-lg h-8 text-sm px-2 w-full bg-background"
+                    className="rounded-lg h-8 text-sm px-2 w-full bg-control shadow-raised"
                     value={feeAccount}
                     onChange={(e) => setAuditFee({ ...auditFee, liabilityAccount: e.target.value as '2991' | '2992' })}
                   >
@@ -244,24 +244,25 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
 
       {error && (
         <Card>
-          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
+          <CardContent className="text-sm text-destructive">{error}</CardContent>
         </Card>
       )}
 
-      <div className="flex justify-between">
-        <Button variant="outline" size="sm" onClick={onBack} disabled={posting}>
-          ← Tillbaka
+      <StepBar>
+        <Button variant="ghost" onClick={onBack} disabled={posting}>
+          Tillbaka
         </Button>
-        <Button onClick={handleCommit} loading={posting}>
+        {/* A read-only member reads on to the next step; nothing is posted. */}
+        <Button onClick={canWrite ? handleCommit : onContinue} loading={posting}>
           {posting ? (
             'Bokför…'
           ) : (
             <>
-              Fortsätt <ArrowRightIcon className="ml-1 h-4 w-4" />
+              Fortsätt <ArrowRightIcon className="h-4 w-4" />
             </>
           )}
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }

@@ -12,10 +12,12 @@ import {
   PencilIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -106,6 +108,7 @@ function amountText(value: Ink3FieldValue | null): string {
 
 export function INK3UnderlagView({ periodId }: { periodId: string }) {
   const t = useTranslations('ink3_underlag')
+  const { canWrite, lockedTitle } = useViewerLock()
   const errorLocale = useLocale() as ErrorLocale
   const [result, setResult] = useState<{ key: string; data?: Ink3Underlag; error?: string } | null>(null)
   const [saved, setSaved] = useState<Ink3Inputs | null>(null)
@@ -206,23 +209,15 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
   }
 
   if (error) {
-    return (
-      <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
-        <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
-        <span className="text-sm">{error}</span>
-        <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-          {t('retry')}
-        </Button>
-      </div>
-    )
+    return <LoadError title={error} onRetry={() => setRetryKey((k) => k + 1)} />
   }
 
   if (!data || !sections || !draft) {
     return (
-      <div className="space-y-4">
+      <LateReveal className="space-y-4">
         <Skeleton className="h-5 w-48" />
         <Skeleton className="h-64" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -243,10 +238,10 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
       >
         {dirty && (
           <>
-            <Button variant="outline" size="sm" onClick={() => saved && setDraft(draftFromInputs(saved))} disabled={saving}>
+            <Button variant="outline" onClick={() => saved && setDraft(draftFromInputs(saved))} disabled={saving}>
               {t('discard')}
             </Button>
-            <Button size="sm" onClick={save} loading={saving}>
+            <Button onClick={save} loading={saving} disabled={!canWrite} title={lockedTitle}>
               {t('save')}
             </Button>
           </>
@@ -303,18 +298,18 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
             ]}
           />
         </div>
-        <p className="text-[12.5px] leading-5 text-muted-foreground">{t('allmannyttig_note')}</p>
+        <p className="text-xs leading-5 text-muted-foreground">{t('allmannyttig_note')}</p>
       </section>
 
       {data.warnings.length > 0 && (
         <div className="flex items-start gap-2 px-1">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
           <div className="space-y-1">
-            <p className="text-[12.5px] font-medium leading-5 text-attn">
+            <p className="text-xs font-medium leading-5 text-attn">
               {t('warnings_count', { count: data.warnings.length })}
             </p>
             {data.warnings.map((warning, i) => (
-              <p key={i} className="text-[12.5px] leading-5 text-muted-foreground">
+              <p key={i} className="text-xs leading-5 text-muted-foreground">
                 {warning}
               </p>
             ))}
@@ -323,7 +318,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
       )}
 
       <Section title={t('accounts_heading')}>
-        <p className="mb-3 text-[12.5px] leading-5 text-muted-foreground">{t('accounts_note')}</p>
+        <p className="mb-3 text-xs leading-5 text-muted-foreground">{t('accounts_note')}</p>
         {data.accounts.length === 0 ? (
           <p className="text-[13px] text-muted-foreground">{t('accounts_empty')}</p>
         ) : (
@@ -486,7 +481,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section>
       <div className="mb-1 flex items-center gap-2 px-1">
-        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</h3>
+        <h3 className="font-sans text-xs font-medium text-muted-foreground">{title}</h3>
         <div className="h-px flex-1 bg-border" />
       </div>
       <div className="px-1 pt-2">{children}</div>
@@ -625,7 +620,7 @@ function ValueCell({
       <span className="inline-flex items-center justify-end gap-1">
         <Badge variant="outline">{t('overridden')}</Badge>
         {input}
-        <Button variant="ghost" size="icon-sm" aria-label={t('reset_amount', { ruta: label })} onClick={() => onChange(undefined)}>
+        <Button variant="ghost" size="icon" aria-label={t('reset_amount', { ruta: label })} onClick={() => onChange(undefined)}>
           <ArrowUturnLeftIcon className="h-4 w-4" />
         </Button>
       </span>
@@ -638,7 +633,7 @@ function ValueCell({
       <span className="tabular-nums">{amountText(field.value)}</span>
       <Button
         variant="ghost"
-        size="icon-sm"
+        size="icon"
         aria-label={t('edit_amount', { ruta: label })}
         onClick={() => onChange(String(field.computed ?? 0))}
       >

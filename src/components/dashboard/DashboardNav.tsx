@@ -1,31 +1,30 @@
 'use client'
 
-import { useEffect, useState, useRef, type ComponentType } from 'react'
+import { useEffect, useState, useRef, type ComponentProps, type ComponentType, type ReactNode } from 'react'
 import { NavLink } from './NavLink'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   ArrowLeftIcon,
   ArrowRightStartOnRectangleIcon,
-  ArrowsRightLeftIcon,
   Bars3Icon,
+  ChevronDownIcon,
   Cog6ToothIcon,
   DocumentTextIcon,
-  HomeIcon,
   QuestionMarkCircleIcon,
-  SparklesIcon,
   UsersIcon,
   XMarkIcon,
   type Icon,
 } from '@/components/icons'
 import { getBranding } from '@/lib/branding/service'
+import { useBranding } from '@/lib/branding/brand-context'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
-import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { SupportLink } from '@/components/ui/support-link'
-import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
+import CompanySwitcher, { CompanyTile } from '@/components/dashboard/CompanySwitcher'
 import UserMenu from '@/components/dashboard/UserMenu'
 import SubscriptionTouchpoint from '@/components/billing/SubscriptionTouchpoint'
 import DiscordInviteCard from '@/components/community/DiscordInviteCard'
@@ -33,17 +32,24 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
-import type { EntityType } from '@/types'
-import type { CapabilitySurface } from '@/lib/modules/capabilities'
-import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
-import { isInvoicerRole } from '@/lib/auth/invoicer-role'
-import { SidebarV2 } from './SidebarV2'
+import { SidebarFiscalYear } from './SidebarFiscalYear'
+import { passesNavGates, type NavGateContext, type ShellNavGate } from '@/lib/navigation/nav-gates'
+import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
-import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
-import { cockpitNavItems, navItems, type GroupKey, type NavItem, type NavLabelKey } from './nav-phone'
+import { SettingsRail } from '@/components/settings/SettingsRail'
+import NewClientCompanyDialog from './NewClientCompanyDialog'
+import { AreaSidebar, type AreaRow, type AreaRowGroup } from './AreaSidebar'
+import { ShellRail, type RailCreate, type RailEntry } from './ShellRail'
+import { useNeedCount } from './need-count'
+import { useInboxUpload } from '@/components/inkorg/UploadButton'
+import { NAV_ROW_ICON_CLASS } from './nav-row-class'
+import type { NavGateFlags } from './nav-v2'
+import { NAV_V3_AREAS, areaCreate, areaItems, createOpenForRole, gateAreas, hrefPath, resolveNavPlace, type NavAreaId, type NavV3Area, type NavV3Item } from './nav-v3'
 import { useNavRowClaim } from './nav-row-claim'
+import { openCommandPalette } from '@/components/common/open-command-palette'
 
-void _ENABLED_EXTENSION_IDS
+/** The phone bar's areas beside "Mer" (the prototype's phone shell). */
+const PHONE_BAR_AREAS: readonly NavAreaId[] = ['todo', 'money', 'sales']
 
 interface ExtensionNavItem {
   href: string
@@ -52,56 +58,13 @@ interface ExtensionNavItem {
 }
 
 interface DashboardNavProps {
-  companyName: string
-  entityType: EntityType
-  // The company's resolved capabilities as the menu reads them
-  // (capabilitySurface in lib/modules/capabilities.ts, resolved by the
-  // layout): a module whose package is off or not in the country hides, and
-  // so does a module the legal form does not offer, such as payroll for an
-  // enskild firma that has not flagged pays_salaries (#782).
-  capabilitySurface: CapabilitySurface
-  // Whether the dimensions register (company_settings.dimensions_enabled) is
-  // switched on. Drives visibility of the Kostnadsställen & projekt row:
-  // fetched by the dashboard layout.
-  dimensionsEnabled?: boolean
-  // Whether kundorder (company_settings.sales_orders_enabled) is switched on.
-  // Drives visibility of the Kundorder row: same mechanism as
-  // dimensionsEnabled, fetched by the dashboard layout.
-  salesOrdersEnabled?: boolean
-  // Whether offerter (company_settings.quotes_enabled) is switched on. Same
-  // mechanism as salesOrdersEnabled, but default true: quotes are on unless
-  // the company switched them off.
-  quotesEnabled?: boolean
-  // Whether the company has a webshop hooked up (active WooCommerce/Shopify
-  // connection, or existing webshop_orders rows). Drives visibility of the
-  // Order row: same mechanism as dimensionsEnabled, fetched by the layout.
-  hasWebshop?: boolean
-  // Whether the Körjournal row shows: the company_settings.mileage_enabled
-  // toggle OR existing mileage_trips rows (trips created via API/MCP must
-  // stay reachable). Computed by the dashboard layout.
-  hasMileage?: boolean
-  // Whether the Utlägg row shows: existing expense_claims rows. New utlägg
-  // start from the Underlag pane ("Vem betalade?"), so the page only earns a
-  // nav row once there is a person to pay out. Computed by the layout.
-  hasExpenseClaims?: boolean
-  // Whether the Kassarapporter row shows: a POS connection exists (live or
-  // ended, so fetched days stay reachable). Computed by the layout.
-  hasPosSales?: boolean
-  // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
-  arkivEnabled?: boolean
-  // Whether BankID document signing is switched on (the Signeringar page). Computed by the layout.
-  signingEnabled?: boolean
-  // Whether the company is in the Bolaget rollout (Avtal och åtaganden). Computed by the layout.
-  commitmentsEnabled?: boolean
-  agentsEnabled?: boolean
-  // Whether the company is in the new Inkorg page's rollout (INKORG_V2_COMPANY_IDS): Inkorg
-  // at the top, Underlag out of Inköp. Computed by the layout.
-  inkorgV2Enabled?: boolean
-  // Whether the company is in the Autogiro rollout (AUTOGIRO_COMPANY_IDS): the
-  // Autogiro row under Fakturering. Computed by the layout.
-  autogiroEnabled?: boolean
-  /** The Bolaget registers are rolled out to this company (lib/env/bolaget-switch.ts). */
-  bolagetEnabled?: boolean
+  /**
+   * What the layout resolves for the menu's gates (lib/navigation/nav-gates.ts):
+   * the legal form, the resolved capabilities and the company's switches and
+   * rollouts. The command palette is handed the same object. A shell with no
+   * company open names only the form and the surface.
+   */
+  navGate: Pick<ShellNavGate, 'entityType' | 'surface'> & Partial<ShellNavGate>
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -112,7 +75,29 @@ interface DashboardNavProps {
   /** One-time Discord invite above the user menu; the layout decides who
    *  gets it (lib/community/discord-invite.ts). */
   showDiscordInvite?: boolean
+  /**
+   * The page panel's content (the layout's <main>). The shell draws the rail
+   * on the frame and the area sidebar and the page inside one panel, so the
+   * page is the shell's child rather than its sibling.
+   */
+  children?: ReactNode
 }
+
+/** The switches of a shell with no company open: all off but offerter, which is on unless a company switches it off. */
+const NAV_GATE_DEFAULTS = {
+  dimensionsEnabled: false, salesOrdersEnabled: false, quotesEnabled: true, hasWebshop: false, hasMileage: false, hasExpenseClaims: false,
+  hasPosSales: false, arkivEnabled: false, agentsEnabled: false, inkorgV2Enabled: false, autogiroEnabled: false,
+}
+
+/**
+ * The page panel (frame layout): one rounded panel on the frame holding the
+ * area sidebar and the page, 10px from the frame's edges, the rail to its
+ * left. The docked assistant claims --agent-dock-w on its right. On a phone
+ * the panel dissolves: the page is plain document flow over the bottom nav.
+ */
+const SHELL_PANEL_CLASS =
+  'md:flex md:min-h-0 md:min-w-0 md:flex-1 md:my-[10px] md:mr-[var(--agent-dock-w)] md:overflow-hidden md:rounded-xl md:bg-background md:shadow-panel ' +
+  'md:transition-[margin-right] md:duration-300 md:ease-drawer'
 
 // Cockpit routes are byrå-scope, not company-scope: they decide which
 // sidebar variant renders and stay enabled without an active company.
@@ -127,14 +112,29 @@ function extensionLabelKey(href: string): string | null {
   return null
 }
 
-const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
-  arbeta: 'group_work',
-  analys: 'group_analysis',
-  data: 'group_data',
-  skatt: 'group_tax',
+/** A phone nav target: a link while it can be opened, else the same row inert. */
+function PhoneNavRow({ enabled, className, children, ...link }: ComponentProps<typeof NavLink> & { enabled: boolean }) {
+  return enabled ? (
+    <NavLink className={className} {...link}>
+      {children}
+    </NavLink>
+  ) : (
+    <div className={className} aria-disabled="true">
+      {children}
+    </div>
+  )
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, commitmentsEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, showDiscordInvite = false }: DashboardNavProps) {
+/** The look of a row in the phone's "Mer" sheet. */
+const sheetRowClass = (enabled: boolean, active: boolean) =>
+  cn(
+    'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
+    enabled
+      ? cn('transition-colors duration-150', active ? 'bg-secondary text-strong font-medium' : 'text-foreground active:bg-muted/60')
+      : 'text-muted-foreground',
+  )
+
+export default function DashboardNav({ navGate, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, showDiscordInvite = false, children }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const { company, capabilities, byraTeam, role } = useCompany()
@@ -142,22 +142,35 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   // built their assistant we show its chosen avatar instead of the
   // generic sparkles glyph.
   const { identity: agentIdentity } = useAgentSheet()
+  const { brand } = useBranding()
   const tNav = useTranslations('nav')
+  const tSettings = useTranslations('settings_nav')
   const tCommon = useTranslations('common')
   const tSwitcher = useTranslations('company_switcher')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
+  // The area whose rows are folded open in the phone's "Mer" sheet.
+  const [openPhoneArea, setOpenPhoneArea] = useState<NavAreaId | null>(null)
+  const [clientDialogOpen, setClientDialogOpen] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Badge counts load client-side after mount (and refresh as described in
   // lib/hooks/use-worklist-badges). They used to arrive as server props, which
   // put two head-count queries on the critical path of every dashboard
   // navigation for numbers nobody needs before first paint.
   const {
-    uncategorized: uncategorizedCount,
     pendingOperations: pendingOpsCount,
+    inbox: inboxCount,
     nudge: nudgeBadges,
-  } = useWorklistBadges(company?.id)
+    // The invoicing-only role has none of the counted rows and its session
+    // may not call the counts route (lib/auth/invoicer-role.ts): it never polls.
+  } = useWorklistBadges(isInvoicerRole(role) ? null : company?.id)
   const hasCompany = !!company
+  // Behöver dig's count: the number Hem's "Visa alla N som lista" shows,
+  // published by the page that builds the rows (need-count.ts).
+  const needCount = useNeedCount(company?.id)
+  const router = useRouter()
+  // "Ladda upp underlag": files land in the inbox; the page showing re-reads so its counts follow.
+  const inboxUpload = useInboxUpload(async () => router.refresh())
   // Byrå cockpit mode: lean sidebar on cockpit routes, full sidebar (with a
   // back-to-clients link) once the member is inside a company. Settings opens
   // as a modal OVER the current surface (intercepted route), so while the
@@ -169,7 +182,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   // nav links, preserved by SettingsRail). It is the signal that SURVIVES a
   // hard refresh, when the previous-surface memory below starts over at
   // false and the sidebar used to flip to the full company nav.
-  const ctxByra = useSearchParams().get('ctx') === 'byra'
+  const searchParams = useSearchParams()
+  const ctxByra = searchParams.get('ctx') === 'byra'
   // Previous-render memory via the adjust-state-during-render pattern
   // (react.dev: storing information from previous renders); a ref would be
   // simpler but refs must not be read or written during render.
@@ -202,7 +216,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     const base = path.split('?')[0]
     return hasCompany || ALWAYS_ENABLED.has(base) || base.startsWith('/settings')
   }
-  type ExpandableGroup = Exclude<GroupKey, 'top'>
 
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
@@ -210,65 +223,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
       closeTimerRef.current = null
     }
     setIsClosing(false)
+    // The sheet opens on the area the user is in.
+    setOpenPhoneArea(shownArea?.id ?? null)
     setIsMobileMenuOpen(true)
   }
 
-  const handleLogout = async () => {
-    // The server revokes the session and deletes the HttpOnly cookie; the
-    // helper then clears what the browser held (token, storage including an
-    // unsent support draft, analytics identity, stray legacy auth cookies)
-    // and leaves with a full page load.
-    await signOutAndNavigate(isSandbox ? '/sandbox' : '/login')
-  }
-
-  const isActive = (href: string) => {
-    // A page that names its own row (an offert in the invoice editor) wins
-    // over the URL's prefix match.
-    const claimed = claimedRowActive(href, pathname, navRowClaim)
-    if (claimed !== undefined) return claimed
-    if (href === '/') {
-      return pathname === '/'
-    }
-    // Cockpit Hem: exact match so /byra/automations and /byra/kpi light up
-    // their own rows only.
-    if (href === '/byra') {
-      return pathname === '/byra'
-    }
-    if (href === '/salary') {
-      return pathname === '/salary' || pathname.startsWith('/salary/runs')
-    }
-    // One account's reconciliation (/reconciliation?account=) is opened from
-    // the Konton list and has no row of its own.
-    if (href === '/accounts') {
-      return pathname.startsWith('/accounts') || pathname.startsWith('/reconciliation')
-    }
-    // Routes with their own rows under Skatt & bokslut (Bokslut, Moms,
-    // Periodiseringar, Årsredovisning, Inkomstdeklaration) are carved out
-    // of their parent routes so exactly one row lights up.
-    if (href === '/bookkeeping') {
-      return (
-        pathname.startsWith('/bookkeeping') &&
-        !pathname.startsWith('/bookkeeping/year-end') &&
-        !pathname.startsWith('/bookkeeping/periodiseringar')
-      )
-    }
-    if (href === '/bookkeeping/year-end') {
-      return (
-        pathname.startsWith('/bookkeeping/year-end') &&
-        !pathname.startsWith('/bookkeeping/year-end/arsredovisning')
-      )
-    }
-    if (href === '/reports') {
-      return (
-        pathname.startsWith('/reports') &&
-        !pathname.startsWith('/reports/vat-declaration') &&
-        !pathname.startsWith('/reports/ink2-declaration') &&
-        !pathname.startsWith('/reports/ne-declaration') &&
-        !pathname.startsWith('/reports/ink3-declaration')
-      )
-    }
-    return pathname.startsWith(href)
-  }
+  // The server revokes the session and deletes the HttpOnly cookie; the
+  // helper then clears what the browser held (token, storage including an
+  // unsent support draft, analytics identity, stray legacy auth cookies)
+  // and leaves with a full page load.
+  const handleLogout = () => void signOutAndNavigate(isSandbox ? '/sandbox' : '/login')
 
   const closeMobileMenu = () => {
     setIsClosing(true)
@@ -314,163 +278,242 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   }
 
   // One gate for both navigations: a surface hides for the same reason in
-  // the sidebar tree (nav-v2.ts) and in the phone menu. The gate itself lives
-  // in lib/navigation/nav-gates.ts so the assistant's UI map applies the same
-  // one. Granskning stays in the top nav at all times: the badge surfaces the
-  // count when there are pending ops, but the link is always present.
+  // the area sidebar and in the phone menu, which are drawn from one tree
+  // (nav-v3.ts). The gate itself lives in lib/navigation/nav-gates.ts so the
+  // assistant's UI map applies the same one. Rutin (/pending) stays in the
+  // menu at all times: the count shows when proposals wait, the link always.
   const gateContext: NavGateContext = {
-    entityType,
-    // The resolved capabilities: payroll shows for every juridisk person and
-    // for a form whose org number is the owner's personnummer once it opts in
-    // through pays_salaries, by the rule the MCP capabilities report shares.
-    // #782
-    surface: capabilitySurface,
-    dimensionsEnabled,
-    salesOrdersEnabled,
-    quotesEnabled,
-    hasWebshop,
-    hasMileage,
-    hasExpenseClaims,
-    hasPosSales,
-    arkivEnabled,
-    signingEnabled,
-    commitmentsEnabled,
-    agentsEnabled,
-    inkorgV2Enabled,
-    autogiroEnabled,
-    bolagetEnabled,
+    ...NAV_GATE_DEFAULTS,
+    ...navGate,
+    mcpExtensionEnabled: ENABLED_EXTENSION_IDS.has('mcp-server'),
     capabilities,
     hiddenNavHrefs,
     role,
   }
   const passesGates = (item: NavGateFlags) => passesNavGates(item, gateContext)
-  const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
-
-  const topItems = filteredItems.filter((i) => i.group === 'top')
 
   // Extension workspaces are company surfaces: none in cockpit mode.
   const visibleExtensionNavItems = cockpitMode ? [] : extensionNavItems
 
-  const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = cockpitMode
-    ? []
-    : [
-        { key: 'arbeta', items: filteredItems.filter((i) => i.group === 'arbeta') },
-        { key: 'analys', items: filteredItems.filter((i) => i.group === 'analys') },
-        { key: 'data', items: filteredItems.filter((i) => i.group === 'data') },
-        { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
-      ]
+  // The shell's areas (nav-v3.ts), gated row by row. An area with no row
+  // left hides from the rail. Inställningar always shows (its rows are the
+  // settings sections); Byrå shows to byrå team members only. In the cockpit
+  // the shell is lean, as before: the cockpit is above the companies, so
+  // only Byrå and Inställningar are offered until a client is entered.
+  const gatedAreas = gateAreas(NAV_V3_AREAS, passesGates)
+  const visibleAreas = gatedAreas.filter((area) =>
+    area.id === 'settings'
+      ? true
+      : area.id === 'byra'
+        ? !!byraTeam
+        : !cockpitMode && areaItems(area).length > 0,
+  )
 
-  // Nav tree: the same gates applied to sections and their sub-items.
-  // In cockpit mode the lean cockpit list is the whole sidebar.
-  const v2Top: NavV2Item[] = cockpitMode
-    ? cockpitNavItems.filter(passesGates).map(({ href, module, labelKey, icon }) => ({ href, module, labelKey, icon }))
-    : gateNavTree(NAV_V2_TOP, gateContext)
-  const v2Company = cockpitMode ? [] : gateNavTree(NAV_V2_COMPANY, gateContext)
-  // Att göra carries the whole queue (unbooked rows + staged operations);
-  // Transaktioner and Assistentens förslag keep their own share.
-  const v2BadgeFor = (href: string): number | null => {
-    if (href === '/' && !cockpitMode) {
-      const n = uncategorizedCount + pendingOpsCount
-      return n > 0 ? n : null
-    }
-    return badgeFor(href)
+  // Where the URL belongs (longest matching row; a row the page claims wins).
+  // Settings in byrå scope stay Inställningar whatever the section, because
+  // the cockpit has no Agenter area for /settings/api to belong to.
+  const place = resolveNavPlace(pathname, searchParams, navRowClaim)
+  const activeAreaId: NavAreaId | null = cockpitMode
+    ? onSettings
+      ? 'settings'
+      : 'byra'
+    : onSettings && ctxByra && byraTeam
+      ? 'settings'
+      : (place?.area ?? null)
+  const activeRowHref = place && place.area === activeAreaId ? place.href : null
+  // The area whose sidebar shows. A page outside every visible area (a
+  // route no area owns, or an area gated away) keeps the first area's menu
+  // in reach without lighting anything.
+  const shownArea: NavV3Area | undefined =
+    visibleAreas.find((area) => area.id === activeAreaId) ??
+    visibleAreas.find((area) => (cockpitMode ? area.id === 'byra' : area.id !== 'settings' && area.id !== 'byra')) ??
+    visibleAreas[0]
+  const isActive = (href: string) => href === activeRowHref
+
+  // The invoicing-only role opens one settings page, its own account.
+  const settingsHref = cockpitMode ? '/settings/account?ctx=byra' : isInvoicerRole(role) ? '/settings/account' : '/settings'
+  /** Where an area's rail button lands: its first row that can be opened. */
+  const areaLanding = (area: NavV3Area): string | null => {
+    if (area.id === 'settings') return settingsHref
+    if (area.id === 'byra' && !cockpitMode) return cockpitHref
+    return areaItems(area).find((item) => isItemEnabled(item.href))?.href ?? null
   }
 
-  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: Icon }[] = cockpitMode
-    ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
+  const byraArea = visibleAreas.find((area) => area.id === 'byra')
+  const mobileNavItems: { href: string; label: string; icon: Icon; active: boolean }[] = cockpitMode
+    ? (byraArea ? areaItems(byraArea) : []).map((item) => ({
+        href: item.href,
+        label: tNav(item.labelKey as never),
+        icon: item.icon,
+        active: isActive(item.href),
+      }))
     : isInvoicerRole(role)
       ? [
           // The invoicing-only role opens only the invoicing pages.
-          { href: '/invoices', labelKey: 'invoices', icon: DocumentTextIcon },
-          { href: '/customers', labelKey: 'customers', icon: UsersIcon },
+          { href: '/invoices', label: tNav('v3_invoices'), icon: DocumentTextIcon, active: isActive('/invoices') },
+          { href: '/customers', label: tNav('customers'), icon: UsersIcon, active: isActive('/customers') },
         ]
-      : [
-        // The phone bar names the page the way the sidebar does: Att göra.
-        { href: '/', labelKey: 'v2_todo' as NavLabelKey, icon: HomeIcon },
-        { href: '/chat', labelKey: 'assistant', icon: SparklesIcon },
-        { href: '/transactions', labelKey: 'transactions', icon: ArrowsRightLeftIcon },
-      ]
+      : PHONE_BAR_AREAS.flatMap((id) => {
+          // The phone bar follows the areas: Att göra, Pengar, Försäljning,
+          // each landing on its first row; every other area is under "Mer".
+          const area = visibleAreas.find((a) => a.id === id)
+          const href = area ? areaLanding(area) : null
+          return area && href
+            ? [{ href, label: tNav(area.labelKey as never), icon: area.icon, active: activeAreaId === id }]
+            : []
+        })
 
-  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean; newBadge?: boolean }) => {
-    const baseClass =
-      'rounded-full bg-muted/60 text-muted-foreground/70 text-[11px] font-medium uppercase tracking-wider px-1.5 py-0.5'
-    if (item.comingSoon) return <span className={baseClass}>{tNav('badge_coming_soon')}</span>
-    if (item.devBadge) return <span className={baseClass}>{tNav('badge_dev')}</span>
-    if (item.betaBadge) return <span className={baseClass}>{tNav('badge_beta')}</span>
-    if (item.newBadge) return <span className={baseClass}>{tNav('badge_new')}</span>
-    return null
+  const rowTag = (item: { betaBadge?: boolean; newBadge?: boolean }): string | undefined =>
+    item.betaBadge ? tNav('badge_beta') : item.newBadge ? tNav('badge_new') : undefined
+
+  // Design convention 18: counts sit only where waiting work is the page's
+  // point: Behöver dig (the things Hem counts), Rutin (the agent's
+  // proposals) and Inkommande (the inbox). Every other page shows its own.
+  const badgeFor = (href: string): number | null =>
+    cockpitMode
+      ? null
+      : href === '/?vy=behover' && needCount !== null && needCount > 0
+        ? needCount
+        : href === '/pending' && pendingOpsCount > 0
+          ? pendingOpsCount
+          : href === '/inkorg' && inboxCount > 0
+            ? inboxCount
+            : null
+
+  const toRow = (item: NavV3Item): AreaRow => ({
+    href: item.href,
+    label: tNav(item.labelKey as never),
+    icon: renderNavIcon(item, cn(NAV_ROW_ICON_CLASS, isActive(item.href) && 'text-strong')),
+    active: isActive(item.href),
+    enabled: isItemEnabled(item.href) && !item.comingSoon,
+    count: badgeFor(item.href),
+    tag: rowTag(item),
+  })
+  const rowGroups: AreaRowGroup[] = (shownArea?.groups ?? []).map((group, index) => ({
+    key: `${shownArea?.id}-${index}`,
+    label: group.labelKey ? tNav(group.labelKey as never) : undefined,
+    rows: group.items.map(toRow),
+  }))
+
+  // Byrå owner/admin add a client through the "Nytt klientbolag" confirm,
+  // the same dialog the user menu opens (NewClientCompanyDialog).
+  const canCreateClient = !isSandbox && (byraTeam?.role === 'owner' || byraTeam?.role === 'admin')
+  /** An area's create action as the shell offers it; undefined when it cannot be used here. */
+  const createFor = (area: NavV3Area | undefined): (RailCreate & { onClick?: () => void }) | undefined => {
+    const create = area && areaCreate(area)
+    if (!create || !createOpenForRole(create, role)) return undefined
+    // A create page under a page the brand hides (/invoices/new under /invoices) goes with it.
+    const createPath = hrefPath(create.href)
+    if ([...hiddenNavHrefs].some((hidden) => createPath.startsWith(`${hidden}/`))) return undefined
+    const base = { key: create.href, label: tNav(create.labelKey as never), symbol: create.symbol }
+    if (create.action === 'new-client') return canCreateClient ? { ...base, onClick: () => setClientDialogOpen(true) } : undefined
+    if (create.action === 'upload-inbox') {
+      // The inbox's own upload, opened from this click; the label counts the files while they go up.
+      return hasCompany ? { ...base, key: 'upload-inbox', label: inboxUpload.label ?? base.label, onClick: inboxUpload.pick } : undefined
+    }
+    return isItemEnabled(create.href) ? { ...base, href: create.href } : undefined
+  }
+  const shownCreate = createFor(shownArea)
+  // The rail's plus: every area's create action, one line per target.
+  const railCreates: RailCreate[] = []
+  for (const area of visibleAreas) {
+    const create = createFor(area)
+    if (!create || railCreates.some((c) => c.key === create.key)) continue
+    railCreates.push({ ...create, icon: area.icon, onSelect: create.onClick })
   }
 
-  const badgeFor = (href: string): number | null =>
-    href === '/transactions' && uncategorizedCount > 0
-      ? uncategorizedCount
-      : href === '/pending' && pendingOpsCount > 0
-        ? pendingOpsCount
-        : null
+  // The area's settings pages, behind its one Inställningar row. Company settings need a
+  // company, and the invoicing-only role opens only its own pages.
+  const areaSettingsLinks = (shownArea?.settings ?? [])
+    .filter((link) => shownArea?.id === 'byra' || (hasCompany && !(isInvoicerRole(role) && !isInvoicerPagePath(hrefPath(link.href)))))
+    .map((link) => ({ href: link.href, label: tSettings(link.labelKey as never) }))
+
+  const railEntry = (area: NavV3Area): RailEntry => {
+    const AreaIcon = area.icon
+    const external = area.id === 'byra' && !cockpitMode && cockpitExternal
+    return {
+      id: area.id,
+      // Outside the cockpit the Byrå button is the way back to the clients.
+      label: area.id === 'byra' && !cockpitMode ? tNav('back_to_clients') : tNav(area.labelKey as never),
+      icon: <AreaIcon className="h-5 w-5" />,
+      href: areaLanding(area),
+      active: area.id === activeAreaId,
+      hint: external ? cockpitHint : null,
+    }
+  }
+  const railGroups = ([0, 1, 2, 3] as const).map((group) => visibleAreas.filter((area) => area.rail === group).map(railEntry))
+  // In the cockpit Byrå is the one area, so it leads the rail; inside a
+  // company it sits at the foot with Agenter and Inställningar.
+  if (cockpitMode && byraArea) railGroups[0] = [railEntry(byraArea)]
+  const railFoot = visibleAreas.filter((area) => area.rail === 'foot' && !(cockpitMode && area.id === 'byra')).map(railEntry)
 
   return (
     <>
-      {/* Desktop sidebar; under md the mobile nav below takes over. */}
-      <SidebarV2
-        top={v2Top}
-        company={v2Company}
-        // The group is headed by the company it acts on, so a byrå moving
-        // between clients sees which books it is in (crm#1279).
-        groupLabel={cockpitMode ? '' : company?.name || tNav('v2_group_company')}
-        label={(key) => tNav(key as NavLabelKey)}
-        isActive={isActive}
-        isEnabled={isItemEnabled}
-        badgeFor={v2BadgeFor}
-        renderIcon={(item, className) => (item.icon ? renderNavIcon({ href: item.href, icon: item.icon }, className) : null)}
-        needsCompanyTitle={tNav('needs_company_tooltip')}
-        betaLabel={tNav('badge_beta')}
-        mainNavLabel={tNav('main_navigation')}
-        brand={<BrandHomeLink showLabel />}
-        backLink={
-          byraTeam && !cockpitMode ? (
-            <div className="mb-2">
-              {cockpitExternal ? (
-                <a
-                  href={cockpitHref}
-                  title={cockpitHint ?? undefined}
-                  className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
-                >
-                  <ArrowLeftIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
-                  <span className="flex-1 min-w-0">
-                    <span className="block">{tNav('back_to_clients')}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{cockpitHint}</span>
+      {/* Desktop shell: the icon rail on the frame, and one panel holding the
+          active area's sidebar and the page. Under md the rail and the
+          sidebar are hidden and the mobile nav below takes over. */}
+      <div className="md:flex md:min-h-0 md:flex-1">
+        <ShellRail
+          ariaLabel={tNav('main_navigation')}
+          creates={railCreates}
+          createLabel={tNav('v3_create')}
+          searchLabel={tNav('v3_search')}
+          onSearch={openCommandPalette}
+          groups={railGroups}
+          foot={railFoot}
+          disabledTitle={tNav('needs_company_tooltip')}
+        />
+        <div data-shell-panel="" className={SHELL_PANEL_CLASS}>
+          <AreaSidebar
+            // A byrå's own logo (usually a wide wordmark) heads the sidebar.
+            // The default mark has no place in the shell: the browser tab
+            // and the sign-in page carry the brand.
+            brand={brand ? <BrandHomeLink showLabel /> : undefined}
+            areaLabel={shownArea ? tNav(shownArea.labelKey as never) : ''}
+            // The sidebar is headed by the company it acts on, so a byrå moving
+            // between clients sees which books it is in (crm#1279). The cockpit
+            // is above the companies: it names the byrå, and a client is
+            // entered through Klienter.
+            companyRow={
+              cockpitMode ? (
+                <div className="flex h-7.5 items-center gap-2 px-2">
+                  <CompanyTile name={byraTeam?.name ?? ''} />
+                  <span data-ph-mask className="min-w-0 flex-1 truncate text-[13px] font-medium text-strong">
+                    {byraTeam?.name ?? ''}
                   </span>
-                </a>
+                </div>
               ) : (
-                <NavLink
-                  href={cockpitHref}
-                  className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
-                >
-                  <ArrowLeftIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
-                  <span className="flex-1">{tNav('back_to_clients')}</span>
-                </NavLink>
-              )}
-              <div className="mx-3 mt-2 border-t border-border" />
-            </div>
-          ) : null
-        }
-        userBlock={
-          <div className="flex-shrink-0">
-            {showDiscordInvite && <DiscordInviteCard />}
-            <SubscriptionTouchpoint variant="sidebar" />
-            <div className="mx-3 border-t border-border" />
-            <div className="px-3 py-2">
-              <UserMenu
-                userName={userName}
-                userEmail={userEmail}
-                isSandbox={isSandbox}
-                cockpitMode={cockpitMode}
-                onLogout={() => void handleLogout()}
-              />
-            </div>
-          </div>
-        }
-      />
+                <CompanySwitcher variant="row" trailing={company ? <SidebarFiscalYear /> : undefined} />
+              )
+            }
+            create={shownCreate}
+            groups={rowGroups}
+            settingsLabel={tNav('settings')}
+            settingsLinks={areaSettingsLinks}
+            disabledTitle={tNav('needs_company_tooltip')}
+            userBlock={
+              <div className="flex-shrink-0">
+                {showDiscordInvite && <DiscordInviteCard />}
+                <SubscriptionTouchpoint variant="sidebar" />
+                <div className="border-t-hairline px-2.5 py-1.5">
+                  <UserMenu
+                    userName={userName}
+                    userEmail={userEmail}
+                    isSandbox={isSandbox}
+                    cockpitMode={cockpitMode}
+                    onLogout={handleLogout}
+                  />
+                </div>
+              </div>
+            }
+          >
+            {shownArea?.id === 'settings' ? <SettingsRail display="rail" /> : undefined}
+          </AreaSidebar>
+          {children}
+        </div>
+      </div>
+      {inboxUpload.input}
+      {canCreateClient && <NewClientCompanyDialog open={clientDialogOpen} onOpenChange={setClientDialogOpen} />}
 
       {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
           on branded hosts the brand style block re-tints the bar's tokens
@@ -479,49 +522,26 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
           Height is --bottom-nav-h (globals.css): the tab row plus the safe
           area inset, the same token every bottom-pinned bar offsets by, so
           the nav and the bars cannot drift apart (#2738). */}
-      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] bg-card/98 backdrop-blur-sm border-t border-border" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] border-t-hairline bg-[var(--material)] backdrop-blur-xl backdrop-saturate-[1.8] reduced-transparency:bg-background reduced-transparency:backdrop-blur-none" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-full px-2">
           {mobileNavItems.map((item) => {
-            const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)
-            const badge = item.href === '/transactions' && uncategorizedCount > 0
-              ? uncategorizedCount
-              : null
-
-            const content = (
-              <>
-                <div className="relative">
-                  {renderNavIcon(item, cn('h-5 w-5 mb-1', active && 'text-primary'))}
-                  {badge !== null && (
-                    <span data-ph-mask className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-semibold px-0.5">
-                      {badge > 99 ? '99+' : badge}
-                    </span>
-                  )}
-                </div>
-                <span className={cn(
-                  "truncate",
-                  active && "font-medium"
-                )}>{tNav(item.labelKey)}</span>
-              </>
-            )
-            const baseClass = cn(
-              'relative flex flex-col items-center justify-center flex-1 h-full text-xs',
-              enabled
-                ? cn(
-                    'transition-colors duration-150',
-                    active ? 'text-primary' : 'text-muted-foreground'
-                  )
-                : 'text-muted-foreground/40'
-            )
-
-            return enabled ? (
-              <NavLink key={item.href} href={item.href} className={baseClass}>
-                {content}
-              </NavLink>
-            ) : (
-              <div key={item.href} className={baseClass} aria-disabled="true">
-                {content}
-              </div>
+            return (
+              <PhoneNavRow
+                key={item.href}
+                enabled={enabled}
+                href={item.href}
+                aria-current={item.active ? 'page' : undefined}
+                className={cn(
+                  'relative flex flex-col items-center justify-center flex-1 min-w-0 h-full text-xs',
+                  enabled
+                    ? cn('transition-colors duration-150', item.active ? 'text-strong' : 'text-muted-foreground')
+                    : 'text-muted-foreground',
+                )}
+              >
+                {renderNavIcon(item, cn('h-5 w-5 mb-1', item.active && 'text-strong'))}
+                <span className={cn('truncate', item.active && 'font-medium')}>{item.label}</span>
+              </PhoneNavRow>
             )
           })}
           {/* Menu button */}
@@ -531,7 +551,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
             className="flex flex-col items-center justify-center flex-1 h-full text-xs text-muted-foreground transition-colors duration-150"
           >
             <Bars3Icon className="h-5 w-5 mb-1" />
-            <span>{tNav('menu')}</span>
+            <span>{tNav('v3_more')}</span>
           </button>
         </div>
       </nav>
@@ -542,7 +562,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
           {/* Backdrop */}
           <div
             className={cn(
-              "md:hidden fixed inset-0 bg-background/80 backdrop-blur-sm z-50",
+              "md:hidden fixed inset-0 bg-veil z-50",
               isClosing ? "animate-out fade-out duration-150" : "animate-in fade-in duration-300"
             )}
             onClick={closeMobileMenu}
@@ -551,7 +571,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain",
+              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-popover rounded-t-xl shadow-float overflow-y-auto overscroll-contain",
               isClosing
                 ? "animate-out slide-out-to-bottom duration-150"
                 : "animate-in slide-in-from-bottom duration-300"
@@ -561,7 +581,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
             aria-label={tNav('navigation_menu')}
           >
             {/* Drag handle */}
-            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
+            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-popover rounded-t-xl">
               <div className="w-8 h-1 rounded-full bg-muted-foreground/25" />
             </div>
 
@@ -570,9 +590,16 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
               <div className="flex-1 min-w-0 mr-2">
                 <CompanySwitcher />
               </div>
+              {/* The fiscal year is app-wide and its picker heads the sidebar;
+                  a phone has no sidebar, so the sheet carries it. */}
+              {company && (
+                <div className="mr-1 flex-shrink-0">
+                  <SidebarFiscalYear placement="sheet" />
+                </div>
+              )}
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="-mr-1"
                 onClick={closeMobileMenu}
                 aria-label={tNav('close_menu')}
@@ -598,7 +625,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                       <span className="flex-1 min-w-0">
                         <span className="block text-sm">{tNav('back_to_clients')}</span>
                         {/* Visible cross-host hint: touch has no title tooltip. */}
-                        <span className="block truncate text-[11px] text-muted-foreground">
+                        <span className="block truncate text-xs text-muted-foreground">
                           {cockpitHint}
                         </span>
                       </span>
@@ -616,154 +643,87 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   <div className="mx-3 mt-1.5 h-px bg-border/30" />
                 </div>
               )}
-              {/* Top items (Hem, Assistent) */}
+              {/* Every area and its menu ("Mer" lists them all): an area
+                  folds open to its rows, the one the user is in first. */}
               <div className="space-y-0.5">
-                {topItems.map((item) => {
-                  const active = isActive(item.href)
-                  const enabled = isItemEnabled(item.href)
-                  const badge: number | null = null
-                  const decorBadge = renderBadge(item)
-                  const content = (
-                    <>
-                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
-                      <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
-                      {decorBadge ? decorBadge : badge !== null && (
-                        <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[11px] font-semibold px-1.5">
-                          {badge > 99 ? '99+' : badge}
-                        </span>
-                      )}
-                    </>
-                  )
-                  const baseClass = cn(
-                    'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors',
-                          active
-                            ? 'bg-primary/10 text-primary font-medium'
-                            : 'text-foreground active:bg-muted/60'
-                        )
-                      : 'text-muted-foreground/40'
-                  )
-                  return enabled ? (
-                    <NavLink
-                      key={item.href}
-                      href={item.href}
-                      onClick={closeMobileMenu}
-                      className={baseClass}
-                    >
-                      {content}
-                    </NavLink>
-                  ) : (
-                    <div key={item.href} className={baseClass} aria-disabled="true">
-                      {content}
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Arbeta / Analys / Data / Skatt & bokslut groups (mobile) */}
-              {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items }) => (
-                <div key={key}>
-                  <div className="flex items-center gap-3 my-1.5 px-3">
-                    <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav(groupLabelKey[key])}</span>
-                    <div className="flex-1 h-px bg-border/30" />
-                  </div>
-                  <div className="space-y-0.5">
-                    {items.map((item) => {
-                      const active = isActive(item.href)
-                      const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && uncategorizedCount > 0
-                        ? uncategorizedCount
-                        : item.href === '/pending' && pendingOpsCount > 0
-                          ? pendingOpsCount
-                          : null
-                      const decorBadge = renderBadge(item)
-                      const content = (
-                        <>
-                          {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
-                          <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
-                          {decorBadge ? decorBadge : badge !== null && (
-                            <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[11px] font-semibold px-1.5">
-                              {badge > 99 ? '99+' : badge}
-                            </span>
+                {visibleAreas
+                  .filter((area) => area.id !== 'settings' && (area.id !== 'byra' || cockpitMode))
+                  .map((area) => {
+                    const AreaIcon = area.icon
+                    const open = openPhoneArea === area.id
+                    const current = area.id === activeAreaId
+                    const panelId = `phone-area-${area.id}`
+                    return (
+                      <div key={area.id}>
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          aria-controls={panelId}
+                          onClick={() => setOpenPhoneArea(open ? null : area.id)}
+                          className={cn(
+                            'flex w-full items-center gap-3 rounded-lg px-3 min-h-[44px] text-left text-sm transition-colors duration-150 active:bg-muted/60',
+                            current ? 'font-medium text-strong' : 'text-foreground',
                           )}
-                        </>
-                      )
-                      const baseClass = cn(
-                        'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors',
-                              active
-                                ? 'bg-primary/10 text-primary font-medium'
-                                : 'text-foreground active:bg-muted/60'
-                            )
-                          : 'text-muted-foreground/40'
-                      )
-                      return enabled ? (
-                        <NavLink
-                          key={item.href}
-                          href={item.href}
-                          onClick={closeMobileMenu}
-                          className={baseClass}
                         >
-                          {content}
-                        </NavLink>
-                      ) : (
-                        <div key={item.href} className={baseClass} aria-disabled="true">
-                          {content}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
+                          <AreaIcon className={cn('h-[18px] w-[18px] flex-shrink-0', current ? 'text-strong' : 'text-muted-foreground')} />
+                          <span className="flex-1">{tNav(area.labelKey as never)}</span>
+                          <ChevronDownIcon
+                            className={cn('h-4 w-4 text-muted-foreground transition-transform duration-150', open && 'rotate-180')}
+                          />
+                        </button>
+                        {open && (
+                          <div id={panelId} className="mb-1 ml-[21px] space-y-0.5 border-l-hairline pl-2.5">
+                            {areaItems(area).map((item) => {
+                              const active = isActive(item.href)
+                              const enabled = isItemEnabled(item.href) && !item.comingSoon
+                              const badge = badgeFor(item.href)
+                              const tag = rowTag(item)
+                              return (
+                                <PhoneNavRow
+                                  key={item.href}
+                                  enabled={enabled}
+                                  href={item.href}
+                                  onClick={closeMobileMenu}
+                                  aria-current={active ? 'page' : undefined}
+                                  className={sheetRowClass(enabled, active)}
+                                >
+                                  <span className="text-sm flex-1">{tNav(item.labelKey as never)}</span>
+                                  {tag ? (
+                                    <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">{tag}</span>
+                                  ) : (
+                                    badge !== null && (
+                                      <span data-ph-mask className="text-[12px] tabular-nums text-muted-foreground">
+                                        {badge > 99 ? '99+' : badge}
+                                      </span>
+                                    )
+                                  )}
+                                </PhoneNavRow>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+              </div>
 
               {/* Tillägg (extensions): only when there's at least one */}
               {visibleExtensionNavItems.length > 0 && (
                 <>
                   <div className="flex items-center gap-3 my-1.5 px-3">
-                    <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_extensions')}</span>
+                    <span className="text-xs font-semibold text-muted-foreground">{tNav('group_extensions')}</span>
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
                     {visibleExtensionNavItems.map((item) => {
                       const Icon = resolveIcon(item.icon)
-                      const active = isActive(item.href)
-                      const enabled = hasCompany
+                      const active = pathname === item.href || pathname.startsWith(`${item.href}/`)
                       const labelTranslationKey = extensionLabelKey(item.href)
-                      const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
-                      const content = (
-                        <>
-                          <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                          <span className="text-sm">{label}</span>
-                        </>
-                      )
-                      const baseClass = cn(
-                        'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                        enabled
-                          ? cn(
-                              'transition-colors',
-                              active
-                                ? 'bg-primary/10 text-primary font-medium'
-                                : 'text-foreground active:bg-muted/60'
-                            )
-                          : 'text-muted-foreground/40'
-                      )
-                      return enabled ? (
-                        <NavLink
-                          key={item.href}
-                          href={item.href}
-                          onClick={closeMobileMenu}
-                          className={baseClass}
-                        >
-                          {content}
-                        </NavLink>
-                      ) : (
-                        <div key={item.href} className={baseClass} aria-disabled="true">
-                          {content}
-                        </div>
+                      return (
+                        <PhoneNavRow key={item.href} enabled={hasCompany} href={item.href} onClick={closeMobileMenu} className={sheetRowClass(hasCompany, active)}>
+                          <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-strong" : "text-muted-foreground")} />
+                          <span className="text-sm">{labelTranslationKey ? tNav(labelTranslationKey) : item.label}</span>
+                        </PhoneNavRow>
                       )
                     })}
                   </div>
@@ -772,7 +732,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
 
               {/* Mitt konto divider */}
               <div className="flex items-center gap-3 my-1.5 px-3">
-                <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('mitt_konto')}</span>
+                <span className="text-xs font-semibold text-muted-foreground">{tNav('mitt_konto')}</span>
                 <div className="flex-1 h-px bg-border/30" />
               </div>
 
@@ -785,51 +745,26 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   // Cockpit: settings open in byrå scope (account-level
                   // sections only) and say so, same as the desktop user menu.
                   {
-                    href: cockpitMode ? '/settings/account?ctx=byra' : '/settings',
-                    labelKey: (cockpitMode ? 'account_settings' : 'settings') as NavLabelKey,
+                    href: settingsHref,
+                    labelKey: cockpitMode ? ('account_settings' as const) : ('settings' as const),
                     icon: Cog6ToothIcon,
                   },
-                  { href: '/help', labelKey: 'help' as NavLabelKey, icon: QuestionMarkCircleIcon },
+                  { href: '/help', labelKey: 'help' as const, icon: QuestionMarkCircleIcon },
                 ]).map((item) => {
-                  const active = isActive(item.href)
+                  const active = pathname.startsWith(hrefPath(item.href))
                   const enabled = isItemEnabled(item.href)
-                  const content = (
-                    <>
-                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
+                  return (
+                    <PhoneNavRow key={item.href} enabled={enabled} href={item.href} onClick={closeMobileMenu} className={sheetRowClass(enabled, active)}>
+                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-strong' : 'text-muted-foreground'))}
                       <span className="text-sm">{tNav(item.labelKey)}</span>
-                    </>
-                  )
-                  const baseClass = cn(
-                    'flex items-center gap-3 px-3 min-h-[44px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors',
-                          active
-                            ? 'bg-primary/10 text-primary font-medium'
-                            : 'text-foreground active:bg-muted/60'
-                        )
-                      : 'text-muted-foreground/40'
-                  )
-                  return enabled ? (
-                    <NavLink
-                      key={item.href}
-                      href={item.href}
-                      onClick={closeMobileMenu}
-                      className={baseClass}
-                    >
-                      {content}
-                    </NavLink>
-                  ) : (
-                    <div key={item.href} className={baseClass} aria-disabled="true">
-                      {content}
-                    </div>
+                    </PhoneNavRow>
                   )
                 })}
               </div>
             </div>
 
             {/* Support + Logout */}
-            <div className="px-2 py-2 mt-1 border-t border-border space-y-1">
+            <div className="px-2 py-2 mt-1 border-t-hairline space-y-1">
               <div className="px-3 py-2">
                 <SupportLink variant="muted" />
               </div>

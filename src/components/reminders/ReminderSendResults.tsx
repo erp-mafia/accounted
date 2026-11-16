@@ -67,7 +67,7 @@ export function ReminderSendResults({
             <span
               className={cn(
                 'block',
-                describe && 'text-[12.5px]',
+                describe && 'text-xs',
                 result.status === 'failed' ? 'text-destructive' : result.status === 'skipped' && 'text-muted-foreground',
               )}
             >
@@ -77,7 +77,7 @@ export function ReminderSendResults({
         ))}
       </ul>
       {retryCount > 0 && canWrite && (
-        <div className="space-y-3 rounded-lg border border-border p-4">
+        <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
           <label className="flex items-start gap-3 text-[13px]">
             <Checkbox
               checked={attested}
@@ -87,7 +87,7 @@ export function ReminderSendResults({
             />
             <span>{t('bank_retry_attest', { count: retryCount })}</span>
           </label>
-          <Button variant="outline" size="sm" disabled={!attested} loading={retrying} onClick={() => void retry()}>
+          <Button variant="outline" disabled={!attested} loading={retrying} onClick={() => void retry()}>
             {t('bank_retry_send', { count: retryCount })}
           </Button>
         </div>

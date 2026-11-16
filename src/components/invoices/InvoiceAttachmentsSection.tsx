@@ -308,7 +308,7 @@ export function InvoiceAttachmentsSection({
   )
 
   return (
-    <div className="space-y-2 rounded-lg border border-border p-3">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1">
           <p className="text-sm font-medium">{t('title')}</p>
@@ -330,21 +330,19 @@ export function InvoiceAttachmentsSection({
           <Button
             type="button"
             variant="outline"
-            size="sm"
             onClick={() => setPickerOpen(true)}
             disabled={disabled || loading || full}
           >
-            <ArchiveBoxIcon className="mr-2 h-4 w-4" />
+            <ArchiveBoxIcon className="h-4 w-4" />
             {t('add_from_archive')}
           </Button>
           <Button
             type="button"
             variant="outline"
-            size="sm"
             onClick={() => inputRef.current?.click()}
             disabled={disabled || loading || full}
           >
-            <PaperClipIcon className="mr-2 h-4 w-4" />
+            <PaperClipIcon className="h-4 w-4" />
             {t('add')}
           </Button>
         </div>
@@ -388,7 +386,7 @@ export function InvoiceAttachmentsSection({
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 aria-label={t('remove', { name: a.file_name })}
                 className="shrink-0"
                 loading={removing === a.document_id}

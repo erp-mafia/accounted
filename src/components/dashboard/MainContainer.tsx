@@ -10,6 +10,16 @@ import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
 import { cn } from '@/lib/utils'
 
 /**
+ * The padded canvas (founder decision 2026-09-07, PR #2390): no max-width,
+ * 24px side padding, and PageHeader restyled into the panel's top bar by the
+ * .page-header rules in globals.css. The 16px top padding is what the sticky
+ * top bar pulls itself back over (negative margin), so the numbers must stay
+ * in step with the CSS. A full-bleed route that shows a plain page (the
+ * extension shell) applies it itself.
+ */
+export const PADDED_CANVAS_CLASS = 'px-4 pb-8 pt-4 md:px-6'
+
+/**
  * Picks the dashboard chrome container based on route. Extension workspaces
  * (/e/*), the /chat app shell and the invoice editor want the full viewport
  * for their own multi-pane layouts; everything else gets the padded
@@ -59,15 +69,10 @@ export function MainContainer({
     )
   }
 
-  // The panel is the canvas (founder decision 2026-09-07, PR #2390): no
-  // max-width, 24px side padding, and PageHeader restyled into the panel's
-  // top bar by the .page-header rules in globals.css. The 16px top padding
-  // is what the sticky top bar pulls itself back over (negative margin), so
-  // the two numbers must stay in step with the CSS. While the floating
-  // assistant button is on screen the bottom padding grows, so the last row
-  // of a page scrolls clear of the button (crm#1841).
+  // While the floating assistant button is on screen the bottom padding
+  // grows, so the last row of a page scrolls clear of the button (crm#1841).
   return (
-    <div key={companyId ?? ''} className={cn('px-4 pb-8 pt-4 md:px-6', AGENT_FAB_CLEARANCE_CLASS)}>
+    <div key={companyId ?? ''} className={cn(PADDED_CANVAS_CLASS, AGENT_FAB_CLEARANCE_CLASS)}>
       <SIEImportHoldBanner companyId={holdCompanyId} />
       {children}
     </div>

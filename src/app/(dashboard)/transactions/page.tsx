@@ -15,11 +15,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { DataListEmpty } from '@/components/ui/data-list'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { OpenOnParam } from '@/components/ui/open-on-param'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AdjustmentsHorizontalIcon, CheckIcon, CreditCardIcon, SpinnerIcon } from '@/components/icons'
 import { useUiState } from '@/lib/hooks/use-ui-state'
@@ -38,8 +40,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
-import { FyPicker } from '@/components/common/FyPicker'
-import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -149,7 +150,6 @@ import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/jo
 import { withLivePointer } from '@/lib/transactions/is-booked'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import { bankRowInSource, countInboxScope, skattekontoInSource } from '@/lib/transactions/inbox-scope'
-import type { FiscalPeriod } from '@/types'
 
 // Every list fetch embeds the junction so a row split over several verifikat
 // (journal_entry_id NULL, #1553) renders as booked with its verifikat instead
@@ -232,11 +232,6 @@ const TemplatePicker = dynamic(
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
-
-// Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
-// NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
-// report page must never silently hide pending inbox rows here, and vice versa.
-const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 
 // Journal-entry ids get interpolated into the supplier-invoice .or() filter
 // string in the underlag-badge effect below. They come from journal_entries.id
@@ -502,8 +497,14 @@ export default function TransactionsPage() {
     setColumnsHidden(current.includes(id) ? current.filter((c) => c !== id) : [...current, id])
   }
   const tDetach = useTranslations('tx_detach')
+  const tCommon = useTranslations('common')
+  const { canWrite } = useCanWrite()
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last list fetch failed (failed) or loaded only the window, without the
+  // older pending rows (partial). Said in the page, never in a toast: with no
+  // rows on screen in place of the list, with rows as one line above them.
+  const [loadFailure, setLoadFailure] = useState<'failed' | 'partial' | null>(null)
   const [mode, setMode] = useState<ViewMode>('inbox')
   // The view is remembered per company (view-mode-storage.ts) and applied
   // once per company and per ?view= link, after mount: reading localStorage
@@ -791,34 +792,25 @@ export default function TransactionsPage() {
     [companyId],
   )
 
-  // Period filter (rakenskapsar). FyPicker owns the persistence under the
-  // page-local key. Quarter chips existed briefly (#1545) but were dropped:
-  // they crowded the filter row, and on a brutet rakenskapsar they were not
-  // momsdeklaration quarters, which made them misleading rather than useful.
-  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
-  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  // Period scope (räkenskapsår): the app-wide year beside the company name
+  // (Stil v3), visible on every page, so a year chosen elsewhere never hides
+  // pending rows here unseen; the footer still names rows outside it. Rows
+  // the scope hides leave both batch selections when it renders
+  // (useBulkSelection): every batch action operates on "what you see".
+  // Quarter chips existed briefly (#1545) but were dropped: on a brutet
+  // räkenskapsår they were not momsdeklaration quarters.
+  const fiscalScope = useFiscalScope()
+  // Footer "Visa alla": this visit lists every year, without moving the
+  // app-wide year. A new year chosen in the sidebar ends it.
+  const [showAllYears, setShowAllYears] = useState(false)
+  const [seenYear, setSeenYear] = useState<string | null | undefined>(undefined)
+  if (fiscalScope.ready && seenYear !== fiscalScope.periodId) {
+    setSeenYear(fiscalScope.periodId)
+    if (seenYear !== undefined) setShowAllYears(false)
+  }
+  const fyPeriod = showAllYears ? null : fiscalScope.period
   const periodBounds = useMemo(() => resolvePeriodBounds(fyPeriod, null), [fyPeriod])
-
-  const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
-    setFyPeriodId(periodId)
-    setFyPeriod(period ?? null)
-    // Rows the new scope hides leave both batch selections when it renders
-    // (useBulkSelection): every batch action operates on "what you see".
-  }, [])
-
-  // Footer "Visa alla" escape hatch: clears the period scope AND its
-  // persisted value (FyPicker only writes storage from its own dropdown).
-  const clearPeriodFilter = useCallback(() => {
-    setFyPeriodId(null)
-    setFyPeriod(null)
-    if (companyId) {
-      try {
-        window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
-      } catch {
-        // localStorage may be unavailable; the in-memory state is cleared.
-      }
-    }
-  }, [companyId])
+  const clearPeriodFilter = useCallback(() => setShowAllYears(true), [])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   // Registered, enabled cash accounts for the account chooser: session-cached
@@ -871,6 +863,25 @@ export default function TransactionsPage() {
   // Bank transaction being moved to another cash account (null = dialog closed).
   const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
+  // A company with no bank row in any year meets the start card, not the
+  // period line: "Välj Alla räkenskapsår" names rows that do not exist. Asked
+  // only when the year's list comes back empty.
+  const [noRowsInAnyYear, setNoRowsInAnyYear] = useState(false)
+  const yearListEmpty = !isLoading && !!periodBounds && transactions.length === 0 && skvRows.length === 0
+  useEffect(() => {
+    if (!companyId || !yearListEmpty) return
+    let cancelled = false
+    void supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .then(({ count, error }) => {
+        if (!cancelled && !error) setNoRowsInAnyYear(count === 0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, supabase, yearListEmpty])
   // Whose giro number a row that names nobody shows (crm#1204): the company's
   // own bankgiro, or the one supplier card carrying it. Read once per company;
   // nothing is shown until the register is in, so a row never flips from
@@ -1444,20 +1455,19 @@ export default function TransactionsPage() {
 
       // A newer fetch (scope change, refresh) started while this one was in
       // flight: its results own the state now, so this response must not
-      // apply. Toasts are skipped too; the newer request reports its own fate.
+      // apply. Its failure state is skipped too; the newer request reports
+      // its own fate.
       if (fetchGenerationRef.current !== generation) return
 
       if (txError) {
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
+        setLoadFailure('failed')
         return
       }
 
-      if (pendingRows === null || ignoredRows === null) {
-        // Partial load: the windowed rows render, but older pending (or
-        // ignored) rows are absent. Say so instead of presenting a
-        // complete-looking list.
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
-      }
+      // Partial load: the windowed rows render, but older pending (or
+      // ignored) rows are absent. Say so instead of presenting a
+      // complete-looking list.
+      setLoadFailure(pendingRows === null || ignoredRows === null ? 'partial' : null)
 
       const rows = txData || []
       const windowIds = new Set(rows.map((r) => r.id))
@@ -1501,7 +1511,7 @@ export default function TransactionsPage() {
       // predecessor may have left it up).
       if (fetchGenerationRef.current === generation) setIsLoading(false)
     }
-  }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
+  }, [companyId, loadSkvRows, periodBounds, supabase])
 
   const refreshTransactions = useCallback(async () => {
     if (!companyId) return
@@ -1819,13 +1829,11 @@ export default function TransactionsPage() {
     }
   }
 
-  // The initial fetch waits for FyPicker to finish restoring the persisted
-  // period scope (onReady fires after its restore onChange). Fetching at
+  // The initial fetch waits for the app-wide year to restore. Fetching at
   // mount used to race the restore: an unscoped fetch painted the list, the
   // restore re-created fetchTransactions and re-ran this effect with a second
   // skeleton takeover, so every visit flashed list → skeleton → list.
-  const [fyReady, setFyReady] = useState(false)
-  const handleFyReady = useCallback(() => setFyReady(true), [])
+  const fyReady = fiscalScope.ready
   // Whether anything is on screen, readable from the effect without making
   // row state a dependency (which would refetch on every row patch).
   const hasRowsRef = useRef(false)
@@ -1839,21 +1847,14 @@ export default function TransactionsPage() {
   const [isScopeRefreshing, setIsScopeRefreshing] = useState(false)
   const scopeRefreshSeqRef = useRef(0)
 
-  // Fiscal scope must not survive a company switch: periodBounds from the
-  // previous company would scope the first fetch for the new one, and a
-  // non-null fyPeriodId makes FyPicker skip its persisted-scope restore
-  // (it only restores when value === null). Resetting during render (React's
-  // adjust-state-on-prop-change pattern) rather than in an effect guarantees
-  // FyPicker's restore effect observes the cleared value: its effect captures
-  // `value` at commit time, and child effects run before a parent effect
-  // could reset it. fyReady = false holds the fetch effect until the new
-  // company's restore completes via onReady.
+  // Page state must not survive a company switch (React's
+  // adjust-state-on-prop-change pattern). The app-wide year resets itself:
+  // fiscalScope.ready is false until the new company's year is restored,
+  // which holds the fetch effect below.
   const [scopeCompanyId, setScopeCompanyId] = useState<string | null>(companyId)
   if (scopeCompanyId !== companyId) {
     setScopeCompanyId(companyId)
-    setFyReady(false)
-    setFyPeriodId(null)
-    setFyPeriod(null)
+    setShowAllYears(false)
     // A scope refresh in flight belongs to the old company: invalidate its
     // finally-guard and drop the cue.
     scopeRefreshSeqRef.current++
@@ -4621,7 +4622,14 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
+      {loadFailure && transactions.length > 0 ? (
+        // The list could not refresh (or loaded without its older pending
+        // rows) while rows are on screen: the rows stay, this line says so,
+        // and it takes the place of any softer line (one per page).
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchTransactions(false, true) }}>
+          {loadFailure === 'partial' ? t('load_partial') : tCommon('refresh_failed')}
+        </AttnLine>
+      ) : skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
         // Only while the person is looking at Skatteverket's rows. The dead
         // connection has its own channel on the Skattekonto page and the
         // Konton row (lib/notices predicate), so a line on every visit to the
@@ -4650,8 +4658,7 @@ export default function TransactionsPage() {
         </AttnLine>
       ) : null}
 
-      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök]
-          ... [period chip] [source ContextPicker far right] */}
+      {/* Toolbar: [Att bokföra/Alla-seg] [source ContextPicker] ... [sök] */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={mode}
@@ -4667,68 +4674,56 @@ export default function TransactionsPage() {
               : []),
           ]}
         />
+        {/* V7 toolbar order: view segments, then the source filter, then the
+            search at the right end (one width on every list). */}
+        {sourceItems.length > 1 && (
+          <ContextPicker
+            value={effectiveSourceFilter}
+            onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
+            triggerLabel={(() => {
+              const active =
+                sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
+              // The annotation is a balance: a colon, not a middle dot,
+              // which reads as a minus sign in front of an amount on a
+              // small screen (PostHog PH 119).
+              return active.annotation ? `${active.label}: ${active.annotation}` : active.label
+            })()}
+            items={sourceItems}
+          />
+        )}
+        {/* Quiet cue that a scope change is reconciling behind the rendered
+            list (the list itself never swaps to a skeleton for it). */}
+        {isScopeRefreshing && (
+          <SpinnerIcon
+            className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+            aria-label={t('refreshing')}
+          />
+        )}
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder="Sök transaktioner…"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
-        {/* Far-right context group, shared by both view modes: period scope
-            (rakenskapsar chip) and the account chooser (concept scene 10).
-            Approved deviation from convention 8's single chip: booking is
-            period work, so the period scope earns the second chip (user
-            request 2026-08-12). The Q1-Q4 chips that briefly rendered here
-            (#1545) were removed: they crowded the row into a second line,
-            and on a brutet rakenskapsar they were not momsdeklaration
-            quarters, so they misled more than they scoped. */}
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {/* Quiet cue that a scope change is reconciling behind the rendered
-              list (the list itself never swaps to a skeleton for it). First in
-              the group, so appearing shifts none of the controls. */}
-          {isScopeRefreshing && (
-            <SpinnerIcon
-              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-              aria-label={t('refreshing')}
-            />
-          )}
-          <FyPicker
-            value={fyPeriodId}
-            onChange={handlePeriodChange}
-            onReady={handleFyReady}
-            storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
-          />
-          {sourceItems.length > 1 && (
-            <ContextPicker
-              value={effectiveSourceFilter}
-              onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
-              triggerLabel={(() => {
-                const active =
-                  sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
-                // The annotation is a balance: a colon, not a middle dot,
-                // which reads as a minus sign in front of an amount on a
-                // small screen (PostHog PH 119).
-                return active.annotation ? `${active.label}: ${active.annotation}` : active.label
-              })()}
-              items={sourceItems}
-            />
-          )}
-        </div>
       </div>
 
       {/* Content based on mode */}
       {isLoading ? (
         // Same shape as loading.tsx and the list it resolves into: borderless
-        // one-line rows, not a boxed card with two-line rows.
-        <div aria-busy>
+        // one-line 44px rows, not a boxed card with two-line rows.
+        <LateReveal>
           {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center justify-between gap-4 border-b border-border py-3">
-              <Skeleton className="h-4 w-48" />
+            <div key={i} className="flex h-11 items-center justify-between gap-4 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
               <div className="flex items-center gap-6">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-16" />
               </div>
             </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailure && transactions.length === 0 ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void fetchTransactions(true, true)} />
       ) : mode === 'review' ? (
         <SuggestionReviewList
           items={suggestionItems}
@@ -4750,17 +4745,18 @@ export default function TransactionsPage() {
               actionLabel={t('card_empty_action')}
               actionHref={`/import?mode=bank&account=${emptyCardSource.id}`}
             />
-          ) : searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
-            <DataListEmpty
-              title="Inga träffar"
-              description={
-                searchTerm
-                  ? t('no_search_results')
-                  : effectiveSourceFilter !== 'all'
-                    ? t('source_empty')
-                    : t('period_empty')
-              }
-            />
+          ) : searchTerm ? (
+            // No hits: one muted line in the list, not a block.
+            <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+              <span>{t('no_search_results')}</span>
+              <Button variant="link" onClick={() => setSearchTerm('')}>
+                {tCommon('clear_search')}
+              </Button>
+            </div>
+          ) : effectiveSourceFilter !== 'all' || (periodBounds && !(noRowsInAnyYear && yearListEmpty)) ? (
+            <p className="py-3 text-[13px] text-muted-foreground">
+              {effectiveSourceFilter !== 'all' ? t('source_empty') : t('period_empty')}
+            </p>
           ) : (
             <InboxZeroState hasTransactions={transactions.length > 0 || skvRows.length > 0} />
           )
@@ -4791,17 +4787,16 @@ export default function TransactionsPage() {
                     </span>
                     {selectedIds.size > 0 && (
                       <>
-                        <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                        <Button onClick={() => setShowBatchSelector(true)} disabled={!canWrite}>
                           {t('batch_book')}
                         </Button>
                         {/* Bulk-book (samlingsverifikation): only when ≥2 selected
                             on the same date + same direction. Disabled state
                             explains why via title. */}
                         <Button
-                          size="sm"
                           variant="outline"
                           onClick={() => setBulkBookOpen(true)}
-                          disabled={!bulkBookEligible}
+                          disabled={!canWrite || !bulkBookEligible}
                           title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
                         >
                           {t('batch_bulk_book')}
@@ -4810,6 +4805,7 @@ export default function TransactionsPage() {
                           type="button"
                           className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
                           onClick={handleBatchDelete}
+                          disabled={!canWrite}
                         >
                           {t('batch_delete')}
                         </button>
@@ -4820,13 +4816,13 @@ export default function TransactionsPage() {
                         the deterministic subset of the selection is bookable;
                         the rest is still ignorable below. */}
                     {skvBookableSelectedRows.length > 0 && (
-                      <Button size="sm" onClick={() => setSkvBulkConfirmOpen(true)}>
+                      <Button onClick={() => setSkvBulkConfirmOpen(true)} disabled={!canWrite}>
                         {t('batch_skv_book', { count: skvBookableSelectedRows.length })}
                       </Button>
                     )}
                     {/* Ignorera spans both selections (bank + skattekonto):
                         one confirmation, one progress counter, one toast. */}
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore} disabled={!canWrite}>
                       {t('batch_ignore')}
                     </button>
                     {(selectedIds.size < selectableInboxIds.length ||
@@ -4854,7 +4850,7 @@ export default function TransactionsPage() {
 
             {/* Negative margin + matching padding: the scroll container runs
                 to the panel edges while the columns keep the page padding. */}
-            <div className="overflow-x-auto -mx-4 px-4 md:-mx-6 md:px-6">
+            <div className="overflow-x-auto -mx-4 px-2 md:-mx-6 md:px-4">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -4878,7 +4874,7 @@ export default function TransactionsPage() {
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
-                            size="icon-sm"
+                            size="icon"
                             className="-my-2 ml-2 mr-2 align-middle text-muted-foreground hover:text-foreground"
                             aria-label={t('columns_button')}
                             title={t('columns_button')}
@@ -4975,6 +4971,7 @@ export default function TransactionsPage() {
           skvRows={skvRowsInScope}
           exitingIds={exitingIds}
           searchTerm={searchTerm}
+          onClearSearch={() => setSearchTerm('')}
           sourceFilter={effectiveSourceFilter}
           filter={historyFilter}
           onFilterChange={setHistoryFilter}
@@ -5167,10 +5164,10 @@ export default function TransactionsPage() {
           (opened without an anchor). */}
       {templatePickerOpen && templatePickerAnchor && (
         <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
-          <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 text-[12.5px]">
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b-hairline px-3 py-2 text-xs">
             {templatePickerTransaction && (
               <>
-                <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
+                <span className="min-w-0 truncate" title={templatePickerTransaction.description} data-ph-mask>{templatePickerTransaction.description}</span>
                 <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
                   {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
                 </span>
@@ -5180,7 +5177,7 @@ export default function TransactionsPage() {
           <div className="flex min-h-0 flex-col overflow-hidden">
             <TemplatePicker {...templatePickerProps} dense />
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-background px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t-hairline bg-background px-3 py-2">
             {templatePickerLinks}
           </div>
         </CategoryPopover>
@@ -5190,7 +5187,7 @@ export default function TransactionsPage() {
         {/* Width capped at the space left of a docked sheet (--agent-sheet-w
             is docked-only) so the picker never clips off-screen left on
             narrow desktops; sheet closed = the old max-w-lg. */}
-        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))]">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
@@ -5218,13 +5215,13 @@ export default function TransactionsPage() {
           if (!open) setInvoicePickerTransaction(null)
         }}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('dialog_match_invoice')}</DialogTitle>
           </DialogHeader>
           {invoicePickerTransaction && (
             <>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                 <span className="truncate text-muted-foreground">{invoicePickerTransaction.description}</span>
                 <span className="font-medium tabular-nums flex-shrink-0 ml-3 text-success">
                   +{formatCurrency(invoicePickerTransaction.amount, invoicePickerTransaction.currency)}
@@ -5248,13 +5245,13 @@ export default function TransactionsPage() {
           if (!open) setSupplierInvoicePickerTransaction(null)
         }}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           {supplierInvoicePickerTransaction && (
             <>
-              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+              <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm bg-control shadow-raised">
                 <span className="truncate text-muted-foreground">{supplierInvoicePickerTransaction.description}</span>
                 <span className="font-medium tabular-nums flex-shrink-0 ml-3">
                   {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
@@ -5293,14 +5290,29 @@ export default function TransactionsPage() {
         />
       )}
 
-      {isDialogOpen && <Dialog open onOpenChange={setIsDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('dialog_add_transaction')}</DialogTitle>
-          </DialogHeader>
-          <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} />
-        </DialogContent>
-      </Dialog>}
+      {/* ?new opens the drawer: the Pengar area's create button links here. */}
+      {/* A viewer cannot create: the top bar's button is locked for them, and the
+          ?new link (the area sidebar's create row) opens nothing either. */}
+      <OpenOnParam
+        param="new"
+        onOpen={() => {
+          if (canWrite) setIsDialogOpen(true)
+        }}
+      />
+      {/* A manual transaction is created in a drawer over the list (V7
+          creation forms); the title is the create button's label. */}
+      {isDialogOpen && (
+        <CreateDrawer
+          open
+          onOpenChange={setIsDialogOpen}
+          title={t('action_new_transaction')}
+          formId="create-transaction-form"
+          submitLabel={t('create_submit')}
+          submitting={isCreating}
+        >
+          <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} formId="create-transaction-form" />
+        </CreateDrawer>
+      )}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
@@ -5399,7 +5411,7 @@ export default function TransactionsPage() {
                 </span>
               </div>
             ))}
-            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
+            <div className="flex items-baseline justify-between gap-4 border-t-hairline pt-2 font-medium">
               <span>{t('skv_bulk_total', { count: skvBookableSelectedRows.length })}</span>
               <span className="tabular-nums">
                 {skvBulkTotal > 0 ? '+' : ''}
@@ -5427,7 +5439,7 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -5440,7 +5452,6 @@ export default function TransactionsPage() {
                     </div>
                   </div>
                   <Button
-                    size="sm"
                     onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
                     disabled={siMatchProcessing}
                   >
@@ -5486,7 +5497,7 @@ export default function TransactionsPage() {
               istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
               verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg p-3 bg-control shadow-raised">
               {ciMatchSuggestion?.candidates.map((c) => (
                 <div key={c.invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -5503,7 +5514,6 @@ export default function TransactionsPage() {
                     </div>
                   </div>
                   <Button
-                    size="sm"
                     onClick={() => handleMatchSuggestedInvoice(ciMatchSuggestion.transactionId, c.invoice_id)}
                     disabled={ciMatchProcessing}
                   >

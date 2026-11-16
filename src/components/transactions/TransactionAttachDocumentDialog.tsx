@@ -126,19 +126,19 @@ export default function TransactionAttachDocumentDialog({
         onOpenChange(o)
       }}
     >
-      <DialogContent
-        ref={dropSurfaceRef}
-        className="sm:max-w-lg"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => e.preventDefault()}
-      >
+      <DialogContent size="form"
+ ref={dropSurfaceRef}
+ 
+ onDragOver={(e) => e.preventDefault()}
+ onDrop={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
         {/* Transaction summary: same block as TransactionBookingDialog */}
-        <div className="flex items-center gap-3 rounded-lg border p-3">
+        <div className="flex items-center gap-3 rounded-lg p-3 bg-control shadow-raised">
           <div
             className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
               isIncome
@@ -171,7 +171,6 @@ export default function TransactionAttachDocumentDialog({
                 <Button
                   type="button"
                   variant="link"
-                  size="sm"
                   className="h-auto p-0 text-xs"
                   disabled={isAttaching}
                   onClick={() => onDetach(transaction)}
@@ -211,7 +210,7 @@ export default function TransactionAttachDocumentDialog({
               )}
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0"
                 aria-label={t('selected_remove')}
                 onClick={() => setPickedDoc(null)}
@@ -223,12 +222,11 @@ export default function TransactionAttachDocumentDialog({
           <Button
             type="button"
             variant="outline"
-            size="sm"
             className="w-full"
             disabled={isAttaching}
             onClick={() => setInboxPickerOpen(true)}
           >
-            <InboxIcon className="h-4 w-4 mr-2" />
+            <InboxIcon className="h-4 w-4" />
             {t('pick_existing')}
           </Button>
         </div>

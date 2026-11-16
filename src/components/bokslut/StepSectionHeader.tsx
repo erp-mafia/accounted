@@ -26,7 +26,7 @@ export function StepSectionHeader({
 }) {
   return (
     <div className="mb-1 flex items-center gap-2 px-1">
-      <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <h3 className="font-sans text-xs font-medium text-muted-foreground">
         <span className="tabular-nums">{ANNUAL_REPORT_STEP_KEYS.indexOf(step) + 1}.</span> {title}
       </h3>
       {help}

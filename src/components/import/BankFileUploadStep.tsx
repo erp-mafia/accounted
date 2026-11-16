@@ -146,7 +146,7 @@ export default function BankFileUploadStep({
                 </SelectContent>
               </Select>
             </div>
-            {exportPathKey && <p className="text-[12.5px] text-muted-foreground">{t(exportPathKey)}</p>}
+            {exportPathKey && <p className="text-xs text-muted-foreground">{t(exportPathKey)}</p>}
           </div>
 
           {/* Drop zone */}
@@ -199,7 +199,7 @@ export default function BankFileUploadStep({
 
           {/* Skattekonto redirect: not an error, a pointer to the right flow */}
           {skattekontoDetected && (
-            <div className="p-4 bg-muted/30 border border-border rounded-lg flex gap-3">
+            <div className="p-4 rounded-lg flex gap-3 bg-control shadow-raised">
               <ExclamationCircleIcon className="h-5 w-5 text-warning flex-shrink-0 mt-0.5" />
               <div className="text-sm">
                 <p className="font-medium">{t('skattekonto_detected_title')}</p>
@@ -215,7 +215,7 @@ export default function BankFileUploadStep({
 
           {/* Error display */}
           {error && (
-            <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
+            <div className="bg-destructive/8 p-4 rounded-lg flex gap-3">
               <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
                 <p className="font-medium text-destructive">{errorTitle || 'Kunde inte läsa filen'}</p>

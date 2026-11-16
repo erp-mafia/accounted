@@ -1,12 +1,15 @@
 'use client'
 
-import { Children, cloneElement, isValidElement, useRef, useState } from 'react'
+import { Children, cloneElement, createContext, isValidElement, useContext, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ChevronLeftIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
+import { FIELD_CLASS } from '@/components/ui/field-classes'
 import { HelpPopover, type HelpPopoverContent } from '@/components/ui/help-popover'
 import { openNativePicker } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { ViewerLock } from '@/components/ui/viewer-lock'
+import { SettingsTopBarPortal, useSettingsTopBarSlots } from './SettingsTopBar'
 import {
   Select,
   SelectContent,
@@ -51,13 +54,32 @@ interface SettingsSectionHeaderProps {
 }
 
 export function SettingsSectionHeader({ title, intro, action, mark }: SettingsSectionHeaderProps) {
+  // On a settings page the top bar is the section's header (it already
+  // carries the section's name, from the sidebar's own labels): the help and
+  // the action move up there and nothing is drawn in the page flow, so a page
+  // never shows a second title (design convention 2). A brand mark stays, as
+  // a small line of its own.
+  const topBar = useSettingsTopBarSlots()
+  if (topBar) {
+    return (
+      <>
+        {intro ? (
+          <SettingsTopBarPortal slot="help">
+            <HelpPopover className="shrink-0">{intro}</HelpPopover>
+          </SettingsTopBarPortal>
+        ) : null}
+        {action ? <SettingsTopBarPortal slot="action">{action}</SettingsTopBarPortal> : null}
+        {mark ? <div className="flex min-h-9 items-center leading-none">{mark}</div> : null}
+      </>
+    )
+  }
   return (
     <header className="flex min-h-9 items-center justify-between gap-4">
       <div className="flex items-center gap-2">
         {mark ? <span className="shrink-0 leading-none">{mark}</span> : null}
         {/* data-ph-unmask: settings chrome (titles, labels) is static i18n
             text in session replays; values and controls stay masked. */}
-        <h2 data-ph-unmask="" className="font-display text-2xl tracking-tight">{title}</h2>
+        <h2 data-ph-unmask="" className="text-[15px] font-medium leading-[22px] text-strong">{title}</h2>
         {intro ? <HelpPopover className="shrink-0">{intro}</HelpPopover> : null}
       </div>
       {action ? <div className="flex shrink-0 items-center gap-3">{action}</div> : null}
@@ -71,10 +93,13 @@ export function SettingsSectionHeader({ title, intro, action, mark }: SettingsSe
  * WhatsApp pages under Kopplingar).
  */
 export function SettingsBackLink({ href, label }: { href: string; label: string }) {
+  // The settings top bar names the hub before the page's own name.
+  const topBar = useSettingsTopBarSlots()
+  if (topBar) return null
   return (
     <Link
       href={href}
-      className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      className="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
     >
       <ChevronLeftIcon className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
@@ -90,13 +115,27 @@ interface SettingsGroupProps {
   help?: React.ReactNode
   children: React.ReactNode
   className?: string
+  /**
+   * Kept for call sites: every group fills the settings column, which the
+   * shell centres at 880px.
+   */
+  wide?: boolean
 }
 
-export function SettingsGroup({ label, help, children, className }: SettingsGroupProps) {
+export function SettingsGroup({ label, help, children, className, wide: _wide = false }: SettingsGroupProps) {
+  const inSettings = useSettingsTopBarSlots() !== null
   return (
-    <section className={cn('pt-10 first:pt-8', className)}>
+    <section className={cn('pt-10', inSettings ? 'first:pt-4' : 'first:pt-8', className)}>
       {label ? (
-        <p className="flex items-center gap-2 border-b border-border pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <p
+          className={cn(
+            'flex items-center gap-2 border-b-hairline pb-2 font-medium',
+            // On a settings page the top bar is the title, so a group is the
+            // page's own section heading (15px); embedded in a form or a
+            // dialog elsewhere it stays the quiet eyebrow over its rows.
+            inSettings ? 'text-[15px] leading-[22px] text-strong' : 'text-xs text-muted-foreground',
+          )}
+        >
           <span data-ph-unmask="">{label}</span>
           {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
         </p>
@@ -104,6 +143,17 @@ export function SettingsGroup({ label, help, children, className }: SettingsGrou
       <div>{children}</div>
     </section>
   )
+}
+
+const SettingsViewerScopeContext = createContext(false)
+
+/**
+ * Company settings a read-only member cannot change: every SettingsRow inside
+ * locks its control column (ViewerLock), while the label and its "?" help stay
+ * live. Renders no element. Settings that belong to the user stay outside it.
+ */
+export function SettingsViewerScope({ children }: { children: React.ReactNode }) {
+  return <SettingsViewerScopeContext.Provider value={true}>{children}</SettingsViewerScopeContext.Provider>
 }
 
 interface SettingsRowProps {
@@ -130,6 +180,7 @@ export function SettingsRow({
   className,
 }: SettingsRowProps) {
   const labelClass = 'text-[13px] text-foreground'
+  const viewerScoped = useContext(SettingsViewerScopeContext)
   // A bare switch is pushed to the column's end edge so every toggle in the
   // settings lines up with the buttons above and below it.
   const content = Children.map(children, (child) =>
@@ -148,7 +199,7 @@ export function SettingsRow({
         className={cn(
           'grid grid-cols-1 gap-2 py-3 @min-[640px]:min-h-[60px] @min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,var(--settings-control-w))] @min-[640px]:gap-x-8',
           align === 'center' ? '@min-[640px]:items-center' : '@min-[640px]:items-baseline',
-          !borderless && 'border-b border-border',
+          !borderless && 'border-b-hairline',
           className,
         )}
       >
@@ -163,7 +214,7 @@ export function SettingsRow({
           {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
-          {content}
+          {viewerScoped ? <ViewerLock>{content}</ViewerLock> : content}
         </div>
       </div>
     </div>
@@ -181,7 +232,7 @@ export function SettingsRowEnd({ children, className }: { children: React.ReactN
  * never pushes the buttons onto a line of their own below it.
  */
 export function SettingsRowNote({ children, className, fill = false }: { children: React.ReactNode; className?: string; fill?: boolean }) {
-  return <span className={cn('text-[12.5px] text-muted-foreground', fill && 'min-w-0 flex-1 basis-0', className)}>{children}</span>
+  return <span className={cn('text-xs text-muted-foreground', fill && 'min-w-0 flex-1 basis-0', className)}>{children}</span>
 }
 
 /**
@@ -189,11 +240,7 @@ export function SettingsRowNote({ children, className, fill = false }: { childre
  * SettingsSelect trigger: they fill the control column, so the text inside
  * every field starts on the same line.
  */
-const SETTINGS_FIELD_CLASS =
-  'min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-[13px] text-foreground ' +
-  'placeholder:text-muted-foreground/60 transition-colors duration-150 ' +
-  'focus-visible:border-foreground/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 ' +
-  'disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground'
+const SETTINGS_FIELD_CLASS = cn(FIELD_CLASS, 'min-w-0 flex-1 px-2.5')
 
 /**
  * Boxed text input that fills the control column (read-only values render
@@ -209,7 +256,7 @@ export function SettingsInput({ className, onClick, ...rest }: React.InputHTMLAt
         onClick?.(e)
         if (!e.defaultPrevented) openNativePicker(e.currentTarget)
       }}
-      className={cn(SETTINGS_FIELD_CLASS, 'h-9', className)}
+      className={cn(SETTINGS_FIELD_CLASS, 'h-8 pointer-coarse:h-10', className)}
     />
   )
 }
@@ -228,7 +275,7 @@ export function SettingsTextarea({ className, ...rest }: React.TextareaHTMLAttri
  * dropdowns). The trigger is the same box as SettingsInput.
  */
 /** The SettingsSelect trigger's look, for a field-shaped picker of another kind (the attest settings' people picker). */
-export const SETTINGS_SELECT_TRIGGER_CLASS = cn(SETTINGS_FIELD_CLASS, 'h-9 w-full cursor-pointer justify-between gap-2')
+export const SETTINGS_SELECT_TRIGGER_CLASS = cn(SETTINGS_FIELD_CLASS, 'h-8 w-full cursor-pointer justify-between gap-2 pointer-coarse:h-10')
 
 // Radix Select refuses empty-string item values; settings selects use '' for
 // placeholder-shaped options ("Ingen", "Lägg till valuta"), so '' maps onto a
@@ -362,7 +409,7 @@ export function SettingsSelect({
               <SelectGroup key={`group-${index}`}>
                 <SelectLabel
                   data-ph-unmask=""
-                  className="text-[11px] uppercase tracking-wider"
+                  className="text-xs"
                 >
                   {entry.label}
                 </SelectLabel>
@@ -410,7 +457,7 @@ export function SettingsReveal({ open, indent = true, children }: SettingsReveal
       )}
     >
       <div className="min-h-0 overflow-hidden">
-        <div className={cn(indent && 'ml-3 border-l border-border pl-4')}>{children}</div>
+        <div className={cn(indent && 'ml-3 border-l-hairline pl-4')}>{children}</div>
       </div>
     </div>
   )
@@ -433,7 +480,7 @@ export function SettingsSeg<T extends string>({
   disabled,
 }: SettingsSegProps<T>) {
   return (
-    <div role="group" aria-label={ariaLabel} className="inline-flex items-center gap-1 rounded-lg bg-muted/70 p-1">
+    <div role="group" aria-label={ariaLabel} className="inline-flex h-8 items-center gap-0.5 rounded-lg bg-secondary/80 p-0.5">
       {options.map((o) => (
         <button
           key={o.value}
@@ -443,9 +490,9 @@ export function SettingsSeg<T extends string>({
           onClick={() => onChange(o.value)}
           data-ph-unmask=""
           className={cn(
-            'rounded-sm px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
+            'h-full rounded-md px-3 text-[13px] font-medium transition-[background-color,box-shadow,color] duration-150 disabled:cursor-not-allowed disabled:opacity-40',
             o.value === value
-              ? 'border border-border bg-card font-medium text-foreground'
+              ? 'bg-control text-strong shadow-raised'
               : 'text-muted-foreground hover:text-foreground',
           )}
         >
@@ -468,8 +515,8 @@ export function SettingsDangerZone({
   children: React.ReactNode
 }) {
   return (
-    <section className="mt-10 border-t border-destructive/30 pt-3">
-      <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
+    <section className="mt-10 border-t-hairline pt-3">
+      <p className="flex items-center gap-2 px-1 text-xs font-medium text-destructive/80">
         <span data-ph-unmask="">{label}</span>
         {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
       </p>

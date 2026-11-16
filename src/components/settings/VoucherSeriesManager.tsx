@@ -7,6 +7,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
 import {
   SettingsGroup,
@@ -54,6 +55,7 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
   const t = useTranslations('settings_voucher_series')
   const { company } = useCompany()
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const saveSettings = useSaveSettings()
   const [series, setSeries] = useState<VoucherSeries[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -192,7 +194,7 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
             )
           })}
           <div className="flex justify-end px-1 pt-4">
-            <Button type="button" size="sm" onClick={handleSave} disabled={!hasChanges} loading={isSaving}>
+            <Button type="button" onClick={handleSave} disabled={!canWrite || !hasChanges} title={lockedTitle} loading={isSaving}>
               {t('save_names')}
             </Button>
           </div>

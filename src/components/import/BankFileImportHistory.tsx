@@ -1,11 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
@@ -13,6 +14,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getFormat } from '@/lib/import/bank-file/formats'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { cn, formatDate } from '@/lib/utils'
+import { useImportHistoryRows, ImportHistorySkeleton, ImportStatus } from './import-history-parts'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 /**
  * Subset of the bank_file_imports row (GET /api/import/bank-file) actually
@@ -68,29 +71,12 @@ interface UndoReport {
  */
 export default function BankFileImportHistory() {
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
-  const [rows, setRows] = useState<BankFileImportListRow[] | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const { rows, loadFailed, reload: fetchImports } = useImportHistoryRows<BankFileImportListRow>('/api/import/bank-file?limit=20')
   const [pendingUndo, setPendingUndo] = useState<BankFileImportListRow | null>(null)
 
-  const fetchImports = useCallback(async () => {
-    try {
-      const res = await fetch('/api/import/bank-file?limit=20')
-      if (!res.ok) {
-        setLoadFailed(true)
-        return
-      }
-      const data = await res.json()
-      setRows(Array.isArray(data.data) ? data.data : [])
-      setLoadFailed(false)
-    } catch {
-      setLoadFailed(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchImports()
-  }, [fetchImports])
 
   // Deliberately no client-side timeout: undoing a large import can take
   // minutes (the route runs with maxDuration 300) and the confirm dialog
@@ -152,34 +138,15 @@ export default function BankFileImportHistory() {
 
   const statusCell = (status: string) => {
     const labelKey = STATUS_LABEL_KEY[status]
-    const label = labelKey ? t(labelKey) : status
-    const variant = STATUS_BADGE_VARIANT[status]
-    if (!variant) {
-      return <span className="text-xs text-muted-foreground">{label}</span>
-    }
-    return (
-      <Badge variant={variant} className="font-normal">
-        {label}
-      </Badge>
-    )
+    return <ImportStatus label={labelKey ? t(labelKey) : status} variant={STATUS_BADGE_VARIANT[status]} />
   }
 
-  if (loadFailed) {
-    return (
-      <p className="px-1 text-xs leading-5 text-muted-foreground">
-        {t('bankfile_history_load_error')}
-      </p>
-    )
+  if (loadFailed && rows === null) {
+    return <LoadError title={t('bankfile_history_load_error')} onRetry={() => void fetchImports()} />
   }
 
   if (rows === null) {
-    return (
-      <div className="space-y-2" role="status">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
-    )
+    return <ImportHistorySkeleton />
   }
 
   if (rows.length === 0) {
@@ -192,7 +159,12 @@ export default function BankFileImportHistory() {
 
   return (
     <div>
-      <div className="overflow-x-auto">
+      {loadFailed && (
+        <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void fetchImports() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -212,7 +184,7 @@ export default function BankFileImportHistory() {
             {rows.map((row) => (
               <tr key={row.id} className="transition-colors duration-150 hover:bg-secondary/35">
                 <td className={TD_CLASS}>{row.filename}</td>
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                   {formatDate(row.created_at)}
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap')}>{formatLabel(row)}</td>
@@ -222,11 +194,12 @@ export default function BankFileImportHistory() {
                   {row.status === 'completed' && (
                     <Button
                       variant="outline"
-                      size="sm"
                       className="text-destructive hover:text-destructive"
                       onClick={() => setPendingUndo(row)}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                     >
-                      <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+                      <ArrowUturnLeftIcon className="h-4 w-4" />
                       {t('bankfile_history_undo_button')}
                     </Button>
                   )}

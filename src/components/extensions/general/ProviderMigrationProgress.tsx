@@ -78,7 +78,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
         {review
-          ? <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">{t('ext_arcim_review_title', { count: review.total })}</h2>
+          ? <h2 className="text-xl text-balance">{t('ext_arcim_review_title', { count: review.total })}</h2>
           : <p className="text-sm">{t(needsAttention ? 'ext_arcim_job_attention' : 'ext_arcim_job_running')}</p>}
         <p className="text-sm text-muted-foreground">
           {review ? t('ext_arcim_review_lede', { provider }) : t('ext_arcim_job_background')}
@@ -120,7 +120,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         {actionFailed && <p className="text-sm text-destructive">
           {t(actionFailed === 'accept' ? 'ext_arcim_review_accept_failed' : 'ext_arcim_review_retry_failed')}
         </p>}
-        <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-end">
+        <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-end">
           {!review.unchanged && <Button variant="outline" onClick={() => void act('retry')}
             loading={busy === 'retry'} disabled={busy !== null}>
             {t('ext_arcim_review_retry', { count: review.total })}

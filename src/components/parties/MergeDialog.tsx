@@ -95,13 +95,13 @@ export function MergeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('merge_dialog_title')}</DialogTitle>
           <DialogDescription>{t('merge_body')}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <ul className="divide-y divide-border rounded-lg border border-border">
+          <ul className="divide-y divide-border">
             {[subject, ...candidates].map((c) => {
               const isSubject = c.id === subject.id
               const included = isSubject || picked.has(c.id)

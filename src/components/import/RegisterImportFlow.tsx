@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
-import { SpinnerIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ARTICLE_BROWSER_MAX_FILE_BYTES } from '@/lib/import/articles/browser-parse'
@@ -26,11 +26,14 @@ import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import type { RegisterResult } from '@/components/import/RegisterResultStep'
 import { useRegisterImportConfig, type ReviewRow } from '@/components/import/register-import-config'
 
+// The step's silhouette while its chunk loads, hidden for the first 300ms.
 function StepLoading() {
   return (
-    <div className="flex min-h-48 items-center justify-center" role="status">
-      <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
-    </div>
+    <LateReveal role="status" className="space-y-4 py-2">
+      <Skeleton className="h-4 w-48" />
+      <Skeleton className="h-32 w-full rounded-lg" />
+      <Skeleton className="h-7 w-28" />
+    </LateReveal>
   )
 }
 

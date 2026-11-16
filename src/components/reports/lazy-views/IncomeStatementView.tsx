@@ -28,7 +28,7 @@ const IncomeExpenseChart = dynamic(
 
 export default function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
-  const { data, loading, error } = useReportData<IncomeStatementReport>(
+  const { data, loading, error, refetch } = useReportData<IncomeStatementReport>(
     `/api/reports/income-statement?${reportQs}`,
     'Kunde inte hämta resultaträkning',
   )
@@ -49,7 +49,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data) {
@@ -79,7 +79,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
         <CardHeader>
           <CardTitle className="text-base">Rörelseintäkter</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <ReportSectionTable
             sections={data.revenue_sections}
             drilldown={drilldown}
@@ -93,7 +93,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
         <CardHeader>
           <CardTitle className="text-base">Rörelsekostnader</CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent>
           <ReportSectionTable
             sections={data.expense_sections}
             negate
@@ -105,7 +105,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
 
       {/* Operating result */}
       <Card>
-        <CardContent className="flex items-baseline justify-between p-6">
+        <CardContent className="flex items-baseline justify-between">
           <span className="text-sm font-medium">Rörelseresultat</span>
           <span className={`font-display text-xl tabular-nums ${data.total_revenue - data.total_expenses >= 0 ? 'text-success' : 'text-destructive'}`}>
             {formatAmount(data.total_revenue - data.total_expenses)} kr
@@ -119,7 +119,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
           <CardHeader>
             <CardTitle className="text-base">Finansiella poster</CardTitle>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent>
             <ReportSectionTable
               sections={data.financial_sections}
               drilldown={drilldown}
@@ -131,7 +131,7 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
 
       {/* Net result */}
       <Card>
-        <CardContent className="flex items-baseline justify-between p-6">
+        <CardContent className="flex items-baseline justify-between">
           <span className="text-sm font-medium">Årets resultat</span>
           <span className={`font-display text-xl tabular-nums ${data.net_result >= 0 ? 'text-success' : 'text-destructive'}`}>
             {formatAmount(data.net_result)} kr

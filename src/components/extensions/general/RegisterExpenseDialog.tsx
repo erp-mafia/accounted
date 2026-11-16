@@ -273,7 +273,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
 
   return (
     <Dialog open={open} onOpenChange={(next) => !isSubmitting && onOpenChange(next)}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('expense_dialog_title')}</DialogTitle>
           <DialogDescription>
@@ -389,12 +389,12 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
               selectedName={accountName}
             />
             {learnedAccount && expenseAccount === learnedAccount && merchant && (
-              <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+              <p data-ph-mask="" className="text-xs text-muted-foreground">
                 {t('expense_account_learned', { merchant })}
               </p>
             )}
             {reverseChargeLines === null && (
-              <p className="attn text-[12.5px]">{t('expense_reverse_charge_account', { account: expenseAccount })}</p>
+              <p className="attn text-xs">{t('expense_reverse_charge_account', { account: expenseAccount })}</p>
             )}
           </div>
 
@@ -405,7 +405,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
           )}
 
           {previewLines.length > 0 && (
-            <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground space-y-2">
+            <div className="rounded-lg px-4 py-3 text-xs text-muted-foreground space-y-2 bg-control shadow-raised">
               {/* Kronor only for a receipt in the ledger currency: the rows are in the receipt's currency until the service converts them. */}
               <VoucherLinesTable lines={previewLines} withCurrency={isLedgerCurrency(currency)} />
               {payer === 'owner' && ownerIsTheCompany ? (

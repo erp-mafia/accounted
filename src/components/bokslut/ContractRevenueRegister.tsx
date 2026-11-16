@@ -3,20 +3,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { SettingsGroup, SettingsRow, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -101,17 +103,23 @@ function toBody(form: Form): Record<string, unknown> | null {
  */
 export function ContractRevenueRegister() {
   const t = useTranslations('contract_revenue')
+  // The top bar names Bokslut before the page (the menu row these pages sit under).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
   const [loading, setLoading] = useState(true)
+  // A failed load says so in the page with "Försök igen" (Stil v3 states), never a toast.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [method, setMethod] = useState<Settings['method']>('successiv')
   const [account, setAccount] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const [contracts, setContracts] = useState<Contract[]>([])
-  const [periodId, setPeriodId] = useState<string | null>(null)
+  // The fiscal year is app-wide context (the sidebar); the register shows one started year.
+  const { periodId } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [preview, setPreview] = useState<Preview | null>(null)
   const [editing, setEditing] = useState<Contract | 'new' | null>(null)
   const [form, setForm] = useState<Form>(EMPTY_FORM)
@@ -132,7 +140,10 @@ export function ContractRevenueRegister() {
     try {
       const res = await fetch('/api/bookkeeping/contract-revenue')
       const body = await res.json().catch(() => ({}))
-      if (!res.ok) return fail(t('load_failed'), body)
+      if (!res.ok) {
+        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        return
+      }
       const saved: Settings | null = body.data?.settings ?? null
       setSettings(saved)
       if (saved) {
@@ -143,18 +154,28 @@ export function ContractRevenueRegister() {
         setAccount('')
       }
       setContracts(body.data?.contracts ?? [])
+      setLoadError(null)
+    } catch {
+      setLoadError(t('load_failed'))
     } finally {
       setLoading(false)
     }
-  }, [fail, t])
+  }, [locale, t])
 
   const loadPreview = useCallback(async () => {
     if (!periodId || !settings) return setPreview(null)
-    const res = await fetch(`/api/bookkeeping/contract-revenue/year?fiscal_period_id=${encodeURIComponent(periodId)}`)
-    const body = await res.json().catch(() => ({}))
-    if (!res.ok) return fail(t('load_failed'), body)
-    setPreview(body.data ?? null)
-  }, [periodId, settings, fail, t])
+    try {
+      const res = await fetch(`/api/bookkeeping/contract-revenue/year?fiscal_period_id=${encodeURIComponent(periodId)}`)
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        return
+      }
+      setPreview(body.data ?? null)
+    } catch {
+      setLoadError(t('load_failed'))
+    }
+  }, [periodId, settings, locale, t])
 
   useEffect(() => {
     void load()
@@ -269,26 +290,31 @@ export function ContractRevenueRegister() {
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }}
         title={t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        help={<HelpPopover>{t('help')}</HelpPopover>}
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             {canWrite && (
-              <Button size="sm" variant="outline" onClick={() => openEditor('new')}>
+              <Button size="toolbar" variant="outline" onClick={() => openEditor('new')}>
+                <PlusIcon className="h-4 w-4" aria-hidden />
                 {t('add')}
               </Button>
             )}
             {canWrite && settings && (
-              <Button size="sm" onClick={() => setConfirmBook(true)} disabled={!periodId || !preview || notK3}>
+              <Button size="toolbar" onClick={() => setConfirmBook(true)} disabled={!periodId || !preview || notK3}>
                 {t('book')}
               </Button>
             )}
-            <FyPicker value={periodId} onChange={(id) => setPeriodId(id)} includeAllOption={false} hideFuturePeriods />
           </div>
         }
       />
 
-      {attention && <AttnLine>{attention}</AttnLine>}
+      {loadError && contracts.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : (
+        attention && <AttnLine>{attention}</AttnLine>
+      )}
 
       <SettingsGroup label={t('settings_heading')}>
         <SettingsRow label={t('method_label')} htmlFor="contract-revenue-method">
@@ -313,12 +339,12 @@ export function ContractRevenueRegister() {
             disabled={!canWrite}
           />
           {canWrite && (
-            <Button size="sm" variant="outline" onClick={saveSettings} loading={savingSettings} disabled={account.trim().length !== 4}>
+            <Button variant="outline" onClick={saveSettings} loading={savingSettings} disabled={account.trim().length !== 4}>
               {t('settings_save')}
             </Button>
           )}
           {canWrite && settings && (
-            <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(true)}>
+            <Button variant="ghost" onClick={() => setConfirmRemove(true)}>
               {t('settings_remove')}
             </Button>
           )}
@@ -326,10 +352,16 @@ export function ContractRevenueRegister() {
       </SettingsGroup>
 
       {loading ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadError && contracts.length === 0 ? (
+        <LoadError
+          title={t('load_failed')}
+          description={loadError === t('load_failed') ? undefined : loadError}
+          onRetry={() => void load()}
+        />
       ) : contracts.length === 0 ? (
         <EmptyState
           title={t('empty_title')}
@@ -337,7 +369,7 @@ export function ContractRevenueRegister() {
           {...(canWrite ? { actionLabel: t('add'), onAction: () => openEditor('new') } : {})}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -356,7 +388,7 @@ export function ContractRevenueRegister() {
                 <tr key={c.id} className="hover:bg-secondary/35">
                   <td className={TD_CLASS} data-ph-mask="">{c.name}</td>
                   <td className={cn(TD_CLASS, 'text-muted-foreground')}>{t(`kind_${c.kind}`)}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(c.figures_as_of)}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(c.figures_as_of)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{money(c.contract_value)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{money(c.costs_to_date)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{money(c.expected_total_cost)}</td>
@@ -382,10 +414,10 @@ export function ContractRevenueRegister() {
 
       {preview && preview.positions.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="text-sm font-medium text-muted-foreground">
             {t('preview_heading', { date: formatDate(preview.balansdag) })}
           </h2>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -403,9 +435,9 @@ export function ContractRevenueRegister() {
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                       {p.fardigstallandegrad_procent === null ? '' : `${p.fardigstallandegrad_procent} %`}
                     </td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(p.upparbetad_intakt)}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(p.netto)}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(p.befarad_forlust)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(p.upparbetad_intakt)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(p.netto)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(p.befarad_forlust)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -414,7 +446,7 @@ export function ContractRevenueRegister() {
           {preview.lines.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">{t('preview_no_lines')}</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -427,8 +459,8 @@ export function ContractRevenueRegister() {
                   {preview.lines.map((line, i) => (
                     <tr key={`${line.account_number}-${i}`}>
                       <td className={cn(TD_CLASS, 'font-mono')}>{line.account_number}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{line.debit_amount ? formatCurrency(line.debit_amount) : ''}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{line.credit_amount ? formatCurrency(line.credit_amount) : ''}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{line.debit_amount ? formatRowAmount(line.debit_amount) : ''}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{line.credit_amount ? formatRowAmount(line.credit_amount) : ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -468,7 +500,7 @@ export function ContractRevenueRegister() {
       />
 
       <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{editing === 'new' ? t('add') : t('edit')}</DialogTitle>
           </DialogHeader>

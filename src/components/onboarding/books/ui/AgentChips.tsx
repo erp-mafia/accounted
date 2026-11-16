@@ -73,7 +73,7 @@ export function AgentChips({ connection, onConnect }: {
                 {t('ai_connected')}
               </span>
             ) : (
-              <Button variant="secondary" size="sm" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
+              <Button variant="outline" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
                 {t('ai_connect')}
               </Button>
             )}

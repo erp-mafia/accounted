@@ -6,9 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { AccountMapping } from '@/lib/import/types'
 import type { SIEAppendPlan, SIEAppendVerdict } from '@/lib/import/sie-append'
@@ -93,7 +93,7 @@ export function SIEExistingYearChoice({
   const rows = plan?.vouchers ?? []
 
   return (
-    <section className="space-y-4 rounded-lg border border-border p-4">
+    <section className="space-y-4 rounded-lg p-4 bg-control shadow-raised">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-[13px]">{appendOnly ? t('title_vouchers_only') : t('title')}</p>
         <Select value={mode} onValueChange={(value) => onModeChange(value as ExistingYearMode)}>
@@ -107,13 +107,13 @@ export function SIEExistingYearChoice({
         </Select>
       </div>
 
-      {mode === 'replace' && <p className="text-[12.5px] text-muted-foreground">{t('replace_hint')}</p>}
+      {mode === 'replace' && <p className="text-xs text-muted-foreground">{t('replace_hint')}</p>}
 
       {mode === 'append' && loading && !plan && (
-        <div className="space-y-2" aria-busy="true">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-4 w-2/3 rounded-sm" />
           <Skeleton className="h-4 w-1/2 rounded-sm" />
-        </div>
+        </LateReveal>
       )}
 
       {mode === 'append' && error && <p className="text-[13px] text-destructive">{error}</p>}
@@ -162,7 +162,7 @@ export function SIEExistingYearChoice({
           ))}
 
           {plan.warnings.length > 0 && (
-            <ul className="space-y-1 text-[12.5px] text-attn">
+            <ul className="space-y-1 text-xs text-attn">
               {plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}
             </ul>
           )}
@@ -184,10 +184,10 @@ export function SIEExistingYearChoice({
                   const badge = VERDICT_BADGE[row.verdict]
                   return (
                     <TableRow key={row.sourceOrdinal}>
-                      <TableCell className="tabular-nums">{formatDate(row.date)}</TableCell>
+                      <TableCell className="date-figures">{formatDate(row.date)}</TableCell>
                       <TableCell className="tabular-nums">{row.sourceId}</TableCell>
                       <TableCell className="max-w-64 truncate">{row.description}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(row.amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatRowAmount(row.amount)}</TableCell>
                       <TableCell>
                         {badge ? (
                           <Badge variant={badge}>
@@ -206,7 +206,7 @@ export function SIEExistingYearChoice({
             </Table>
           )}
           {(rows.length > SHOWN_ROWS || plan.vouchersTruncated) && (
-            <p className="text-[12.5px] text-muted-foreground">{t('more_rows', { count: plan.counts.total - plan.counts.present - Math.min(rows.length, SHOWN_ROWS) })}</p>
+            <p className="text-xs text-muted-foreground">{t('more_rows', { count: plan.counts.total - plan.counts.present - Math.min(rows.length, SHOWN_ROWS) })}</p>
           )}
         </div>
       )}

@@ -186,7 +186,6 @@ export function SecuritySettings() {
         >
           <SettingsRowEnd>
             <Button
-              size="sm"
               onClick={() =>
                 router.push('/account/set-password?returnTo=/settings/account')
               }
@@ -236,7 +235,7 @@ export function SecuritySettings() {
               disabled={isChangingPassword}
             />
             <SettingsRowEnd>
-              <Button type="submit" size="sm" loading={isChangingPassword}>
+              <Button type="submit" loading={isChangingPassword}>
                 {isChangingPassword ? t('saving') : t('update_password_button')}
               </Button>
             </SettingsRowEnd>
@@ -274,11 +273,10 @@ export function SecuritySettings() {
                 ) : (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={handleUnenrollMfa}
                     loading={isUnenrolling}
                   >
-                    {!isUnenrolling && <ShieldExclamationIcon className="mr-2 h-3.5 w-3.5" />}
+                    {!isUnenrolling && <ShieldExclamationIcon className="h-3.5 w-3.5" />}
                     {isUnenrolling ? t('disabling') : t('disable_mfa')}
                   </Button>
                 )}
@@ -291,7 +289,6 @@ export function SecuritySettings() {
                 {hasPassword === false ? (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() =>
                       router.push('/account/set-password?returnTo=/mfa/enroll')
                     }
@@ -301,12 +298,11 @@ export function SecuritySettings() {
                 ) : (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() =>
                       router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)
                     }
                   >
-                    <ShieldCheckIcon className="mr-2 h-3.5 w-3.5" />
+                    <ShieldCheckIcon className="h-3.5 w-3.5" />
                     {t('enable_mfa')}
                   </Button>
                 )}

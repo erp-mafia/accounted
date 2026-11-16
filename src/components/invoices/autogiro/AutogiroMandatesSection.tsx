@@ -65,7 +65,7 @@ export function AutogiroMandatesSection({
       {rows.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('mandates_empty')}</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -100,7 +100,7 @@ export function AutogiroMandatesSection({
                           )}
                         </span>
                       ) : canWrite ? (
-                        <Button type="button" size="sm" variant="outline" onClick={() => setLinking(mandate)}>
+                        <Button type="button" variant="outline" onClick={() => setLinking(mandate)}>
                           {t('mandate_link_customer')}
                         </Button>
                       ) : (
@@ -118,7 +118,7 @@ export function AutogiroMandatesSection({
                     </td>
                     <td className={cn(TD_CLASS, 'max-w-0')}>
                       {mandate.status_text && (
-                        <span className="block truncate text-[12.5px] text-muted-foreground" title={mandate.status_text}>
+                        <span className="block truncate text-xs text-muted-foreground" title={mandate.status_text}>
                           {mandate.status_text}
                         </span>
                       )}
@@ -193,7 +193,7 @@ function LinkCustomerDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('mandate_link_title', { payer: mandate.payer_number })}</DialogTitle>
           <DialogDescription>{t('mandate_link_description')}</DialogDescription>

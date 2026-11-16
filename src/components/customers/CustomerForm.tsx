@@ -6,13 +6,14 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FormSubmitRow } from '@/components/common/FormSubmitRow'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { CheckCircleIcon, LockClosedIcon, XCircleIcon } from '@/components/icons'
+import { CheckCircleIcon, XCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -53,12 +54,15 @@ interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
   isLoading: boolean
   initialData?: Partial<CreateCustomerInput>
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 export default function CustomerForm({
   onSubmit,
   isLoading,
   initialData,
+  formId,
 }: CustomerFormProps) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -362,7 +366,7 @@ export default function CustomerForm({
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Customer Type */}
       <div className="space-y-2">
         <Label>{t('type_label')}</Label>
@@ -472,7 +476,7 @@ export default function CustomerForm({
 
       {/* Customer number */}
       <div className="space-y-2">
-        <Label htmlFor="customer_number">{t('customer_number_label')}</Label>
+        <Label htmlFor="customer_number" optional>{t('customer_number_label')}</Label>
         <Input
           id="customer_number"
           placeholder={t('customer_number_placeholder')}
@@ -488,7 +492,7 @@ export default function CustomerForm({
       {/* Contact */}
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="contact_person">{t('contact_person_label')}</Label>
+          <Label htmlFor="contact_person" optional>{t('contact_person_label')}</Label>
           <Input
             id="contact_person"
             placeholder={t('contact_person_placeholder')}
@@ -500,7 +504,7 @@ export default function CustomerForm({
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="email">{t('email_label')}</Label>
+            <Label htmlFor="email" optional>{t('email_label')}</Label>
             <Input
               id="email"
               type="email"
@@ -512,7 +516,7 @@ export default function CustomerForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">{t('phone_label')}</Label>
+            <Label htmlFor="phone" optional>{t('phone_label')}</Label>
             <Input
               id="phone"
               placeholder={t('phone_placeholder')}
@@ -527,7 +531,7 @@ export default function CustomerForm({
         <h3 className="text-sm">{t('invoice_email_section')}</h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="invoice_email_cc_addresses">{t('invoice_email_cc_label')}</Label>
+            <Label htmlFor="invoice_email_cc_addresses" optional>{t('invoice_email_cc_label')}</Label>
             <Textarea
               id="invoice_email_cc_addresses"
               rows={3}
@@ -539,7 +543,7 @@ export default function CustomerForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="invoice_email_bcc_addresses">{t('invoice_email_bcc_label')}</Label>
+            <Label htmlFor="invoice_email_bcc_addresses" optional>{t('invoice_email_bcc_label')}</Label>
             <Textarea
               id="invoice_email_bcc_addresses"
               rows={3}
@@ -558,7 +562,7 @@ export default function CustomerForm({
       <div className="space-y-4">
         <h3>{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">{t('street_label')}</Label>
+          <Label htmlFor="address_line1" optional>{t('street_label')}</Label>
           <Input
             id="address_line1"
             placeholder={t('street_placeholder')}
@@ -566,7 +570,7 @@ export default function CustomerForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Label htmlFor="address_line2" optional>{t('address_line2_label')}</Label>
           <Input
             id="address_line2"
             placeholder={t('address_line2_placeholder')}
@@ -575,7 +579,7 @@ export default function CustomerForm({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">{t('postal_label')}</Label>
+            <Label htmlFor="postal_code" optional>{t('postal_label')}</Label>
             <Input
               id="postal_code"
               placeholder={t('postal_placeholder')}
@@ -583,7 +587,7 @@ export default function CustomerForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">{t('city_label')}</Label>
+            <Label htmlFor="city" optional>{t('city_label')}</Label>
             <Input
               id="city"
               placeholder={t('city_placeholder')}
@@ -643,7 +647,7 @@ export default function CustomerForm({
 
       {/* Fakturareferens: Er referens on new invoices (crm#1200) */}
       <div className="space-y-2">
-        <Label htmlFor="invoice_reference">{t('invoice_reference_label')}</Label>
+        <Label htmlFor="invoice_reference" optional>{t('invoice_reference_label')}</Label>
         <Input
           id="invoice_reference"
           placeholder={t('invoice_reference_placeholder')}
@@ -658,7 +662,7 @@ export default function CustomerForm({
 
       {/* Märkning: Märkning on new invoices (crm#1477) */}
       <div className="space-y-2">
-        <Label htmlFor="invoice_marking">{t('invoice_marking_label')}</Label>
+        <Label htmlFor="invoice_marking" optional>{t('invoice_marking_label')}</Label>
         <Input
           id="invoice_marking"
           placeholder={t('invoice_marking_placeholder')}
@@ -694,7 +698,7 @@ export default function CustomerForm({
 
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -702,26 +706,16 @@ export default function CustomerForm({
         />
       </div>
 
-      {/* Submit */}
-      <div className="flex justify-end gap-2">
-        <Button
-          type="submit"
-          disabled={!canWrite}
-          loading={isLoading}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-        >
-          {isLoading ? (
-            t('submit_saving')
-          ) : !canWrite ? (
-            <>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
-              {t('submit_save')}
-            </>
-          ) : (
-            t('submit_save')
-          )}
-        </Button>
-      </div>
+      {/* Submit: the host's footer carries it when the form has an id. */}
+      {!formId && (
+        <FormSubmitRow
+          canWrite={canWrite}
+          isLoading={isLoading}
+          label={t('submit_save')}
+          savingLabel={t('submit_saving')}
+          viewerTitle={t('viewer_disabled_tooltip')}
+        />
+      )}
     </form>
   )
 }

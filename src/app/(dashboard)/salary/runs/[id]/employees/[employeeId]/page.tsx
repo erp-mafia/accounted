@@ -6,8 +6,12 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowLeftIcon, CalculatorIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -21,7 +25,7 @@ import {
   mealBenefitSchablonFromRunParams,
 } from '@/lib/salary/manual-payslip-lines'
 import { comparePayslipLines, isTextRow } from '@/lib/salary/text-rows'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, EmployeeMasked } from '@/types'
@@ -111,6 +115,7 @@ export default function SalaryRunEmployeeDetailPage({
   const tSalary = useTranslations('salary')
   const tRun = useTranslations('salary_run')
   const { id: runId, employeeId } = use(params)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -230,7 +235,7 @@ export default function SalaryRunEmployeeDetailPage({
   // selection, the scroll position and any open dialog with it.
   if (!current && loading) {
     return (
-      <div role="status" aria-label={t('loading')} className="space-y-8">
+      <LateReveal role="status" aria-label={t('loading')} className="space-y-8">
         <Skeleton className="h-8 w-64" />
         <div className="flex flex-wrap gap-x-10 gap-y-4">
           {[1, 2, 3, 4].map((i) => (
@@ -238,7 +243,7 @@ export default function SalaryRunEmployeeDetailPage({
           ))}
         </div>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </LateReveal>
     )
   }
 
@@ -252,7 +257,7 @@ export default function SalaryRunEmployeeDetailPage({
           <ArrowLeftIcon className="h-4 w-4" />
           {t('back_to_run')}
         </Link>
-        <p className="text-sm text-destructive">{error ?? t('error_load_employee')}</p>
+        <LoadError title={t('error_load_employee')} description={error ?? undefined} onRetry={() => void load()} />
       </div>
     )
   }
@@ -263,10 +268,10 @@ export default function SalaryRunEmployeeDetailPage({
   // recurring text rows, manual text rows, then the rest by sort_order.
   const lineItems = [...(runEmployee.line_items ?? [])].sort(comparePayslipLines)
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  const readOnly = run.status !== 'draft' && run.status !== 'review'
+  const readOnly = !canWrite || (run.status !== 'draft' && run.status !== 'review')
   // Lines can be added to and taken off the payslip only while the run is a
   // draft (the line commands' gate); the button and the column exist only then.
-  const canEditLines = run.status === 'draft'
+  const canEditLines = canWrite && run.status === 'draft'
   // The same status as the Löner list and the run header (lib/salary/run-status-display.ts).
   const statusDisplay = salaryRunStatusDisplay(run.status)
   const statusLabel = statusDisplay ? tSalary(statusDisplay.labelKey) : run.status
@@ -299,64 +304,69 @@ export default function SalaryRunEmployeeDetailPage({
     { label: t('parental_days'), days: liveCounts?.parental ?? runEmployee.parental_days },
   ]
 
+  const statusChip =
+    statusDisplay && statusDisplay.chip === null ? (
+      <span className="text-sm text-muted-foreground">{statusLabel}</span>
+    ) : (
+      <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
+    )
+  const payslipFacts = (
+    <>
+      <span className="tabular-nums">{employee.personnummer_masked}</span>
+      {' · '}
+      <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
+      {/* Same note as the run header: say which days this payslip reads
+          when they are not the pay month, since the calendar opens there. */}
+      {hasCustomDeviationWindow(run) && (
+        <>
+          {' · '}
+          <span className="tabular-nums">
+            {tRun('deviation_period_note', {
+              start: formatDate(calendarWindow.start),
+              end: formatDate(calendarWindow.end),
+            })}
+          </span>
+        </>
+      )}
+    </>
+  )
+
   return (
     <div className="space-y-8 stagger-enter" aria-busy={loading}>
       {/* Header: the page-header hooks turn it into the top bar (convention
-          2), like the run and employee pages. The way back to the run is a
-          quiet arrow before the name instead of a row of its own; the run's
+          2), like the run and employee pages. The way back to the run is the
+          quiet parent link before the name instead of a row of its own; the run's
           status is the one status element, the meta line stays inline, and
           the next step sits on the right. */}
       <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href={`/salary/runs/${runId}`}
-              aria-label={t('back_to_run')}
-              title={t('back_to_run')}
-              className="inline-flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeftIcon className="h-4 w-4" />
-            </Link>
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
+            {/* The way back to the run, as the quiet parent before the name. */}
+            <PageHeaderParent label={tRun('title', { period: periodLabel })} href={`/salary/runs/${runId}`} />
+            <h1 className="page-header-title">
               {employee.first_name} {employee.last_name}
             </h1>
-            {statusDisplay && statusDisplay.chip === null ? (
-              <span className="text-sm text-muted-foreground">{statusLabel}</span>
-            ) : (
-              <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
-            )}
+            {/* On a phone the bar has no room for this: it is the first line under the bar (PageHeaderBelow). */}
+            <span className="hidden md:contents">{statusChip}</span>
             {loading && (
               <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
             )}
           </div>
-          <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-            <span className="tabular-nums">{employee.personnummer_masked}</span>
-            {' · '}
-            <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
-            {/* Same note as the run header: say which days this payslip reads
-                when they are not the pay month, since the calendar opens there. */}
-            {hasCustomDeviationWindow(run) && (
-              <>
-                {' · '}
-                <span className="tabular-nums">
-                  {tRun('deviation_period_note', {
-                    start: formatDate(calendarWindow.start),
-                    end: formatDate(calendarWindow.end),
-                  })}
-                </span>
-              </>
-            )}
-          </p>
+          <p data-below="" className="page-header-meta mt-1 text-sm text-muted-foreground">{payslipFacts}</p>
         </div>
         {run.status === 'draft' && (
-          <div className="page-header-action flex shrink-0 items-center gap-2">
-            <Button size="sm" onClick={handleCalculate} loading={calculating}>
-              {!calculating && <CalculatorIcon className="mr-2 h-4 w-4" />}
+          <PageHeaderActions className="page-header-action flex shrink-0 items-center gap-2">
+            <Button size="toolbar" onClick={handleCalculate} loading={calculating} disabled={!canWrite} title={lockedTitle}>
+              {!calculating && <CalculatorIcon className="h-4 w-4" />}
               {t('calculate')}
             </Button>
-          </div>
+          </PageHeaderActions>
         )}
       </div>
+      <PageHeaderBelow>
+        {statusChip}
+        <p>{payslipFacts}</p>
+      </PageHeaderBelow>
 
       {/* A failed reload or recalculation is said under the bar, with the
           payslip still on screen, instead of replacing the page. */}
@@ -371,7 +381,7 @@ export default function SalaryRunEmployeeDetailPage({
       <div className="flex flex-wrap gap-x-10 gap-y-4">
         {kpis.map(({ label, value, accent, overridden }) => (
           <div key={label} className="min-w-0">
-            <p className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
               {label}
               {overridden && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
             </p>
@@ -417,7 +427,7 @@ export default function SalaryRunEmployeeDetailPage({
             employeeId={employeeId}
             hoursWorked={runEmployee.hours_worked}
             calendarHours={calendarHours}
-            editable={run.status === 'draft'}
+            editable={canWrite && run.status === 'draft'}
             onSaved={load}
           />
         )}
@@ -438,7 +448,7 @@ export default function SalaryRunEmployeeDetailPage({
         <div className="mt-4 flex flex-wrap gap-x-10 gap-y-3">
           {absenceCounts.map(({ label, days }) => (
             <div key={label} className="min-w-0">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="text-xs text-muted-foreground">{label}</p>
               <p className="mt-1 text-sm tabular-nums">{t('days_count', { days })}</p>
             </div>
           ))}
@@ -452,7 +462,7 @@ export default function SalaryRunEmployeeDetailPage({
         kicker={t('line_items_title', { count: lineItems.length })}
         aside={
           canEditLines ? (
-            <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAddingLine(true)}>
+            <Button type="button" variant="outline" className="-my-1" onClick={() => setAddingLine(true)}>
               {t('add_line')}
             </Button>
           ) : undefined
@@ -501,14 +511,14 @@ export default function SalaryRunEmployeeDetailPage({
                       <td className={TD_CLASS}>{li.description}</td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{text ? null : (li.quantity ?? '-')}</td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
-                        {text ? null : formatCurrency(li.amount)}
+                        {text ? null : formatRowAmount(li.amount)}
                       </td>
                       {canEditLines && (
                         <td className={cn(TD_CLASS, 'pr-0 text-right')}>
                           {isRemovableLine(li) && (
                             <Button
                               variant="ghost"
-                              size="icon-sm"
+                              size="icon"
                               className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
                               onClick={() => handleRemoveLine(li.id)}
                               loading={removingLineId === li.id}

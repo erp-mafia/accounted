@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
-import Link from 'next/link'
+import { closableFiscalPeriods } from '@/lib/reference-data/fiscal-scope'
+import { useTranslations } from 'next-intl'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeftIcon, ArrowRightIcon, LockClosedIcon } from '@/components/icons'
+import { ArrowRightIcon, LockClosedIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,9 +13,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
-import { EmptyState } from '@/components/ui/empty-state'
+import { StepBar } from '@/components/ui/step-bar'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -34,7 +36,6 @@ import type {
   PeriodiseringConfidence,
 } from '@/lib/bokslut/accruals/auto-detect'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
 
@@ -92,8 +93,8 @@ export default function PeriodiseringWizardPage() {
   // K1 wording stays advisory ("behöver normalt inte").
   const isEF = company?.entity_type === 'enskild_firma'
 
+  const tNav = useTranslations('nav')
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
-  const [periodsError, setPeriodsError] = useState<string | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
   )
@@ -101,6 +102,8 @@ export default function PeriodiseringWizardPage() {
   const [step, setStep] = useState<Step>('vacation')
   const [proposal, setProposal] = useState<ProposalResponse | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to fetch the same period's accruals again.
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [loading, setLoading] = useState(false)
 
   const [vacationAccepted, setVacationAccepted] = useState(true)
@@ -127,23 +130,21 @@ export default function PeriodiseringWizardPage() {
   const [postSummary, setPostSummary] = useState<{ created: number; skipped: number } | null>(null)
 
   // ---- Eligible periods, from the session-cached list (lib/reference-data) ----
-  const { periods: allPeriods, isLoading: periodsLoading, error: periodsFetchError } = useFiscalPeriods()
+  const {
+    periods: allPeriods,
+    isLoading: periodsLoading,
+    error: periodsFetchError,
+    refresh: refreshPeriods,
+  } = useFiscalPeriods()
+  const periodsFailed = Boolean(periodsFetchError)
   useEffect(() => {
-    if (periodsLoading) return
-    if (periodsFetchError) {
-      setPeriodsError('Kunde inte hämta perioder')
-      return
-    }
-    const today = todayIsoStockholm()
-    const eligible = allPeriods.filter(
-      (p) => !p.is_closed && !p.closing_entry_id && hasEnded(p.period_end, today),
-    )
-    eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+    if (periodsLoading || periodsFailed) return
+    const eligible = closableFiscalPeriods(allPeriods)
     setPeriods(eligible)
     if (!selectedPeriodId && eligible.length > 0) {
       setSelectedPeriodId(eligible[0].id)
     }
-  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFetchError])
+  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFailed])
 
   // ---- Fetch accruals snapshot once period chosen ----
   useEffect(() => {
@@ -178,7 +179,7 @@ export default function PeriodiseringWizardPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, loadAttempt])
 
   const vacationProposal = useMemo(
     () => proposal?.proposals.find((p) => p.kind === 'vacation_liability_change') ?? null,
@@ -280,29 +281,18 @@ export default function PeriodiseringWizardPage() {
     <div className="space-y-8">
       <PageHeader
         title={closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
-        action={
-          <Button size="sm" variant="outline" asChild>
-            <Link href="/bookkeeping/year-end">
-              <ArrowLeftIcon className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-            </Link>
-          </Button>
-        }
+        // The way back to the bokslut is the quiet parent before the title.
+        parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }}
       />
 
-      {periods === null && !periodsError && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-4 w-full" />
-          </CardContent>
-        </Card>
+      {periods === null && !periodsFailed && (
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-full" />
+        </LateReveal>
       )}
 
-      {periodsError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{periodsError}</CardContent>
-        </Card>
-      )}
+      {periodsFailed && <LoadError title="Kunde inte hämta perioder" onRetry={() => void refreshPeriods()} />}
 
       {periods !== null && periods.length === 0 && (
         <EmptyState
@@ -312,25 +302,19 @@ export default function PeriodiseringWizardPage() {
         />
       )}
 
-      {loadError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{loadError}</CardContent>
-        </Card>
-      )}
+      {loadError && <LoadError title={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />}
 
       {loading && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-20 w-full" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-20 w-full" />
+        </LateReveal>
       )}
 
       {showWizard && proposal && (
         <>
           <Card>
-            <CardContent className="p-4 space-y-2">
+            <CardContent className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="sm:hidden text-primary font-medium">
                   Steg {currentStepIndex + 1}/{STEP_ORDER.length}: {labels[step]}
@@ -440,7 +424,7 @@ function VacationStep({
         </CardHeader>
         <CardContent>
           {proposal ? (
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
+            <div className="flex items-start justify-between gap-4 rounded-lg p-4 bg-control shadow-raised">
               <div className="flex-1 space-y-2">
                 <p className="text-sm font-medium">{proposal.label}</p>
                 <p className="text-xs text-muted-foreground">{proposal.description}</p>
@@ -474,11 +458,11 @@ function VacationStep({
           )}
         </CardContent>
       </Card>
-      <div className="flex justify-end">
+      <StepBar>
         <Button onClick={onNext}>
-          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -521,7 +505,7 @@ function AuditStep({
             </Label>
           </div>
           {state.enabled && (
-            <div className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-lg p-4 bg-control shadow-raised">
               <div className="space-y-1">
                 <Label className="text-xs">Belopp (kr)</Label>
                 <Input
@@ -536,7 +520,7 @@ function AuditStep({
               <div className="space-y-1">
                 <Label className="text-xs">Konto</Label>
                 <select
-                  className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
+                  className="rounded-lg h-9 text-sm px-2 w-full bg-control shadow-raised"
                   value={state.liabilityAccount}
                   onChange={(e) =>
                     onChange({ ...state, liabilityAccount: e.target.value as '2991' | '2992' })
@@ -550,14 +534,14 @@ function AuditStep({
           )}
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -606,7 +590,7 @@ function AutoStep({
             return (
               <div
                 key={key}
-                className="flex items-start gap-3 rounded-lg border border-border p-3"
+                className="flex items-start gap-3 rounded-lg p-3 bg-control shadow-raised"
               >
                 <Checkbox
                   id={`auto-${key}`}
@@ -649,14 +633,14 @@ function AutoStep({
           })}
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -685,14 +669,14 @@ function ManualStep({
           <ManualAccrualsEditor entries={entries} onChange={onChange} />
         </CardContent>
       </Card>
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Granska <ArrowRightIcon className="ml-1 h-4 w-4" />
+          Granska <ArrowRightIcon className="h-4 w-4" />
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -792,13 +776,13 @@ function ReviewStep({
 
       {postError && (
         <Card>
-          <CardContent className="p-4 text-sm text-destructive">{postError}</CardContent>
+          <CardContent className="text-sm text-destructive">{postError}</CardContent>
         </Card>
       )}
 
       {postSummary && (
         <Card>
-          <CardContent className="p-4 text-sm">
+          <CardContent className="text-sm">
             {postSummary.created} verifikation{postSummary.created === 1 ? '' : 'er'} bokförd
             {postSummary.created === 1 ? '' : 'a'}.
             {postSummary.skipped > 0 && ` ${postSummary.skipped} hoppades över (redan postade).`}
@@ -806,8 +790,8 @@ function ReviewStep({
         </Card>
       )}
 
-      <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} disabled={posting}>
+      <StepBar>
+        <Button variant="ghost" onClick={onBack} disabled={posting}>
           Tillbaka
         </Button>
         <Button
@@ -818,7 +802,7 @@ function ReviewStep({
         >
           {!canWrite ? (
             <>
-              <LockClosedIcon className="mr-2 h-4 w-4" /> Posta alla
+              <LockClosedIcon className="h-4 w-4" /> Posta alla
             </>
           ) : posting ? (
             'Bokför…'
@@ -826,14 +810,14 @@ function ReviewStep({
             'Posta alla'
           )}
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
 
 function ReviewLine({ label, amount, note }: { label: string; amount: number; note?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-lg px-3 py-2 bg-control shadow-raised">
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{label}</p>
         {note && <p className="text-xs text-muted-foreground">{note}</p>}

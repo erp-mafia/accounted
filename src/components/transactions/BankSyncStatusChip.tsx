@@ -85,7 +85,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href={selfHosted ? '/settings/banking' : '/settings/billing'}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
@@ -101,7 +101,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
+        className="bg-destructive/8 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
@@ -122,7 +122,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href={chooseAccountsHref({ id: state.connectionId, aggregator: state.aggregator })}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
@@ -140,7 +140,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
@@ -158,7 +158,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>

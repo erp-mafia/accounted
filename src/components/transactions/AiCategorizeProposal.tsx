@@ -92,7 +92,7 @@ export function proposalMetaFromRead(read: AssistantRead, pick: AssistantPick): 
   }
 }
 
-const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground'
 
 /** The assistant's one-line "working" status (avatar, spinner, text). Shared with the review dialog's own document read. */
 export function AiStatusLine({ text }: { text: string }) {
@@ -183,7 +183,7 @@ export default function AiCategorizeProposal({
   const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
   const hasMore = !!read.reasoning && why !== read.reasoning.trim()
   const more = hasMore ? (
-    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={() => setExpanded((v) => !v)}>
+    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-xs')} onClick={() => setExpanded((v) => !v)}>
       {expanded ? t('ai_less') : t('ai_more')}
     </button>
   ) : null
@@ -232,7 +232,7 @@ export default function AiCategorizeProposal({
       {!agrees && (
         <button
           type="button"
-          className={cn(QUIET_LINK_CLASS, 'text-[12.5px] font-medium')}
+          className={cn(QUIET_LINK_CLASS, 'text-xs font-medium')}
           onClick={() => {
             takenRef.current = pick.account
             onTake(pick, { auto: false })

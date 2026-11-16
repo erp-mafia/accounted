@@ -273,7 +273,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
             {t('to_done')}
           </Button>
         ) : open ? (
-          <Button variant="ghost" size="sm" className={`text-muted-foreground${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
+          <Button variant="ghost" className={`text-muted-foreground${bodyCls}`} onClick={() => dispatch({ type: 'SKV_SKIP' })}>
             {t('skv_skip')}
           </Button>
         ) : null}

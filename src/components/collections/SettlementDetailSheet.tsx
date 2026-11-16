@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Textarea } from '@/components/ui/textarea'
 import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
@@ -150,21 +151,14 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
           closeLabel={t('close')}
         />
         <SlideOverBody className="space-y-6">
-          {loadFailed && (
-            <div className="flex items-center justify-between gap-3 text-[13px] text-muted-foreground">
-              <span>{t('load_failed')}</span>
-              {settlementId && (
-                <Button variant="outline" size="sm" onClick={() => void load(settlementId)}>
-                  {t('retry')}
-                </Button>
-              )}
-            </div>
+          {loadFailed && settlementId && (
+            <LoadError title={t('load_failed')} onRetry={() => void load(settlementId)} />
           )}
           {!detail && !loadFailed && (
-            <div className="space-y-3">
+            <LateReveal className="space-y-3">
               <Skeleton className="h-4 w-48" />
               <Skeleton className="h-24 w-full" />
-            </div>
+            </LateReveal>
           )}
           {detail && (
             <>
@@ -182,9 +176,9 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
                     </Link>
                   )}
                 </div>
-                {reasonKey && !isDuplicate && <p className="attn text-[12.5px]">{tw(reasonKey)}</p>}
+                {reasonKey && !isDuplicate && <p className="attn text-xs">{tw(reasonKey)}</p>}
                 {isDuplicate && (
-                  <p className="attn text-[12.5px]">
+                  <p className="attn text-xs">
                     {detail.duplicateOf?.voucher ? (
                       <>
                         {tw('duplicate_body', { voucher: detail.duplicateOf.voucher })}{' '}
@@ -205,7 +199,7 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
               </div>
 
               <section className="space-y-2">
-                <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('lines_heading')}</h2>
+                <h2 className="text-xs font-medium text-muted-foreground">{t('lines_heading')}</h2>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -267,7 +261,7 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
               {/* What the booking posts, before it is booked: a row that waits for a choice above reads as waiting, then follows it. */}
               {voucherRows && settlementBookable(detail) && (
                 <section className="space-y-2">
-                  <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('voucher_heading')}</h2>
+                  <h2 className="text-xs font-medium text-muted-foreground">{t('voucher_heading')}</h2>
                   <VoucherTable rows={voucherRows} accounts={accounts} t={t} />
                 </section>
               )}
@@ -341,7 +335,7 @@ export function SettlementDetailSheet({ settlementId, words, canWrite, onClose, 
             {voucherRows && (
               <button
                 type="button"
-                className="text-[12.5px] underline underline-offset-2"
+                className="text-xs underline underline-offset-2"
                 aria-expanded={showVoucher}
                 onClick={() => setShowVoucher((v) => !v)}
               >
@@ -399,7 +393,7 @@ function VoucherTable({
       </thead>
       <tbody>
         {rows.map((row, index) => (
-          <tr key={`${row.accountNumber ?? 'waiting'}-${index}`} className="border-t border-border">
+          <tr key={`${row.accountNumber ?? 'waiting'}-${index}`} className="border-t-hairline">
             <td className={cn('py-1 pr-3', row.waiting && 'text-attn')}>
               {row.accountNumber
                 ? accountWithName(row.accountNumber, accounts, getBasLoadedByNumber(row.accountNumber)?.account_name)

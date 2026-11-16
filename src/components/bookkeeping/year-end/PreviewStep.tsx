@@ -1,8 +1,10 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   Table,
   TableBody,
@@ -11,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { YearEndPreview } from '@/types'
@@ -20,22 +22,24 @@ interface PreviewStepProps {
   preview: YearEndPreview | null
   isLoading: boolean
   error: string | null
+  /** Asks for the preview again after a failed load. */
+  onRetry: () => void
   onBack: () => void
   onContinue: () => void
 }
 
-export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: PreviewStepProps) {
+export function PreviewStep({ preview, isLoading, error, onRetry, onBack, onContinue }: PreviewStepProps) {
   if (isLoading) {
     return (
-      <div className="space-y-3">
+      <LateReveal className="space-y-3">
         <Skeleton className="h-6 w-1/3" />
         <Skeleton className="h-32 w-full" />
-      </div>
+      </LateReveal>
     )
   }
 
   if (error) {
-    return <p className="py-4 text-sm text-destructive">{error}</p>
+    return <LoadError title={error} onRetry={onRetry} />
   }
 
   if (!preview) return null
@@ -46,7 +50,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
   return (
     <div className="space-y-6">
       <div className="px-1">
-        <p className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <p className="font-sans text-xs font-medium text-muted-foreground">
           Årets resultat
         </p>
         <div className="mt-1 flex items-baseline justify-between gap-4">
@@ -64,7 +68,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
       </div>
 
       {preview.bolagsskattMissing && (
-        <p className="px-1 text-[12.5px] leading-5 text-attn">
+        <p className="px-1 text-xs leading-5 text-attn">
           Året visar vinst och skatten på det som är bokfört blir mer än 0 kr, men ingen
           bolagsskatt (konto 8910) är bokförd. Bokför bolagsskatten, eller de dispositioner som
           sänker den, i dispositionssteget. Varningen hindrar inte att du verkställer.{' '}
@@ -77,7 +81,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
       {preview.currencyRevaluation && preview.currencyRevaluation.items.length > 0 && (
         <section>
           <div className="mb-1 flex items-center gap-2 px-1">
-            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <h3 className="font-sans text-xs font-medium text-muted-foreground">
               Kursrevaluering (ÅRL 4:13)
             </h3>
             <div className="h-px flex-1 bg-border/60" />
@@ -90,19 +94,19 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
           <div className="px-1 pt-4">
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
-                <p className="text-muted-foreground text-xs uppercase tracking-wider">Kursvinst</p>
+                <p className="text-muted-foreground text-xs">Kursvinst</p>
                 <p className="font-display text-xl tabular-nums">
                   {formatCurrency(preview.currencyRevaluation.totalGain)}
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground text-xs uppercase tracking-wider">Kursförlust</p>
+                <p className="text-muted-foreground text-xs">Kursförlust</p>
                 <p className="font-display text-xl tabular-nums">
                   {formatCurrency(preview.currencyRevaluation.totalLoss)}
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground text-xs uppercase tracking-wider">Nettoeffekt</p>
+                <p className="text-muted-foreground text-xs">Nettoeffekt</p>
                 <p className="font-display text-xl tabular-nums">
                   {formatCurrency(preview.currencyRevaluation.netEffect)}
                 </p>
@@ -130,7 +134,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
                       {item.type === 'receivable' ? 'Kundfordran' : 'Leverantörsskuld'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {formatCurrency(item.amount_in_currency, item.currency)}
+                      {formatRowAmount(item.amount_in_currency, item.currency)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
                       {item.original_rate.toFixed(4)} → {item.closing_rate.toFixed(4)}
@@ -138,7 +142,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
                     <TableCell
                       className={`text-right tabular-nums ${item.difference_sek < 0 ? 'text-destructive' : ''}`}
                     >
-                      {formatCurrency(item.difference_sek)}
+                      {formatRowAmount(item.difference_sek)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -150,7 +154,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
 
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">
             Bokslutsverifikation: förhandsgranskning
           </h3>
           <div className="h-px flex-1 bg-border/60" />
@@ -166,14 +170,14 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
         />
       </section>
 
-      <div className="flex justify-between">
-        <Button variant="outline" size="sm" onClick={onBack}>
-          ← Tillbaka
+      <StepBar>
+        <Button variant="ghost" onClick={onBack}>
+          Tillbaka
         </Button>
-        <Button variant="outline" size="sm" onClick={onContinue}>
-          Nästa: Verkställ →
+        <Button onClick={onContinue}>
+          Nästa: Verkställ
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }

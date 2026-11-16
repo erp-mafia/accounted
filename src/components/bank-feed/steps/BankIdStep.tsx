@@ -101,7 +101,7 @@ export function BankIdStep({
         aria-describedby="bank-connect-pn-hint"
         className="w-[200px] tabular-nums"
       />
-      <span id="bank-connect-pn-hint" className={personalNumberInvalid ? 'block text-[12.5px] text-destructive' : 'block text-[12.5px] text-muted-foreground'}>
+      <span id="bank-connect-pn-hint" className={personalNumberInvalid ? 'block text-xs text-destructive' : 'block text-xs text-muted-foreground'}>
         {personalNumberInvalid ? t('personal_number_invalid') : t('personal_number_hint')}
       </span>
     </label>
@@ -144,7 +144,7 @@ export function BankIdStep({
         {/* The ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
         <DialogFooter className="sm:flex-wrap">
           {closeButton}
-          <Button variant="secondary" onClick={() => onStart('same_device')} loading={state.starting && state.method === 'same_device'} disabled={disabled}>
+          <Button variant="outline" onClick={() => onStart('same_device')} loading={state.starting && state.method === 'same_device'} disabled={disabled}>
             {t('method_same_device')}
           </Button>
           <Button onClick={() => onStart('qr')} loading={state.starting && state.method === 'qr'} disabled={disabled}>
@@ -212,7 +212,7 @@ export function BankIdStep({
           {state.startError && <AttnLine>{state.startError}</AttnLine>}
           {onCopyReminder && (
             <div className="text-center">
-              <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
+              <button type="button" onClick={onCopyReminder} className="text-xs underline underline-offset-2 hover:opacity-80">
                 {t('send_reminder')}
               </button>
             </div>
@@ -222,7 +222,7 @@ export function BankIdStep({
         <div className="space-y-3 text-center">
           <p className="text-[13px] leading-relaxed">{t('partially_authorised')}</p>
           {onCopyReminder && (
-            <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
+            <button type="button" onClick={onCopyReminder} className="text-xs underline underline-offset-2 hover:opacity-80">
               {t('send_reminder')}
             </button>
           )}

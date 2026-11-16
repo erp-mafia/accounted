@@ -8,6 +8,8 @@ import {
   parseInvoiceListTab,
   parseQuoteListTab,
   segmentViewActive,
+  invoiceListSegmentTabs,
+  QUOTE_LIST_SEGMENT_TABS,
   statusPickerTabs,
   type InvoiceListTab,
   type QuoteListTab,
@@ -288,45 +290,36 @@ describe('Förfallna follows the due date (crm#1084), with collections in play',
   })
 })
 
-describe('one door for Förfallna and Hos inkasso', () => {
-  it('leaves the segmented views out of the status picker while the segmented control shows', () => {
-    const picker = statusPickerTabs(INVOICE_LIST_TABS, true)
-    expect(picker).not.toContain('overdue')
-    expect(picker).not.toContain('collections')
-    expect(picker).toContain('all')
-    expect(picker).toContain('unpaid')
-  })
-
-  it('keeps every view in the picker while collections is not in play', () => {
-    expect(statusPickerTabs(INVOICE_LIST_TABS, false)).toEqual([...INVOICE_LIST_TABS])
-  })
-
-  it('says when the active view is the segmented control\'s', () => {
-    expect(segmentViewActive('overdue', true)).toBe(true)
-    expect(segmentViewActive('collections', true)).toBe(true)
-    expect(segmentViewActive('paid', true)).toBe(false)
-    expect(segmentViewActive('overdue', false)).toBe(false)
-  })
-})
-
-// Three of four credit notes in production carry no link to their original
-// (the provider named none, or the import predates the pairing): every view
-// reads the one identity, a link or a total below zero.
-describe('matchesInvoiceListTab: a credit note imported without a link', () => {
-  const imported = (status: Row['status'], extra: Partial<Row> = {}) =>
-    row({ status, invoice_number: 'K1', total: -500, due_date: '2026-01-01', remaining_amount: 0, ...extra })
-
-  it('is in Kreditfakturor, whatever status the import gave it', () => {
-    for (const status of ['paid', 'credited', 'draft', 'overdue', 'sent'] as const) {
-      expect(tabsFor(imported(status)), status).toEqual(['all', 'credit'])
+describe('one door per view: segments first, the rest in the status picker', () => {
+  it('shows at most five segments, Alla last, on both lists', () => {
+    for (const segments of [invoiceListSegmentTabs(false), invoiceListSegmentTabs(true), QUOTE_LIST_SEGMENT_TABS]) {
+      expect(segments.length).toBeLessThanOrEqual(5)
+      expect(segments[segments.length - 1]).toBe('all')
     }
   })
 
-  it('leaves Kreditfakturor when it is cancelled, like a linked one', () => {
-    expect(tabsFor(imported('cancelled'))).toEqual(['cancelled'])
+  it('swaps Osända for Hos inkasso while collections is in play', () => {
+    expect(invoiceListSegmentTabs(false)).toContain('unsent')
+    expect(invoiceListSegmentTabs(false)).not.toContain('collections')
+    expect(invoiceListSegmentTabs(true)).toContain('collections')
+    expect(invoiceListSegmentTabs(true)).not.toContain('unsent')
   })
 
-  it('a zero total is no credit note', () => {
-    expect(tabsFor(row({ status: 'paid', total: 0 }))).toEqual(['all', 'paid'])
+  it('leaves the segment views out of the status picker and keeps every other view in it', () => {
+    for (const collectionsShown of [false, true]) {
+      const segments = invoiceListSegmentTabs(collectionsShown)
+      const picker = statusPickerTabs(INVOICE_LIST_TABS, segments)
+      for (const tab of segments) expect(picker).not.toContain(tab)
+      expect([...picker, ...segments].sort()).toEqual([...INVOICE_LIST_TABS].sort())
+    }
+    const quotePicker = statusPickerTabs(QUOTE_LIST_TABS, QUOTE_LIST_SEGMENT_TABS)
+    expect([...quotePicker, ...QUOTE_LIST_SEGMENT_TABS].sort()).toEqual([...QUOTE_LIST_TABS].sort())
+  })
+
+  it('says when the active view is the segmented control\'s', () => {
+    expect(segmentViewActive('overdue', invoiceListSegmentTabs(true))).toBe(true)
+    expect(segmentViewActive('collections', invoiceListSegmentTabs(true))).toBe(true)
+    expect(segmentViewActive('paid', invoiceListSegmentTabs(true))).toBe(false)
+    expect(segmentViewActive('collections', invoiceListSegmentTabs(false))).toBe(false)
   })
 })

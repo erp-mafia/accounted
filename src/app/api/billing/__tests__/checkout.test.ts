@@ -545,7 +545,7 @@ describe('POST /api/billing/checkout', () => {
         submit: {
           message:
             'Fakturan ställs ut på Bolaget AB, org.nr 556677-8899, momsreg.nr SE556677889901, Storgatan 1, 111 22 Stockholm. ' +
-            'Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.',
+            'Stämmer något inte? Ändra under Inställningar > Företaget > Företagsuppgifter och starta betalningen igen.',
         },
       })
     })

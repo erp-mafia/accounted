@@ -9,13 +9,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { PHONE_HIDDEN, ROW_ACTIONS_TD, SUM_ROW_CLASS, pct } from './register-table'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { useToast } from '@/components/ui/use-toast'
@@ -27,6 +29,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { SHARE_EVENT_KINDS, TRANSFER_REASONS, type ShareEventKind } from '@/lib/bolaget/types'
 import type { ShareEventView, ShareRegisterView } from '@/lib/bolaget/view'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ArrowDownTrayIcon, PlusIcon } from '@/components/icons'
 
 interface Person {
   party_id: string
@@ -151,6 +154,9 @@ export function eventBody(form: FormState): Record<string, unknown> {
  */
 export function ShareRegister() {
   const t = useTranslations('bolaget_aktiebok')
+  // The top bar carries the menu row's name (Företaget's sidebar).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -161,6 +167,9 @@ export function ShareRegister() {
   const [asOf, setAsOf] = useState('')
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<PageData | null>(null)
+  // The register could not be read: in place of it when nothing is on
+  // screen, as one line above it when a refresh failed.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [eventForm, setEventForm] = useState<FormState | null>(null)
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState(false)
@@ -180,12 +189,18 @@ export function ShareRegister() {
     try {
       const res = await fetch(`/api/bolaget/share-register${asOf ? `?as_of=${asOf}` : ''}`)
       const body = await res.json().catch(() => ({}))
-      if (!res.ok) return fail(t('load_failed'), body)
+      if (!res.ok) {
+        setLoadFailed(true)
+        return
+      }
       setData(body.data as PageData)
+      setLoadFailed(false)
+    } catch {
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [asOf, fail, t])
+  }, [asOf])
 
   useEffect(() => {
     void load()
@@ -388,7 +403,7 @@ export function ShareRegister() {
       <>
         <div className="space-y-1 sm:col-span-2">
           <Label htmlFor={`sr-${selectKey}`}>{label}</Label>
-          <SettingsSelect {...field(state, set, selectKey)}>
+          <SettingsSelect {...field(state, set, selectKey)} value={state[selectKey] || NEW_PARTY}>
             <option value={NEW_PARTY}>{t('party_new')}</option>
             {people.map((p) => (
               <option key={p.party_id} value={p.party_id}>
@@ -424,46 +439,61 @@ export function ShareRegister() {
 
   return (
     <div className="space-y-8">
-      <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
-          <>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline">
-                  {t('export')}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem asChild>
-                  <a href={exportHref('pdf')}>{t('export_pdf')}</a>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <a href={exportHref('csv', 'shares')}>{t('export_csv_shares')}</a>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <a href={exportHref('csv', 'holders')}>{t('export_csv_holders')}</a>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <a href={exportHref('csv', 'history')}>{t('export_csv_history')}</a>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {canWrite && register && !register.is_avstamningsbolag && (
-              <Button size="sm" onClick={() => openEvent()}>
-                {t('new_event')}
+      <BolagetHeader
+        title={tNav('v3_share_register')}
+        subtitle={t('subtitle')}
+        help={t('help')}
+        asOf={asOf}
+        onAsOfChange={setAsOf}
+        asOfLabel={t('as_of')}
+        toolbarEnd={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="toolbar">
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {t('export')}
               </Button>
-            )}
-          </>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                <a href={exportHref('pdf')}>{t('export_pdf')}</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href={exportHref('csv', 'shares')}>{t('export_csv_shares')}</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href={exportHref('csv', 'holders')}>{t('export_csv_holders')}</a>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <a href={exportHref('csv', 'history')}>{t('export_csv_history')}</a>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+        action={
+          canWrite && register && !register.is_avstamningsbolag ? (
+            <Button onClick={() => openEvent()}>
+              <PlusIcon className="h-4 w-4" />
+              {t('new_event')}
+            </Button>
+          ) : undefined
         }
       />
 
-      {attn}
+      {loadFailed && data ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : (
+        attn
+      )}
 
       {loading && !data ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && !data ? (
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
       ) : register && register.events_count === 0 ? (
         <EmptyState
           title={t('empty_title')}
@@ -484,49 +514,48 @@ export function ShareRegister() {
       ) : register ? (
         <>
           <section className="space-y-3">
-            <div className="flex items-baseline justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('holders_heading')}</h2>
-              <span className="text-xs text-muted-foreground tabular-nums">
+            <div>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('holders_heading')}</h2>
+              <p className="text-[13px] text-muted-foreground">
                 {t('totals', { shares: register.total_shares, votes: register.total_votes, date: formatDate(register.as_of) })}
-              </span>
+              </p>
             </div>
-            <div className="overflow-x-auto">
+            <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
               <table className="stagger-enter w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
                     <th className={TH_CLASS}>{t('col_holder')}</th>
-                    <th className={TH_CLASS}>{t('col_identity')}</th>
+                    <th className={cn(TH_CLASS, PHONE_HIDDEN)}>{t('col_identity')}</th>
                     <th className={cn(TH_CLASS, 'text-right')}>{t('col_shares')}</th>
                     <th className={cn(TH_CLASS, 'text-right')}>{t('col_capital')}</th>
                     <th className={cn(TH_CLASS, 'text-right')}>{t('col_votes')}</th>
-                    <th className={TH_CLASS}>{t('col_numbers')}</th>
+                    <th className={cn(TH_CLASS, PHONE_HIDDEN)}>{t('col_numbers')}</th>
                     <th className={TH_CLASS} />
                   </tr>
                 </thead>
                 <tbody>
                   {holders.map((h) => (
-                    <tr key={h.party_id} className="hover:bg-secondary/35">
+                    <tr key={h.party_id} className="group hover:bg-secondary/35">
                       <td className={TD_CLASS} data-ph-mask="">
                         {h.name}
                         {h.officer && <span className="ml-2 text-xs text-muted-foreground">{t('officer')}</span>}
                       </td>
-                      <td className={cn(TD_CLASS, 'tabular-nums')} data-ph-mask="">
+                      <td className={cn(TD_CLASS, PHONE_HIDDEN, 'tabular-nums')} data-ph-mask="">
                         {h.identity ?? <Badge variant="outline">{t('identity_missing')}</Badge>}
                       </td>
                       <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{h.shares.toLocaleString('sv-SE')}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{h.capital_pct.toLocaleString('sv-SE')} %</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{h.votes_pct.toLocaleString('sv-SE')} %</td>
-                      <td className={cn(TD_CLASS, 'tabular-nums text-muted-foreground')}>
-                        {h.ranges.map((r) => (r.range_start === r.range_end ? `${r.range_start}` : `${r.range_start}-${r.range_end}`)).join(', ')}
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{pct(h.capital_pct)}</td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{pct(h.votes_pct)}</td>
+                      <td className={cn(TD_CLASS, PHONE_HIDDEN, 'tabular-nums text-muted-foreground')}>
+                        {h.ranges.map((r) => (r.range_start === r.range_end ? r.range_start.toLocaleString('sv-SE') : `${r.range_start.toLocaleString('sv-SE')}-${r.range_end.toLocaleString('sv-SE')}`)).join(', ')}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-                        <a className={QUIET_LINK_CLASS} href={`/api/bolaget/holders/${h.party_id}/extract${asOf ? `?as_of=${asOf}` : ''}`}>
-                          {t('extract')}
-                        </a>
+                      <td className={ROW_ACTIONS_TD}>
+                        <Button variant="row" asChild>
+                          <a href={`/api/bolaget/holders/${h.party_id}/extract${asOf ? `?as_of=${asOf}` : ''}`}>{t('extract')}</a>
+                        </Button>
                         {canWrite && (
-                          <button
-                            type="button"
-                            className={cn(QUIET_LINK_CLASS, 'ml-3')}
+                          <Button
+                            variant="row"
                             onClick={() => {
                               const p = personById.get(h.party_id)
                               setPerson({
@@ -546,18 +575,27 @@ export function ShareRegister() {
                             }}
                           >
                             {t('edit_details')}
-                          </button>
+                          </Button>
                         )}
                       </td>
                     </tr>
                   ))}
+                  <tr className={SUM_ROW_CLASS}>
+                    <td className={TD_CLASS}>{t('total_row')}</td>
+                    <td className={cn(TD_CLASS, PHONE_HIDDEN)} />
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{register.total_shares.toLocaleString('sv-SE')}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{pct(holders.reduce((sum, h) => sum + h.capital_pct, 0))}</td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>{pct(holders.reduce((sum, h) => sum + h.votes_pct, 0))}</td>
+                    <td className={cn(TD_CLASS, PHONE_HIDDEN)} />
+                    <td className={TD_CLASS} />
+                  </tr>
                 </tbody>
               </table>
             </div>
             {register.notes.length > 0 && (
               <div className="space-y-1 pt-2">
                 {register.notes.map((n) => (
-                  <div key={`${n.kind}-${n.event_number}-${n.range_start}`} className="flex flex-wrap items-baseline gap-3 text-[12.5px] text-muted-foreground">
+                  <div key={`${n.kind}-${n.event_number}-${n.range_start}`} className="flex flex-wrap items-baseline gap-3 text-xs text-muted-foreground">
                     <span>
                       {n.kind === 'aktiebrev'
                         ? t('note_aktiebrev', { number: n.aktiebrev_number ?? '', from: n.range_start, to: n.range_end })
@@ -581,19 +619,20 @@ export function ShareRegister() {
 
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('classes_heading')}</h2>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('classes_heading')}</h2>
               {canWrite && (
-                <button
-                  type="button"
-                  className={QUIET_LINK_CLASS}
+                <Button
+                  variant="ghost"
                   onClick={() =>
                     setClassForm({ code: '', name: '', votes_per_share: '1', forbehall_samtycke: '', forbehall_forkop: '', forbehall_hembud: '', forbehall_omvandling: '', forbehall_inlosen: '', forbehall_text: '', bolagsordning_reference: '' })
                   }
                 >
+                  <PlusIcon className="h-4 w-4" />
                   {t('class_add')}
-                </button>
+                </Button>
               )}
             </div>
+            <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -606,7 +645,7 @@ export function ShareRegister() {
               </thead>
               <tbody>
                 {classes.map((c) => (
-                  <tr key={c.share_class_id} className="hover:bg-secondary/35">
+                  <tr key={c.share_class_id} className="group hover:bg-secondary/35">
                     <td className={TD_CLASS}>
                       {c.code}
                       {c.name ? <span className="ml-2 text-muted-foreground">{c.name}</span> : null}
@@ -619,11 +658,10 @@ export function ShareRegister() {
                         .map((k) => t(`forbehall_${k}`))
                         .join(', ') || t('forbehall_none')}
                     </td>
-                    <td className={cn(TD_CLASS, 'text-right')}>
+                    <td className={ROW_ACTIONS_TD}>
                       {canWrite && (
-                        <button
-                          type="button"
-                          className={QUIET_LINK_CLASS}
+                        <Button
+                          variant="row"
                           onClick={() =>
                             setClassForm({
                               share_class_id: c.share_class_id,
@@ -641,18 +679,19 @@ export function ShareRegister() {
                           }
                         >
                           {t('edit')}
-                        </button>
+                        </Button>
                       )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('history_heading')}</h2>
-            <div className="overflow-x-auto">
+            <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('history_heading')}</h2>
+            <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
               <table className="stagger-enter w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -664,27 +703,23 @@ export function ShareRegister() {
                 </thead>
                 <tbody>
                   {[...(data?.events ?? [])].reverse().map((e) => (
-                    <tr key={e.share_register_event_id} className="hover:bg-secondary/35">
+                    <tr key={e.share_register_event_id} className="group hover:bg-secondary/35">
                       <td className={cn(TD_CLASS, 'tabular-nums')}>{e.event_number}</td>
-                      <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(e.event_date)}</td>
-                      <td className={cn(TD_CLASS, e.voided && 'text-muted-foreground line-through')} data-ph-mask="">
+                      <td className={cn(TD_CLASS, 'date-figures whitespace-nowrap')}>{formatDate(e.event_date)}</td>
+                      <td className={cn(TD_CLASS, 'min-w-56', e.voided && 'text-muted-foreground line-through')} data-ph-mask="">
                         {e.text}
                         {e.voided && <span className="ml-2 no-underline">{t('voided')}</span>}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
+                      <td className={ROW_ACTIONS_TD}>
                         {e.kind === 'aktiebrev' && e.aktiebrev_action === 'issued' && !e.voided && (
-                          <a className={QUIET_LINK_CLASS} href={`/api/bolaget/aktiebrev/${e.share_register_event_id}`}>
-                            {t('print_aktiebrev')}
-                          </a>
+                          <Button variant="row" asChild>
+                            <a href={`/api/bolaget/aktiebrev/${e.share_register_event_id}`}>{t('print_aktiebrev')}</a>
+                          </Button>
                         )}
                         {canWrite && !e.voided && e.kind !== 'rattelse' && !register.is_avstamningsbolag && (
-                          <button
-                            type="button"
-                            className={cn(QUIET_LINK_CLASS, 'ml-3')}
-                            onClick={() => openEvent({ kind: 'rattelse', corrects_event_id: e.share_register_event_id })}
-                          >
+                          <Button variant="row" onClick={() => openEvent({ kind: 'rattelse', corrects_event_id: e.share_register_event_id })}>
                             {t('correct')}
-                          </button>
+                          </Button>
                         )}
                       </td>
                     </tr>
@@ -697,7 +732,7 @@ export function ShareRegister() {
       ) : null}
 
       {register && isAdmin && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {register.is_avstamningsbolag ? t('avstamning_yes') : t('avstamning_no')}{' '}
           <button type="button" className={QUIET_LINK_CLASS} onClick={() => setConfirmAvstamning(true)}>
             {t('avstamning_change')}
@@ -715,7 +750,7 @@ export function ShareRegister() {
       />
 
       <Dialog open={Boolean(eventForm)} onOpenChange={(open) => (open ? null : setEventForm(null))}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{preview ? t('preview_title') : t('new_event')}</DialogTitle>
           </DialogHeader>
@@ -925,7 +960,7 @@ export function ShareRegister() {
       </Dialog>
 
       <Dialog open={Boolean(quickStart)} onOpenChange={(open) => (open ? null : setQuickStart(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('quick_title')}</DialogTitle>
           </DialogHeader>
@@ -963,7 +998,7 @@ export function ShareRegister() {
       </Dialog>
 
       <Dialog open={Boolean(person)} onOpenChange={(open) => (open ? null : setPerson(null))}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle data-ph-mask="">{person?.name ?? ''}</DialogTitle>
           </DialogHeader>
@@ -1022,11 +1057,11 @@ export function ShareRegister() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(classForm)} onOpenChange={(open) => (open ? null : setClassForm(null))}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{classForm?.share_class_id ? t('class_edit_title', { code: classForm.code }) : t('class_add')}</DialogTitle>
-          </DialogHeader>
+      {/* A share class is a small record: added and changed in a drawer over the register (V7 creation forms). */}
+      <SlideOver open={Boolean(classForm)} onOpenChange={(open) => (open ? null : setClassForm(null))}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={classForm?.share_class_id ? t('class_edit_title', { code: classForm.code }) : t('class_add')} />
+          <SlideOverBody>
           {classForm && (
             <div className="grid gap-4 sm:grid-cols-2">
               {!classForm.share_class_id && (
@@ -1036,7 +1071,7 @@ export function ShareRegister() {
                 </div>
               )}
               <div className="space-y-1">
-                <Label htmlFor="sr-name">{t('field_class_name')}</Label>
+                <Label htmlFor="sr-name" optional>{t('field_class_name')}</Label>
                 <Input {...field(classForm, setClassForm as (s: FormState) => void, 'name')} maxLength={100} />
               </div>
               <div className="space-y-1">
@@ -1055,28 +1090,29 @@ export function ShareRegister() {
                 ))}
               </div>
               <div className="space-y-1 sm:col-span-2">
-                <Label htmlFor="sr-forbehall_text">{t('field_forbehall_text')}</Label>
+                <Label htmlFor="sr-forbehall_text" optional>{t('field_forbehall_text')}</Label>
                 <Textarea {...field(classForm, setClassForm as (s: FormState) => void, 'forbehall_text')} maxLength={4000} rows={3} />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="sr-bolagsordning_reference">{t('field_bolagsordning_reference')}</Label>
+                <Label htmlFor="sr-bolagsordning_reference" optional>{t('field_bolagsordning_reference')}</Label>
                 <Input {...field(classForm, setClassForm as (s: FormState) => void, 'bolagsordning_reference')} maxLength={200} />
               </div>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setClassForm(null)} disabled={busy}>
+          </SlideOverBody>
+          <SlideOverFooter>
+            <Button variant="ghost" onClick={() => setClassForm(null)} disabled={busy}>
               {t('cancel')}
             </Button>
             <Button onClick={saveClass} loading={busy}>
-              {t('save')}
+              {classForm?.share_class_id ? t('save') : t('class_create')}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
 
       <Dialog open={Boolean(capitalForm)} onOpenChange={(open) => (open ? null : setCapitalForm(null))}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('capital_title')}</DialogTitle>
           </DialogHeader>

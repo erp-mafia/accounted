@@ -96,6 +96,8 @@ vi.mock('../hem-sections', () => ({
   HemPanesSection: () => null,
 }))
 vi.mock('@/components/dashboard/DashboardContent', () => ({ default: () => null }))
+vi.mock('@/components/dashboard/AgentPromo', () => ({ AgentPromo: () => null }))
+vi.mock('@/components/dashboard/HemDone', () => ({ HemDone: () => null }))
 vi.mock('@/components/dashboard/HemSkeletons', () => ({ ChecklistSkeleton: () => null, PanesSkeleton: () => null }))
 vi.mock('@/components/system/RefreshWhenRestored', () => ({ RefreshWhenRestored: () => null }))
 vi.mock('@/components/ui/page-header', () => ({ PageHeader: () => null }))
@@ -106,6 +108,10 @@ async function renderHem() {
   const { default: DashboardPage } = await import('../page')
   return DashboardPage()
 }
+
+// Each test loads the page's whole module graph afresh (resetModules), which
+// alone takes seconds on a busy runner: the limit covers the load, not the redirect.
+vi.setConfig({ testTimeout: 20_000 })
 
 beforeEach(() => {
   vi.clearAllMocks()

@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { CheckIcon, Square2StackIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { payInBankDetails, plainAmount, type PayInBankDetails, type PayInBankInvoice } from '@/lib/inkorg/pay-in-bank'
@@ -76,7 +76,7 @@ export function PayInBankDialog({ target, onClose }: { target: PayInBankTarget |
 
   return (
     <Dialog open={!!target} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle data-ph-mask="">
             {details?.supplierName ? t('pay_title_named', { name: details.supplierName }) : t('pay_title')}
@@ -85,11 +85,11 @@ export function PayInBankDialog({ target, onClose }: { target: PayInBankTarget |
         </DialogHeader>
 
         {load.status === 'loading' && (
-          <div className="space-y-3" aria-hidden="true">
+          <LateReveal className="space-y-3">
             {[0, 1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-8 w-full rounded-sm" />
             ))}
-          </div>
+          </LateReveal>
         )}
 
         {load.status === 'failed' && (
@@ -128,7 +128,7 @@ export function PayInBankDialog({ target, onClose }: { target: PayInBankTarget |
           </dl>
         )}
 
-        {details && !details.settled && <p className="text-[12.5px] text-muted-foreground">{t('pay_after')}</p>}
+        {details && !details.settled && <p className="text-xs text-muted-foreground">{t('pay_after')}</p>}
 
         <DialogFooter>
           <Button onClick={onClose}>{t('done')}</Button>
@@ -168,16 +168,16 @@ export function CopyRow({ label, value, suffix }: { label: string; value: string
 
   return (
     <div className="flex items-center gap-3 py-2">
-      <dt className="w-28 shrink-0 text-[12.5px] text-muted-foreground">{label}</dt>
+      <dt className="w-28 shrink-0 text-xs text-muted-foreground">{label}</dt>
       <dd className="min-w-0 flex-1">
         <span ref={valueRef} data-ph-mask="" className="select-all break-all text-[13px] tabular-nums">
           {value}
         </span>
         {suffix && <span className="ml-1 text-[13px] text-muted-foreground">{suffix}</span>}
-        {state === 'selected' && <span className="block text-[12.5px] text-muted-foreground">{t('pay_copy_selected')}</span>}
+        {state === 'selected' && <span className="block text-xs text-muted-foreground">{t('pay_copy_selected')}</span>}
       </dd>
-      <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label={t('pay_copy_aria', { label })}>
-        {state === 'copied' ? <CheckIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" /> : <Square2StackIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" />}
+      <Button variant="ghost" onClick={() => void copy()} aria-label={t('pay_copy_aria', { label })}>
+        {state === 'copied' ? <CheckIcon aria-hidden="true" className="h-3.5 w-3.5" /> : <Square2StackIcon aria-hidden="true" className="h-3.5 w-3.5" />}
         {state === 'copied' ? t('copied') : t('copy')}
       </Button>
       <span className="sr-only" aria-live="polite">

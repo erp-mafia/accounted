@@ -12,7 +12,7 @@ import { isIsoDateShaped } from '@/lib/invariants'
 import type { CounterpartyPayable, CounterpartyReceivable } from '@/lib/invoices/counterparty-setoff/open-items'
 import { setoffDefaultAmount } from '@/lib/invoices/counterparty-setoff/plan'
 import { parseAmountInput } from '@/lib/money'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { postSetoff, type SetoffPreview } from './counterparty-client'
 
 interface Props {
@@ -158,7 +158,7 @@ export function SetoffDialog({ partyId, counterpartyName, receivables, payables,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('setoff_title', { name: counterpartyName })}</DialogTitle>
           <DialogDescription>{t('setoff_description')}</DialogDescription>
@@ -169,7 +169,7 @@ export function SetoffDialog({ partyId, counterpartyName, receivables, payables,
             <Label htmlFor="setoff-invoice">{t('setoff_invoice')}</Label>
             <select
               id="setoff-invoice"
-              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              className="h-9 w-full rounded-lg px-3 text-sm bg-control shadow-raised"
               value={invoiceId}
               onChange={(e) => choose(e.target.value, supplierInvoiceId)}
             >
@@ -184,7 +184,7 @@ export function SetoffDialog({ partyId, counterpartyName, receivables, payables,
             <Label htmlFor="setoff-supplier-invoice">{t('setoff_supplier_invoice')}</Label>
             <select
               id="setoff-supplier-invoice"
-              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              className="h-9 w-full rounded-lg px-3 text-sm bg-control shadow-raised"
               value={supplierInvoiceId}
               onChange={(e) => choose(invoiceId, e.target.value)}
             >
@@ -235,10 +235,10 @@ export function SetoffDialog({ partyId, counterpartyName, receivables, payables,
               </thead>
               <tbody>
                 {result.lines.map((line) => (
-                  <tr key={line.account_number} className="border-t border-border">
+                  <tr key={line.account_number} className="border-t-hairline">
                     <td className="py-1 pr-3 tabular-nums">{line.account_number}</td>
-                    <td className="py-1 text-right tabular-nums">{line.debit_amount > 0 ? formatCurrency(line.debit_amount) : ''}</td>
-                    <td className="py-1 text-right tabular-nums">{line.credit_amount > 0 ? formatCurrency(line.credit_amount) : ''}</td>
+                    <td className="py-1 text-right tabular-nums">{line.debit_amount > 0 ? formatRowAmount(line.debit_amount) : ''}</td>
+                    <td className="py-1 text-right tabular-nums">{line.credit_amount > 0 ? formatRowAmount(line.credit_amount) : ''}</td>
                   </tr>
                 ))}
               </tbody>

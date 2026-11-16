@@ -100,7 +100,7 @@ export default function RegisterResultStep({
         {result.errors.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-sm font-medium">Rader som inte kunde importeras</h4>
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 max-h-60 overflow-y-auto">
+            <div className="bg-destructive/8 rounded-lg max-h-60 overflow-y-auto">
               <ul className="divide-y divide-destructive/20">
                 {result.errors.map((e, i) => (
                   <li key={i} className="px-3 py-2 text-sm">
@@ -148,7 +148,7 @@ function Stat({
   accent?: 'success' | 'warning' | 'destructive' | 'muted'
 }) {
   return (
-    <div className="rounded-lg border bg-muted/30 p-4 text-center">
+    <div className="rounded-lg p-4 text-center bg-control shadow-raised">
       <p
         className={
           accent === 'success' ? 'text-2xl font-semibold tabular-nums text-success' :

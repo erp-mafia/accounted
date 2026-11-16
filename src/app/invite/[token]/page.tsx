@@ -5,8 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { BriefcaseIcon, ExclamationCircleIcon } from '@/components/icons'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { Skeleton } from '@/components/ui/skeleton'
 import { fetchSessionUser, reloadTo, signOut } from '@/lib/auth/session-client'
 import { useToast } from '@/components/ui/use-toast'
@@ -236,240 +235,156 @@ export default function InvitePage() {
   // that names the company.
   const prepared = invite?.preparedProfile
   const preparedLine = prepared ? (
-    <p className="text-sm text-muted-foreground mt-1">
+    <p className="text-muted-foreground">
       {t('prepared_profile', { profile: locale === 'en' ? prepared.name : prepared.name_sv })}
     </p>
   ) : null
 
   if (isLoading) {
     return (
-      <div className="min-h-dvh flex flex-col bg-background" aria-busy="true">
-        <div className="bg-frame border-b border-border">
-          <div className="max-w-2xl mx-auto w-full px-6 md:px-10 pt-5 pb-6 md:pt-6 md:pb-8 space-y-5">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-8 w-64" />
-          </div>
-        </div>
-        <div className="max-w-lg mx-auto w-full px-6 md:px-10 py-6 md:py-8 space-y-4">
-          <Skeleton className="h-32 w-full rounded-xl" />
+      <StandalonePage busy>
+        <Skeleton className="h-7 w-56" />
+        <StandaloneStack>
+          <Skeleton className="h-16 w-full" />
           <Skeleton className="h-11 w-full" />
-        </div>
-      </div>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
-  return (
-    <div className="min-h-dvh flex flex-col bg-background">
-      <header className="relative bg-frame text-foreground border-b border-border overflow-hidden">
-        <div className="relative z-10 max-w-2xl mx-auto w-full px-6 md:px-10 pt-5 pb-6 md:pt-6 md:pb-8">
-          <div className="flex items-center gap-2.5 mb-5 md:mb-6">
-            <span className="font-display text-base tracking-tight" style={{ fontWeight: 700 }}>
-              {branding.appName.toLowerCase()}
-            </span>
-          </div>
-          <div className="animate-fade-in">
-            <h1 className="font-display text-2xl md:text-3xl tracking-tight leading-[1.1]">
-              {joinedName !== null
-                ? t('header_already_member')
-                : error || gone
-                  ? t('header_invalid')
-                  : t('header_invited')}
-            </h1>
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1">
-        <div className="max-w-lg mx-auto px-6 md:px-10 py-6 md:py-8">
-          <div className="animate-slide-up">
-            {error ? (
-              <Card className="p-6">
-                <div className="flex items-start gap-3">
-                  <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-medium">{error}</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {t('contact_inviter')}
-                    </p>
-                    <Link
-                      href="/login"
-                      className="text-sm text-primary hover:underline mt-3 inline-block"
-                    >
-                      {t('go_to_login')}
-                    </Link>
-                  </div>
-                </div>
-              </Card>
-            ) : joinedName !== null ? (
-              // Already joined through this invitation: straight into the app.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{joinedName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('already_member_description')}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-
-                {/* Full page load, as after a join: the app resolves the company context afresh. */}
-                <Button size="lg" className="w-full" onClick={() => reloadTo('/')}>
-                  {t('already_member_open', { appName: branding.appName })}
-                </Button>
-              </div>
-            ) : goneCopy ? (
-              <Card className="p-6">
-                <div className="flex items-start gap-3">
-                  <ExclamationCircleIcon className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-medium">{t(goneCopy.title)}</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {t(goneCopy.body)}
-                    </p>
-                    {goneCopy.loginLink && (
-                      <Link
-                        href="/login"
-                        className="text-sm text-primary hover:underline mt-3 inline-block"
-                      >
-                        {t('go_to_login')}
-                      </Link>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ) : isLoggedInAsInvitee ? (
-              // Already signed in as the invitee: one-click join.
-              // Prioritized over alreadyHasAccount to avoid the broken flow
-              // where a false-negative from the email check would send a
-              // logged-in user to /register, which middleware bounces to /.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t.rich('logged_in_as', {
-                          email: currentUserEmail ?? '',
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                      {preparedLine}
-                    </div>
-                  </div>
-                </Card>
-
-                <Button
-                  size="lg"
-                  className="w-full"
-                  onClick={handleJoinNow}
-                  loading={isJoining}
-                >
-                  {isJoining ? (
-                    t('joining')
-                  ) : (
-                    <>{t('join_named', { companyName: invite.companyName ?? '' })}</>
-                  )}
-                </Button>
-              </div>
-            ) : isLoggedInAsOther ? (
-              // Signed in as a different user: ask them to sign out first.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t.rich('wrong_account', {
-                          invitedEmail: invite.email,
-                          currentEmail: currentUserEmail ?? '',
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t('signout_then_login')}
-                      </p>
-                      {preparedLine}
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleSignOutAndRetry}>
-                  {t('signout_and_switch')}
-                </Button>
-              </div>
-            ) : invite?.alreadyHasAccount ? (
-              // Not signed in: email has an existing account, bounce to login.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t.rich('existing_account', {
-                          email: invite.email,
-                          appName: branding.appName.toLowerCase(),
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                      {preparedLine}
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleAcceptExistingUser}>
-                  {t('login_and_join')}
-                </Button>
-              </div>
-            ) : invite ? (
-              // Not signed in, no existing account: register.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                      {preparedLine}
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleAccept}>
-                  {t('create_account_and_join')}
-                </Button>
-
-                <p className="text-center text-xs text-muted-foreground">
-                  {t('terms_notice')}
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </main>
+  // What the invitation is to: the company's name, then the sentences about it.
+  const about = (name: string | null | undefined, lines: React.ReactNode) => (
+    <div data-ph-mask="">
+      <p className="text-[15px] font-medium leading-[22px] text-strong">{name}</p>
+      <div className="mt-0.5 space-y-1 text-sm text-foreground">{lines}</div>
     </div>
+  )
+
+  return (
+    // The standalone frame of the sign-in pages: what happened as the heading,
+    // what to do next under it, one primary.
+    <StandalonePage>
+      <StandaloneHeading
+        title={
+          joinedName !== null
+            ? t('header_already_member')
+            : error
+              ? t('header_invalid')
+              : goneCopy
+                ? t(goneCopy.title)
+                : t('header_invited')
+        }
+      />
+      <StandaloneStack>
+        {error ? (
+          <>
+            <p className="text-sm text-foreground">
+              {error} {t('contact_inviter')}
+            </p>
+            <Button asChild variant="outline" size="lg" className="w-full">
+              <Link href="/login">{t('go_to_login')}</Link>
+            </Button>
+          </>
+        ) : joinedName !== null ? (
+          // Already joined through this invitation: straight into the app.
+          <>
+            {about(joinedName, <p>{t('already_member_description')}</p>)}
+            {/* Full page load, as after a join: the app resolves the company context afresh. */}
+            <Button size="lg" className="w-full" onClick={() => reloadTo('/')}>
+              {t('already_member_open', { appName: branding.appName })}
+            </Button>
+          </>
+        ) : goneCopy ? (
+          <>
+            <p className="text-sm text-foreground">{t(goneCopy.body)}</p>
+            {goneCopy.loginLink && (
+              <Button asChild variant="outline" size="lg" className="w-full">
+                <Link href="/login">{t('go_to_login')}</Link>
+              </Button>
+            )}
+          </>
+        ) : isLoggedInAsInvitee ? (
+          // Already signed in as the invitee: one-click join.
+          // Prioritized over alreadyHasAccount to avoid the broken flow
+          // where a false-negative from the email check would send a
+          // logged-in user to /register, which middleware bounces to /.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                <p>
+                  {t.rich('logged_in_as', {
+                    email: currentUserEmail ?? '',
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleJoinNow} loading={isJoining}>
+              {isJoining ? t('joining') : t('join_named', { companyName: invite.companyName ?? '' })}
+            </Button>
+          </>
+        ) : isLoggedInAsOther ? (
+          // Signed in as a different user: ask them to sign out first.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>
+                  {t.rich('wrong_account', {
+                    invitedEmail: invite.email,
+                    currentEmail: currentUserEmail ?? '',
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                <p>{t('signout_then_login')}</p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleSignOutAndRetry}>
+              {t('signout_and_switch')}
+            </Button>
+          </>
+        ) : invite?.alreadyHasAccount ? (
+          // Not signed in: email has an existing account, bounce to login.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                <p>
+                  {t.rich('existing_account', {
+                    email: invite.email,
+                    appName: branding.appName.toLowerCase(),
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleAcceptExistingUser}>
+              {t('login_and_join')}
+            </Button>
+          </>
+        ) : invite ? (
+          // Not signed in, no existing account: register.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleAccept}>
+              {t('create_account_and_join')}
+            </Button>
+            <p className="text-xs text-muted-foreground">{t('terms_notice')}</p>
+          </>
+        ) : null}
+      </StandaloneStack>
+    </StandalonePage>
   )
 }

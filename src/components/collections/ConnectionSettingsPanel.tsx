@@ -253,7 +253,7 @@ export function ConnectionSettingsPanel({ data, connection, onChanged }: Props) 
         {canManage && (dirty || saved) ? (
           <div className="flex items-center justify-end gap-3 pt-4">
             {saved && !dirty ? <SettingsRowNote>{t('saved')}</SettingsRowNote> : null}
-            <Button size="sm" disabled={!dirty} loading={busy === 'save'} onClick={save}>
+            <Button disabled={!dirty} loading={busy === 'save'} onClick={save}>
               {t('save')}
             </Button>
           </div>
@@ -288,7 +288,7 @@ export function ConnectionSettingsPanel({ data, connection, onChanged }: Props) 
         {canManage && (accountsDirty || accountsSaved) ? (
           <div className="flex items-center justify-end gap-3 pt-4">
             {accountsSaved && !accountsDirty ? <SettingsRowNote>{t('saved')}</SettingsRowNote> : null}
-            <Button size="sm" disabled={!accountsDirty} loading={busy === 'accounts'} onClick={saveAccounts}>
+            <Button disabled={!accountsDirty} loading={busy === 'accounts'} onClick={saveAccounts}>
               {t('save')}
             </Button>
           </div>
@@ -324,14 +324,14 @@ export function ConnectionSettingsPanel({ data, connection, onChanged }: Props) 
         </SettingsGroup>
       ) : null}
 
-      {message ? <p className="pt-4 text-[12.5px] text-attn">{message}</p> : null}
+      {message ? <p className="pt-4 text-xs text-attn">{message}</p> : null}
 
       {canManage ? (
         <SettingsDangerZone label={t('danger_zone')}>
           <SettingsRow label={t('disconnect')} borderless>
             {blocked ? <SettingsRowNote>{t('disconnect_blocked')}</SettingsRowNote> : null}
             <SettingsRowEnd>
-              <Button variant="outline" size="sm" disabled={blocked} onClick={() => setConfirmDisconnect(true)}>
+              <Button variant="outline" disabled={blocked} onClick={() => setConfirmDisconnect(true)}>
                 {t('disconnect')}
               </Button>
             </SettingsRowEnd>

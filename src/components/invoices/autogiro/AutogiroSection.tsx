@@ -21,7 +21,7 @@ export function AutogiroSection({
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h2 className="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <span>
             {title}
             {count !== undefined && <span className="tabular-nums"> ({count})</span>}

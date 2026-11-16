@@ -29,6 +29,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import { formatAmountInput } from '@/lib/money'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 const NewJournalEntryDialog = dynamic(
   () => import('@/components/bookkeeping/NewJournalEntryDialog'),
@@ -54,10 +55,12 @@ export default function BookkeepingPage() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { canWrite, lockedTitle } = useViewerLock()
+  // A read-only member gets no create dialog from a deep link either.
   const copyFromId = useMemo<string | null>(() => {
     const raw = searchParams.get('copy_from')
-    return raw && UUID_RE.test(raw) ? raw : null
-  }, [searchParams])
+    return canWrite && raw && UUID_RE.test(raw) ? raw : null
+  }, [searchParams, canWrite])
   // Deep link from the dashboard "Verifikat utan underlag" card (and the
   // push-notification link): open the list with the saknade-underlag filter
   // already on. Read once on mount: the param stays in the URL (shareable),
@@ -83,6 +86,8 @@ export default function BookkeepingPage() {
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
   const t = useTranslations('bookkeeping')
   const tStart = useTranslations('start_cards')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const { openAgentSheet } = useAgentSheet()
   const { uiState, loaded: uiStateLoaded } = useUiState()
   // The 'assistent' mode opens the tool-loop runtime (verifikation.draft via
@@ -161,7 +166,7 @@ export default function BookkeepingPage() {
   // re-trigger. copy_from wins if both are somehow present. A missing or
   // invalid payload (shared/stale link) degrades to the plain list.
   useEffect(() => {
-    if (copyFromId) return
+    if (copyFromId || !canWrite) return
     const rawId = searchParams.get('skv_tx')
     if (!rawId) return
     const prefill = takeSkvManualPrefill(rawId)
@@ -170,7 +175,19 @@ export default function BookkeepingPage() {
     setSkvLink(prefill)
     setCopyPrefill(null)
     setShowNewEntry(true)
-  }, [searchParams, copyFromId, router])
+  }, [searchParams, copyFromId, router, canWrite])
+
+  // ?new opens the empty "Nytt verifikat" dialog: the Bokföring area's create
+  // button in the sidebar links here. The param is consumed so a refresh or
+  // the back button does not reopen the dialog. The other deep links win.
+  const wantsNew = canWrite && searchParams.has('new')
+  useEffect(() => {
+    if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
+    router.replace('/bookkeeping')
+    setCopyPrefill(null)
+    setSkvLink(null)
+    setShowNewEntry(true)
+  }, [wantsNew, copyFromId, searchParams, router])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
@@ -247,7 +264,7 @@ export default function BookkeepingPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={t('title')}
+        title={tNav('v3_vouchers')}
         action={
           <SplitButton
             // Remount once ui_state loads so the primary face re-resolves
@@ -263,6 +280,8 @@ export default function BookkeepingPage() {
                   : t('create_tomt'),
                 icon: PlusIcon,
                 description: t('create_tomt_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () => {
                   setCopyPrefill(null)
                   setSkvLink(null)
@@ -274,6 +293,8 @@ export default function BookkeepingPage() {
                 label: t('create_mall'),
                 icon: RectangleGroupIcon,
                 description: t('create_mall_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () => setShowTemplateDialog(true),
               },
               {
@@ -281,6 +302,8 @@ export default function BookkeepingPage() {
                 label: t('create_with_assistant'),
                 icon: SparklesIcon,
                 description: t('create_assistent_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () =>
                   openAgentSheet({
                     intentId: 'verifikation.draft',
@@ -335,7 +358,9 @@ export default function BookkeepingPage() {
                   key={mode}
                   type="button"
                   onClick={onClick}
-                  className="rounded-lg border border-border bg-background p-4 text-left transition-colors duration-150 hover:bg-secondary/35 active:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  disabled={!canWrite}
+                  title={lockedTitle}
+                  className="rounded-lg p-4 text-left transition-colors duration-150 hover:bg-secondary/35 active:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                 >
                   <div className="text-[13px] font-medium">{tStart(`bookkeeping_mini_${mode}_title`)}</div>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

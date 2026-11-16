@@ -120,10 +120,6 @@ interface NewSupplierForm {
   country: string
 }
 
-function RequiredMark() {
-  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   name: '',
   supplier_type: 'swedish_business',
@@ -163,7 +159,7 @@ function hasExtractionContent(e: InvoiceExtractionResult | null | undefined): bo
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="mb-3 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
+    <div className="mb-3 text-xs text-muted-foreground">
       {children}
     </div>
   )
@@ -1108,7 +1104,7 @@ export default function NewSupplierInvoiceForm({
           <p className="text-xs text-muted-foreground tabular-nums">
             {t('slp_applied_line', { amount: formatAmount(slpAmount) })}
           </p>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setSlp(index, false)}>
+          <Button type="button" variant="ghost" onClick={() => setSlp(index, false)}>
             {t('slp_remove_action')}
           </Button>
         </div>
@@ -1117,7 +1113,7 @@ export default function NewSupplierInvoiceForm({
     return (
       <div
         role="status"
-        className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+        className="flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
       >
         <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
         <p className="flex-1 text-sm">
@@ -1126,7 +1122,6 @@ export default function NewSupplierInvoiceForm({
         <Button
           type="button"
           variant="outline"
-          size="sm"
           className="shrink-0"
           onClick={() => setSlp(index, true)}
         >
@@ -1164,7 +1159,7 @@ export default function NewSupplierInvoiceForm({
     if (!item) return null
     const invoiced = invoicedRowVat(item)
     return (
-      <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+      <div className="rounded-lg p-3 space-y-2 bg-control shadow-raised">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <Label htmlFor={`deductible-vat-${index}`} className="text-sm font-normal">
             {t('deductible_vat_label')}
@@ -1192,7 +1187,6 @@ export default function NewSupplierInvoiceForm({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             className="ml-auto"
             onClick={() => toggleLimitedDeduction(index)}
           >
@@ -1251,7 +1245,7 @@ export default function NewSupplierInvoiceForm({
     const item = watchedItems?.[index]
     if (!item || item.dimensions == null) return null
     return (
-      <div className="rounded-lg border bg-muted/30 p-3 space-y-1">
+      <div className="rounded-lg p-3 space-y-1 bg-control shadow-raised">
         <div className="max-w-md">
           <LineDimensionFields
             dimensions={item.dimensions}
@@ -1840,7 +1834,7 @@ export default function NewSupplierInvoiceForm({
     return null
   })()
   const reverseChargeKindRow = (
-    <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+    <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
       <span>
         {t('reverse_charge_kind_label')}
         <span className="block text-xs text-muted-foreground">
@@ -1921,14 +1915,14 @@ export default function NewSupplierInvoiceForm({
             <ArrowLeftIcon className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+            <h1 className="text-2xl leading-8">{t('page_title')}</h1>
           </div>
         </div>
       )}
 
       {isLoadingInbox && (
         <Card className="mb-6">
-          <CardContent className="py-4 flex items-center gap-3 text-sm text-muted-foreground">
+          <CardContent className="flex items-center gap-3 text-sm text-muted-foreground">
             <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('loading_inbox')}
           </CardContent>
@@ -1941,19 +1935,19 @@ export default function NewSupplierInvoiceForm({
           <section className="pb-6">
             <SectionLabel>{t('section_underlag')}</SectionLabel>
             {inboxItemId ? (
-              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
+              <div className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] text-muted-foreground bg-control shadow-raised">
                 <DocumentTextIcon className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_inbox')}
               </div>
             ) : selfBilled ? (
               // Our own document: the server refuses an uploaded underlag on a
               // självfaktura, so none is offered (crm#1367).
-              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
+              <div className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] text-muted-foreground bg-control shadow-raised">
                 <DocumentTextIcon className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_self_billed')}
               </div>
             ) : underlagFile ? (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
+              <div className="flex items-center justify-between gap-3 rounded-lg px-4 py-3 bg-control shadow-raised">
                 <div className="flex min-w-0 items-center gap-3">
                   <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
@@ -2054,11 +2048,10 @@ export default function NewSupplierInvoiceForm({
           <section className="py-6">
             <SectionLabel>
               {t('section_supplier')}
-              <RequiredMark />
             </SectionLabel>
 
             {showAISupplierHint && (
-              <div className="mb-3 rounded-lg border border-border bg-muted/30 p-4">
+              <div className="mb-3 rounded-lg p-4 bg-control shadow-raised">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-start gap-3">
                     <ChatBubbleOvalLeftIcon className="h-5 w-5 text-primary shrink-0 mt-0.5" />
@@ -2074,8 +2067,8 @@ export default function NewSupplierInvoiceForm({
                       </p>
                     </div>
                   </div>
-                  <Button type="button" size="sm" onClick={openSupplierDialogPrefilled}>
-                    <PlusIcon className="mr-2 h-4 w-4" />
+                  <Button type="button" onClick={openSupplierDialogPrefilled}>
+                    <PlusIcon className="h-4 w-4" />
                     {t('create_and_select')}
                   </Button>
                 </div>
@@ -2098,17 +2091,17 @@ export default function NewSupplierInvoiceForm({
               onCreateCustomer={openSupplierDialogNamed}
             />
             {selectedSupplier?.org_number && (
-              <p className="mt-2 text-[12.5px] text-muted-foreground">
+              <p className="mt-2 text-xs text-muted-foreground">
                 {t('org_number_prefix', { number: selectedSupplier.org_number })}
               </p>
             )}
             {selfBillingOffered && (
-              <div className="mt-3 flex items-start justify-between gap-4 rounded-lg border border-border px-4 py-3">
+              <div className="mt-3 flex items-start justify-between gap-4 rounded-lg px-4 py-3 bg-control shadow-raised">
                 <div className="min-w-0">
                   <Label htmlFor="si-self-billed" className="text-sm font-medium">
                     {t('self_billing_toggle_label')}
                   </Label>
-                  <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                  <p className="mt-0.5 text-xs text-muted-foreground">
                     {t('self_billing_toggle_help', { agreement: selectedSupplier?.self_billing_agreement_ref ?? '' })}
                   </p>
                 </div>
@@ -2134,14 +2127,12 @@ export default function NewSupplierInvoiceForm({
           <section className="py-6">
             <SectionLabel>
               {t('section_details')}
-              <RequiredMark />
             </SectionLabel>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="si-invoice-number" className="text-xs font-normal text-muted-foreground">
                     {t('supplier_invoice_number_label')}
-                    <RequiredMark />
                   </Label>
                   <AiFilledIndicator active={aiFlags.invoiceNumber} label="AI-fyllt" />
                 </div>
@@ -2187,7 +2178,6 @@ export default function NewSupplierInvoiceForm({
                 <div className="flex items-center justify-between">
                   <Label htmlFor="si-invoice-date" className="text-xs font-normal text-muted-foreground">
                     {t('invoice_date_label')}
-                    <RequiredMark />
                   </Label>
                   <AiFilledIndicator active={aiFlags.invoiceDate} label="AI-fyllt" />
                 </div>
@@ -2216,7 +2206,7 @@ export default function NewSupplierInvoiceForm({
                 )}
               />
               {settleWith && inboxItemId && watchedPayer === 'company' && (
-                <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+                <p data-ph-mask="" className="text-xs text-muted-foreground">
                   {t('settle_with_bank_row', {
                     date: formatDate(settleWith.date),
                     amount: formatCurrency(Math.abs(settleWith.amount), settleWith.currency),
@@ -2357,7 +2347,7 @@ export default function NewSupplierInvoiceForm({
             {showNoPeriodWarning && (
               <div
                 role="alert"
-                className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+                className="bg-destructive/8 mt-4 flex items-start gap-3 rounded-lg p-3"
               >
                 <ExclamationCircleIcon className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                 <div className="flex-1 text-sm text-destructive">
@@ -2372,7 +2362,6 @@ export default function NewSupplierInvoiceForm({
           <section className="py-6">
             <SectionLabel>
               {t('section_accounting')}
-              <RequiredMark />
               {fields.length > 0 && (
                 <span className="ml-2 normal-case tracking-normal">
                   {t('rows_count', { count: fields.length })}
@@ -2382,7 +2371,7 @@ export default function NewSupplierInvoiceForm({
 
             {templateAccountNote &&
               (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (
-                <p className="mb-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+                <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                   {t('account_from_history', {
                     account: templateAccountNote.account,
@@ -2395,7 +2384,7 @@ export default function NewSupplierInvoiceForm({
             {rcAccountWarningRows.length > 0 && (
               <div
                 role="status"
-                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
               >
                 <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
@@ -2413,7 +2402,7 @@ export default function NewSupplierInvoiceForm({
             {foreignZeroVatRows.length > 0 && (
               <div
                 role="status"
-                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
               >
                 <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
@@ -2427,8 +2416,8 @@ export default function NewSupplierInvoiceForm({
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[560px] border-collapse text-[13px]">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                  <tr className="border-b border-border text-left">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b-hairline text-left">
                     <th className="w-28 pb-2 pr-2">{t('col_account')}</th>
                     <th className="pb-2 pr-2">{t('col_description')}</th>
                     <th className="w-28 pb-2 pr-2 text-right">
@@ -2458,7 +2447,7 @@ export default function NewSupplierInvoiceForm({
                             slpRowVisible(index) ||
                             isLimitedDeductionOpen(index)
                             ? 'border-0'
-                            : 'border-b border-border',
+                            : 'border-b-hairline',
                           settledFields.has('items') && 'prefill-settle',
                         )}
                       >
@@ -2606,28 +2595,28 @@ export default function NewSupplierInvoiceForm({
                         </td>
                       </tr>
                       {canUseAccrual && isAccrualOpen(index) && (
-                        <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderAccrualPanel(index, `accrual-${index}`)}
                           </td>
                         </tr>
                       )}
                       {dimensionsEnabled && isDimOpen(index) && (
-                        <tr className={cn(slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn(slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderDimensionsPanel(index)}
                           </td>
                         </tr>
                       )}
                       {slpRowVisible(index) && (
-                        <tr className={cn(isLimitedDeductionOpen(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn(isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderSlpPanel(index)}
                           </td>
                         </tr>
                       )}
                       {isLimitedDeductionOpen(index) && (
-                        <tr className="border-b border-border">
+                        <tr className="border-b-hairline">
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderLimitedDeductionPanel(index)}
                           </td>
@@ -2654,18 +2643,18 @@ export default function NewSupplierInvoiceForm({
                         }}
                       />
                     </td>
-                    <td className="py-2 pr-2 italic text-muted-foreground/50">
+                    <td className="py-2 pr-2 italic text-muted-foreground">
                       {t('ghost_description')}
                     </td>
-                    <td className="py-2 pr-2 text-right italic tabular-nums text-muted-foreground/50">
+                    <td className="py-2 pr-2 text-right italic tabular-nums text-muted-foreground">
                       0
                     </td>
                     {vatColsVisible && (
                       <>
-                        <td className="py-2 pr-2 italic tabular-nums text-muted-foreground/50">
+                        <td className="py-2 pr-2 italic tabular-nums text-muted-foreground">
                           25 %
                         </td>
-                        <td className="py-2 pr-2 text-right italic text-muted-foreground/50">-</td>
+                        <td className="py-2 pr-2 text-right italic text-muted-foreground">-</td>
                       </>
                     )}
                     <td></td>
@@ -2693,11 +2682,11 @@ export default function NewSupplierInvoiceForm({
             {/* Goods or services stays in plain view for an EU supplier:
                 behind Ändra förval it was missed (crm#1323). */}
             {asksReverseChargeKind && !forvalOpen && (
-              <div className="mt-4 border-t border-border">{reverseChargeKindRow}</div>
+              <div className="mt-4 border-t-hairline">{reverseChargeKindRow}</div>
             )}
             {forvalOpen && (
-              <div className="mt-4 border-t border-border">
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+              <div className="mt-4 border-t-hairline">
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <label htmlFor="reverse_charge" className="cursor-pointer">
                     {t('reverse_charge_label')}
                     <span className="block text-xs text-muted-foreground">
@@ -2718,7 +2707,7 @@ export default function NewSupplierInvoiceForm({
                   />
                 </div>
                 {asksReverseChargeKind && reverseChargeKindRow}
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <span>{t('currency_label')}</span>
                   <Controller
                     name="currency"
@@ -2741,7 +2730,7 @@ export default function NewSupplierInvoiceForm({
                   />
                 </div>
                 {watchedCurrency !== 'SEK' && (
-                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                     <span>
                       {t('exchange_rate_label')}{' '}
                       <span className="text-muted-foreground">{t('exchange_rate_to_sek')}</span>
@@ -2759,7 +2748,7 @@ export default function NewSupplierInvoiceForm({
                   </div>
                 )}
                 {(watchedCurrency || 'SEK') === 'SEK' && (
-                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                     <label htmlFor="ore-rounding" className="cursor-pointer">
                       {t('ore_rounding_label')}
                       <span className="block text-xs text-muted-foreground">{t('ore_rounding_help')}</span>
@@ -2772,7 +2761,7 @@ export default function NewSupplierInvoiceForm({
                     />
                   </div>
                 )}
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <Label htmlFor="si-delivery-date" className="text-[13px] font-normal">
                     {t('delivery_date_label')}
                   </Label>
@@ -2784,12 +2773,12 @@ export default function NewSupplierInvoiceForm({
                   />
                 </div>
                 {registrationDateCapped && (
-                  <p className="border-b border-border py-2 text-xs text-muted-foreground">
+                  <p className="border-b-hairline py-2 text-xs text-muted-foreground">
                     {t('eu_goods_registration_date_hint', { date: formatDate(registrationDateHere) })}
                   </p>
                 )}
                 {dimensionsEnabled && (
-                  <div className="border-b border-border py-3 text-[13px]">
+                  <div className="border-b-hairline py-3 text-[13px]">
                     <span>{t('row_dimensions_title')}</span>
                     <div className="mt-2 max-w-md">
                       <LineDimensionFields
@@ -2823,18 +2812,18 @@ export default function NewSupplierInvoiceForm({
             <SectionLabel>{t('section_summary')}</SectionLabel>
             {vatColsVisible && (
               <>
-                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                   <span className="text-muted-foreground">{t('net_excl_vat')}</span>
                   <span className="tabular-nums">{formatCurrency(subtotal, watchedCurrency)}</span>
                 </div>
-                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                   <span className="text-muted-foreground">
                     {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
                   </span>
                   <span className="tabular-nums">{formatCurrency(totalVat, watchedCurrency)}</span>
                 </div>
                 {totalNonDeductibleVat !== 0 && (
-                  <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                  <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                     <span className="text-muted-foreground">{t('non_deductible_vat_label')}</span>
                     <span className="tabular-nums">{formatCurrency(totalNonDeductibleVat, watchedCurrency)}</span>
                   </div>
@@ -2842,13 +2831,13 @@ export default function NewSupplierInvoiceForm({
               </>
             )}
             {figures.rounding.applies && (
-              <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+              <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                 <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
                 <span className="tabular-nums">{signedAmount(figures.rounding.roundingDelta)}</span>
               </div>
             )}
             <div className="flex items-baseline justify-between pt-4">
-              <span className="font-display text-lg">{t('total_payable_label')}</span>
+              <span className="text-[15px] font-medium text-strong">{t('total_payable_label')}</span>
               <span className="font-display text-xl tabular-nums">
                 {formatCurrency(figures.toPay, watchedCurrency)}
               </span>
@@ -2859,7 +2848,7 @@ export default function NewSupplierInvoiceForm({
                 names the booking moment and the confirm dialog the outcome
                 (convention 10). The live region stays mounted so the change
                 is announced. */}
-            <p aria-live="polite" className={cn('text-[12.5px] text-attn', nextStep && 'pt-6')}>
+            <p aria-live="polite" className={cn('text-xs text-attn', nextStep && 'pt-6')}>
               {nextStep && (
                 <>
                   {t('next_step_prefix')}
@@ -2881,7 +2870,7 @@ export default function NewSupplierInvoiceForm({
             mode, to the page panel scroll on the standalone page) ── */}
         <div
           className={cn(
-            'sticky bottom-0 z-10 mt-6 border-t border-border bg-background',
+            'sticky bottom-0 z-10 mt-6 border-t-hairline bg-background',
             bare && '-mx-6 -mb-6 rounded-b-xl px-6',
           )}
         >
@@ -2909,7 +2898,7 @@ export default function NewSupplierInvoiceForm({
                 t('registering')
               ) : !canWrite ? (
                 <>
-                  <LockClosedIcon className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="h-4 w-4" />
                   {primaryLabel}
                 </>
               ) : (
@@ -2982,13 +2971,13 @@ export default function NewSupplierInvoiceForm({
 
       {/* New supplier dialog */}
       <Dialog open={showNewSupplier} onOpenChange={setShowNewSupplier}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('new_supplier_dialog_title')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>{t('new_supplier_name_label')}<RequiredMark /></Label>
+              <Label>{t('new_supplier_name_label')}</Label>
               <Input
                 placeholder={t('new_supplier_name_placeholder')}
                 value={newSupplier.name}

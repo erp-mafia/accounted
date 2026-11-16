@@ -47,14 +47,14 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">Effekt per konto</p>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Debet − Kredit
         </p>
       </div>
 
-      <div className="hidden sm:block rounded-lg border overflow-hidden">
+      <div className="hidden sm:block overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground bg-muted/30">
+          <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground bg-muted/30">
             <tr>
               <th className="px-3 py-2 text-left w-56">Konto</th>
               <th className="px-3 py-2 text-right">Original</th>
@@ -91,7 +91,7 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
 
       <div className="sm:hidden space-y-2">
         {rows.map((row) => (
-          <div key={row.account_number} className="rounded-lg border p-3 space-y-1.5">
+          <div key={row.account_number} className="rounded-lg p-3 space-y-1.5 bg-control shadow-raised">
             <div className="flex items-center justify-between gap-2">
               <AccountNumber number={row.account_number} showName size="sm" />
               <span className={`text-sm font-medium tabular-nums ${signClass(row.delta)}`}>

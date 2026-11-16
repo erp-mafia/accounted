@@ -19,10 +19,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   Select,
   SelectContent,
@@ -40,7 +43,6 @@ import {
   MagnifyingGlassIcon,
   PaperAirplaneIcon,
   ShieldCheckIcon,
-  SpinnerIcon,
 } from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CONNECTED_FILING_PUBLIC_RELEASED } from '@/lib/bokslut/arsredovisning/capabilities'
@@ -134,7 +136,9 @@ const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secon
 
 export function DigitalInlamning({ periodId }: { periodId: string }) {
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const tStudio = useTranslations('annualReportStudio')
+  const tCommon = useTranslations('common')
   const ixbrlUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/ixbrl`
 
   const [showPreview, setShowPreview] = useState(false)
@@ -503,7 +507,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {/* Steg: Granska & validera */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Digital inlämning: granska &amp; validera (iXBRL)</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Digital inlämning: granska &amp; validera (iXBRL)</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <p className="px-1 text-sm text-muted-foreground">
@@ -521,7 +525,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </a>
             </Button>
             <Button onClick={() => void handleValidate()} loading={validating}>
-              {!validating && <MagnifyingGlassIcon className="mr-2 h-4 w-4" />}
+              {!validating && <MagnifyingGlassIcon className="h-4 w-4" />}
               Validera
             </Button>
           </div>
@@ -530,7 +534,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <iframe
               src={previewUrl}
               title="Förhandsgranskning av årsredovisning (iXBRL)"
-              className="w-full h-[640px] rounded-lg border border-border bg-white"
+              className="w-full h-[640px] rounded-lg bg-white shadow-raised"
             />
           )}
 
@@ -571,7 +575,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {/* Steg: Skicka in */}
       <section>
         <div className="mb-1 flex items-center gap-2 px-1">
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Skicka in till Bolagsverket</h3>
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">Skicka in till Bolagsverket</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
         <p className="px-1 text-sm text-muted-foreground">
@@ -581,10 +585,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         </p>
         <div className="space-y-4 px-1 pt-4 text-sm">
           {extensionActive === null && (
-            <div className="text-muted-foreground">
-              <SpinnerIcon className="inline h-4 w-4 animate-spin mr-2" />
-              Kontrollerar anslutningen till Bolagsverket …
-            </div>
+            <LateReveal className="space-y-2" aria-label="Kontrollerar anslutningen till Bolagsverket">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </LateReveal>
           )}
 
           {extensionActive === false && (
@@ -759,7 +763,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </p>
 
               {registryInformation && (
-                <div className="border-t border-border pt-3 text-xs">
+                <div className="border-t-hairline pt-3 text-xs">
                   <p className="font-medium">Grunduppgifter från Bolagsverket</p>
                   <p className="mt-1 text-muted-foreground">
                     {registryInformation.namn}
@@ -835,14 +839,16 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 <Button
                  
                   onClick={() => void handleSubmit()}
+                  title={lockedTitle}
                   disabled={
+                    !canWrite ||
                     blockingErrors ||
                     !selectedVersionId ||
                     (avtal !== null && !avtal.accepted)
                   }
                   loading={submitting}
                 >
-                  {!submitting && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+                  {!submitting && <PaperAirplaneIcon className="h-4 w-4" />}
                   {avtal ? 'Godkänn villkoren och skicka in' : 'Kontrollera och skicka in'}
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
@@ -850,7 +856,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                    
                     variant="outline"
                     onClick={() => void handleSubmit({ ignoreWarnings: true })}
-                    disabled={submitting}
+                    disabled={!canWrite || submitting}
+                    title={lockedTitle}
                   >
                     Skicka in trots varningar
                   </Button>
@@ -858,7 +865,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
 
               {kvittens && (
-                <div className="space-y-2 border-t border-border pt-4">
+                <div className="space-y-2 border-t-hairline pt-4">
                   <div className="flex items-center gap-2">
                     <ShieldCheckIcon className="h-4 w-4 text-success" />
                     <p className="font-medium">Uppladdad till eget utrymme</p>
@@ -867,7 +874,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     Undertecknaren har fått e-post från Bolagsverket och signerar
                     fastställelseintyget där. Ärendet startar först efter signering.
                   </p>
-                  <Button variant="outline" size="sm" asChild>
+                  <Button variant="outline" asChild>
                     <a href={kvittens.url} target="_blank" rel="noopener noreferrer">
                       <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
@@ -884,7 +891,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   row.handling_typ === 'arsredovisning_kompletteras' &&
                   ['uploaded', 'inkommen', 'forelagd', 'komplettering'].includes(row.status),
               ) && (
-                <div className="space-y-3 border-t border-border pt-4">
+                <div className="space-y-3 border-t-hairline pt-4">
                   <p className="font-medium">{tStudio('revisor_filing.title')}</p>
                   <p className="text-xs text-muted-foreground">{tStudio('revisor_filing.intro')}</p>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -930,24 +937,26 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     <Button
                       variant="outline"
                       onClick={() => void handleSubmitRevisionsberattelse()}
-                      disabled={avtal !== null && !avtal.accepted}
+                      disabled={!canWrite || (avtal !== null && !avtal.accepted)}
+                      title={lockedTitle}
                       loading={rbSubmitting}
                     >
-                      {!rbSubmitting && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+                      {!rbSubmitting && <PaperAirplaneIcon className="h-4 w-4" />}
                       {tStudio('revisor_filing.submit')}
                     </Button>
                     {utfall && utfall.length > 0 && !utfallHasErrors && (
                       <Button
                         variant="outline"
                         onClick={() => void handleSubmitRevisionsberattelse({ ignoreWarnings: true })}
-                        disabled={rbSubmitting}
+                        disabled={!canWrite || rbSubmitting}
+                        title={lockedTitle}
                       >
                         {tStudio('revisor_filing.submit_despite_warnings')}
                       </Button>
                     )}
                   </div>
                   {rbKvittens && (
-                    <Button variant="outline" size="sm" asChild>
+                    <Button variant="outline" asChild>
                       <a href={rbKvittens.url} target="_blank" rel="noopener noreferrer">
                         <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> {tStudio('revisor_filing.open_at_bolagsverket')}
                       </a>
@@ -964,7 +973,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       {extensionActive === true && (
         <section>
           <div className="mb-1 flex items-center gap-2 px-1">
-            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Inlämningsstatus</h3>
+            <h3 className="font-sans text-xs font-medium text-muted-foreground">Inlämningsstatus</h3>
             <div className="h-px flex-1 bg-border/60" />
           </div>
           <p className="px-1 text-sm text-muted-foreground">
@@ -974,21 +983,27 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="flex justify-end">
               <Button
                 variant="outline"
-                size="sm"
                 loading={pollingEvents}
                 onClick={() => void handlePollEvents()}
               >
-                {!pollingEvents && <ArrowPathIcon className="mr-2 h-4 w-4" />}
+                {!pollingEvents && <ArrowPathIcon className="h-4 w-4" />}
                 {pollingEvents ? 'Uppdaterar …' : 'Uppdatera status'}
               </Button>
             </div>
-            {submissionsError && <p className="text-xs text-destructive">{submissionsError}</p>}
+            {submissionsError && submissions.length > 0 && (
+              <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadSubmissions() }}>
+                {tCommon('refresh_failed')}
+              </AttnLine>
+            )}
+            {submissionsError && submissions.length === 0 && !loadingSubmissions && (
+              <LoadError title="Kunde inte hämta inlämningshistoriken" onRetry={() => void loadSubmissions()} />
+            )}
             {loadingSubmissions && submissions.length === 0 && (
-              <div className="space-y-2" aria-busy="true" aria-label="Hämtar">
+              <LateReveal className="space-y-2" aria-label={tCommon('loading')}>
                 <Skeleton className="h-4 w-1/3" />
                 <Skeleton className="h-4 w-2/3" />
                 <Skeleton className="h-4 w-1/2" />
-              </div>
+              </LateReveal>
             )}
             {!loadingSubmissions && submissions.length === 0 && !submissionsError && (
               <p className="text-muted-foreground italic">Inga inlämningar ännu.</p>
@@ -1010,7 +1025,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               return (
                 <div
                   key={submission.id}
-                  className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
+                  className="flex flex-col gap-3 border-b-hairline pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="space-y-1">
                     {badge.variant ? (
@@ -1034,7 +1049,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     )}
                   </div>
                   {submission.bolagsverket_url && submission.status === 'uploaded' && (
-                    <Button variant="outline" size="sm" asChild>
+                    <Button variant="outline" asChild>
                       <a href={submission.bolagsverket_url} target="_blank" rel="noopener noreferrer">
                         <ArrowTopRightOnSquareIcon className="mr-1 h-3.5 w-3.5" /> Signera
                       </a>
@@ -1049,8 +1064,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       </div>
       {INLAMNING_COMING_SOON && (
         <div className="absolute inset-0 z-10 flex items-center justify-center">
-          <div className="rounded-lg border border-border bg-background px-8 py-6 text-center">
-            <p className="font-display text-2xl">Kommer snart</p>
+          <div className="rounded-lg px-8 py-6 text-center bg-control shadow-raised">
+            <p className="text-[15px] font-medium leading-[22px] text-strong">Kommer snart</p>
             <p className="mt-2 max-w-xs text-sm text-muted-foreground">
               Digital inlämning till Bolagsverket öppnar så snart integrationen
               är godkänd. Tills dess: ladda ner PDF-utkastet ovan.

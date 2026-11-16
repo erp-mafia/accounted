@@ -18,7 +18,7 @@ interface PayDeclarationViaBankButtonProps {
   /** A line beside the button (what is to pay), shown only with it. */
   prompt?: ReactNode
   variant?: 'default' | 'outline'
-  size?: 'default' | 'sm'
+  size?: 'default' | 'toolbar'
   /** Called when the dialog closes after a payment was made, approved or sent to the bank. */
   onDone?: () => void
 }

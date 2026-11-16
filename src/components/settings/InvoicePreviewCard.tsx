@@ -10,6 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCustomers } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -156,18 +157,15 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      {/* Quiet header-action trigger (Fönster): the preview lives in the
-          section header's action slot, not as a card in the page flow. */}
+      {/* The trigger sits in the settings top bar (the section header's
+          action slot), so it takes the top bar's 32px outline button. */}
       <DialogTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-        >
-          <EyeIcon className="h-3.5 w-3.5" />
+        <Button variant="outline" size="toolbar">
+          <EyeIcon className="h-4 w-4" aria-hidden />
           {t('preview_button')}
-        </button>
+        </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-3xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
         </DialogHeader>
@@ -180,7 +178,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         )}
 
         {!isLoading && error && (
-          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 px-6 text-center">
+          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg px-6 text-center bg-control shadow-raised">
             <p className="text-sm text-destructive">{t('error')}: {error}</p>
           </div>
         )}
@@ -220,7 +218,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
             data={blobUrl}
             type="application/pdf"
             title={t('iframe_title')}
-            className="w-full h-[70vh] rounded-lg border border-border"
+            className="w-full h-[70vh] rounded-lg bg-control shadow-raised"
           >
             <p className="p-4 text-sm text-muted-foreground">
               {t('error')}:{' '}

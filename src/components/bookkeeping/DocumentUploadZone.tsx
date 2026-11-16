@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import {
   ArrowUpTrayIcon,
   DocumentTextIcon,
@@ -61,6 +62,11 @@ interface DocumentUploadZoneProps {
    * revealing the zone and waiting for a second click inside it.
    */
   fileInputRef?: React.RefObject<HTMLInputElement | null>
+  /**
+   * More ways in, shown in the compact row after "Ladda upp" (e.g. "Välj
+   * från Inkorgen"), so a dialog's Underlag reads as one line.
+   */
+  actions?: React.ReactNode
 }
 
 let uploadCounter = 0
@@ -144,6 +150,7 @@ export default function DocumentUploadZone({
   dropSurfaceRef,
   onUploaded,
   fileInputRef,
+  actions,
 }: DocumentUploadZoneProps) {
   const t = useTranslations('document_upload')
   const locale = useLocale()
@@ -371,47 +378,62 @@ export default function DocumentUploadZone({
           </div>,
           document.body,
         )}
-      {/* Drop zone */}
-      <div
-        ref={zoneRef}
-        className={`
-          relative border-2 border-dashed rounded-lg text-center transition-colors
-          ${compact ? 'p-3' : 'p-6'}
-          ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-          ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
-        `}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-      >
-        <input
-          ref={(element) => {
-            inputRef.current = element
-            if (fileInputRef) fileInputRef.current = element
-          }}
-          type="file"
-          multiple
-          accept={DOCUMENT_UPLOAD_ACCEPT}
-          className="hidden"
-          onChange={handleInputChange}
-          disabled={disabled}
-        />
-
-        <div className={compact ? 'flex items-center justify-center gap-2' : 'space-y-2'}>
-          <ArrowUpTrayIcon className={compact ? 'h-4 w-4 text-muted-foreground' : 'mx-auto h-8 w-8 text-muted-foreground'} />
-          <div>
-            <p className={compact ? 'text-sm text-muted-foreground' : 'text-sm font-medium'}>
-              {compact ? t('compact_prompt') : t('prompt')}
-            </p>
-            {!compact && (
-              <p className="text-xs text-muted-foreground">
-                {t('format_hint')}
-              </p>
-            )}
+      <input
+        ref={(element) => {
+          inputRef.current = element
+          if (fileInputRef) fileInputRef.current = element
+        }}
+        type="file"
+        multiple
+        accept={DOCUMENT_UPLOAD_ACCEPT}
+        className="hidden"
+        onChange={handleInputChange}
+        disabled={disabled}
+      />
+      {compact ? (
+        // Compact (Stil v3, board Dlg-Bokfor): one line, not a dashed box:
+        // "Ladda upp", the host's other ways in, and the drag hint. The row
+        // still takes a dropped file, and so does dropSurfaceRef.
+        <div
+          ref={zoneRef}
+          className={cn(
+            'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md transition-shadow duration-150',
+            isDragging && 'ring-[1.5px] ring-primary',
+            disabled && 'pointer-events-none opacity-40',
+          )}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <Button variant="outline" onClick={() => inputRef.current?.click()} disabled={disabled}>
+            <ArrowUpTrayIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('upload_button')}
+          </Button>
+          {actions}
+          <span className="text-xs text-muted-foreground">{t('drag_hint')}</span>
+        </div>
+      ) : (
+        <div
+          ref={zoneRef}
+          className={`
+            relative border-2 border-dashed rounded-lg text-center transition-colors p-6
+            ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
+            ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
+          `}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+        >
+          <div className="space-y-2">
+            <ArrowUpTrayIcon className="mx-auto h-8 w-8 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">{t('prompt')}</p>
+              <p className="text-xs text-muted-foreground">{t('format_hint')}</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* File list */}
       {files.length > 0 && (
@@ -452,7 +474,7 @@ export default function DocumentUploadZone({
 
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 aria-label={t('remove_file')}
                 className="shrink-0"
                 onClick={(e) => {

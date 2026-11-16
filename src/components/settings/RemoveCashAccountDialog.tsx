@@ -167,10 +167,10 @@ function RemoveCashAccountBody({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
-      <DialogContent className="sm:min-w-[460px] sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           {/* data-ph-mask: the title names the account (user data). */}
-          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="" className="text-lg">
             {state.kind === 'refused'
               ? t('remove_refused_title', { account: account.label })
               : state.kind === 'archivable'

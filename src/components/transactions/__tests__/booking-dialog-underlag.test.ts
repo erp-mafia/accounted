@@ -41,7 +41,9 @@ const messages = (locale: 'sv' | 'en') =>
 
 describe('review dialog layout: the buttons stay in view', () => {
   it('only the body scrolls; the dialog itself no longer does', () => {
-    expect(REVIEW_SRC).toContain("'flex max-h-[95dvh] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90dvh]'")
+    // The height cap is DialogContent's own (100dvh less the 72px top and a
+    // bottom margin); the review only turns its scroll off.
+    expect(REVIEW_SRC).toContain('className="flex flex-col gap-0 overflow-hidden p-0"')
     expect(REVIEW_SRC).toContain('scrollbar-visible min-h-0 flex-1 overflow-y-auto')
     expect(REVIEW_SRC).not.toContain('max-h-[85vh] overflow-y-auto')
     expect(REVIEW_SRC).not.toContain('max-h-[90vh] overflow-y-auto')
@@ -65,7 +67,7 @@ describe('review dialog layout: the buttons stay in view', () => {
   })
 
   it('the receipt column beside the review is sized from the body, so its file row is never under the footer', () => {
-    expect(REVIEW_SRC).toContain('lg:h-[min(72vh,calc(90dvh-9rem))]')
+    expect(REVIEW_SRC).toContain('md:h-[min(36rem,calc(100dvh-17rem))]')
     expect(REVIEW_SRC).not.toContain('lg:h-[72vh]')
   })
 })

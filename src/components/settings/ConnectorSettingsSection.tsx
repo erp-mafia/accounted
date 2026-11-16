@@ -150,7 +150,7 @@ export function ConnectorSettingsSection() {
         <SettingsRow label={t('connector_row_status')} borderless>
           <SettingsRowNote>{t('connector_load_failed')}</SettingsRowNote>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+            <Button variant="outline" onClick={() => setReloadKey((k) => k + 1)}>
               {t('load_retry')}
             </Button>
           </SettingsRowEnd>
@@ -173,7 +173,7 @@ export function ConnectorSettingsSection() {
             )}
             {status.configured ? (
               <SettingsRowEnd>
-                <Button variant="outline" size="sm" loading={syncing} onClick={runSync}>
+                <Button variant="outline" loading={syncing} onClick={runSync}>
                   {!syncing && <ArrowPathIcon aria-hidden="true" className="h-3.5 w-3.5" />}
                   <span>{syncing ? t('connector_sync_button_busy') : t('connector_sync_button')}</span>
                 </Button>

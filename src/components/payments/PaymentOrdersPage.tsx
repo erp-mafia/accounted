@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { BuildingLibraryIcon } from '@/components/icons'
+import { BuildingLibraryIcon, PlusIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
@@ -13,8 +13,8 @@ import { BankMark } from '@/components/banks/BankMark'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -24,7 +24,7 @@ import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { parsePaymentSigningReturn, stripPaymentSigningReturn, type PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { ApprovePaymentOrdersDialog } from './ApprovePaymentOrdersDialog'
 import { ResolvePaymentOrderDialog } from './ResolvePaymentOrderDialog'
@@ -78,6 +78,7 @@ const PaySkattekontoViaBankDialog = dynamic(() => import('./PaySkattekontoViaBan
  */
 export function PaymentOrdersPage() {
   const t = useTranslations('payments_page')
+  const tCommon = useTranslations('common')
   const tStatus = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -94,6 +95,8 @@ export function PaymentOrdersPage() {
   const [verificationBusy, setVerificationBusy] = useState(false)
   const [payingSkattekonto, setPayingSkattekonto] = useState(false)
   const [orders, setOrders] = useState<PaymentOrder[] | null>(null)
+  /** The last read of the orders failed: with none on screen the page says so in their place; orders on screen stay. */
+  const [ordersFailed, setOrdersFailed] = useState(false)
   const [approving, setApproving] = useState<PaymentOrder[] | null>(null)
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
   /** Set when the signing dialog was reopened by a return from the bank's own page. */
@@ -126,7 +129,10 @@ export function PaymentOrdersPage() {
     const [avail, list, links] = await Promise.allSettled([fetchPaymentsAvailability(), listPaymentOrders(), listOpenSigningLinks()])
     const availabilityValue = avail.status === 'fulfilled' ? avail.value : { available: false, reason: null, provider: null, accounts: [], signer_known: false }
     setAvailability(availabilityValue)
-    setOrders(list.status === 'fulfilled' ? list.value : [])
+    // A failed read keeps the orders already on screen and says so (ordersFailed).
+    if (list.status === 'fulfilled') setOrders(list.value)
+    else setOrders((current) => current ?? [])
+    setOrdersFailed(list.status === 'rejected')
     setOpenLinks(links.status === 'fulfilled' ? links.value : [])
     // The verification rides on the availability (lib/payments/orders/readiness);
     // the line is informational: a failed read leaves it out rather than blocking the page.
@@ -350,7 +356,7 @@ export function PaymentOrdersPage() {
     if (!available || !verification) return null
     if (verification.state === 'valid') {
       return (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           <VerificationStateText verification={verification} />
         </p>
       )
@@ -381,7 +387,8 @@ export function PaymentOrdersPage() {
       help={<HelpPopover>{t('help_body')}</HelpPopover>}
       action={
         available && canWrite ? (
-          <Button size="sm" variant="outline" onClick={() => setPayingSkattekonto(true)}>
+          <Button size="toolbar" variant="outline" onClick={() => setPayingSkattekonto(true)}>
+            <PlusIcon className="h-4 w-4" />
             {t('new_skattekonto_payment')}
           </Button>
         ) : undefined
@@ -393,22 +400,24 @@ export function PaymentOrdersPage() {
     return (
       <div className="space-y-8">
         {header}
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-4 w-20 flex-1" />
-              <Skeleton className="h-4 w-24" />
+        <LateReveal>
+          <Skeleton className="mb-3 h-3 w-32" />
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-24" />
             </div>
           ))}
-        </div>
+        </LateReveal>
       </div>
     )
   }
 
   const filesSection = (
     <section className="space-y-3">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('files_heading')}</h2>
+      <h2 className="text-sm font-medium text-muted-foreground">{t('files_heading')}</h2>
       <p className="text-[13px] text-muted-foreground">
         {t('files_body')}{' '}
         <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
@@ -422,7 +431,12 @@ export function PaymentOrdersPage() {
     <div className="space-y-8">
       {header}
 
-      {verificationLine}
+      {/* A failed reload takes the place of the verification line: one attention line per page. */}
+      {ordersFailed && hasOrders ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: refresh }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : (
+        verificationLine
+      )}
 
       {/* Select-all lives on the section head: it picks only the orders that
           can share one signing, which a plain "Markera alla" would not. */}
@@ -432,24 +446,36 @@ export function PaymentOrdersPage() {
         countLabel={t('selected_count', { count: selectedOrders.length })}
         clearLabel={t('clear_selection')}
       >
-        <RequestSigningLinkButton size="sm" onClick={() => setRequesting(selectedOrders)} />
-        <Button size="sm" onClick={() => setSigning(selectedOrders)}>
+        <RequestSigningLinkButton onClick={() => setRequesting(selectedOrders)} />
+        <Button onClick={() => setSigning(selectedOrders)}>
           {t('sign_selected', { count: selectedOrders.length })}
         </Button>
       </BulkSelectionBar>
 
-      {!available && !hasOrders && (
-        <>
-          {filesSection}
-          {availability?.reason === 'subscription' ? (
+      {!available &&
+        !hasOrders &&
+        (availability?.reason === 'subscription' ? (
+          <>
+            {filesSection}
             <UpgradeNote>{t('requires_subscription')}</UpgradeNote>
-          ) : (
-            <p className="text-[12.5px] text-muted-foreground">{t('not_available')}</p>
-          )}
-        </>
-      )}
+          </>
+        ) : (
+          // First time, bank payments not open for the company (convention
+          // 17): the state says so where the rows would be and gives the way
+          // that does work, the payment files. No switch to link to: the plan
+          // (the note above) or the installation opens it, not a setting.
+          <EmptyState
+            icon={BuildingLibraryIcon}
+            title={t('not_available')}
+            description={t('files_body')}
+            actionLabel={t('files_link')}
+            actionHref="/supplier-invoices/payment-files"
+          />
+        ))}
 
-      {(available || hasOrders) && !hasOrders && (
+      {available && !hasOrders && ordersFailed && <LoadError title={t('load_failed_title')} onRetry={refresh} />}
+
+      {(available || hasOrders) && !hasOrders && !ordersFailed && (
         <EmptyState
           icon={BuildingLibraryIcon}
           title={t('empty_title')}
@@ -471,11 +497,11 @@ export function PaymentOrdersPage() {
           return (
             <section key={section} className="space-y-3">
               <div className="flex items-center justify-between gap-4">
-                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                <h2 className="text-sm font-medium text-muted-foreground">
                   {t(`section_${section}`)} <span className="tabular-nums">({rows.length})</span>
                 </h2>
                 {isToApprove && canWrite && available && (
-                  <Button size="sm" variant="outline" onClick={() => setApproving(rows)}>
+                  <Button variant="outline" onClick={() => setApproving(rows)}>
                     {t('approve_all', { count: rows.length })}
                   </Button>
                 )}
@@ -492,9 +518,9 @@ export function PaymentOrdersPage() {
               {isToSign && anchor && toSign.some((o) => !selectable(o)) && <AttnLine>{t('mixed_accounts_hint')}</AttnLine>}
               {/* What Väntar på andra firmatecknare asks for, for whoever closed the signing before reading it. */}
               {section === 'in_progress' && rows.some((o) => o.sign_second) && (
-                <p className="text-[12.5px] text-muted-foreground">{t('second_signer_hint', { count: rows.filter((o) => o.sign_second).length })}</p>
+                <p className="text-xs text-muted-foreground">{t('second_signer_hint', { count: rows.filter((o) => o.sign_second).length })}</p>
               )}
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -547,7 +573,7 @@ export function PaymentOrdersPage() {
                             <span className="flex min-w-0 items-baseline gap-2">
                               <span className="truncate">{orderInvoiceLabel(order)}</span>
                               {order.reference ? (
-                                <span className="min-w-0 flex-1 basis-0 truncate text-[12.5px] text-muted-foreground">{order.reference}</span>
+                                <span className="min-w-0 flex-1 basis-0 truncate text-xs text-muted-foreground">{order.reference}</span>
                               ) : null}
                             </span>
                           </td>
@@ -563,7 +589,7 @@ export function PaymentOrdersPage() {
                               </Badge>
                             )}
                           </td>
-                          <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>{formatDate(order.requested_execution_date)}</td>
+                          <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>{formatDate(order.requested_execution_date)}</td>
                           {showStatus && (
                             <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                               {held ? (
@@ -585,7 +611,7 @@ export function PaymentOrdersPage() {
                                 <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
                               )}
                               {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
-                                <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
+                                <span className="ml-2 text-xs text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
                               )}
                               {silentSince && (
                                 <span className="ml-2 text-xs text-muted-foreground">{tStatus('bank_silent_since', { date: formatDate(silentSince) })}</span>
@@ -599,13 +625,13 @@ export function PaymentOrdersPage() {
                               {(() => {
                                 const from = availability?.accounts.find((a) => a.id === order.cash_account_id)
                                 return from ? (
-                                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                                     <BankMark bankName={from.bank_name} size={14} />
                                     {from.ledger_account}
                                   </span>
                                 ) : null
                               })()}
-                              {formatCurrency(Number(order.amount), order.currency)}
+                              {formatRowAmount(Number(order.amount), order.currency)}
                             </span>
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>

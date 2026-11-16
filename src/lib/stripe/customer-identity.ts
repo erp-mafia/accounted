@@ -231,8 +231,8 @@ export function checkoutIdentityNotice(
     parts.push([a.line1, a.line2, [a.postal_code, a.city].filter(Boolean).join(' ')].filter(Boolean).join(', '))
   }
   const message = sv
-    ? `Fakturan ställs ut på ${parts.join(', ')}. Stämmer något inte? Ändra under Inställningar > Företag > Allmänt och starta betalningen igen.`
-    : `The invoice is issued to ${parts.join(', ')}. Anything wrong? Change it under Settings > Company > General and start the payment again.`
+    ? `Fakturan ställs ut på ${parts.join(', ')}. Stämmer något inte? Ändra under Inställningar > Företaget > Företagsuppgifter och starta betalningen igen.`
+    : `The invoice is issued to ${parts.join(', ')}. Anything wrong? Change it under Settings > Company > Company details and start the payment again.`
   return message.length > CHECKOUT_TEXT_MAX ? `${message.slice(0, CHECKOUT_TEXT_MAX - 3)}...` : message
 }
 

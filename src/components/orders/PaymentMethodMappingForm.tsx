@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   SettingsGroup,
   SettingsRow,
@@ -44,6 +45,7 @@ export function PaymentMethodMappingForm({
   methods,
 }: PaymentMethodMappingFormProps) {
   const t = useTranslations('webshop_orders')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
   const [saved, setSaved] = useState<Record<string, WebshopPaymentMethodPolicy>>({})
   const [draft, setDraft] = useState<Record<string, DraftPolicy>>({})
@@ -178,7 +180,7 @@ export function PaymentMethodMappingForm({
                     setMode(method, e.target.value as 'book' | 'invoice')
                   }
                 }}
-                className="rounded-full border border-border bg-transparent px-3 py-[5px] text-[13px]"
+                className="rounded-md border border-border bg-transparent px-3 py-[5px] text-[13px]"
                 aria-label={t('mapping_mode_aria', { method: title || method })}
               >
                 <option value="unmapped">{t('mapping_mode_unmapped')}</option>
@@ -202,7 +204,7 @@ export function PaymentMethodMappingForm({
       <div className="flex items-center justify-between px-1 pt-3">
         <SettingsRowNote>{t('mapping_note')}</SettingsRowNote>
         {dirty && (
-          <Button size="sm" onClick={save} disabled={saving || invalid}>
+          <Button onClick={save} disabled={!canWrite || saving || invalid} title={lockedTitle}>
             {saving ? t('mapping_saving') : t('mapping_save')}
           </Button>
         )}

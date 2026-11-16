@@ -1,4 +1,7 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import { StandaloneMessage } from '@/components/standalone/StandalonePage'
 import { AttestLinkPage } from '@/components/supplier-invoices/AttestLinkPage'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
@@ -15,17 +18,6 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic'
 
-function MessageShell({ title, body }: { title: string; body: string }) {
-  return (
-    <main className="min-h-dvh bg-background flex items-center justify-center px-4 md:px-6">
-      <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-2">
-        <h1 className="font-display text-2xl tracking-tight">{title}</h1>
-        <p className="text-[13px] text-muted-foreground">{body}</p>
-      </div>
-    </main>
-  )
-}
-
 export default async function AttestPage({
   params,
   searchParams,
@@ -41,7 +33,13 @@ export default async function AttestPage({
 
   // Unknown, expired and used read the same: the link no longer opens
   // anything, and the invoice can still be attested in Accounted.
-  const gone = <MessageShell title="Länken är inte längre giltig" body="Länken har redan använts eller gått ut. Logga in för att attestera fakturan." />
+  const gone = (
+    <StandaloneMessage title="Länken är inte längre giltig" body="Länken har redan använts eller gått ut. Logga in för att attestera fakturan.">
+      <Button asChild size="lg" variant="outline">
+        <Link href="/login">Logga in</Link>
+      </Button>
+    </StandaloneMessage>
+  )
   if (!resolved?.ok) return gone
   if (!(await attesterCanStillDecide(service, resolved.link))) return gone
 

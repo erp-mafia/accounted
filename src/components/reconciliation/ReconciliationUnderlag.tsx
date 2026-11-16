@@ -112,11 +112,11 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
   return (
     <section aria-label={t('heading')} className="space-y-1.5">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+        <h3 className="text-xs font-medium text-muted-foreground">
           {t('heading_dated', { date: formatDate(throughDate) })}
         </h3>
         {attachments !== null && attachments.length === 0 && (
-          <span className="text-[12.5px] text-muted-foreground" title={t('empty')}>
+          <span className="text-xs text-muted-foreground" title={t('empty')}>
             {t('empty_short')}
           </span>
         )}
@@ -157,7 +157,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               >
                 {a.file_name}
               </a>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                 {formatSize(a.size_bytes)} · {formatDate(a.uploaded_at)}
               </span>
               {canWrite && (

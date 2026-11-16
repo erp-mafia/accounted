@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -14,7 +13,10 @@ import {
 } from '@/lib/invoices/copy-invoice'
 import InvoiceEditor from '@/components/invoices/InvoiceEditor'
 import { InvoiceEditorShellSkeleton } from '@/components/invoices/editor/InvoiceEditorShellSkeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import type { InvoiceDocumentType } from '@/types'
+import { useViewerRedirect } from '@/components/ui/viewer-lock'
 
 interface Props {
   /** Copy from this invoice (the detail page's "Kopiera"). */
@@ -33,6 +35,7 @@ interface Props {
 export default function NewInvoiceEditor({ copyFromId, selfBilled, documentType }: Props) {
   const t = useTranslations('invoice_editor')
   const { company } = useCompany()
+  const canWrite = useViewerRedirect(documentType === 'quote' ? '/quotes' : '/invoices')
   const supabase = useMemo(() => createClient(), [])
   const [copyLoad, setCopyLoad] = useState<{
     sourceId: string | null
@@ -97,17 +100,25 @@ export default function NewInvoiceEditor({ copyFromId, selfBilled, documentType 
     }
   }, [company?.id, copyFromId, supabase])
 
+  // A read-only member gets the list, never the editor.
+  if (!canWrite) return null
+
   if (copyFromId) {
     const copyInitial = copyLoad.sourceId === copyFromId ? copyLoad.initial : null
     const copyLoadFailed = copyLoad.sourceId === copyFromId && copyLoad.failed
     if (copyLoadFailed) {
+      // Full-bleed route: the editor owns its padding, so the state brings the
+      // gutter. No retry: the source is gone or cannot be a template.
       return (
-        <div className="space-y-2 px-4 py-12 text-center md:px-6">
-          <p className="text-[15px]">{t('copy_load_failed_title')}</p>
-          <p className="text-[13px] text-muted-foreground">{t('copy_load_failed_description')}</p>
-          <Link href="/invoices" className="text-[13px] underline underline-offset-4">
-            {t('back')}
-          </Link>
+        <div className="px-4 pt-4 md:px-6">
+          <EmptyState
+            tone="error"
+            icon={ExclamationTriangleIcon}
+            title={t('copy_load_failed_title')}
+            description={t('copy_load_failed_description')}
+            secondaryActionLabel={t('back')}
+            secondaryActionHref="/invoices"
+          />
         </div>
       )
     }

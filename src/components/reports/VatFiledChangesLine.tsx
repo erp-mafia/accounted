@@ -45,7 +45,7 @@ export function VatFiledChangesLine({
   }
 
   return (
-    <p className="attn text-[12.5px]">
+    <p className="attn text-xs">
       {ruta49 !== 0 ? t('vat_filed_changed_ruta49', values) : t('vat_filed_changed_rutor', values)}
       {changed.length > 1 && ` ${t('vat_filed_changed_others', { count: changed.length - 1 })}`}{' '}
       <button type="button" className="underline underline-offset-2" onClick={() => onOpen(first)}>

@@ -7,6 +7,8 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Textarea } from '@/components/ui/textarea'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DataList,
@@ -516,7 +518,7 @@ export function VatChecksCard({
               return (
                 <div
                   key={`${c.code}-${i}`}
-                  className="flex items-start gap-2 border-b border-border py-3 text-[13px] leading-5 last:border-b-0"
+                  className="flex items-start gap-2 border-b-hairline py-3 text-[13px] leading-5 last:border-b-0"
                 >
                   {c.review ? (
                     <CheckCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -582,7 +584,6 @@ export function VatChecksCard({
                         />
                         <div className="flex flex-wrap items-center gap-2">
                           <Button
-                            size="sm"
                             onClick={() => handleMarkReviewed(c)}
                             loading={reviewBusy === c.code}
                             disabled={reviewBusy !== null}
@@ -590,7 +591,6 @@ export function VatChecksCard({
                             {t('vat_check_review_save')}
                           </Button>
                           <Button
-                            size="sm"
                             variant="ghost"
                             onClick={() => setReviewingCode(null)}
                             disabled={reviewBusy !== null}
@@ -611,7 +611,7 @@ export function VatChecksCard({
           <div className="space-y-3">
             <div className="mb-1 flex items-center gap-2">
               <h3
-                className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                className="font-sans text-xs font-medium text-muted-foreground"
                 aria-live="polite"
               >
                 {rcBasisAdvisory
@@ -622,19 +622,17 @@ export function VatChecksCard({
             </div>
 
             {gapsLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <SpinnerIcon className="h-4 w-4 animate-spin" />
-                Söker berörda verifikationer...
-              </div>
+              <LateReveal aria-label="Söker berörda verifikationer">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+                    <Skeleton className="h-3.5 w-16" />
+                    <Skeleton className="h-3.5 w-56" />
+                    <Skeleton className="ml-auto h-3.5 w-20" />
+                  </div>
+                ))}
+              </LateReveal>
             ) : gapsFailed ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <p role="alert" className="text-sm text-destructive">
-                  Kunde inte hämta verifikationslistan.
-                </p>
-                <Button variant="outline" onClick={() => setGapsResult(null)}>
-                  Försök igen
-                </Button>
-              </div>
+              <LoadError title="Kunde inte hämta verifikationslistan" onRetry={() => setGapsResult(null)} />
             ) : gaps.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Inga verifikationer hittades. Bristen kan ligga utanför perioden eller i
@@ -683,8 +681,8 @@ export function VatChecksCard({
                     ariaLabel="Typ av inköp"
                     disabled={busy}
                   />
-                  <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
-                    {bulkProgress === null && <CheckCircleIcon className="h-4 w-4 mr-2" />}
+                  <Button size="toolbar" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
+                    {bulkProgress === null && <CheckCircleIcon className="h-4 w-4" />}
                     Korrigera alla ({verifikatCount})
                   </Button>
                 </div>

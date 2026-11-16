@@ -2,7 +2,7 @@ import {
   ConnectorCallError,
   CONNECTOR_PROTOCOL_ERROR_CODE,
   CONNECTOR_UNREACHABLE_CODE,
-} from '@/lib/connect/instance/connector-fetch'
+} from '@/lib/connect/instance/connector-error'
 
 /**
  * Errors of the collections and delivery ports, and the words they are shown

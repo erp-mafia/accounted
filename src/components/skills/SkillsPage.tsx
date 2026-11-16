@@ -12,8 +12,10 @@ import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-s
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
 import { ConnectGate } from './ConnectGate'
-import { Catalog } from './Catalog'
+import { Catalog, CatalogCreateMenu } from './Catalog'
 import { KindsIntro } from './KindsIntro'
 import type { ItemKind } from './hues'
 import { trackInstructions } from './track'
@@ -37,6 +39,9 @@ export function SkillsPage({ hrefBase = '/skills' }: { hrefBase?: string }) {
 
 function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Kompetens).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
   const { appName } = useBranding()
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
@@ -127,7 +132,7 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
             {address && (
               <div className={styles.addr}>
                 <code aria-label={t('server_address')}>{address}</code>
-                <Button size="sm" onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
+                <Button onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
               </div>
             )}
             {addressCopy === 'failed' && <p role="status">{t('copy_failed')}</p>}
@@ -150,10 +155,22 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
 
   return (
     <div className={styles.page} data-state={state}>
-      <PageHeader title={t('title')} help={<HelpPopover><p>{t('help')}</p></HelpPopover>} />
+      <PageHeader
+        title={tNav('v3_skills')}
+        help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
+        action={<CatalogCreateMenu hrefBase={hrefBase} client={client} canWrite={canWrite} onCreate={createAgent} />}
+      />
 
       {/* The first visit's explanation sits above the catalogue, so it is read before the featured item. */}
       <KindsIntro companyId={companyId} />
+
+      {/* The catalogue could not load: said before it, with "Försök igen". */}
+      {catalog.error &&
+        (catalog.data ? (
+          <AttnLine action={{ label: t('retry'), onClick: () => void catalog.mutate() }}>{tCommon('refresh_failed')}</AttnLine>
+        ) : (
+          <LoadError title={t('load_failed')} onRetry={() => void catalog.mutate()} />
+        ))}
 
       <Catalog
         hrefBase={hrefBase}
@@ -171,7 +188,6 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
         pending={waitingBanner}
       />
       {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
-      {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
 
       <ConnectGate open={gateOpen} onClose={() => setGateOpen(false)} onConnect={connect} />
     </div>

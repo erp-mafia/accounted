@@ -8,7 +8,7 @@ import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -523,7 +523,7 @@ function useFiscalYearSpanLabel(): (fy: SourceFiscalYear) => string {
 function StepHeading({ title, lede }: { title: string; lede?: string }) {
   return (
     <div>
-      <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">{title}</h2>
+      <h2 className="text-xl text-balance">{title}</h2>
       {lede && <p className="mt-2 text-sm text-muted-foreground">{lede}</p>}
     </div>
   )
@@ -531,7 +531,7 @@ function StepHeading({ title, lede }: { title: string; lede?: string }) {
 
 function SectionKicker({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <h3 className="text-xs font-medium text-muted-foreground">
       {children}
     </h3>
   )
@@ -543,7 +543,7 @@ function SieFallbackLine({ message, label = 'Ladda upp SIE-fil' }: { message: st
       {message}{' '}
       <Link
         href="/import?mode=sie"
-        className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+        className="underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground"
       >
         {label}
       </Link>
@@ -570,7 +570,7 @@ function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: 
   const progressPercent = ((currentIndex + 1) / steps.length) * 100
   return (
     <nav aria-label="Migreringens steg">
-      <p className="text-[11px] font-medium uppercase tracking-wider sm:hidden">
+      <p className="text-xs font-medium sm:hidden">
         Steg {currentIndex + 1} av {steps.length}: {STEP_LABELS[steps[currentIndex]]}
       </p>
       <ol className="hidden flex-wrap items-center gap-x-6 gap-y-1 sm:flex">
@@ -579,12 +579,12 @@ function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: 
             key={s}
             aria-current={i === currentIndex ? 'step' : undefined}
             className={cn(
-              'flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider transition-colors duration-150',
+              'flex items-center gap-1 text-xs font-medium transition-colors duration-150',
               i === currentIndex
                 ? 'text-foreground'
                 : i < currentIndex
                   ? 'text-muted-foreground'
-                  : 'text-muted-foreground/60'
+                  : 'text-muted-foreground'
             )}
           >
             {i < currentIndex && <CheckIcon className="h-3 w-3" aria-hidden="true" />}
@@ -905,12 +905,12 @@ export function ProviderStep({
           </p>
           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
             {unfinishedCanRetry && (
-              <Button size="sm" onClick={() => onSelect(unfinishedInfo.id)}>
-                <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
+              <Button onClick={() => onSelect(unfinishedInfo.id)}>
+                <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
                 {t('ext_arcim_unfinished_connect_retry')}
               </Button>
             )}
-            <Button size="sm" variant="outline" asChild>
+            <Button variant="outline" asChild>
               <Link href="/import?mode=sie">{t('ext_arcim_unfinished_connect_sie')}</Link>
             </Button>
           </div>
@@ -1010,53 +1010,49 @@ export function ProviderStep({
                       // refusal, so the one way on is the reconnect (B11).
                       documentRunNeedsReconnect(consent.provider) ? (
                         <Button
-                          size="sm"
                           onClick={() => (onReconnectDocuments ?? onFetchDocuments)(consent.id, consent.provider)}
                         >
-                          <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />
+                          <ArrowPathIcon className="h-3.5 w-3.5" />
                           {t('ext_arcim_documents_reconnect_provider', { provider: providerInfo?.name ?? consent.provider })}
                         </Button>
                       ) : (
                         <Button
-                          size="sm"
                           onClick={() => onFetchDocuments(consent.id, consent.provider)}
                         >
-                          <PaperClipIcon className="mr-1.5 h-3.5 w-3.5" />
+                          <PaperClipIcon className="h-3.5 w-3.5" />
                           {t('ext_arcim_documents_fetch_action')}
                         </Button>
                       )
                     )}
                     {continuesImport(consent.provider) ? (
-                      <Button size="sm" onClick={() => onResync(consent.provider, consent.id)}>
+                      <Button onClick={() => onResync(consent.provider, consent.id)}>
                         {connectionAction(consent.provider)}
-                        <ArrowRightIcon className="ml-1.5 h-3.5 w-3.5" />
+                        <ArrowRightIcon className="h-3.5 w-3.5" />
                       </Button>
                     ) : (
                       <Button
                         variant="outline"
-                        size="sm"
                         onClick={() => onResync(consent.provider, consent.id)}
                       >
-                        <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
+                        <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
                         {connectionAction(consent.provider)}
                       </Button>
                     )}
                     {underlagWaitsForLedger && (
                       <Button
                         variant="outline"
-                        size="sm"
                         disabled
                         aria-describedby={`underlag-after-ledger-${consent.id}`}
                       >
-                        <PaperClipIcon className="mr-1.5 h-3.5 w-3.5" />
+                        <PaperClipIcon className="h-3.5 w-3.5" />
                         {t('ext_arcim_documents_fetch_action')}
                       </Button>
                     )}
                     {/* A key nothing needs any more gets a named way out
                         instead of the bare icon below. */}
                     {consent.keyUse === 'idle' && (
-                      <Button variant="outline" size="sm" onClick={() => onDisconnect(consent.id)}>
-                        <TrashIcon className="mr-1.5 h-3.5 w-3.5" />
+                      <Button variant="outline" onClick={() => onDisconnect(consent.id)}>
+                        <TrashIcon className="h-3.5 w-3.5" />
                         {t('ext_arcim_key_remove')}
                       </Button>
                     )}
@@ -1064,7 +1060,7 @@ export function ProviderStep({
                   {consent.keyUse !== 'idle' && (
                     <Button
                       variant="ghost"
-                      size="icon-sm"
+                      size="icon"
                       className="order-1 shrink-0 self-start text-muted-foreground hover:text-destructive sm:order-none sm:self-auto"
                       aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
                       onClick={() => onDisconnect(consent.id)}
@@ -1081,14 +1077,14 @@ export function ProviderStep({
 
       {/* Provider selection: quiet list rows on the page, hairline-divided. */}
       {isLoadingStatus ? (
-        <div className="divide-y divide-border" aria-busy="true">
+        <LateReveal className="divide-y divide-border">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-4 py-3">
               <Skeleton className="h-8 w-8 shrink-0 rounded-sm" />
               <Skeleton className="h-4 w-40" />
             </div>
           ))}
-        </div>
+        </LateReveal>
       ) : (
         <div className="stagger-enter divide-y divide-border" data-no-stagger>
           {offeredProviders(connectionStatus).map((provider) => {
@@ -1150,7 +1146,7 @@ export function ProviderStep({
                 </div>
                 {!isDisabled && (
                   <ChevronRightIcon
-                    className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
+                    className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
                     aria-hidden="true"
                   />
                 )}
@@ -1283,7 +1279,7 @@ function ConnectStep({
           </p>
           <Button onClick={() => onOpenProviderWindow(authUrl)}>
             Logga in i {providerName}
-            <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
           </Button>
         </div>
       )}
@@ -1295,7 +1291,7 @@ function ConnectStep({
         <div className="space-y-4">
           <Button onClick={() => onOpenProviderWindow(activationUrl)}>
             {t('ext_arcim_bl_activate_button')}
-            <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
           </Button>
           {!showManualKey && (
             <Button
@@ -1379,7 +1375,7 @@ function ConnectStep({
               disabled={!canSubmit}
             >
               Anslut
-              <ArrowRightIcon className="ml-2 h-4 w-4" />
+              <ArrowRightIcon className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -1389,9 +1385,9 @@ function ConnectStep({
           most customers whose connect stalled never saw it. */}
       <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
 
-      <div className="flex border-t border-border pt-6">
+      <div className="flex border-t-hairline pt-6">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
       </div>
@@ -1475,13 +1471,13 @@ function SieFetchErrorNotice({
         </p>
       </div>
       {action === 'reconnect' ? (
-        <Button size="sm" onClick={onReconnect}>
-          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+        <Button onClick={onReconnect}>
+          <ArrowUturnLeftIcon className="h-4 w-4" />
           {t('ext_arcim_sie_error_reconnect_action', { provider: providerName })}
         </Button>
       ) : (
-        <Button size="sm" onClick={onRetry}>
-          <ArrowPathIcon className="mr-2 h-4 w-4" />
+        <Button onClick={onRetry}>
+          <ArrowPathIcon className="h-4 w-4" />
           {t('ext_arcim_sie_error_retry_action')}
         </Button>
       )}
@@ -1540,7 +1536,7 @@ export function PreviewStep({
   return (
     <div className="stagger-enter space-y-8">
       <div>
-        <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+        <h2 className="text-xl text-balance">
           {preview ? `Anslutet till ${providerName}` : 'Förhandsgranskning'}
         </h2>
 
@@ -1641,8 +1637,8 @@ export function PreviewStep({
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
           {authExpired && (
-            <Button size="sm" onClick={onReconnect} disabled={isLoading}>
-              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+            <Button onClick={onReconnect} disabled={isLoading}>
+              <ArrowUturnLeftIcon className="h-4 w-4" />
               Återanslut {providerName}
             </Button>
           )}
@@ -1678,9 +1674,9 @@ export function PreviewStep({
         </div>
       )}
 
-      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button
@@ -1688,7 +1684,7 @@ export function PreviewStep({
           disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
           Fortsätt
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -1744,9 +1740,9 @@ function MappingStep({
           )}
         </div>
         <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
-        <div className="flex border-t border-border pt-6">
+        <div className="flex border-t-hairline pt-6">
           <Button variant="outline" onClick={onBack}>
-            <ArrowLeftIcon className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="h-4 w-4" />
             Tillbaka
           </Button>
         </div>
@@ -1933,7 +1929,7 @@ export function OptionsStep({
             )}
             {/* Verifikationsserie: one aligned row, not a nested box. */}
             {importsLedger && (
-              <div className="flex items-center gap-3 border-t border-border py-3">
+              <div className="flex items-center gap-3 border-t-hairline py-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Verifikationsserie</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{t('ext_arcim_option_series_help')}</p>
@@ -1949,7 +1945,7 @@ export function OptionsStep({
             )}
             {/* #63: the source system's export carries its whole chart. */}
             {importsLedger && unusedAccountCount > 0 && (
-              <div className="border-t border-border">
+              <div className="border-t-hairline">
                 <OptionRow
                   label={t('ext_arcim_option_only_used_accounts')}
                   description={t('ext_arcim_option_only_used_accounts_desc', { count: unusedAccountCount })}
@@ -2019,14 +2015,14 @@ export function OptionsStep({
         <AttnLine>{t('ext_arcim_option_sie_required_hint')}</AttnLine>
       )}
 
-      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
           Starta migrering
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
 
@@ -2345,12 +2341,12 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
       {showRemarks && remarks.length > 0 && (
         <ul className="mt-1 space-y-1">
           {remarks.map((w, i) => (
-            <li key={i} className="text-[12.5px] leading-5 text-muted-foreground">{w}</li>
+            <li key={i} className="text-xs leading-5 text-muted-foreground">{w}</li>
           ))}
         </ul>
       )}
       {d && d.failedBatches > 0 && (
-        <p className="mt-1 text-[12.5px] leading-5 text-destructive">
+        <p className="mt-1 text-xs leading-5 text-destructive">
           {d.retriedBatches} {d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök, {d.failedBatches} misslyckades trots omförsök.
         </p>
       )}
@@ -2397,7 +2393,7 @@ function DocumentNote({
  */
 function DocumentDisclosure({ summary, children }: { summary: string; children: React.ReactNode }) {
   return (
-    <details className="group text-[12.5px] leading-5 text-muted-foreground">
+    <details className="group text-xs leading-5 text-muted-foreground">
       <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden">
         <ChevronRightIcon
           className="h-3 w-3 transition-transform duration-150 group-open:rotate-90"
@@ -2491,7 +2487,7 @@ function DocumentOutcomeRow({
       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] leading-5">{label}</p>
-          <p className="text-[12.5px] leading-5 text-muted-foreground">{hint}</p>
+          <p className="text-xs leading-5 text-muted-foreground">{hint}</p>
         </div>
         {children && <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>}
       </div>
@@ -2532,7 +2528,7 @@ export function DocumentImportFollowUp({
   const openYearsLink = (
     <Link
       href="/settings/bookkeeping"
-      className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+      className="underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground"
     >
       {t('ext_arcim_documents_locked_open_years')}
     </Link>
@@ -2561,8 +2557,8 @@ export function DocumentImportFollowUp({
           key={entry.scope}
           icon={InformationCircleIcon}
           action={entry.scope === reconnectScope ? (
-            <Button variant="outline" size="sm" onClick={onReconnect}>
-              <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />
+            <Button variant="outline" onClick={onReconnect}>
+              <ArrowPathIcon className="h-3.5 w-3.5" />
               {t('ext_arcim_documents_reconnect_action')}
             </Button>
           ) : undefined}
@@ -2592,7 +2588,7 @@ export function DocumentImportFollowUp({
       {t('ext_arcim_documents_upload_instead')}{' '}
       <Link
         href={UNDERLAG_UPLOAD_HREF}
-        className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+        className="underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground"
       >
         {t('ext_arcim_documents_upload_link')}
       </Link>
@@ -2612,7 +2608,7 @@ export function DocumentImportFollowUp({
       >
         {/* The offer's button lands here: hold its place so the page does
             not jump when the count arrives. */}
-        {state.phase === 'discovering' && <Skeleton className="h-9 w-40 rounded-full" />}
+        {state.phase === 'discovering' && <Skeleton className="h-8 w-40 rounded-md" />}
       </DocumentState>
     )
   } else if (state.phase === 'importing') {
@@ -2665,7 +2661,7 @@ export function DocumentImportFollowUp({
         {notes.length > 0 && <ul className="space-y-2">{notes}</ul>}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
-            <PaperClipIcon className="mr-2 h-4 w-4" />
+            <PaperClipIcon className="h-4 w-4" />
             {t('ext_arcim_documents_import_action', { count: state.found })}
           </Button>
           {/* Standalone, "not now" is the page's own Tillbaka. */}
@@ -2683,7 +2679,7 @@ export function DocumentImportFollowUp({
         {unreachableNotes.length > 0 && <ul className="space-y-2">{unreachableNotes}</ul>}
         <div>
           <Button variant="outline" onClick={onDiscover}>
-            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="h-4 w-4" />
             {t('ext_arcim_documents_retry_discovery')}
           </Button>
         </div>
@@ -2738,8 +2734,8 @@ export function DocumentImportFollowUp({
                   label={t('ext_arcim_documents_failed')}
                   hint={t('ext_arcim_documents_partial_failure')}
                 >
-                  <Button variant="outline" size="sm" onClick={onImport}>
-                    <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
+                  <Button variant="outline" onClick={onImport}>
+                    <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
                     {t('ext_arcim_documents_retry_import')}
                   </Button>
                 </DocumentOutcomeRow>
@@ -2750,11 +2746,11 @@ export function DocumentImportFollowUp({
                   label={t('ext_arcim_documents_locked', { years: lockedYears })}
                   hint={t('ext_arcim_documents_locked_result')}
                 >
-                  <Button variant="ghost" size="sm" asChild>
+                  <Button variant="ghost" asChild>
                     <Link href="/settings/bookkeeping">{t('ext_arcim_documents_locked_open_years')}</Link>
                   </Button>
-                  <Button variant="outline" size="sm" onClick={onDiscover}>
-                    <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
+                  <Button variant="outline" onClick={onDiscover}>
+                    <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
                     {t('ext_arcim_documents_retry_discovery')}
                   </Button>
                 </DocumentOutcomeRow>
@@ -2835,7 +2831,7 @@ export function DocumentImportFollowUp({
         >
           <div>
             <Button onClick={onReconnect}>
-              <ArrowPathIcon className="mr-2 h-4 w-4" />
+              <ArrowPathIcon className="h-4 w-4" />
               {connectionRefused
                 ? t('ext_arcim_documents_reconnect_provider', { provider })
                 : t('ext_arcim_documents_reconnect_action')}
@@ -2864,7 +2860,7 @@ export function DocumentImportFollowUp({
         >
           <div>
             <Button onClick={discoveryFailed ? onDiscover : onImport}>
-              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+              <ArrowUturnLeftIcon className="h-4 w-4" />
               {t('ext_arcim_documents_retry_import')}
             </Button>
           </div>
@@ -2953,14 +2949,14 @@ export function ResultStep({
     return (
       <div className="stagger-enter space-y-8">
         <div>
-          <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+          <h2 className="text-xl text-balance">
             {completed.length > 0 ? 'Migreringen avbröts' : 'Migreringen misslyckades'}
           </h2>
           <p className="mt-3 whitespace-pre-line text-sm text-destructive">{error}</p>
         </div>
         {completed.length > 0 && (
           <div>
-            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            <h3 className="text-sm font-medium text-muted-foreground">
               Hann slutföras innan felet
             </h3>
             <ul className="mt-3 space-y-1 text-sm">
@@ -2974,10 +2970,10 @@ export function ResultStep({
           </div>
         )}
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
-        <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+        <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>Klar</Button>
           <Button onClick={onRetry}>
-            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="h-4 w-4" />
             Försök igen
           </Button>
         </div>
@@ -3001,7 +2997,7 @@ export function ResultStep({
           )}
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+              <h2 className="text-xl text-balance">
                 {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
               </h2>
               <HelpPopover>
@@ -3023,9 +3019,9 @@ export function ResultStep({
         />
         {/* Tillbaka is always there; the way on to the vouchers only once
             the files are on them, so no state has two primary actions. */}
-        <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+        <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>
-            <ArrowLeftIcon className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="h-4 w-4" />
             {t('ext_arcim_documents_standalone_back')}
           </Button>
           {documentImportState.phase === 'complete' && (
@@ -3267,10 +3263,10 @@ export function ResultStep({
       {/* ── The reveal: settled constellation beside the serif verdict ── */}
       <div className={cn('grid items-center gap-6', showCanvas && 'md:grid-cols-[minmax(280px,380px)_1fr]')}>
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             Migrering
           </p>
-          <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+          <h2 className="mt-2 text-xl text-balance">
             {verdict}
           </h2>
           {nothingNew ? (
@@ -3352,7 +3348,7 @@ export function ResultStep({
                 rather than asks for action, so it sits behind the row's "?".
                 A failed row keeps its destructive value. */}
             {entityLines.map((line) => (
-              <div key={line.label} className="flex items-center justify-between gap-4 border-b border-border py-2">
+              <div key={line.label} className="flex items-center justify-between gap-4 border-b-hairline py-2">
                 <span className="flex min-w-0 items-center gap-2 text-sm">
                   {line.label}
                   {line.detail && <HelpPopover className="shrink-0">{line.detail}</HelpPopover>}
@@ -3414,9 +3410,9 @@ export function ResultStep({
         </section>
       )}
 
-      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onDone}>
-          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowUturnLeftIcon className="h-4 w-4" />
           Ny migrering
         </Button>
         <div className="flex flex-col gap-2 sm:flex-row">

@@ -8,12 +8,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
+import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
+import { PHONE_HIDDEN, ROW_ACTIONS_TD } from './register-table'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -21,6 +22,7 @@ import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { COMPANY_ROLE_KINDS } from '@/lib/bolaget/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { PlusIcon } from '@/components/icons'
 
 interface RoleRow {
   company_role_id: string
@@ -73,6 +75,9 @@ const NEW_PARTY = '__new'
  */
 export function BoardAndSignatories() {
   const t = useTranslations('bolaget_roles')
+  // The top bar carries the menu row's name (Företaget's sidebar).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -80,6 +85,9 @@ export function BoardAndSignatories() {
   const [asOf, setAsOf] = useState('')
   const [showEnded, setShowEnded] = useState(false)
   const [loading, setLoading] = useState(true)
+  // The roles could not be read: in place of them when nothing is on
+  // screen, as one line above them when a refresh failed.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [roles, setRoles] = useState<RolesData | null>(null)
   const [bo, setBo] = useState<BoData | null>(null)
   const [roleForm, setRoleForm] = useState<FormState | null>(null)
@@ -101,8 +109,12 @@ export function BoardAndSignatories() {
       const [rolesRes, boRes] = await Promise.all([fetch(`/api/bolaget/roles${q}`), fetch(`/api/bolaget/beneficial-owners${q}`)])
       const rolesBody = await rolesRes.json().catch(() => ({}))
       const boBody = await boRes.json().catch(() => ({}))
-      if (!rolesRes.ok) return fail(t('load_failed'), rolesBody)
+      if (!rolesRes.ok) {
+        setLoadFailed(true)
+        return
+      }
       setRoles(rolesBody.data as RolesData)
+      setLoadFailed(false)
       if (boRes.ok) {
         const view = boBody.data as BoData
         setBo(view)
@@ -114,10 +126,12 @@ export function BoardAndSignatories() {
           controlNote: '',
         })
       }
+    } catch {
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [asOf, fail, t])
+  }, [asOf])
 
   useEffect(() => {
     void load()
@@ -217,35 +231,42 @@ export function BoardAndSignatories() {
 
   return (
     <div className="space-y-8">
-      <BolagetHeader title={t('title')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
+      <BolagetHeader title={tNav('v3_board')} subtitle={t('subtitle')} help={t('help')} asOf={asOf} onAsOfChange={setAsOf} asOfLabel={t('as_of')} action={
           canWrite ? (
-            <Button size="sm" onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: todayIsoStockholm(), registered_at: '' })}>
+            <Button onClick={() => setRoleForm({ party: people[0]?.party_id ?? NEW_PARTY, name: '', kind: 'person', org_number: '', role: 'styrelseledamot', valid_from: todayIsoStockholm(), registered_at: '' })}>
+              <PlusIcon className="h-4 w-4" />
               {t('add_role')}
             </Button>
           ) : undefined
         }
       />
 
-      {attn}
+      {loadFailed && roles ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : (
+        attn
+      )}
 
       {loading && !roles ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && !roles ? (
+        <LoadError title={t('load_failed')} onRetry={() => void load()} />
       ) : roles ? (
         <>
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('roles_heading')}</h2>
-              <button type="button" className={QUIET_LINK_CLASS} onClick={() => setShowEnded((v) => !v)}>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('roles_heading')}</h2>
+              <Button variant="ghost" aria-pressed={showEnded} onClick={() => setShowEnded((v) => !v)}>
                 {showEnded ? t('hide_ended') : t('show_ended')}
-              </button>
+              </Button>
             </div>
             {visibleRoles.length === 0 ? (
               <EmptyState title={t('roles_empty_title')} description={t('roles_empty_description')} />
             ) : (
-              <div className="overflow-x-auto">
+              <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
                 <table className="stagger-enter w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -253,25 +274,25 @@ export function BoardAndSignatories() {
                       <th className={TH_CLASS}>{t('col_name')}</th>
                       <th className={TH_CLASS}>{t('col_from')}</th>
                       <th className={TH_CLASS}>{t('col_to')}</th>
-                      <th className={TH_CLASS}>{t('col_source')}</th>
+                      <th className={cn(TH_CLASS, PHONE_HIDDEN)}>{t('col_source')}</th>
                       <th className={TH_CLASS} />
                     </tr>
                   </thead>
                   <tbody>
                     {visibleRoles.map((r) => (
-                      <tr key={r.company_role_id} className={cn('hover:bg-secondary/35', !r.active && 'text-muted-foreground')}>
+                      <tr key={r.company_role_id} className={cn('group hover:bg-secondary/35', !r.active && 'text-muted-foreground')}>
                         <td className={TD_CLASS}>{t(`role_${r.role}`)}</td>
                         <td className={TD_CLASS} data-ph-mask="">
                           {r.name}
                         </td>
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{r.valid_from ? formatDate(r.valid_from) : t('unknown')}</td>
-                        <td className={cn(TD_CLASS, 'tabular-nums')}>{r.valid_to ? formatDate(r.valid_to) : ''}</td>
-                        <td className={cn(TD_CLASS, 'text-xs text-muted-foreground')}>{t(`source_${r.source}`)}</td>
-                        <td className={cn(TD_CLASS, 'text-right')}>
+                        <td className={cn(TD_CLASS, 'date-figures whitespace-nowrap')}>{r.valid_from ? formatDate(r.valid_from) : t('unknown')}</td>
+                        <td className={cn(TD_CLASS, 'date-figures whitespace-nowrap')}>{r.valid_to ? formatDate(r.valid_to) : ''}</td>
+                        <td className={cn(TD_CLASS, PHONE_HIDDEN, 'text-muted-foreground')}>{t(`source_${r.source}`)}</td>
+                        <td className={ROW_ACTIONS_TD}>
                           {canWrite && r.valid_to === null && (
-                            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setEnding({ ...r, valid_to: todayIsoStockholm() })}>
+                            <Button variant="row" onClick={() => setEnding({ ...r, valid_to: todayIsoStockholm() })}>
                               {t('end_role')}
-                            </button>
+                            </Button>
                           )}
                         </td>
                       </tr>
@@ -284,19 +305,19 @@ export function BoardAndSignatories() {
 
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('signatory_heading')}</h2>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('signatory_heading')}</h2>
               {canWrite && (
-                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRuleForm({ rule_text: roles.signatory_rule ?? '', valid_from: todayIsoStockholm() })}>
+                <Button variant="ghost" onClick={() => setRuleForm({ rule_text: roles.signatory_rule ?? '', valid_from: todayIsoStockholm() })}>
                   {t('change_rule')}
-                </button>
+                </Button>
               )}
             </div>
-            <p className="text-sm">{roles.signatory_rule ?? <span className="text-muted-foreground">{t('rule_missing')}</span>}</p>
+            <p className="max-w-[760px] text-sm">{roles.signatory_rule ?? <span className="text-muted-foreground">{t('rule_missing')}</span>}</p>
             {showEnded &&
               roles.signatory_rules
                 .filter((r) => !r.active)
                 .map((r) => (
-                  <p key={r.signatory_rule_id} className="text-[12.5px] text-muted-foreground">
+                  <p key={r.signatory_rule_id} className="text-xs text-muted-foreground">
                     {t('rule_period', { from: r.valid_from ?? t('unknown'), to: r.valid_to ?? '' })}: {r.rule_text}
                   </p>
                 ))}
@@ -304,8 +325,8 @@ export function BoardAndSignatories() {
 
           {bo && boForm && (
             <section className="space-y-3">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('bo_heading')}</h2>
-              <p className="text-sm text-muted-foreground">{t('bo_intro')}</p>
+              <h2 className="text-[15px] font-medium leading-[22px] text-strong">{t('bo_heading')}</h2>
+              <p className="max-w-[760px] text-sm text-muted-foreground">{t('bo_intro')}</p>
               {bo.proposal.owners.length === 0 && bo.confirmed.length === 0 ? (
                 <p className="text-sm">{t('bo_none_proposed')}</p>
               ) : (
@@ -331,7 +352,7 @@ export function BoardAndSignatories() {
                 </div>
               )}
               {bo.proposal.indirect.length > 0 && (
-                <p className="text-[12.5px] text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {t('bo_indirect', { names: bo.proposal.indirect.map((o) => `${o.name} (${o.votes_pct.toLocaleString('sv-SE')} %)`).join(', ') })}
                 </p>
               )}
@@ -351,16 +372,16 @@ export function BoardAndSignatories() {
                   {boForm.control && (
                     <Textarea value={boForm.controlNote} onChange={(e) => setBoForm({ ...boForm, controlNote: e.target.value })} maxLength={2000} rows={2} placeholder={t('bo_note_placeholder')} />
                   )}
-                  <Button size="sm" variant="outline" onClick={() => setConfirmBo(true)}>
+                  <Button variant="outline" onClick={() => setConfirmBo(true)}>
                     {t('bo_confirm')}
                   </Button>
                 </div>
               )}
               {bo.assessments.length > 0 && (
                 <div className="space-y-1 pt-2">
-                  <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('bo_history')}</h3>
+                  <h3 className="text-xs font-medium text-muted-foreground">{t('bo_history')}</h3>
                   {bo.assessments.map((a) => (
-                    <p key={a.beneficial_owner_assessment_id} className="text-[12.5px] text-muted-foreground" data-ph-mask="">
+                    <p key={a.beneficial_owner_assessment_id} className="text-xs text-muted-foreground" data-ph-mask="">
                       {formatDate(a.assessed_on)}:{' '}
                       {a.conclusion === 'no_beneficial_owner' ? t('bo_none') : a.owners.map((o) => o.name ?? '').join(', ')}
                     </p>
@@ -397,11 +418,11 @@ export function BoardAndSignatories() {
         )}
       </ConfirmDialog>
 
-      <Dialog open={Boolean(roleForm)} onOpenChange={(open) => (open ? null : setRoleForm(null))}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('add_role')}</DialogTitle>
-          </DialogHeader>
+      {/* A role is a small record: it is added in a drawer over the register (V7 creation forms). */}
+      <SlideOver open={Boolean(roleForm)} onOpenChange={(open) => (open ? null : setRoleForm(null))}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={t('add_role')} />
+          <SlideOverBody>
           {roleForm && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1">
@@ -451,28 +472,31 @@ export function BoardAndSignatories() {
                 </>
               )}
               <div className="space-y-1">
-                <Label htmlFor="br-registered_at">{t('field_registered_at')}</Label>
+                <Label htmlFor="br-registered_at" optional>
+                  {t('field_registered_at')}
+                </Label>
                 <Input {...field(roleForm, setRoleForm, 'registered_at')} type="date" className="tabular-nums" />
               </div>
               <p className="text-xs text-muted-foreground sm:col-span-2">{t('role_hint')}</p>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRoleForm(null)} disabled={busy}>
+          </SlideOverBody>
+          <SlideOverFooter>
+            <Button variant="ghost" onClick={() => setRoleForm(null)} disabled={busy}>
               {t('cancel')}
             </Button>
             <Button onClick={addRole} loading={busy} disabled={!roleForm?.valid_from}>
-              {t('save')}
+              {t('add_role_submit')}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
 
-      <Dialog open={Boolean(ruleForm)} onOpenChange={(open) => (open ? null : setRuleForm(null))}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('change_rule')}</DialogTitle>
-          </DialogHeader>
+      {/* The signatory rule is one text and a date: a drawer over the register, like a role. */}
+      <SlideOver open={Boolean(ruleForm)} onOpenChange={(open) => (open ? null : setRuleForm(null))}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={t('change_rule')} />
+          <SlideOverBody>
           {ruleForm && (
             <div className="space-y-4">
               <div className="space-y-1">
@@ -485,16 +509,17 @@ export function BoardAndSignatories() {
               </div>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRuleForm(null)} disabled={busy}>
+          </SlideOverBody>
+          <SlideOverFooter>
+            <Button variant="ghost" onClick={() => setRuleForm(null)} disabled={busy}>
               {t('cancel')}
             </Button>
             <Button onClick={saveRule} loading={busy} disabled={!ruleForm?.rule_text.trim() || !ruleForm?.valid_from}>
               {t('save')}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
     </div>
   )
 }

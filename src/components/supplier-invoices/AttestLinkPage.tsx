@@ -2,7 +2,19 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { useBranding } from '@/lib/branding/brand-context'
+import {
+  StandaloneFacts,
+  StandaloneFile,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneLabel,
+  StandaloneOutcome,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -28,6 +40,9 @@ export function AttestLinkPage({
   preselected: 'approve' | 'reject' | null
 }) {
   const t = useTranslations('attest_link_page')
+  const tSigning = useTranslations('signing_page')
+  const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   const locale = useLocale() as ErrorLocale
   const data = initial
   const [picked, setPicked] = useState<'approve' | 'reject'>(preselected ?? 'approve')
@@ -40,9 +55,6 @@ export function AttestLinkPage({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<{ decision: 'approved' | 'rejected'; attested: boolean; remaining: number } | null>(null)
 
-  const invoiceLabel = data.invoice.supplier_invoice_number
-    ? t('invoice_number', { number: data.invoice.supplier_invoice_number })
-    : t('arrival_number', { number: data.invoice.arrival_number })
   const supplier = data.invoice.supplier_name ?? t('supplier_fallback')
 
   async function submit() {
@@ -67,74 +79,23 @@ export function AttestLinkPage({
     }
   }
 
-  const header = (
-    <header className="space-y-4">
-      <BrandWordmark size="inline" />
-      <div className="space-y-1">
-        <p className="text-[12.5px] uppercase tracking-wider text-muted-foreground">{t('eyebrow', { company: data.company_name })}</p>
-        <h1 className="font-display text-2xl tracking-tight" data-ph-mask="">
-          {t('title', { supplier, amount: formatCurrency(data.invoice.total, data.invoice.currency) })}
-        </h1>
-        <p className="text-[13px] text-muted-foreground" data-ph-mask="">
-          {data.registered_by ? t('registered_by', { name: data.registered_by }) : t('registered')}
-        </p>
-      </div>
-    </header>
-  )
-
-  const facts = (
-    <section className="space-y-2 rounded-lg border border-border p-6 text-[13px]" data-ph-mask="">
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-muted-foreground">{invoiceLabel}</span>
-        <span className="font-medium tabular-nums">{formatCurrency(data.invoice.total, data.invoice.currency)}</span>
-      </div>
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-muted-foreground">{t('invoice_date')}</span>
-        <span className="tabular-nums">{formatDate(data.invoice.invoice_date)}</span>
-      </div>
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-muted-foreground">{t('due_date')}</span>
-        <span className="tabular-nums">{formatDate(data.invoice.due_date)}</span>
-      </div>
-      {data.stage && data.state === 'open' && (
-        <p className="pt-2 text-[12.5px] text-muted-foreground">{t(data.stage === 'pre' ? 'stage_pre' : 'stage_final')}</p>
-      )}
-      {data.remaining_names.length > 0 && data.state === 'open' && (
-        <p className="pt-2 text-[12.5px] text-muted-foreground">
-          {data.mode === 'all' ? t('waiting_all', { names: data.remaining_names.join(', ') }) : t('waiting_any', { names: data.remaining_names.join(', ') })}
-        </p>
-      )}
-    </section>
-  )
-
-  const documentFrame = data.invoice.has_document ? (
-    <section className="space-y-2">
-      <iframe
-        src={`/api/attest/${encodeURIComponent(token)}/document`}
-        title={t('document_title')}
-        className="h-[560px] w-full rounded-lg border border-border bg-background"
-      />
-      <a href={`/api/attest/${encodeURIComponent(token)}/document`} target="_blank" rel="noreferrer" className="text-[12.5px] text-muted-foreground underline-offset-4 hover:underline">
-        {t('open_document')}
-      </a>
-    </section>
-  ) : (
-    <p className="text-[12.5px] text-muted-foreground">{t('no_document')}</p>
-  )
+  const documentHref = `/api/attest/${encodeURIComponent(token)}/document`
+  const amount = formatCurrency(data.invoice.total, data.invoice.currency)
 
   let decisionBlock: React.ReactNode
   if (done) {
     decisionBlock = (
-      <section className="space-y-2 rounded-lg border border-border p-6">
-        <h2 className="font-display text-xl tracking-tight">{done.decision === 'approved' ? t('done_approved_title') : t('done_rejected_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">
-          {done.decision === 'rejected'
-            ? t('done_rejected_body')
-            : done.attested
-              ? t('done_attested_body')
-              : t('done_waiting_body', { count: done.remaining })}
-        </p>
-      </section>
+      <StandaloneOutcome
+        className="mt-5 border-t-hairline pt-4"
+        mark={done.decision === 'approved' ? <StatusGlyph tone="ok" size={16} /> : undefined}
+        title={done.decision === 'approved' ? t('done_approved_title') : t('done_rejected_title')}
+      >
+        {done.decision === 'rejected'
+          ? t('done_rejected_body')
+          : done.attested
+            ? t('done_attested_body')
+            : t('done_waiting_body', { count: done.remaining })}
+      </StandaloneOutcome>
     )
   } else if (data.state !== 'open' || (!data.may_approve && !data.may_reject)) {
     const key =
@@ -151,32 +112,32 @@ export function AttestLinkPage({
                 : data.reason === 'other_step'
                   ? 'state_other_step'
                   : 'state_not_allowed'
-    decisionBlock = (
-      <section className="space-y-2 rounded-lg border border-border p-6">
-        <p className="text-[13px] text-muted-foreground">{t(key)}</p>
-      </section>
-    )
+    decisionBlock = <StandaloneOutcome className="mt-5 border-t-hairline pt-4" title={t(key)} />
   } else {
+    const options = [
+      ...(data.may_approve ? [{ value: 'approve' as const, label: t('choice_approve') }] : []),
+      ...(data.may_reject ? [{ value: 'reject' as const, label: t('choice_reject') }] : []),
+    ]
     decisionBlock = (
-      <section className="space-y-4 rounded-lg border border-border p-6">
-        {!data.may_approve && overLimit && <p className="text-[13px] text-muted-foreground">{t('limit_reject_only')}</p>}
+      <section className="mt-5 flex flex-col gap-3">
+        {!data.may_approve && overLimit && <p className="text-sm text-foreground">{t('limit_reject_only')}</p>}
         {data.may_approve && data.acts_for_name && (
-          <p className="text-[13px] text-muted-foreground" data-ph-mask="">
+          <p className="text-sm text-foreground" data-ph-mask="">
             {t('acts_for', { name: data.acts_for_name })}
           </p>
         )}
-        <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={t('decision_label')}>
-          {data.may_approve && (
-            <Button type="button" size="sm" variant={choice === 'approve' ? 'default' : 'outline'} role="radio" aria-checked={choice === 'approve'} onClick={() => setChoice('approve')}>
-              {t('choice_approve')}
-            </Button>
-          )}
-          {data.may_reject && (
-            <Button type="button" size="sm" variant={choice === 'reject' ? 'default' : 'outline'} role="radio" aria-checked={choice === 'reject'} onClick={() => setChoice('reject')}>
-              {t('choice_reject')}
-            </Button>
-          )}
-        </div>
+        {options.length > 1 && (
+          <div>
+            <StandaloneLabel className="mb-1.5">{t('decision_label')}</StandaloneLabel>
+            <SegmentedControl
+              aria-label={t('decision_label')}
+              value={choice}
+              onChange={setChoice}
+              options={options}
+              className="pointer-coarse:h-12"
+            />
+          </div>
+        )}
         {choice === 'reject' && (
           <Textarea
             value={comment}
@@ -187,22 +148,70 @@ export function AttestLinkPage({
           />
         )}
         {error && <AttnLine>{error}</AttnLine>}
-        <Button type="button" onClick={() => void submit()} loading={busy}>
+        <Button type="button" size="lg" className="w-full" onClick={() => void submit()} loading={busy}>
           {choice === 'approve' ? t('submit_approve') : t('submit_reject')}
         </Button>
-        <p className="text-[12.5px] text-muted-foreground">{t('expires', { date: formatDate(data.expires_at) })}</p>
       </section>
     )
   }
 
+  const open = !done && data.state === 'open'
+
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-2xl space-y-6 stagger-enter">
-        {header}
-        {facts}
-        {decisionBlock}
-        {documentFrame}
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={data.company_name} via={tSigning('via', { platform: appName })} />
+      <StandaloneHeading
+        className="mt-5"
+        eyebrow={t('eyebrow', { company: data.company_name })}
+        title={<span data-ph-mask="">{t('title', { supplier, amount: '' }).trim()}</span>}
+      />
+      <p className="mt-2 font-display text-2xl tabular-nums text-strong" data-ph-mask="">
+        {amount}
+      </p>
+      <StandaloneFacts
+        className="mt-5"
+        rows={[
+          {
+            label: data.invoice.supplier_invoice_number ? t('invoice_label') : t('arrival_label'),
+            value: data.invoice.supplier_invoice_number ?? data.invoice.arrival_number,
+          },
+          { label: t('invoice_date'), value: formatDate(data.invoice.invoice_date) },
+          { label: t('due_date'), value: formatDate(data.invoice.due_date) },
+          data.registered_by ? { label: t('registered_by_label'), value: data.registered_by } : null,
+        ]}
+      />
+      {(data.stage || data.remaining_names.length > 0) && open && (
+        <p className="mt-2 text-xs text-muted-foreground" data-ph-mask="">
+          {[
+            data.stage ? t(data.stage === 'pre' ? 'stage_pre' : 'stage_final') : null,
+            data.remaining_names.length > 0
+              ? data.mode === 'all'
+                ? t('waiting_all', { names: data.remaining_names.join(', ') })
+                : t('waiting_any', { names: data.remaining_names.join(', ') })
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      )}
+      <div className="mt-4">
+        {data.invoice.has_document ? (
+          <StandaloneFile name={t('document_title')} href={documentHref} openLabel={tCommon('open')} />
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('no_document')}</p>
+        )}
       </div>
-    </main>
+      {decisionBlock}
+      {open && <StandaloneSmall>{t('expires', { date: formatDate(data.expires_at) })}</StandaloneSmall>}
+      {/* The file itself, inline where a screen has room for it: on a phone
+          the row above opens it in the phone's own viewer. */}
+      {data.invoice.has_document && (
+        <iframe
+          src={documentHref}
+          title={t('document_title')}
+          className="mt-5 hidden h-[560px] w-full rounded-lg bg-control shadow-raised sm:block"
+        />
+      )}
+    </StandalonePage>
   )
 }

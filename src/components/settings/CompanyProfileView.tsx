@@ -74,7 +74,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
   if (!snapshot) {
     // Dynamic status (nothing fetched yet): stays visible as a quiet line.
     return (
-      <p className="border-b border-border px-1 py-3 text-sm text-muted-foreground">
+      <p className="border-b-hairline px-1 py-3 text-sm text-muted-foreground">
         Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
         från Bolagsverket via organisationsnumret.
       </p>

@@ -34,7 +34,7 @@ export function BankIdChallengeQr({ data, label }: { data: string; label: string
     <div
       role="img"
       aria-label={label}
-      className="mx-auto h-[200px] w-[200px] rounded-lg border border-border bg-white p-1"
+      className="mx-auto h-[200px] w-[200px] rounded-lg bg-white p-1 shadow-raised"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   )

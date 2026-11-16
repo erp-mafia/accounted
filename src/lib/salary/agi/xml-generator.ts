@@ -254,12 +254,12 @@ export class AGIIncompleteDataError extends Error {
  * files with; telefon and e-post fall back to the company's own (Allmänt).
  */
 const COMPANY_FIELD_PLACES: Readonly<Record<string, string>> = {
-  organisationsnummer: 'organisationsnummer under Inställningar → Allmänt',
+  organisationsnummer: 'organisationsnummer under Inställningar → Företagsuppgifter',
   'kontaktperson (namn)': 'namn under Inställningar → Moms och skatt → Kontaktperson för skatteärenden',
   telefon:
-    'telefon under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt)',
+    'telefon under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller Telefon under Inställningar → Företagsuppgifter)',
   'e-post':
-    'e-post under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller E-post under Inställningar → Allmänt)',
+    'e-post under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller E-post under Inställningar → Företagsuppgifter)',
 }
 
 /**

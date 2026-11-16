@@ -50,8 +50,9 @@ const NO_ENTRIES: ReadonlySet<number> = new Set()
 
 export default function JournalRegisterView({ periodId }: { periodId: string }) {
   const t = useTranslations('journal_register')
+  const tCommon = useTranslations('common')
   const first = periodId ? `/api/reports/journal-register/page?${new URLSearchParams({ period_id: periodId })}` : null
-  const { pages, loading, error, hasMore, loadMore } = useReportPages<JournalRegisterPageData>(
+  const { pages, loading, error, hasMore, loadMore, retry } = useReportPages<JournalRegisterPageData>(
     first,
     'Kunde inte hämta grundbok',
     (page) => page.next && first
@@ -88,7 +89,7 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
   }
 
   if (error && pages.length === 0) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={retry} />
   }
 
   if (!totals || entries.length === 0) {
@@ -115,7 +116,7 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm tabular-nums min-w-[500px]">
-            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+            <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b text-left">
                 <th className="py-2 w-8"></th>
                 <th className="py-2 w-16">Ver.nr</th>
@@ -147,7 +148,7 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
                       <td className="py-2 font-mono text-xs">
                         {formatVoucher(entry)}
                       </td>
-                      <td className="py-2">{formatDate(entry.date)}</td>
+                      <td className="py-2 date-figures">{formatDate(entry.date)}</td>
                       <td className="py-2">
                         {entry.description}
                         {isReversed && (
@@ -188,9 +189,14 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
           {(loading || error || hasMore) && (
             <div className="mt-3 flex items-center gap-3 text-sm text-muted-foreground">
               {loading && <span>{t('loading_more')}</span>}
-              {error && <span className="text-destructive">{t('page_failed')}</span>}
+              {error && (
+                <>
+                  <span className="text-destructive">{t('page_failed')}</span>
+                  <Button variant="link" onClick={retry}>{tCommon('retry')}</Button>
+                </>
+              )}
               {hasMore && (
-                <Button variant="outline" size="sm" onClick={loadMore}>
+                <Button variant="outline" onClick={loadMore}>
                   {t('load_more', { shown: entries.length, total: totals.total_entries })}
                 </Button>
               )}

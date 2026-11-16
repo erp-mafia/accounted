@@ -48,7 +48,7 @@ export function BankIdChallengeView({ challenge, stepHeading = null, newQr = fal
     <>
       <p className="text-[13px] text-muted-foreground">{texts.qrHint}</p>
       {secondsLeft !== null && (
-        <p className={cn('text-[12.5px] tabular-nums', secondsLeft > 0 ? 'text-muted-foreground' : 'text-foreground')}>
+        <p className={cn('text-xs tabular-nums', secondsLeft > 0 ? 'text-muted-foreground' : 'text-foreground')}>
           {secondsLeft > 0 ? texts.secondsLeft(secondsLeft) : texts.maybeExpired}
         </p>
       )}
@@ -76,7 +76,7 @@ export function BankIdChallengeView({ challenge, stepHeading = null, newQr = fal
           <img
             src={challenge.qrImage}
             alt={texts.qrLabel}
-            className={cn('mx-auto h-[200px] w-[200px] rounded-lg border bg-white p-1', newQr ? 'border-foreground' : 'border-border')}
+            className={cn('mx-auto h-[200px] w-[200px] rounded-lg bg-white p-1 shadow-raised', newQr ? 'ring-[1.5px] ring-strong' : '')}
           />
           {qrFooter}
         </>

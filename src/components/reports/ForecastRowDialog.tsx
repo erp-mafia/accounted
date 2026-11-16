@@ -13,7 +13,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { FORECAST_ROW_CATEGORIES, FORECAST_ROW_CONFIDENCES } from '@/lib/forecast/rows'
 import { parseAmountInput } from '@/lib/money'
 
-const SELECT_CLASS = 'h-10 w-full rounded-lg border border-input bg-card px-4 text-sm'
+const SELECT_CLASS = 'h-10 w-full rounded-lg px-4 text-sm bg-control shadow-raised'
 
 interface ForecastRowDialogProps {
   /** Today in Stockholm, from the forecast: the earliest date a row counts on. */
@@ -142,10 +142,10 @@ export function ForecastRowDialog({ today, onOpenChange, onAdded }: ForecastRowD
               <Label htmlFor="forecast-row-note">{t('form_note')}</Label>
               <Input id="forecast-row-note" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
             </div>
-            {amountText !== '' && !amountValid && <div className="text-[12.5px] text-destructive">{t('form_amount_invalid')}</div>}
+            {amountText !== '' && !amountValid && <div className="text-xs text-destructive">{t('form_amount_invalid')}</div>}
           </div>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
               {t('form_cancel')}
             </Button>
             <Button type="submit" loading={busy} disabled={!canSubmit}>

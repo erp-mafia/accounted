@@ -6,7 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -31,8 +32,8 @@ import {
   TrashIcon,
 } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency } from '@/lib/utils'
-import { FyPicker } from '@/components/common/FyPicker'
+import { formatRowAmount } from '@/lib/utils'
+import { useUrlFiscalPeriod } from '@/components/providers/FiscalScopeProvider'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import { ArsredovisningBankIdSigning, useVersionSigningRequests } from '@/components/bokslut/ArsredovisningBankIdSigning'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
@@ -45,6 +46,7 @@ import {
 } from '@/components/bokslut/AnnualReportStudio'
 import { StepRail } from '@/components/bokslut/StepRail'
 import { K3DisclosureEditor } from '@/components/bokslut/K3DisclosureEditor'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { StepSectionHeader, annualReportStepAnchor } from '@/components/bokslut/StepSectionHeader'
 import {
   deriveAnnualReportWorkflow,
@@ -76,7 +78,7 @@ const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
 type EvidenceDocument = Pick<ArkivDocumentRow, 'document_id' | 'title' | 'document_date' | 'created_at' | 'doc_type'>
 
 const TEXT_LINK_CLASS =
-  'text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground'
+  'text-foreground underline underline-offset-4 decoration-foreground/25 hover:decoration-foreground'
 
 /** Note overrides as the server rendered them: overridden notes carry the
  *  generated text in generated_body and the user's text in body. */
@@ -97,6 +99,9 @@ export default function ArsredovisningPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const periodId = searchParams.get('period')
+  // The year is app-wide context: a visit without ?period takes the sidebar
+  // year into the URL, and a pick in the sidebar moves the URL.
+  useUrlFiscalPeriod(periodId, '/bookkeeping/year-end/arsredovisning', { allowAll: false, hideFuture: true })
   const { toast } = useToast()
   const tStudio = useTranslations('annualReportStudio')
   const tNotes = useTranslations('annualReportNotes')
@@ -113,6 +118,8 @@ export default function ArsredovisningPage() {
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to load the same year again.
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   // Editable narrative fields: persisted to arsredovisning_narratives so
   // the PDF always reflects the latest saved version and a refresh / new
@@ -178,6 +185,7 @@ export default function ArsredovisningPage() {
   const [cashFlowOmissionConfirmed, setCashFlowOmissionConfirmed] = useState(false)
   const [savedCashFlowOmissionConfirmed, setSavedCashFlowOmissionConfirmed] = useState(false)
   const [savingNarrative, setSavingNarrative] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [k3DisclosuresDirty, setK3DisclosuresDirty] = useState(false)
   const [narrativeRevision, setNarrativeRevision] = useState<string | null>(null)
 
@@ -355,7 +363,7 @@ export default function ArsredovisningPage() {
     return () => {
       cancelled = true
     }
-  }, [periodId])
+  }, [periodId, loadAttempt])
 
   // The AGM fields are step 7, everything else is step 3; both are saved by
   // the same narrative POST.
@@ -852,21 +860,11 @@ export default function ArsredovisningPage() {
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
               förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
               fullständiga bokslutet görs sedan via{' '}
-              <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
+              <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-foreground/25 hover:decoration-foreground">
                 Bokslut
               </Link>
               .
             </p>
-          <div className="mt-4">
-            <FyPicker
-              value={null}
-              onChange={(id) => {
-                if (id) router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-            />
-          </div>
         </div>
       </div>
     )
@@ -876,10 +874,10 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
           <Skeleton className="h-32 w-full" />
-        </div>
+        </LateReveal>
       </div>
     )
   }
@@ -888,7 +886,7 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <p className="py-4 text-sm text-destructive">{error ?? 'Kunde inte hämta data'}</p>
+        <LoadError title={error ?? 'Kunde inte hämta data'} onRetry={() => setLoadAttempt((n) => n + 1)} />
       </div>
     )
   }
@@ -1002,24 +1000,8 @@ export default function ArsredovisningPage() {
               : data.company.name}
           </span>
         }
-        // The year switch has to live on the loaded view too: the no-period
-        // branch above auto-jumps to the remembered scope (or the newest
-        // year) before anyone sees its picker, so without this the only way
-        // to another year's årsredovisning was to change the scope on some
-        // other page and come back. The way back to the bokslut is the
-        // rail's first step (Bokslut), not a second button up here.
-        action={
-          <FyPicker
-            value={periodId}
-            onChange={(id) => {
-              if (id && id !== periodId) {
-                router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
-              }
-            }}
-            includeAllOption={false}
-            hideFuturePeriods
-          />
-        }
+        // The year is the sidebar's (app-wide context); the way back to
+        // the bokslut is the rail's first step (Bokslut).
       />
 
       {/* One numbered sequence for the whole page: what is done, what is
@@ -1062,10 +1044,10 @@ export default function ArsredovisningPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3 px-1" aria-hidden="true">
+        <LateReveal className="space-y-3 px-1" aria-hidden="true">
           <Skeleton className="h-7 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
       )}
 
       {/* Steps 2 to 5 render inside the studio, which owns the compliance
@@ -1112,7 +1094,7 @@ export default function ArsredovisningPage() {
         boardHelp={<HelpPopover>{tSteps('board_intro')}</HelpPopover>}
         contentSection={
           <>
-            <div className="space-y-4 px-1 pt-2">
+            <div className="max-w-[760px] space-y-4 px-1 pt-2">
               <div className="space-y-2">
                 <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
                 <Textarea
@@ -1154,9 +1136,9 @@ export default function ArsredovisningPage() {
                   Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
                 </p>
               </div>
-              <div className="pt-4 border-t border-border space-y-4">
+              <div className="pt-4 border-t-hairline space-y-4">
                 <div className="flex items-center gap-2">
-                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <h3 className="font-sans text-xs font-medium text-muted-foreground">
                     Lagstadgade upplysningar
                   </h3>
                   <HelpPopover>
@@ -1174,7 +1156,7 @@ export default function ArsredovisningPage() {
                   </HelpPopover>
                 </div>
                 {data?.company.entity_type === 'ekonomisk_forening' && (
-                  <div className="space-y-4 pb-4 border-b border-border">
+                  <div className="space-y-4 pb-4 border-b-hairline">
                     <div className="flex items-center gap-2">
                       <h4 className="text-sm font-medium">{tHelp('members_title')}</h4>
                       <HelpPopover>
@@ -1358,9 +1340,9 @@ export default function ArsredovisningPage() {
               </div>
 
               {data.accounting_framework === 'k3' && (
-                <div className="pt-4 border-t border-border space-y-4">
+                <div className="pt-4 border-t-hairline space-y-4">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    <h3 className="font-sans text-xs font-medium text-muted-foreground">
                       {tNotes('notes_title')}
                     </h3>
                     <HelpPopover>{tNotes('notes_description')}</HelpPopover>
@@ -1383,7 +1365,6 @@ export default function ArsredovisningPage() {
                                 <Button
                                   type="button"
                                   variant="ghost"
-                                  size="sm"
                                   onClick={() =>
                                     setNoteOverrides((prev) => {
                                       const next = { ...prev }
@@ -1432,8 +1413,8 @@ export default function ArsredovisningPage() {
               )}
 
               {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission?.withheld && (
-                <div className="pt-4 border-t border-border space-y-3">
-                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="pt-4 border-t-hairline space-y-3">
+                  <h3 className="font-sans text-xs font-medium text-muted-foreground">
                     {tNotes('cashflow_title')}
                   </h3>
                   <p className="text-sm text-muted-foreground">{tNotes('cashflow_withheld')}</p>
@@ -1441,9 +1422,9 @@ export default function ArsredovisningPage() {
               )}
 
               {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && !data.kassaflodesanalys_omission.withheld && (
-                <div className="pt-4 border-t border-border space-y-3">
+                <div className="pt-4 border-t-hairline space-y-3">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    <h3 className="font-sans text-xs font-medium text-muted-foreground">
                       {tNotes('cashflow_title')}
                     </h3>
                     <HelpPopover>{tNotes('cashflow_rule')}</HelpPopover>
@@ -1502,8 +1483,8 @@ export default function ArsredovisningPage() {
                 </div>
               )}
 
-              <div className="space-y-2 border-t border-border pt-4">
-                <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="space-y-2 border-t-hairline pt-4">
+                <h3 className="font-sans text-xs font-medium text-muted-foreground">
                   Flerårsöversikt
                 </h3>
                 <Table>
@@ -1520,10 +1501,10 @@ export default function ArsredovisningPage() {
                       <TableRow key={row.year}>
                         <TableCell>{row.year}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatCurrency(row.net_revenue)}
+                          {formatRowAmount(row.net_revenue)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatCurrency(row.result_after_financial)}
+                          {formatRowAmount(row.result_after_financial)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {row.soliditet_pct === null
@@ -1551,14 +1532,15 @@ export default function ArsredovisningPage() {
                 <Button
                   variant={primaryAction === 'save_text' ? 'default' : 'outline'}
                   onClick={handleSaveNarrative}
-                  disabled={!hasUnsavedNarrative}
+                  disabled={!canWrite || !hasUnsavedNarrative}
+                  title={lockedTitle}
                   loading={savingNarrative}
                 >
                   {savingNarrative ? (
                     'Sparar…'
                   ) : (
                     <>
-                      <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" /> Spara texten
+                      <ArrowDownOnSquareIcon className="h-4 w-4" /> Spara texten
                     </>
                   )}
                 </Button>
@@ -1567,7 +1549,7 @@ export default function ArsredovisningPage() {
           </>
         }
         boardSection={
-          <div className="space-y-4 px-1 pt-2">
+          <div className="max-w-[760px] space-y-4 px-1 pt-2">
             {signingAvailable && <p className="text-xs leading-5 text-muted-foreground">{tSign('board_name_rule')}</p>}
             {signatures.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">{tSteps('board_empty')}</p>
@@ -1575,7 +1557,7 @@ export default function ArsredovisningPage() {
               signatures.map((sig) => (
                 <div
                   key={sig.id}
-                  className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0"
+                  className="flex items-center justify-between gap-3 border-b-hairline pb-3 last:border-b-0 last:pb-0"
                 >
                   <div>
                     <p className="text-sm font-medium">{sig.signer_name}</p>
@@ -1587,6 +1569,8 @@ export default function ArsredovisningPage() {
                       variant="ghost"
                       className="min-w-11"
                       aria-label={tStudio('remove_signer')}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                       onClick={() => void handleRemoveSigner(sig.id)}
                     >
                       <TrashIcon className="h-4 w-4" />
@@ -1632,12 +1616,13 @@ export default function ArsredovisningPage() {
                 variant={primaryAction === 'add_signer' ? 'default' : 'outline'}
                 className="w-full sm:w-auto"
                 onClick={handleAddSigner}
-                disabled={!signerName.trim()}
+                disabled={!canWrite || !signerName.trim()}
+                title={lockedTitle}
               >
-                <PlusIcon className="mr-1 h-4 w-4" /> Lägg till
+                <PlusIcon className="h-4 w-4" /> Lägg till
               </Button>
               {boardCandidates > 0 && (
-                <Button variant="outline" className="w-full sm:w-auto" onClick={handleAddFromBoard} loading={addingBoard}>
+                <Button variant="outline" className="w-full sm:w-auto" onClick={handleAddFromBoard} loading={addingBoard} disabled={!canWrite} title={lockedTitle}>
                   {tBoard('roster_from_board', { count: boardCandidates })}
                 </Button>
               )}
@@ -1659,7 +1644,7 @@ export default function ArsredovisningPage() {
             </HelpPopover>
           }
         />
-        <div className="space-y-4 px-1 pt-2">
+        <div className="max-w-[760px] space-y-4 px-1 pt-2">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-version">Låst version</Label>
@@ -1711,7 +1696,7 @@ export default function ArsredovisningPage() {
                   <button type="button" className={QUIET_LINK_CLASS} aria-expanded={manualOpen} onClick={() => setManualOpen((open) => !open)}>
                     {manualOpen ? tSign('manual_hide') : tSign('manual_show')}
                   </button>
-                  <p className="text-[12.5px] text-muted-foreground">{tSign('manual_when')}</p>
+                  <p className="text-xs text-muted-foreground">{tSign('manual_when')}</p>
                 </div>
               )}
               {!manualFolded && (
@@ -1782,10 +1767,11 @@ export default function ArsredovisningPage() {
                   variant="outline"
                   className="shrink-0"
                   onClick={() => evidenceFileInput.current?.click()}
-                  disabled={!hasLockedVersion}
+                  disabled={!canWrite || !hasLockedVersion}
+                  title={lockedTitle}
                   loading={uploadingEvidence}
                 >
-                  {!uploadingEvidence && <ArrowUpTrayIcon className="mr-2 h-4 w-4" />}
+                  {!uploadingEvidence && <ArrowUpTrayIcon className="h-4 w-4" />}
                   {uploadingEvidence
                     ? tSteps('signature_document_uploading')
                     : tSteps('signature_document_upload')}
@@ -1812,7 +1798,7 @@ export default function ArsredovisningPage() {
           {signatures.filter((sig) => signingTrack.kind !== 'bankid' || isAuditorRole(sig.role)).map((sig) => (
             <div
               key={sig.id}
-              className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-3 border-b-hairline pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
                 <p className="text-sm font-medium">{sig.signer_name}</p>
@@ -1827,11 +1813,12 @@ export default function ArsredovisningPage() {
                   <>
                     <span className="text-xs text-muted-foreground">Väntar på underskrift</span>
                     <Button
-                      size="sm"
                       variant="outline"
                      
                       onClick={() => void handleMarkSigned(sig.id)}
+                      title={lockedTitle}
                       disabled={
+                        !canWrite ||
                         !selectedSignatureVersionId ||
                         !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim()) ||
                         !signatureDate
@@ -1857,7 +1844,7 @@ export default function ArsredovisningPage() {
           title={tSteps('section_agm')}
           help={<HelpPopover>{tSteps('agm_intro')}</HelpPopover>}
         />
-        <div className="space-y-4 px-1 pt-2">
+        <div className="max-w-[760px] space-y-4 px-1 pt-2">
           <div className="space-y-2">
             <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
             <Input
@@ -1907,10 +1894,11 @@ export default function ArsredovisningPage() {
             <Button
               variant={primaryAction === 'save_agm' ? 'default' : 'outline'}
               onClick={handleSaveNarrative}
-              disabled={!hasUnsavedNarrative}
+              disabled={!canWrite || !hasUnsavedNarrative}
+              title={lockedTitle}
               loading={savingNarrative}
             >
-              {!savingNarrative && <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />}
+              {!savingNarrative && <ArrowDownOnSquareIcon className="h-4 w-4" />}
               {tSteps('save_agm')}
             </Button>
           </div>
@@ -1961,7 +1949,7 @@ export default function ArsredovisningPage() {
               them alongside the coming-soon Bolagsverket parts made the
               pre-submission checklist unreadable in the default config. */}
           {data.warnings.length > 0 && (
-            <div className="space-y-1 border-t border-border pt-3 text-xs">
+            <div className="space-y-1 border-t-hairline pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
               <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
                 {data.warnings.map((w, i) => (

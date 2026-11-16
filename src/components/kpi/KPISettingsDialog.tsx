@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   Dialog,
   DialogContent,
@@ -36,6 +37,7 @@ interface KPISettingsDialogProps {
 export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDialogProps) {
   const t = useTranslations('kpi')
   const tCommon = useTranslations('common')
+  const { canWrite, lockedTitle } = useViewerLock()
   const [draft, setDraft] = useState<KPIPreferences>(preferences)
   const [expandedKpi, setExpandedKpi] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
@@ -106,12 +108,12 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger asChild>
         {/* Same height as the year picker beside it (founder review 2026-09-07). */}
-        <Button variant="outline" size="sm" className="gap-1.5">
+        <Button variant="outline" className="gap-1.5">
           <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
           {t('customize')}
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('settings_title')}</DialogTitle>
           <DialogDescription>
@@ -133,7 +135,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
             return (
               <div
                 key={def.id}
-                className="rounded-lg border border-border p-3"
+                className="rounded-lg p-3 bg-control shadow-raised"
               >
                 <div className="flex items-center justify-between">
                   <button
@@ -172,7 +174,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                       <p className="font-medium text-foreground/80 mb-0.5">
                         {t('settings_formula_label')}
                       </p>
-                      <p className="font-mono text-[11px] bg-muted/50 rounded-sm px-2 py-1">
+                      <p className="font-mono text-xs bg-muted/50 rounded-sm px-2 py-1">
                         {t(`def_${def.id}_formula`)}
                       </p>
                     </div>
@@ -195,16 +197,16 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                             setAccountOverride(def.id, e.target.value)
                           }
                           placeholder={def.defaultAccounts.join(', ')}
-                          className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50"
+                          className="w-full rounded-lg px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50 bg-control shadow-raised"
                         />
-                        <p className="mt-1 text-[11px] text-muted-foreground/70">
+                        <p className="mt-1 text-xs text-muted-foreground">
                           {t('settings_account_hint', { example: def.defaultAccounts.slice(0, 3).join(', ') })}
                         </p>
                         {hasOverride && (
                           <button
                             type="button"
                             onClick={() => clearAccountOverride(def.id)}
-                            className="mt-1 text-[11px] text-primary hover:underline"
+                            className="mt-1 text-xs text-primary hover:underline"
                           >
                             {t('settings_reset_field')}
                           </button>
@@ -218,7 +220,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
           })}
           {/* The month table is a layout flag, not a metric: its own row
               after the KPI list, no expand panel, no account override. */}
-          <div className="rounded-lg border border-border p-3">
+          <div className="rounded-lg p-3 bg-control shadow-raised">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{t('settings_monthly_table_label')}</p>
@@ -248,11 +250,11 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
           </button>
           <div className="flex gap-2">
             <DialogClose asChild>
-              <Button variant="outline" size="sm" disabled={saving}>
+              <Button variant="outline" disabled={saving}>
                 {tCommon('cancel')}
               </Button>
             </DialogClose>
-            <Button size="sm" onClick={handleSave} disabled={saving}>
+            <Button onClick={handleSave} disabled={!canWrite || saving} title={lockedTitle}>
               {saving ? tCommon('saving') : tCommon('save')}
             </Button>
           </div>

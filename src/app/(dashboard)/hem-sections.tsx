@@ -1,4 +1,11 @@
 import { after } from 'next/server'
+import type { ReactNode } from 'react'
+import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
+import { formatDate } from '@/lib/utils'
+import type { HemView } from '@/components/dashboard/att-gora-views'
+import { dueStateOf } from '@/components/dashboard/need-model'
 import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import {
@@ -262,7 +269,16 @@ export async function HemPanesSection({
   hasSkatteverketConnected,
   aiConnection,
   firstTaskClient,
+  view = 'hem',
+  initialStep = null,
+  afterHeadline,
 }: {
+  /** Which face of Att göra to draw (AttGoraSection.view). */
+  view?: HemView
+  /** Börja: the step to open on. */
+  initialStep?: string | null
+  /** Hem: Kom igång and the assistant prompt, drawn under the headline. */
+  afterHeadline?: ReactNode
   companyId: string
   now: Date
   setupOpen: boolean
@@ -340,6 +356,7 @@ export async function HemPanesSection({
     documentsToSign,
     paymentsFailed,
     attestedToPay,
+    nextDeadlineRes,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -378,6 +395,17 @@ export async function HemPanesSection({
       documentsToSignPromise,
       paymentsFailedPromise,
       attestedToPayPromise,
+      // Hem's glance line: the next open deadline from today on (the same
+      // rows /deadlines lists; its stored title is shown as it is there).
+      view === 'hem'
+        ? filterOpenDeadlines(
+            supabase.from('deadlines').select('title, due_date').eq('company_id', companyId),
+          )
+            .gte('due_date', todayIsoStockholm(now))
+            .order('due_date', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+        : null,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -424,40 +452,65 @@ export async function HemPanesSection({
     !hasSkatteverketConnected &&
     (await getSkatteverketOmbudAppointment(companyId)).state === 'waiting'
 
+  const tHem = await getTranslations('hem')
+  // A failed read leaves the line out: no deadline is not the same as none found.
+  const nextDeadline = nextDeadlineRes && !nextDeadlineRes.error ? nextDeadlineRes.data : null
+  // Due today or tomorrow is said in words (the row's own state); any other day is its date.
+  const nextDeadlineState = nextDeadline ? dueStateOf(nextDeadline.due_date, todayIsoStockholm(now)) : null
+  const facts = nextDeadline ? (
+    <p className="mt-1.5 text-[13px] text-muted-foreground">
+      {/* The label never breaks in two; on a narrow screen the deadline wraps under it as one piece. */}
+      <Link href="/deadlines" className="group inline-flex min-h-7 flex-wrap items-baseline gap-x-1.5 py-1">
+        <span className="whitespace-nowrap">{tHem('next_deadline')}</span>
+        <span className="font-medium text-strong group-hover:underline group-hover:underline-offset-[3px]">
+          {nextDeadlineState === 'today' ? (
+            tHem('next_deadline_today')
+          ) : nextDeadlineState === 'tomorrow' ? (
+            tHem('next_deadline_tomorrow')
+          ) : (
+            <span className="date-figures">{formatDate(nextDeadline.due_date)}</span>
+          )}
+          , {nextDeadline.title}
+        </span>
+      </Link>
+    </p>
+  ) : null
+
   return (
-    <>
-      <div className={resumeItems.length > 0 ? 'grid items-start gap-x-6 gap-y-8 md:grid-cols-2' : undefined}>
-        <AttGoraSection
-          worklist={worklist}
-          expensePayouts={expensePayouts}
-          attestsDue={attestsDue}
-          documentsToSign={documentsToSign}
-          skattekontoPayment={skattekontoPayment}
-          attestedToPay={attestedToPay}
-          missingUnderlag={missingUnderlag}
-          bankSwitches={bankSwitches}
-          paymentsVerification={paymentsVerification}
-          supplierPayeeChanges={supplierPayeeChanges}
-          paymentsFailed={paymentsFailed}
-          invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
-          suggestions={openSuggestions}
-          grantReview={grantReview}
-          expiringBankConnections={expiringBankConnections}
-          emptyLedger={emptyLedger}
-          noBankFeed={noBankFeed}
-          hasActiveBankConnection={hasActiveBankConnection}
-          hasSkatteverketConnection={hasSkatteverketConnected}
-          skvOmbudEnabled={skvOmbudEnabled}
-          skvOmbudWaiting={skvOmbudWaiting}
-          aiConnection={aiConnection}
-          firstTaskClient={firstTaskClient}
-          // While the getting-started checklist is open it carries the bank
-          // and Skatteverket steps itself; afterwards the kopplingar row keeps
-          // the connections visible for whoever declined them in the books act.
-          showKopplingar={!setupOpen}
-        />
-        <ResumePane items={resumeItems} />
-      </div>
-    </>
+    <AttGoraSection
+      view={view}
+      initialStep={initialStep}
+      todayIso={todayIsoStockholm(now)}
+      afterHeadline={afterHeadline}
+      facts={facts}
+      resume={view === 'borja' ? null : <ResumePane items={resumeItems} />}
+      worklist={worklist}
+      expensePayouts={expensePayouts}
+      attestsDue={attestsDue}
+      documentsToSign={documentsToSign}
+      skattekontoPayment={skattekontoPayment}
+      attestedToPay={attestedToPay}
+      missingUnderlag={missingUnderlag}
+      bankSwitches={bankSwitches}
+      paymentsVerification={paymentsVerification}
+      supplierPayeeChanges={supplierPayeeChanges}
+      paymentsFailed={paymentsFailed}
+      invoiceSets={suggestedMatches.filter((m) => (m.allocations?.length ?? 0) > 0)}
+      suggestions={openSuggestions}
+      grantReview={grantReview}
+      expiringBankConnections={expiringBankConnections}
+      emptyLedger={emptyLedger}
+      noBankFeed={noBankFeed}
+      hasActiveBankConnection={hasActiveBankConnection}
+      hasSkatteverketConnection={hasSkatteverketConnected}
+      skvOmbudEnabled={skvOmbudEnabled}
+      skvOmbudWaiting={skvOmbudWaiting}
+      aiConnection={aiConnection}
+      firstTaskClient={firstTaskClient}
+      // While the getting-started checklist is open it carries the bank
+      // and Skatteverket steps itself; afterwards the kopplingar row keeps
+      // the connections visible for whoever declined them in the books act.
+      showKopplingar={!setupOpen}
+    />
   )
 }

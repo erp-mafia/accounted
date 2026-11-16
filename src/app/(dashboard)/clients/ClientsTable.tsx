@@ -2,11 +2,13 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
+import { PaperAirplaneIcon, SpinnerIcon } from '@/components/icons'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -67,6 +69,7 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  */
 export default function ClientsTable({ clients, bankSwitchCampaign = null, canEditClientNumber = false }: ClientsTableProps) {
   const t = useTranslations('clients')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [query, setQuery] = useState('')
@@ -138,32 +141,29 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
   }
 
   if (clients.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">{t('empty')}</p>
-    )
+    return <EmptyState title={t('empty')} />
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2 max-w-xs flex-1 rounded-lg border border-border px-3 py-2">
-          <MagnifyingGlassIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('filter_placeholder')}
-            aria-label={t('filter_placeholder')}
-            className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
-          />
-        </div>
+      {/* Toolbar: the bulk action first, search at the right end (V7 list toolbars). */}
+      <div className="flex flex-wrap items-center gap-2">
         {showBankSwitch && notSwitched.length > 0 && (
-          <Button variant="outline" size="sm" onClick={() => setNudge({ kind: 'all', count: notSwitched.length })}>
+          <Button variant="outline" size="toolbar" onClick={() => setNudge({ kind: 'all', count: notSwitched.length })}>
+            <PaperAirplaneIcon className="h-4 w-4" />
             {t('bank_switch_bulk', { count: notSwitched.length })}
           </Button>
         )}
+        <ToolbarSearch
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('filter_placeholder')}
+          aria-label={t('filter_placeholder')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -185,7 +185,12 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
             {rows.length === 0 && (
               <tr>
                 <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={columnCount}>
-                  {t('no_matches')}
+                  <span className="flex flex-wrap items-center gap-x-3">
+                    <span>{t('no_matches')}</span>
+                    <Button variant="link" onClick={() => setQuery('')}>
+                      {tCommon('clear_search')}
+                    </Button>
+                  </span>
                 </td>
               </tr>
             )}
@@ -220,7 +225,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
                       void handleEnter(row.companyId)
                     }}
                     disabled={pendingId !== null}
-                    className="flex items-center gap-2 text-left"
+                    className="flex items-center gap-2 whitespace-nowrap text-left"
                   >
                     <span className="font-medium text-foreground">{row.name}</span>
                     {row.orgNumber && (
@@ -288,7 +293,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
                       >
                         {row.nextDeadline.title}
                       </span>
-                      <span className="text-muted-foreground tabular-nums">
+                      <span className="whitespace-nowrap text-muted-foreground tabular-nums">
                         {formatDate(row.nextDeadline.dueDate)}
                       </span>
                     </span>
@@ -296,7 +301,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
                     <span className="text-muted-foreground">-</span>
                   )}
                 </td>
-                <td className={cn(TD_CLASS, 'tabular-nums')}>
+                <td className={cn(TD_CLASS, 'date-figures')}>
                   {row.lastBookedDate ? (
                     <span className="text-muted-foreground">
                       {formatDate(row.lastBookedDate)}
@@ -474,7 +479,7 @@ function ClientNumberCell({ value, canEdit, editLabel, onSave }: ClientNumberCel
           setEditing(false)
         }
       }}
-      className="-my-1 h-7 w-24 rounded-lg border border-input bg-card px-2 text-[13px] tabular-nums transition-colors duration-150 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 disabled:opacity-50"
+      className="-my-1 h-7 w-24 rounded-lg px-2 text-[13px] tabular-nums transition-colors duration-150 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 disabled:opacity-50 bg-control shadow-raised"
     />
   )
 }
@@ -512,7 +517,6 @@ function BankSwitchCell({ value, onNudge, nudgeLabel, labels }: BankSwitchCellPr
       {value.banks.length > 0 && <span className="truncate text-muted-foreground">{value.banks.join(', ')}</span>}
       <Button
         variant="ghost"
-        size="sm"
         className="ml-auto text-muted-foreground hover:text-foreground"
         onClick={(e) => {
           e.stopPropagation()

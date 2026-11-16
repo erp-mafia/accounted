@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import type { ArkivQuestion, QuestionFinding } from '@/lib/arkiv/questions'
 import type { Reading } from '@/lib/documents/extract/fields'
@@ -21,7 +22,7 @@ import { useFieldLabel } from './useFieldLabel'
  * not on a chip. Used by Granska and by the Underlag rail, so a question
  * reads the same wherever it is met.
  */
-export const QUIET_ACTION_CLASS = 'text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50'
+export const QUIET_ACTION_CLASS = 'text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground disabled:opacity-50'
 
 type DismissNote = 'not_exists' | 'not_applicable'
 
@@ -78,6 +79,9 @@ export function QuestionCard({
   const t = useTranslations('arkiv')
   const fieldLabel = useFieldLabel()
   const { toast } = useToast()
+  // useCanWrite's rule; outside a provider (the sandbox) the server decides.
+  const companyContext = useCompanyOptional()
+  const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
   const [busy, setBusy] = useState(false)
   // Answered: the card fades (leaving), then leaves the list (gone).
   const [leaving, setLeaving] = useState(false)
@@ -122,10 +126,10 @@ export function QuestionCard({
     why = d.relevance_reason ?? (d.addressed_to ? t('addressed_to', { name: d.addressed_to }) : d.summary)
     chips = (
       <>
-        <Button size="sm" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'admit' }), t('then_admitted'))}>
+        <Button disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'admit' }), t('then_admitted'))}>
           {t('question_held_yes')}
         </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'discard' }), t('discarded'))}>
+        <Button variant="outline" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/admission`, { decision: 'discard' }), t('discarded'))}>
           {t('question_held_no')}
         </Button>
       </>
@@ -139,11 +143,11 @@ export function QuestionCard({
       sentence = t('question_type', { title: shortFileName(d.title, 48), type: label })
       chips = (
         <>
-          <Button size="sm" disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/classification`, { doc_type: proposed }), t('then_typed', { type: label }))}>
+          <Button disabled={busy} onClick={() => act(() => send('POST', `/api/documents/${d.document_id}/classification`, { doc_type: proposed }), t('then_typed', { type: label }))}>
             {t('question_type_yes', { type: label })}
           </Button>
           {onMore ? (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => onMore(question)}>
+            <Button variant="outline" disabled={busy} onClick={() => onMore(question)}>
               {t('question_type_no')}
             </Button>
           ) : null}
@@ -153,7 +157,7 @@ export function QuestionCard({
     } else {
       sentence = t('question_type_open', { title: shortFileName(d.title, 48) })
       chips = onMore ? (
-        <Button size="sm" disabled={busy} onClick={() => onMore(question)}>
+        <Button disabled={busy} onClick={() => onMore(question)}>
           {t('question_type_pick')}
         </Button>
       ) : null
@@ -171,12 +175,12 @@ export function QuestionCard({
       <>
         {question.readings.length === 1 && first ? (
           // One reading to confirm: the sentence already says the value, the chip says yes.
-          <Button size="sm" disabled={busy} title={first.quote ?? asText(first.value)} onClick={() => save(first)}>
+          <Button disabled={busy} title={first.quote ?? asText(first.value)} onClick={() => save(first)}>
             {t('question_yes')}
           </Button>
         ) : (
           question.readings.map((r, i) => (
-            <Button key={i} size="sm" variant={i === 0 ? 'default' : 'outline'} disabled={busy} title={r.quote ?? asText(r.value)} onClick={() => save(r)}>
+            <Button key={i} variant={i === 0 ? 'default' : 'outline'} disabled={busy} title={r.quote ?? asText(r.value)} onClick={() => save(r)}>
               {readingLabel(r)}
             </Button>
           ))
@@ -190,25 +194,35 @@ export function QuestionCard({
     )
     more = null
   } else {
-    return <FindingQuestion finding={question.finding} compact={compact} busy={busy} leaving={leaving} failed={failed} onClose={(resolution, note) => act(() => closeFinding(question.finding, resolution, note), resolution === 'applied' ? t('finding_applied') : t('then_noted'))} />
+    return <FindingQuestion finding={question.finding} compact={compact} busy={busy || !canWrite} leaving={leaving} failed={failed} onClose={(resolution, note) => act(() => closeFinding(question.finding, resolution, note), resolution === 'applied' ? t('finding_applied') : t('then_noted'))} />
   }
 
   return (
     <div className={cardClass(compact, leaving)} inert={leaving || undefined}>
       <div className="text-[13px]">{sentence}</div>
-      {why ? <div className="mt-0.5 text-[12.5px] text-muted-foreground">{why}</div> : null}
+      {why ? <div className="mt-0.5 text-xs text-muted-foreground">{why}</div> : null}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        {chips}
-        {more}
+        {canWrite ? (
+          <>
+            {chips}
+            {more}
+          </>
+        ) : (
+          // A read-only member reads the question; every answer is locked.
+          <fieldset disabled title={t('viewer_disabled_tooltip')} className="contents">
+            {chips}
+            {more}
+          </fieldset>
+        )}
       </div>
-      {failed ? <div className="mt-1 text-[12.5px] text-destructive">{t('action_failed')}</div> : null}
+      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
     </div>
   )
 }
 
 /** A question card; an answered one fades out before it leaves the list. */
 function cardClass(compact: boolean, leaving: boolean): string {
-  return cn('border-b border-border px-1 transition-opacity duration-150 ease-out', compact ? 'py-2.5' : 'py-3', leaving && 'opacity-0')
+  return cn('border-b-hairline px-1 transition-opacity duration-150 ease-out', compact ? 'py-2.5' : 'py-3', leaving && 'opacity-0')
 }
 
 async function closeFinding(f: QuestionFinding, resolution: 'applied' | 'dismissed', note?: DismissNote): Promise<void> {
@@ -296,7 +310,7 @@ function FindingQuestion({
       <div className="mt-2 flex flex-wrap items-center gap-3">
         {finding.kind === 'document_expected' ? (
           <>
-            <Button size="sm" asChild>
+            <Button asChild>
               <Link href="/arkiv">{t('finding_upload')}</Link>
             </Button>
             <button type="button" disabled={busy} className={QUIET_ACTION_CLASS} onClick={() => onClose('dismissed', 'not_exists')}>
@@ -309,7 +323,7 @@ function FindingQuestion({
         ) : (
           <>
             {finding.kind === 'settings_mismatch' ? (
-              <Button size="sm" disabled={busy} onClick={() => onClose('applied')}>
+              <Button disabled={busy} onClick={() => onClose('applied')}>
                 {t('finding_apply')}
               </Button>
             ) : null}
@@ -319,7 +333,7 @@ function FindingQuestion({
           </>
         )}
       </div>
-      {failed ? <div className="mt-1 text-[12.5px] text-destructive">{t('action_failed')}</div> : null}
+      {failed ? <div className="mt-1 text-xs text-destructive">{t('action_failed')}</div> : null}
     </div>
   )
 }

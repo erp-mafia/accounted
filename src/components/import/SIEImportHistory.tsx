@@ -6,7 +6,8 @@ import { createSIEHistoryPollGate, startSIEHistoryPolling, type SIEHistoryPollGa
 import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
@@ -15,6 +16,8 @@ import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import SIELegacyRecoveryPanel from './SIELegacyRecoveryPanel'
 import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
+import { ImportHistorySkeleton, ImportStatus } from './import-history-parts'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 const PAGE_SIZE = 20
 
@@ -64,6 +67,8 @@ const STATUS_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'destructiv
  */
 export default function SIEImportHistory() {
   const t = useTranslations('import')
+  const tCommon = useTranslations('common')
+  const { canWrite, lockedTitle } = useViewerLock()
   const { toast } = useToast()
   const [rows, setRows] = useState<SIEImportListRow[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -156,30 +161,15 @@ export default function SIEImportHistory() {
 
   const statusCell = (status: string) => {
     const labelKey = STATUS_LABEL_KEY[status]
-    const label = labelKey ? t(labelKey) : status
-    const variant = STATUS_BADGE_VARIANT[status]
-    if (!variant) {
-      return <span className="text-xs text-muted-foreground">{label}</span>
-    }
-    return (
-      <Badge variant={variant} className="font-normal">
-        {label}
-      </Badge>
-    )
+    return <ImportStatus label={labelKey ? t(labelKey) : status} variant={STATUS_BADGE_VARIANT[status]} />
   }
 
   if (loadFailed && rows === null) {
-    return <p className="px-1 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>
+    return <LoadError title={t('sie_history_load_error')} onRetry={() => void fetchImports()} />
   }
 
   if (rows === null) {
-    return (
-      <div className="space-y-2" role="status">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
-    )
+    return <ImportHistorySkeleton />
   }
 
   if (rows.length === 0 && offset === 0) {
@@ -190,8 +180,12 @@ export default function SIEImportHistory() {
 
   return (
     <div>
-      {loadFailed && <p role="status" className="mb-3 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>}
-      <div className="overflow-x-auto">
+      {loadFailed && (
+        <AttnLine className="mb-3" action={{ label: tCommon('retry'), onClick: () => void fetchImports() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -209,7 +203,7 @@ export default function SIEImportHistory() {
             {rows.map((row) => (
               <tr key={row.id} className="transition-colors duration-150 hover:bg-secondary/35">
                 <td className={TD_CLASS}>{row.filename}</td>
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                   {formatDate(row.imported_at ?? row.created_at)}
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
@@ -224,16 +218,17 @@ export default function SIEImportHistory() {
                   {row.job_state === 'completed' && row.job_kind !== 'duplicate_repair' && (
                     <Button
                       variant="outline"
-                      size="sm"
                       className="text-destructive hover:text-destructive"
                       onClick={() => setPendingUndo(row)}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                     >
-                      <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
+                      <ArrowUturnLeftIcon className="h-4 w-4" />
                       {t('sie_history_undo_button')}
                     </Button>
                   )}
                   {!row.job_state && (
-                    <Button variant="outline" size="sm" onClick={event => {
+                    <Button variant="outline" onClick={event => {
                       reviewTrigger.current = event.currentTarget
                       setReviewImport(row)
                     }}>
@@ -250,11 +245,11 @@ export default function SIEImportHistory() {
       {(total > PAGE_SIZE || offset > 0) && (
         <nav className="mt-4 flex flex-wrap items-center justify-end gap-3" aria-label={t('sie_recovery.pagination')}>
           <span className="text-xs tabular-nums text-muted-foreground">{t('sie_recovery.page', { page: offset / PAGE_SIZE + 1 })}</span>
-          <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => {
+          <Button variant="outline" disabled={offset === 0} onClick={() => {
             setRows(null)
             setOffset(value => Math.max(0, value - PAGE_SIZE))
           }}>{t('sie_recovery.previous')}</Button>
-          <Button variant="outline" size="sm" disabled={offset + PAGE_SIZE >= total} onClick={() => {
+          <Button variant="outline" disabled={offset + PAGE_SIZE >= total} onClick={() => {
             setRows(null)
             setOffset(value => value + PAGE_SIZE)
           }}>{t('sie_recovery.next')}</Button>

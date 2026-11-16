@@ -48,11 +48,11 @@ export function TransactionPartsSection({ transactionId, onMatch, processing }: 
   const kinds = new Set(prefills.map((p) => p.kind))
 
   return (
-    <div className="border-b border-border px-6 py-3">
-      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+    <div className="border-b-hairline px-6 py-3">
+      <p className="mb-1.5 text-xs font-semibold text-muted-foreground">
         {t('heading', { count: parts.length })}
       </p>
-      <ul className="divide-y divide-border text-[12.5px]">
+      <ul className="divide-y divide-border text-xs">
         {parts.map((part) => {
           const orgNumber = part.counterparty_org_number ? formatOrgNumberDisplay(part.counterparty_org_number) : null
           const suggested = part.suggested_invoice
@@ -79,7 +79,7 @@ export function TransactionPartsSection({ transactionId, onMatch, processing }: 
       {/* One kind per batch (the allocation RPC refuses a mix): a split that
           names both is left to the person. */}
       {onMatch && prefills.length > 0 && kinds.size === 1 && (
-        <Button size="sm" className="mt-2" onClick={() => onMatch(prefills)} disabled={processing}>
+        <Button className="mt-2" onClick={() => onMatch(prefills)} disabled={processing}>
           {t('match_button', { count: prefills.length })}
         </Button>
       )}

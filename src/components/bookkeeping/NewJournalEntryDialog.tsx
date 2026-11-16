@@ -67,24 +67,24 @@ export default function NewJournalEntryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // Wide: the konteringsrader table (konto, radtext, debet, kredit,
-        // saldo) is the point of this dialog, and at 3xl the amount columns
-        // were squeezed against the account search. Capped at 6xl so it stays
-        // a dialog on an ultrawide screen.
-        className="sm:max-w-5xl lg:max-w-6xl max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
-        // Escape closes an untouched dialog, like every other overlay, but a
-        // half-typed verifikat must survive a stray Escape (easy to hit across
-        // multiple windows/screens, or when you only meant to dismiss a
-        // combobox dropdown): then closing is explicit, the header X. See
-        // holdEscapeWhileUnsaved. A backdrop click never closes it. This also
-        // stops nested popovers (AccountCombobox, date pickers) and the form's
-        // own confirm dialogs from collapsing the parent when they portal
-        // outside it.
-        onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, hasUnsavedInput)}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent size="document"
+ // Wide: the konteringsrader table (konto, radtext, debet, kredit,
+ // saldo) is the point of this dialog, and at 3xl the amount columns
+ // were squeezed against the account search. Capped at 6xl so it stays
+ // a dialog on an ultrawide screen.
+ className="lg:max-w-6xl"
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed verifikat must survive a stray Escape (easy to hit across
+ // multiple windows/screens, or when you only meant to dismiss a
+ // combobox dropdown): then closing is explicit, the header X. See
+ // holdEscapeWhileUnsaved. A backdrop click never closes it. This also
+ // stops nested popovers (AccountCombobox, date pickers) and the form's
+ // own confirm dialogs from collapsing the parent when they portal
+ // outside it.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, hasUnsavedInput)}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{t('new_entry_dialog_title')}</DialogTitle>
         </DialogHeader>
@@ -99,7 +99,7 @@ export default function NewJournalEntryDialog({
         ) : (
           <>
             {copyPrefill && (
-              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+              <div className="flex items-start gap-3 rounded-lg p-3 text-sm bg-control shadow-raised">
                 <Square2StackIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">
@@ -112,7 +112,7 @@ export default function NewJournalEntryDialog({
               </div>
             )}
             {activeSkvPrefill && (
-              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+              <div className="flex items-start gap-3 rounded-lg p-3 text-sm bg-control shadow-raised">
                 <LinkIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">

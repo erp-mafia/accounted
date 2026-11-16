@@ -112,9 +112,9 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent aria-describedby={undefined} className="sm:max-w-lg">
+      <DialogContent size="form" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">{t('invoice_dialog_title')}</DialogTitle>
+          <DialogTitle className="text-lg">{t('invoice_dialog_title')}</DialogTitle>
         </DialogHeader>
         {mail && !results && (
           <p data-ph-mask="" className="text-[13px] leading-relaxed">
@@ -125,7 +125,7 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
                 : t('invoice_dialog_no_email')}
           </p>
         )}
-        {imported && !results && !skip && <p className="attn text-[12.5px]">{t('invoice_imported_warning')}</p>}
+        {imported && !results && !skip && <p className="attn text-xs">{t('invoice_imported_warning')}</p>}
         {results ? (
           <ReminderSendResults results={results} canWrite={canWrite} onAttestedRetry={() => confirm(true)} />
         ) : (

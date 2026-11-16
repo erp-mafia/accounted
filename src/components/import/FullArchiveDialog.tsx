@@ -156,9 +156,9 @@ export function FullArchiveDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">
+          <DialogTitle className="text-lg">
             {isMigrationResetSource
               ? tCompany('reset_archive_download_title')
               : t('export_archive_title')}
@@ -247,7 +247,7 @@ export function FullArchiveDialog({
         </div>
         <DialogFooter>
           <Button onClick={handleDownload} disabled={!canDownload}>
-            <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
+            <ArrowDownTrayIcon className="h-4 w-4" />
             {t('archive_download_button')}
           </Button>
         </DialogFooter>

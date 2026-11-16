@@ -1,0 +1,1 @@
+[2026-11-15] Hem: one filled button, urgent first. Kom igång follows the three blocks once something is urgent and its step is outline while the top bar holds Börja; the Rutin button has no count (Rutin counts bulk-eligible ones); Gjort rows are log lines: no address for one settled proposal.

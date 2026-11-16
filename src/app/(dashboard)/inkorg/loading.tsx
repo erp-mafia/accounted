@@ -1,11 +1,9 @@
 import { Skeleton } from '@/components/ui/skeleton'
-import { cn } from '@/lib/utils'
-import { CONTENT_COLUMN_CLASS, RAIL_COLUMN_CLASS, WORK_AREA_CLASS } from '@/components/inkorg/frame'
+import { WORK_AREA_CLASS } from '@/components/inkorg/frame'
 
 /**
- * The page's silhouette while it loads: the top bar, then the rail in its
- * own column beside the list, in the page's own frame, so nothing moves
- * when they land.
+ * The page's silhouette while it loads: the top bar, then the toolbar over
+ * the list, in the page's own frame, so nothing moves when they land.
  */
 export default function InkorgLoading() {
   return (
@@ -15,13 +13,11 @@ export default function InkorgLoading() {
         <Skeleton className="h-4 w-16 rounded-sm" />
       </div>
       <div className={WORK_AREA_CLASS}>
-        <div className={cn('hidden space-y-2 md:block', RAIL_COLUMN_CLASS)}>
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-9 w-full rounded-lg" />
-          ))}
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-64 rounded-lg" />
+          <Skeleton className="h-8 w-24 rounded-lg" />
         </div>
-        <div className={cn('space-y-3', CONTENT_COLUMN_CLASS)}>
-          <Skeleton className="h-8 w-40 rounded-sm" />
+        <div className="space-y-3">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full rounded-lg" />
           ))}

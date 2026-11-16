@@ -128,7 +128,7 @@ export function BankingSettingsContent() {
       {bankConnectionError && (
         <div role="alert" className="mt-6 flex items-start gap-2 px-1">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
-          <div className="min-w-0 flex-1 space-y-1 text-[12.5px] leading-relaxed">
+          <div className="min-w-0 flex-1 space-y-1 text-xs leading-relaxed">
             <p className="text-attn">{bankConnectionError}</p>
             {isAccessDenied && failedBankName && (
               <p className="text-muted-foreground">

@@ -12,8 +12,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8')
 
 describe('truncating labels in flex rows', () => {
   it.each([
-    ['src/components/dashboard/UserMenu.tsx', '<span className="min-w-0 flex-1 truncate">\n                  {cockpitMode'],
-    ['src/components/dashboard/SidebarV2.tsx', '<span className="min-w-0 flex-1 truncate">{label(item.labelKey)}</span>'],
+    ['src/components/dashboard/UserMenu.tsx', "<span className=\"min-w-0 flex-1 truncate\">{tSwitcher('choose_company')}</span>"],
+    ['src/components/dashboard/AreaSidebar.tsx', '<span className="min-w-0 flex-1 truncate">{item.label}</span>'],
+    ['src/components/settings/SettingsRail.tsx', '<span className="min-w-0 flex-1 truncate">{i.label}</span>'],
     ['src/components/common/CommandPalette.tsx', '<span className="min-w-0 flex-1 truncate">{entry.label}</span>'],
     ['src/components/inbox/PurchaseCategoryChip.tsx', '<span className="min-w-0 truncate">{isPurchaseCategoryCode(current.code)'],
     ['src/components/pending-operations/OperationPreview.tsx', '<span className="min-w-0 truncate mr-4">'],
@@ -28,7 +29,7 @@ describe('truncating labels in flex rows', () => {
 
 describe('rows and footers that wrap instead of overflowing', () => {
   it('a Hem grant posting wraps its badges and buttons', () => {
-    expect(read('src/components/dashboard/GrantPostings.tsx')).toContain('className="flex flex-wrap items-center gap-3 border-b border-border px-1 py-3 text-[13px]"')
+    expect(read('src/components/dashboard/GrantPostings.tsx')).toContain('className="flex flex-wrap items-center gap-3 border-b-hairline px-1 py-3 text-[13px]"')
   })
 
   it('the Kvittojakten prerequisites footer wraps a long client name', () => {

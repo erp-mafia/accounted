@@ -38,10 +38,8 @@ export default function HomeDomainSignpost({
   return (
     <div className="stagger-enter mx-auto max-w-lg pt-12">
       <div className="flex flex-col items-center text-center">
-        <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-muted/60">
-          <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
-        </div>
-        <h1 className="font-display text-2xl leading-8 tracking-tight">
+        <BriefcaseIcon className="mb-4 h-5 w-5 text-muted-foreground" aria-hidden="true" />
+        <h1 className="text-xl font-medium leading-7 text-strong">
           {t('title')}
         </h1>
         <p className="mt-2 text-sm text-muted-foreground text-balance">
@@ -72,7 +70,7 @@ export default function HomeDomainSignpost({
 
       {homedCompanies.length > 0 && (
         <div className="mt-10">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="text-sm font-medium text-muted-foreground">
             {t('homed_here')}
           </h2>
           <ul className="mt-2 divide-y divide-border border-y border-border">

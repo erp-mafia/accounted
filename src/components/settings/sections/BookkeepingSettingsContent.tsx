@@ -25,6 +25,7 @@ import {
   SettingsSectionHeader,
   SettingsSelect,
   SettingsTextarea,
+  SettingsViewerScope,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { contractRevenueEnabled } from '@/lib/env/contract-revenue-switch'
@@ -236,6 +237,8 @@ export function BookkeepingSettingsContent() {
         <PeriodLockingSettings settings={settings} />
       </SettingsFormWrapper>
 
+      {/* Company settings that save on their own: locked for a read-only member. */}
+      <SettingsViewerScope>
       {fxMonthlyRevaluationEnabled() && settings.fx_revaluation_monthly && <MonthlyFxRevaluationAction />}
 
       <VoucherSeriesPerSourceTypeForm
@@ -246,6 +249,7 @@ export function BookkeepingSettingsContent() {
       <VoucherSeriesPerCashAccountForm settings={settings} />
 
       <VoucherSeriesManager settings={settings} onSettingsUpdated={updateSettings} />
+      </SettingsViewerScope>
 
       <SettingsGroup label={t('group_automation')}>
         {/* accounted#130: whether a settled suggestion books with one click. */}

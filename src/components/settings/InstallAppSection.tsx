@@ -85,8 +85,8 @@ export function InstallAppSection() {
     <SettingsRow label={t('install_app_title')} help={t('install_app_description', { appName })}>
       {installPrompt ? (
         <SettingsRowEnd>
-          <Button variant="outline" size="sm" onClick={handleInstall}>
-            <ComputerDesktopIcon className="mr-2 h-3.5 w-3.5" />
+          <Button variant="outline" onClick={handleInstall}>
+            <ComputerDesktopIcon className="h-3.5 w-3.5" />
             {t('install_app_button')}
           </Button>
         </SettingsRowEnd>

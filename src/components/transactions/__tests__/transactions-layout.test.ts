@@ -47,9 +47,11 @@ describe('list scrollers bleed exactly the page padding', () => {
     expect(container).toContain('px-4 pb-8 pt-4 md:px-6')
   })
 
+  // The scroller reaches the panel edge; it pads back 8px less than the page
+  // so the table bleeds 8px past the gutter like every list (LIST_BLEED_CLASS).
   it('the Att bokföra table and the Alla list use the same negative margin', () => {
-    expect(page).toContain('-mx-4 px-4 md:-mx-6 md:px-6')
-    expect(history).toContain('-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6')
+    expect(page).toContain('-mx-4 px-2 md:-mx-6 md:px-4')
+    expect(history).toContain('-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4')
     expect(history).not.toMatch(/-mx-5|md:-mx-8/)
   })
 })

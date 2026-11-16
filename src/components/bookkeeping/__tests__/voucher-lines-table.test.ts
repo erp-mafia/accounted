@@ -41,7 +41,7 @@ describe('surfaces on the shared voucher lines table', () => {
   it.each([
     'components/bookkeeping/JournalEntryReviewContent.tsx',
     'components/suppliers/SupplierInvoiceReviewContent.tsx',
-    'components/transactions/JournalEntryPreview.tsx',
+    'components/transactions/QuickReviewDialog.tsx',
     'components/bookkeeping/year-end/PreviewStep.tsx',
     'app/(dashboard)/bookkeeping/[id]/page.tsx',
   ])('%s', (rel) => {

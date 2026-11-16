@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { CheckIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import type { ReviewData } from '@/app/api/arkiv/review/route'
 import type { FindingView } from '@/app/api/arkiv/findings/route'
@@ -20,6 +23,7 @@ import { QuestionCard, decisionDocumentFor } from './QuestionCard'
  */
 export function ArkivReview() {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [data, setData] = useState<ReviewData | null>(null)
   const [findings, setFindings] = useState<FindingView[] | null>(null)
@@ -70,23 +74,33 @@ export function ArkivReview() {
         meta={data ? t('review_count', { count: left }) : undefined}
       />
 
-      {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
+      {failed && data && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+      {failed && !data && (
+        <LoadError
+          onRetry={() => {
+            setFailed(false)
+            void load()
+          }}
+        />
+      )}
       {!data && !failed && (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
           <Skeleton className="h-6 w-2/3" />
-        </div>
+        </LateReveal>
       )}
 
       {data && (
         <div>
-          {left === 0 && <p className="px-1 py-6 text-[13px] text-muted-foreground">{t('review_all_clear')}</p>}
+          {left === 0 && <EmptyState tone="done" icon={CheckIcon} title={t('review_all_clear')} />}
           {groups.map((group) => {
             const list = unanswered.filter((q) => q.kind === group.key)
             if (list.length === 0) return null
             return (
               <section key={group.id} id={group.id}>
-                <div className="px-1 pb-1 pt-5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{group.title}</div>
+                <div className="px-1 pb-1 pt-5 text-xs font-medium text-muted-foreground">{group.title}</div>
                 {list.map((q) => (
                   <QuestionCard key={q.id} question={q} onMore={openSheet} onAnswered={(a) => setAnswered((prev) => new Set(prev).add(a.id))} />
                 ))}

@@ -72,7 +72,7 @@ Standard on failure. How a company gets one:
   maintainer flips it after confirming the lists). The MCP and v1 creation paths record
   the suggestion and never apply it.
 - **Byrå invitation**: the byrå picks the client's profile in the invite
-  form (Inställningar, Medlemmar) of a client company on its team; the form
+  form (Inställningar, Användare) of a client company on its team; the form
   preselects the stored profile, else the recorded suggestion, else
   Standard. The invited client sees "Din byrå har förberett: <profil>" on
   `/invite/[token]` (`src/lib/company/client-profile.ts`).

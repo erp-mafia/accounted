@@ -201,7 +201,7 @@ describe('answerAssistantQuestion', () => {
   // page" but was never told which page they were on or what pages exist.
   describe('UI grounding (the assistant names only UI that exists)', () => {
     const GROUNDING =
-      'Användaren är på sidan: Inköp → Underlag (/e/general/invoice-inbox).\n\nAppens meny för det här bolaget ...'
+      'Användaren är på sidan: Dokument → Inkommande (/e/general/invoice-inbox).\n\nAppens meny för det här bolaget ...'
 
     it('grounds the answer in the page the user asked from and the real menu', async () => {
       buildUiGrounding.mockResolvedValue(GROUNDING)

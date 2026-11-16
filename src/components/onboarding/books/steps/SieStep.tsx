@@ -496,7 +496,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   {f.status === 'dup' ? (
                     <span className="bks-f is-warn" style={{ marginLeft: 8 }}>
                       {f.error}{' '}
-                      {f.dupImportId ? <Button variant="link" size="sm" className={CHANGE_LINK_CLASS} onClick={() => void replaceDup(f.id)}>{t('sie_replace')}</Button> : null}
+                      {f.dupImportId ? <Button variant="link" className={CHANGE_LINK_CLASS} onClick={() => void replaceDup(f.id)}>{t('sie_replace')}</Button> : null}
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
@@ -543,8 +543,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           <div className="jny-qactions">
             {files.length > 0 ? (
               <>
-                <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => { setFiles([]); setOptsOpen(false) }}>{t('sie_other_file')}</Button>
-                <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => inputRef.current?.click()}>{t('sie_add_file')}</Button>
+                <Button variant="ghost" className="text-muted-foreground" onClick={() => { setFiles([]); setOptsOpen(false) }}>{t('sie_other_file')}</Button>
+                <Button variant="ghost" className="text-muted-foreground" onClick={() => inputRef.current?.click()}>{t('sie_add_file')}</Button>
               </>
             ) : null}
             {ready.length > 0 && !parsing ? (
@@ -578,7 +578,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             <p className="s">{t('reg_card_sub')}</p>
           </button>
           {regError ? <p className="bks-err">{regError}</p> : null}
-          <div className="jny-qactions"><Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setReg('skipped')}>{t('reg_skip')}</Button></div>
+          <div className="jny-qactions"><Button variant="ghost" className="text-muted-foreground" onClick={() => setReg('skipped')}>{t('reg_skip')}</Button></div>
         </div>
       ) : null}
       {reg === 'connecting' ? <Wait text={t('reg_connecting', { provider: provName ?? '' })} height={96} /> : null}
@@ -588,7 +588,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName ?? '' })} autoComplete="off" />
           {regError ? <p className="bks-err">{regError}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setReg('card')}>‹ {t('back')}</Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => setReg('card')}>‹ {t('back')}</Button>
             <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
@@ -609,7 +609,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           ) : null}
           {importError ? (
             <>
-              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</Button>
+              <Button variant="ghost" className="text-muted-foreground" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</Button>
               {written > 0 ? (
                 <Button size="lg" onClick={() => { dispatch({ type: 'IMPORTED' }); dispatch({ type: 'TO_INSIGHT' }) }}>{t('to_insight')}</Button>
               ) : null}

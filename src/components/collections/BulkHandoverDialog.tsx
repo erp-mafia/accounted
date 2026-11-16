@@ -109,9 +109,9 @@ export function BulkHandoverDialog({ open, onOpenChange, invoices, displayName, 
 
   return (
     <Dialog open={open} onOpenChange={(next) => !summary.running && onOpenChange(next)}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">{title.key === 'bulk_title' ? tp('bulk_title', { count: title.count }) : tp('bulk_title_plain')}</DialogTitle>
+          <DialogTitle className="text-lg">{title.key === 'bulk_title' ? tp('bulk_title', { count: title.count }) : tp('bulk_title_plain')}</DialogTitle>
           <DialogDescription className="text-[13px] leading-relaxed">
             {sandbox ? `${tp('bulk_intro')} ${tp('sandbox_note')}` : tp('bulk_intro')}
           </DialogDescription>
@@ -143,7 +143,7 @@ export function BulkHandoverDialog({ open, onOpenChange, invoices, displayName, 
                   {row.state === 'loading' ? (
                     <Skeleton className="h-4 w-2/3 rounded-sm" />
                   ) : (
-                    <p className="text-[12.5px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {[
                         row.step ? tp(row.step === 'reminder' ? 'batch_step_reminder' : 'batch_step_collection') : null,
                         // A held row says why on its own line; the bank line would repeat it.
@@ -154,7 +154,7 @@ export function BulkHandoverDialog({ open, onOpenChange, invoices, displayName, 
                     </p>
                   )}
                   {row.state === 'held' && (
-                    <p className="text-[12.5px] text-attn">
+                    <p className="text-xs text-attn">
                       {holdText(row.reason, tp)}{' '}
                       <Link href={`/invoices/${invoice.id}`} className="text-foreground underline underline-offset-2">
                         {tp('bulk_open_invoice')}
@@ -162,7 +162,7 @@ export function BulkHandoverDialog({ open, onOpenChange, invoices, displayName, 
                     </p>
                   )}
                   {outcome && (
-                    <p className={cn('text-[12.5px]', outcome.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                    <p className={cn('text-xs', outcome.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
                       {outcome.state === 'sending'
                         ? tp('bulk_outcome_sending')
                         : outcome.state === 'sent'

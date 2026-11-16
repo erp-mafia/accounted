@@ -1,7 +1,8 @@
 'use client'
 
-import { Fragment, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
+import { Fact, FactList } from './preview-parts'
 import {
   isPurchaseCategoryCode,
   PURCHASE_CATEGORY_I18N_NAMESPACE,
@@ -53,14 +54,13 @@ export function PurchaseCategoryPreview({ data }: { data: Record<string, unknown
 
   return (
     <div className="space-y-2 text-sm">
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-3 gap-y-1">
+      <FactList compactClassName="grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-3">
         {rows.map((row) => (
-          <Fragment key={row.label}>
-            <span className="text-xs text-muted-foreground">{row.label}</span>
-            <span className="min-w-0 break-words">{row.value}</span>
-          </Fragment>
+          <Fact key={row.label} label={row.label}>
+            {row.value}
+          </Fact>
         ))}
-      </div>
+      </FactList>
       <p className="text-xs text-muted-foreground">{t('preview_purchase_category_books_nothing')}</p>
     </div>
   )

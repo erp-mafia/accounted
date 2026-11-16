@@ -30,7 +30,7 @@ export default function ContextChip({
   if (!target) return null
 
   const shape =
-    'inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground'
+    'inline-flex max-w-full items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground'
 
   // Not every context has a page to go to: the document inbox is an extension
   // route, and core cannot hardcode a path that exists only when the extension

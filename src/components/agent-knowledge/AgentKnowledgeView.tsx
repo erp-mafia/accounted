@@ -13,42 +13,22 @@ import { formatDateLong } from '@/lib/utils'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
 import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
-import { LedgerGraph } from './LedgerGraph'
+import { vatLabel } from '@/lib/agent-context/vat-labels'
 import { CompetenceCard, FactsCard } from './AgentCompetenceSections'
-
-// Swedish VAT (moms) treatment codes stay Swedish in both locales, like BAS
-// account names and momsdeklaration labels (.claude/rules/i18n.md).
-const VAT_LABELS: Record<string, string> = {
-  standard_25: 'Moms 25%',
-  standard_12: 'Moms 12%',
-  standard_6: 'Moms 6%',
-  reduced_12: 'Moms 12%',
-  reduced_6: 'Moms 6%',
-  reverse_charge: 'Omvänd moms',
-  reverse_charge_eu: 'Omvänd moms (EU)',
-  reverse_charge_services: 'Omvänd moms (tjänster)',
-  eu_reverse_charge_services: 'Omvänd moms (EU-tjänster)',
-  eu_goods: 'EU-varor',
-  export: 'Export',
-  exempt: 'Momsfri',
-  no_vat: 'Ingen moms',
-}
-
-function vatLabel(code: string | null): string | null {
-  if (!code) return null
-  return VAT_LABELS[code] ?? code
-}
 
 export function AgentKnowledgeView({
   context,
   deep,
   competence,
   companyName,
+  heading = true,
 }: {
   context: LedgerContext
   deep: DeepLedgerContext
   competence: AgentCompetence
   companyName: string
+  /** False where the page's top bar already names the view (the wiki). */
+  heading?: boolean
 }) {
   const t = useTranslations('agentKnowledge')
 
@@ -96,15 +76,12 @@ export function AgentKnowledgeView({
 
   return (
     <div className="space-y-8">
-      {/* The cinematic hero: a self-contained dark panel with its own header */}
-      <LedgerGraph deep={deep} companyName={companyName} />
-
-      {/* "Regler & profil": user-authored rules + observed VAT + conventions,
+      {/* "Bokföringsprofil": user-authored rules + observed VAT + conventions,
           in the flat settings language (groups under eyebrow labels, static
           descriptions behind the group "?"). Minne and Kompetens have their
           own top-level views, so no second tab row here. */}
       <section>
-        <SettingsSectionHeader title={t('tab_config')} />
+        {heading && <SettingsSectionHeader title={t('tab_config')} />}
 
         {explicit_rules.length > 0 && (
           <SettingsGroup label={t('rules_title')} help={t('rules_description')}>
@@ -113,7 +90,7 @@ export function AgentKnowledgeView({
               return (
                 <div
                   key={r.rule_name + r.match + i}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-1 py-3"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b-hairline px-1 py-3"
                 >
                   <span className="text-sm">{r.rule_name}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">

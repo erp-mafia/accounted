@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import nextConfig from '../../../../next.config'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboard/nav-v2'
-import { navItems } from '@/components/dashboard/nav-phone'
+import { NAV_V3_AREAS, areaItems, resolveNavPlace } from '@/components/dashboard/nav-v3'
 
 /**
  * Konton is the one account list (founder decision 2026-10-18): the
@@ -32,11 +32,15 @@ describe('/reconciliation after the Konton merge', () => {
 
   it('keeps one Konton entry in both menus and no Avstämning list entry', () => {
     const sidebar = (items: NavV2Item[]) => items.flatMap((item) => [item.href, ...(item.sub ?? []).map((s) => s.href)])
-    const desktop = sidebar([...NAV_V2_TOP, ...NAV_V2_COMPANY])
-    const phone = navItems.map((item) => item.href)
-    for (const hrefs of [desktop, phone]) {
+    const assistantMap = sidebar([...NAV_V2_TOP, ...NAV_V2_COMPANY])
+    const shell = NAV_V3_AREAS.flatMap(areaItems).map((item) => item.href)
+    for (const hrefs of [assistantMap, shell]) {
       expect(hrefs.filter((href) => href === '/accounts')).toHaveLength(1)
       expect(hrefs).not.toContain('/reconciliation')
     }
+  })
+
+  it('lights the Konton row while one account is being reconciled', () => {
+    expect(resolveNavPlace('/reconciliation', 'account=1930')).toEqual({ area: 'money', href: '/accounts' })
   })
 })

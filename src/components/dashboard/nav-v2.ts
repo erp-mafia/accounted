@@ -1,21 +1,3 @@
-import {
-  ArchiveBoxIcon,
-  ArrowsRightLeftIcon,
-  BanknotesIcon,
-  BookOpenIcon,
-  BuildingLibraryIcon,
-  BuildingOfficeIcon,
-  ChartBarIcon,
-  CheckCircleIcon,
-  ClipboardDocumentListIcon,
-  DocumentCheckIcon,
-  DocumentTextIcon,
-  InboxIcon,
-  PercentBadgeIcon,
-  SparklesIcon,
-  WalletIcon,
-  type Icon,
-} from '@/components/icons'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
@@ -56,8 +38,18 @@ export interface NavGateFlags {
    * registers are (the rollout and a form that keeps an aktiebok).
    */
   requiresBolagetHub?: boolean
+  /** A Bolaget register page (aktiebok, styrelse): the rollout and a form that keeps an aktiebok (lib/bolaget/hub.ts `registers`). */
+  requiresBolagetRegisters?: boolean
+  /** Avtal och åtaganden (/bolaget/avtal): the commitments rollout, any form (lib/bolaget/hub.ts `agreements`). */
+  requiresCommitments?: boolean
+  /** A page of the MCP server extension (/settings/api): shown only where that extension is built in. */
+  requiresMcpExtension?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
+  /** What the Agenter page replaces (the Kompetens view of the wiki): hidden where that page is open. */
+  hiddenWithAgents?: boolean
+  /** Fakta in the wiki: only where Arkiv reads the company's documents (lib/arkiv/flag.ts isArkivBrainEnabled). */
+  requiresArkivBrain?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
   requiresInkorgV2?: boolean
   /** What the new Inkorg page replaces (Underlag under Inköp): hidden for the companies in that rollout. */
@@ -84,7 +76,6 @@ export interface NavGateFlags {
  */
 export interface NavV2Item extends NavGateFlags {
   labelKey: string
-  icon?: Icon
   sub?: NavV2Item[]
 }
 
@@ -93,7 +84,6 @@ export const NAV_V2_TOP: NavV2Item[] = [
     href: '/',
     module: 'platform',
     labelKey: 'v2_todo',
-    icon: CheckCircleIcon,
     sub: [{ href: '/pending', module: 'platform', labelKey: 'v2_proposals' }],
   },
   // Inkorg, lifted out of Inköp to sit under Att göra (founder decision
@@ -105,18 +95,14 @@ export const NAV_V2_TOP: NavV2Item[] = [
     href: '/inkorg',
     module: 'inbox',
     labelKey: 'inkorg',
-    icon: InboxIcon,
     requiresInkorgV2: true,
     requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
   },
-  {
-    href: '/chat',
-    module: 'agent',
-    labelKey: 'assistant',
-    icon: SparklesIcon,
-    sub: [{ href: '/agent-knowledge', module: 'agent', labelKey: 'agent_knowledge' }],
-  },
-  { href: '/skills', module: 'agent', labelKey: 'skills', icon: ClipboardDocumentListIcon, newBadge: true, requiresAgents: true },
+  { href: '/chat', module: 'agent', labelKey: 'assistant' },
+  // The wiki replaced "Vad din agent vet" under Assistent (decided 2026-10-29):
+  // its own row, landing on what the agent receives (/agent-knowledge redirects).
+  { href: '/wiki', module: 'agent', labelKey: 'wiki', newBadge: true },
+  { href: '/skills', module: 'agent', labelKey: 'skills', newBadge: true, requiresAgents: true },
 ]
 
 export const NAV_V2_COMPANY: NavV2Item[] = [
@@ -124,7 +110,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/accounts',
     module: 'ledger',
     labelKey: 'v2_accounts',
-    icon: BuildingLibraryIcon,
     // One list, no sub-items (founder decision 2026-10-18): Avstämning was a
     // second list of the same accounts, so it merged into Konton. Each row
     // opens the account's reconciliation at /reconciliation?account=, which
@@ -134,7 +119,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/transactions',
     module: 'transactions',
     labelKey: 'transactions',
-    icon: ArrowsRightLeftIcon,
     // Regler is back in the menu (founder call 2026-10-28, reversing the
     // 2026-09-07 one): it is where a rule is set to always ask, and where
     // Ett klick says which rules book without a review (accounted#130).
@@ -147,7 +131,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/invoices',
     module: 'invoicing',
     labelKey: 'v2_invoicing',
-    icon: DocumentTextIcon,
     sub: [
       // A quote is not an invoice (founder direction 2026-09-12): its own row
       // above Kundfakturor, shown while quotes are switched on in settings.
@@ -170,7 +153,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/supplier-invoices',
     module: 'supplier-invoices',
     labelKey: 'v2_purchases',
-    icon: WalletIcon,
     sub: [
       { href: '/supplier-invoices', module: 'supplier-invoices', labelKey: 'supplier_invoices' },
       {
@@ -195,7 +177,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/arkiv',
     module: 'inbox',
     labelKey: 'arkiv',
-    icon: ArchiveBoxIcon,
     requiresArkiv: true,
     sub: [
       { href: '/arkiv', module: 'inbox', labelKey: 'arkiv_all' },
@@ -207,7 +188,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/bookkeeping',
     module: 'ledger',
     labelKey: 'bookkeeping',
-    icon: BookOpenIcon,
     sub: [
       { href: '/bookkeeping', module: 'ledger', labelKey: 'v2_vouchers' },
       { href: '/chart-of-accounts', module: 'ledger', labelKey: 'chart_of_accounts' },
@@ -221,7 +201,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/salary',
     module: 'payroll',
     labelKey: 'salary',
-    icon: BanknotesIcon,
     sub: [
       { href: '/salary', module: 'payroll', labelKey: 'v2_salary_runs' },
       { href: '/salary/employees', module: 'payroll', labelKey: 'employees' },
@@ -231,7 +210,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/reports/vat-declaration',
     module: 'vat',
     labelKey: 'v2_tax',
-    icon: PercentBadgeIcon,
     sub: [
       { href: '/reports/vat-declaration', module: 'vat', labelKey: 'vat_declaration' },
       { href: '/deadlines', module: 'deadlines', labelKey: 'deadlines' },
@@ -241,7 +219,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/reports',
     module: 'ledger',
     labelKey: 'reports',
-    icon: ChartBarIcon,
     sub: [
       { href: '/reports', module: 'ledger', labelKey: 'reports' },
       { href: '/kpi', module: 'ledger', labelKey: 'kpi' },
@@ -252,7 +229,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/bookkeeping/year-end',
     module: 'year-end',
     labelKey: 'v2_closing',
-    icon: DocumentCheckIcon,
     sub: [
       { href: '/bookkeeping/year-end', module: 'year-end', labelKey: 'year_end' },
       { href: '/bookkeeping/year-end/arsredovisning', module: 'year-end', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
@@ -270,30 +246,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/bolaget',
     module: 'corporate',
     labelKey: 'bolaget',
-    icon: BuildingOfficeIcon,
     requiresBolagetHub: true,
   },
 ]
-
-/**
- * A row claimed by the page (nav-row-claim.ts) overrides the URL: the
- * claimed row is active, and any other row the pathname would match by
- * prefix is not. Undefined when the claim says nothing about `href`, so
- * the URL rules decide.
- */
-export function claimedRowActive(href: string, pathname: string, claimedHref: string | null): boolean | undefined {
-  if (!claimedHref) return undefined
-  if (href === claimedHref) return true
-  if (href !== '/' && pathname.startsWith(href)) return false
-  return undefined
-}
-
-/**
- * Longest matching sub-item wins, so /invoices/recurring lights up
- * Återkommande and not Kundfakturor as well.
- */
-export function activeSubHref(item: NavV2Item, isActive: (href: string) => boolean): string | null {
-  const matches = (item.sub ?? []).filter((s) => isActive(s.href))
-  if (matches.length === 0) return null
-  return matches.reduce((best, s) => (s.href.length > best.href.length ? s : best)).href
-}

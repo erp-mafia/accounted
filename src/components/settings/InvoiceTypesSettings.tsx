@@ -52,7 +52,7 @@ export function InvoiceTypesSettings() {
           return (
             <div
               key={toggle}
-              className="flex items-center justify-between gap-3 border-b border-border px-1 py-3"
+              className="flex items-center justify-between gap-3 border-b-hairline px-1 py-3"
             >
               <span className="flex min-w-0 items-center gap-2">
                 <label htmlFor={id} className="truncate text-sm">

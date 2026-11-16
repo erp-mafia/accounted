@@ -207,7 +207,7 @@ export function AccountSettingsContent() {
           />
           <SettingsRowEnd>
             <Button
-              size="sm"
+              variant="outline"
               onClick={handleSaveName}
               disabled={nameLoading || savingName || nameUnchanged}
             >
@@ -236,7 +236,7 @@ export function AccountSettingsContent() {
           />
           <SettingsRowEnd>
             <Button
-              size="sm"
+              variant="outline"
               onClick={handleSaveEmail}
               disabled={
                 !currentEmail ||
@@ -336,7 +336,7 @@ export function AccountSettingsContent() {
         <AnalyticsConsentRow />
         <SettingsRow label={tSettings('legal_terms')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/terms" target="_blank" rel="noopener noreferrer">
                 <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
@@ -346,7 +346,7 @@ export function AccountSettingsContent() {
         </SettingsRow>
         <SettingsRow label={tSettings('legal_privacy')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/privacy" target="_blank" rel="noopener noreferrer">
                 <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
@@ -356,7 +356,7 @@ export function AccountSettingsContent() {
         </SettingsRow>
         <SettingsRow label={tSettings('legal_dpa')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/dpa" target="_blank" rel="noopener noreferrer">
                 <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}

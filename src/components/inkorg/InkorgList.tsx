@@ -4,10 +4,9 @@ import { useEffect, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { DocumentMagnifyingGlassIcon, InboxIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { RowSelectCheckbox } from '@/components/ui/dry-table'
-import { AttnLine } from '@/components/ui/attn-line'
 import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import { cn, formatCurrency } from '@/lib/utils'
 import { OVERDUE_CHIP } from '@/lib/status-display'
@@ -62,16 +61,20 @@ export function InkorgList({
 
   if (state === 'loading') {
     return (
-      <div className="space-y-3" aria-busy="true">
+      <LateReveal>
         {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+          <div key={i} className="flex h-11 items-center gap-4 border-b-hairline px-2">
+            <Skeleton className="h-6 w-6 shrink-0 rounded-full" />
+            <Skeleton className="h-3.5 w-48" />
+            <Skeleton className="ml-auto h-3.5 w-20" />
+          </div>
         ))}
-      </div>
+      </LateReveal>
     )
   }
 
   if (state === 'failed') {
-    return <AttnLine action={{ label: t('retry'), onClick: onRetry }}>{t('load_failed')}</AttnLine>
+    return <LoadError title={t('load_failed')} onRetry={onRetry} />
   }
 
   if (items.length === 0) {
@@ -83,7 +86,7 @@ export function InkorgList({
   }
 
   return (
-    <ul className="stagger-enter border-t border-border">
+    <ul className="stagger-enter border-t-hairline">
       {items.map((item) => (
         <InkorgRow
           key={item.id}
@@ -163,7 +166,7 @@ function InkorgRow({
     ) : status.kind === 'waiting' ? (
       <Badge variant="secondary">{t('status_waiting')}</Badge>
     ) : status.kind === 'reading' ? (
-      <span className="text-[12.5px] text-muted-foreground">{t('row_reading')}</span>
+      <span className="text-xs text-muted-foreground">{t('row_reading')}</span>
     ) : null
 
   const amount = headline.amount != null ? formatCurrency(headline.amount, headline.currency) : ''

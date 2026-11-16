@@ -807,7 +807,7 @@ export function AccountPickerDialog({
         component on close, and a rejected save must return to a live picker
         with the user's picks intact. */}
     <Dialog open={open && !progressOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>Välj konton att synka: <span data-ph-mask="">{bankName}</span></DialogTitle>
           <DialogDescription>
@@ -823,16 +823,16 @@ export function AccountPickerDialog({
             authorized while the wrong company was active looks identical to
             the right one. */}
         {company?.name && (
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             Kontona bokförs i <span className="font-medium text-foreground">{company.name}</span>
             {' '}och bokföringskontona nedan kommer ur det bolagets kontoplan.
           </p>
         )}
 
         {isInitialSelection && (
-          <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
+          <div className="space-y-3 rounded-lg p-4 text-sm bg-control shadow-raised">
             <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <label className="block text-xs font-medium text-muted-foreground">
                 Hämta historik från
               </label>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1034,7 +1034,7 @@ export function AccountPickerDialog({
             </div>
 
             {reimportsFetchedPeriod && gapFill && (
-              <p className="attn text-[12.5px]">
+              <p className="attn text-xs">
                 Du har redan hämtat transaktioner till och med {gapFill.latestImportedDate}. Ett
                 tidigare startdatum kan hämta mer historik från banken, och dagar som redan är
                 bokförda kan då dyka upp som ohanterade.
@@ -1042,7 +1042,7 @@ export function AccountPickerDialog({
             )}
 
             {showLongRangeHelper && (
-              <p className="attn text-[12.5px]">
+              <p className="attn text-xs">
                 De flesta banker lämnar bara ut cirka 90 dagar utan extra godkännande, och vissa
                 (till exempel Swedbank) avbryter hela kopplingen vid längre förfrågningar: då hämtas
                 inget alls och banken måste kopplas om. Säkrast är 90 dagar här och äldre historik
@@ -1085,7 +1085,7 @@ export function AccountPickerDialog({
         </div>
 
         {currencyConflicts.length > 0 && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
             Varning: samma bokföringskonto används för flera valutor:
             {currencyConflicts.map(c => ` ${c.ledger} (${c.currencies.join(', ')})`).join(';')}.
             Det fungerar tekniskt men gör årsskifte med valutaomvärdering svårare.
@@ -1093,7 +1093,7 @@ export function AccountPickerDialog({
         )}
 
         {chartError && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+          <div className="bg-destructive/8 rounded-lg p-3 text-xs text-destructive">
             Kunde inte ladda bokföringskonton (19xx). Ladda om sidan och försök igen innan du sparar kontoval.
           </div>
         )}
@@ -1101,13 +1101,13 @@ export function AccountPickerDialog({
         {saveError && (
           <div
             role="alert"
-            className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+            className="bg-destructive/8 rounded-lg p-3 text-xs text-destructive"
           >
             Kontovalet sparades inte: {saveError}
           </div>
         )}
 
-        <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
+        <div className="max-h-[50vh] overflow-y-auto divide-y divide-border">
           {sortedAccounts.map(renderAccountRow)}
           {/* Two distinct empty states: every account in the consent belongs
               to another company (the text below says so and points at the
@@ -1123,7 +1123,7 @@ export function AccountPickerDialog({
                   : 'Bankkopplingen innehåller inga konton att synka. Logga in igen och välj konton hos banken.'}
               </p>
               {isInitialSelection && onReauthorize && (
-                <Button type="button" variant="outline" size="sm" onClick={onReauthorize}>
+                <Button type="button" variant="outline" onClick={onReauthorize}>
                   Logga in igen
                 </Button>
               )}
@@ -1178,7 +1178,7 @@ export function AccountPickerDialog({
               </span>
             </button>
             {claimedOpen && (
-              <div className="max-h-[30vh] overflow-y-auto rounded-lg border border-border divide-y divide-border">
+              <div className="max-h-[30vh] overflow-y-auto divide-y divide-border">
                 {sortedClaimed.map(renderAccountRow)}
               </div>
             )}

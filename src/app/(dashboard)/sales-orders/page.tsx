@@ -7,15 +7,16 @@ import { useLocale, useTranslations } from 'next-intl'
 import { ClipboardDocumentListIcon, LockClosedIcon, PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { ListPageSkeleton } from '@/components/common/ListPageSkeleton'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
-import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import {
   DELIVERY_LABEL_KEY,
   INVOICING_LABEL_KEY,
@@ -33,9 +34,9 @@ function isStatus(value: string | null): value is SalesOrderStatus {
 
 function SalesOrdersPageInner() {
   const t = useTranslations('sales_orders')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
-  const { toast } = useToast()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -45,6 +46,12 @@ function SalesOrdersPageInner() {
 
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed (the description says why). With no rows on screen
+  // the list says so in place of them; rows already on screen stay, with one
+  // line above them. "Försök igen" bumps reloadKey.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const reload = useCallback(() => setReloadKey((key) => key + 1), [])
   const [searchTerm, setSearchTerm] = useState('')
   const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
 
@@ -71,15 +78,13 @@ function SalesOrdersPageInner() {
         return (json?.data ?? []) as SalesOrder[]
       })
       .then((data) => {
-        if (!cancelled) setOrders(data)
+        if (cancelled) return
+        setOrders(data)
+        setLoadError(null)
       })
       .catch((err) => {
         if (cancelled) return
-        toast({
-          title: t('load_failed_title'),
-          description: getErrorMessage(err.body ?? err, { locale: errorLocale, statusCode: err.status }),
-          variant: 'destructive',
-        })
+        setLoadError(getErrorMessage(err.body ?? err, { locale: errorLocale, statusCode: err.status }))
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false)
@@ -87,9 +92,9 @@ function SalesOrdersPageInner() {
     return () => {
       cancelled = true
     }
-    // toast/t are stable enough; the fetch keys on the status filter only.
+    // errorLocale is stable enough; the fetch keys on the status filter (and a retry) only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter])
+  }, [statusFilter, reloadKey])
 
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -110,16 +115,16 @@ function SalesOrdersPageInner() {
   return (
     <div className="space-y-8">
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <Button size="sm" asChild={canWrite} disabled={!canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+        <h1 className="page-header-title">{t('title')}</h1>
+        <Button size="toolbar" asChild={canWrite} disabled={!canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
           {canWrite ? (
             <Link href="/sales-orders/new">
-              <PlusIcon className="mr-2 h-4 w-4" />
+              <PlusIcon className="h-4 w-4" />
               {t('new_order')}
             </Link>
           ) : (
             <span>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="h-4 w-4" />
               {t('new_order')}
             </span>
           )}
@@ -135,7 +140,7 @@ function SalesOrdersPageInner() {
           items={statusItems}
         />
         <ToolbarSearch
-          containerClassName="min-w-[190px]"
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
@@ -145,25 +150,34 @@ function SalesOrdersPageInner() {
         />
       </div>
 
+      {loadError && orders.length > 0 && !isLoading && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: reload }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-12" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="hidden h-3.5 w-20 md:block" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadError && orders.length === 0 ? (
+        <LoadError title={t('load_failed_title')} description={loadError} onRetry={reload} />
       ) : filtered.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={ClipboardDocumentListIcon}
-            title={t('no_search_results_title')}
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : statusFilter !== ALL ? (
-          <EmptyState
-            icon={ClipboardDocumentListIcon}
-            title={t('no_search_results_title')}
-            description={t('no_status_results_description')}
-          />
+          <p className="py-3 text-[13px] text-muted-foreground">{t('no_status_results_description')}</p>
         ) : (
           <EmptyState
             icon={ClipboardDocumentListIcon}
@@ -175,7 +189,7 @@ function SalesOrdersPageInner() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -209,7 +223,7 @@ function SalesOrdersPageInner() {
                           {order.customer?.name || '-'}
                         </Link>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground md:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap date-figures text-muted-foreground md:table-cell')}>
                         {formatDate(order.order_date)}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
@@ -228,7 +242,7 @@ function SalesOrdersPageInner() {
                         {t(INVOICING_LABEL_KEY[order.invoicing_progress ?? 'none'])}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                        {formatCurrency(order.total, order.currency)}
+                        {formatRowAmount(order.total, order.currency)}
                       </td>
                     </tr>
                   )
@@ -254,21 +268,7 @@ function SalesOrdersPageInner() {
 
 export default function SalesOrdersPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="space-y-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <Skeleton className="h-9 w-40" />
-            <Skeleton className="h-10 w-32" />
-          </div>
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<ListPageSkeleton />}>
       <SalesOrdersPageInner />
     </Suspense>
   )

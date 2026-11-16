@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogConsequence, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -1473,6 +1473,17 @@ export default function JournalEntryForm({
     }
   }
 
+  // What the primary will make, on the action row's left (Stil v3 footer
+  // anatomy); said only once the next number is known, never guessed.
+  const createsLine =
+    nextVoucherNumber != null ? (
+      <DialogConsequence>
+        {t('consequence_creates_voucher', {
+          voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }),
+        })}
+      </DialogConsequence>
+    ) : null
+
   // Inline review for the modal (bare): swap the form body to a read-only
   // summary instead of stacking a second dialog over the form dialog. The
   // no-underlag caveat folds in here so there's a single confirm step.
@@ -1496,7 +1507,7 @@ export default function JournalEntryForm({
         >
           ← {t('review_back')}
         </button>
-        <span className="font-display text-lg">
+        <span className="text-[15px] font-medium text-strong">
           {nextVoucherNumber != null
             ? t('review_title_with_voucher', { voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }) })
             : t('review_title')}
@@ -1526,8 +1537,9 @@ export default function JournalEntryForm({
         hideDate={false}
       />
 
-      <div className="flex justify-end gap-2 pt-2 border-t">
-        <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t-hairline pt-3">
+        {createsLine}
+        <Button variant="ghost" onClick={() => setShowReview(false)} disabled={isSubmitting}>
           {t('review_back')}
         </Button>
         <Button ref={bareConfirmRef} onClick={handleConfirm} loading={isSubmitting}>
@@ -1549,7 +1561,7 @@ export default function JournalEntryForm({
       {/* Verifikat metadata: compact bar on top (Fortnox-style). Date, series
           and period are pre-filled; the period derives from the date. The
           konteringsrader below are the focus. */}
-      <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+      <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
         <div className="grid gap-3 grid-cols-1 sm:grid-cols-[1fr_2fr_auto]">
           {!(embedded && initialDate) && (
             <div>
@@ -1642,8 +1654,8 @@ export default function JournalEntryForm({
           {/* A real control, not muted text: users missed the quiet
               "+ Intern anteckning" link (accounted#183). */}
           {!embedded && !showNotes && !notes && (
-            <Button type="button" variant="outline" size="sm" onClick={() => setShowNotes(true)}>
-              <ChatBubbleLeftIcon className="mr-2 h-4 w-4" />
+            <Button type="button" variant="outline" onClick={() => setShowNotes(true)}>
+              <ChatBubbleLeftIcon className="h-4 w-4" />
               {t('add_internal_note')}
             </Button>
           )}
@@ -1732,7 +1744,7 @@ export default function JournalEntryForm({
         )}
 
         {periodMismatch === 'no_period' && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-start gap-3 rounded-lg p-3 bg-control shadow-raised">
             <ExclamationTriangleIcon className="h-5 w-5 text-attn mt-0.5 shrink-0" />
             <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
@@ -1749,21 +1761,19 @@ export default function JournalEntryForm({
             {preFyClampTarget ? (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => setEntryDate(preFyClampTarget.period_start)}
                 className="shrink-0"
               >
-                <CalendarIcon className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5" />
                 {t('pre_fy_book_on_first_day', { date: preFyClampTarget.period_start })}
               </Button>
             ) : (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => setShowCreatePeriod(true)}
                 className="shrink-0"
               >
-                <CalendarIcon className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5" />
                 {t('create_period')}
               </Button>
             )}
@@ -1810,7 +1820,7 @@ export default function JournalEntryForm({
               {line.dimensions &&
                 Object.keys(line.dimensions).length > 0 &&
                 (line.account_number || line.debit_amount || line.credit_amount) && (
-                  <Badge data-ph-mask="" variant="outline" className="font-mono text-[11px] font-normal">
+                  <Badge data-ph-mask="" variant="outline" className="font-mono text-xs font-normal">
                     {compactDims(line.dimensions)}
                   </Badge>
                 )}
@@ -1831,7 +1841,7 @@ export default function JournalEntryForm({
             const after = roundOre(bal + delta)
             return (
               <span className="inline-flex flex-col items-end leading-tight">
-                <span className="text-[11px]">{formatCurrency(bal)}</span>
+                <span className="text-xs">{formatCurrency(bal)}</span>
                 <span className="text-foreground">→ {formatCurrency(after)}</span>
               </span>
             )
@@ -1849,7 +1859,7 @@ export default function JournalEntryForm({
                 >
                   <Button
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
                     className={
                       line.dimensions && Object.keys(line.dimensions).length > 0
@@ -1923,12 +1933,11 @@ export default function JournalEntryForm({
             />
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setShowSaveTemplate(true)}
               disabled={derivedTemplateLines.length < 2}
               title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
             >
-              <BookmarkIcon className="h-3 w-3 mr-1" />
+              <BookmarkIcon className="h-3 w-3" />
               {t('save_as_template')}
             </Button>
           </>
@@ -1962,11 +1971,12 @@ export default function JournalEntryForm({
         </p>
       )}
 
-      <div className="flex flex-col items-end gap-1">
+      <div className="flex flex-col items-end gap-1 border-t-hairline pt-3">
         {/* flex-wrap: Rensa + Spara som utkast + Granska & skapa need ~380px,
             wider than the dialog on a phone, and the items-end column pushed
             the overflow off the left edge where it cannot be scrolled to. */}
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
+          {!editEntryId && createsLine}
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
@@ -1974,7 +1984,7 @@ export default function JournalEntryForm({
               loading={canWrite && isSavingDraft}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4" />}
               {t('save_edit')}
             </Button>
           ) : (
@@ -1986,7 +1996,7 @@ export default function JournalEntryForm({
                   disabled={!hasContent || isSubmitting || isSavingDraft}
                   title={t('clear_all_tooltip')}
                 >
-                  <BackspaceIcon className="mr-2 h-4 w-4" />
+                  <BackspaceIcon className="h-4 w-4" />
                   {t('clear_all')}
                 </Button>
               )}
@@ -2002,7 +2012,7 @@ export default function JournalEntryForm({
                   loading={canWrite && isSavingDraft}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
-                  {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                  {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                   {t('save_draft')}
                 </Button>
               )}
@@ -2011,7 +2021,7 @@ export default function JournalEntryForm({
                 disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
-                {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                 {t('review_and_create')}
               </Button>
             </>
@@ -2045,7 +2055,7 @@ export default function JournalEntryForm({
           the mall later. The shared TemplateForm re-seeds from the derived lines
           each time the dialog opens (Radix unmounts its content when closed). */}
       <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('save_template_dialog_title')}</DialogTitle>
             <DialogDescription>{t('save_template_dialog_description')}</DialogDescription>
@@ -2172,7 +2182,7 @@ export default function JournalEntryForm({
 
       {/* Clear-all confirmation */}
       <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('clear_all_confirm_title')}</DialogTitle>
             <DialogDescription>{t('clear_all_confirm_body')}</DialogDescription>
@@ -2188,7 +2198,7 @@ export default function JournalEntryForm({
                 setShowClearConfirm(false)
               }}
             >
-              <BackspaceIcon className="mr-2 h-4 w-4" />
+              <BackspaceIcon className="h-4 w-4" />
               {t('clear_all_confirm')}
             </Button>
           </DialogFooter>

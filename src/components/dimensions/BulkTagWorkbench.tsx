@@ -2,6 +2,7 @@
 
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   ArrowUturnLeftIcon,
   ChevronDownIcon,
@@ -29,6 +30,9 @@ import {
   DataListRow,
 } from '@/components/ui/data-list'
 import { useToast } from '@/components/ui/use-toast'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LateReveal } from '@/components/ui/skeleton'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -124,6 +128,7 @@ function voucherTagState(v: TaggingVoucher): {
  */
 export default function BulkTagWorkbench() {
   const { toast } = useToast()
+  const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
 
   // Filter bar
@@ -139,6 +144,8 @@ export default function BulkTagWorkbench() {
   const [vouchers, setVouchers] = useState<TaggingVoucher[] | null>(null)
   const [totalCapped, setTotalCapped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // The last fetch's failure, said in the page instead of a toast (Stil v3 states).
+  const [loadError, setLoadError] = useState<string | null>(null)
   // Tag chips carry each dimension's registry name, as every other surface
   // does (session-cached: the pickers below read the same entry).
   const { dimensions: registry } = useDimensions()
@@ -190,12 +197,9 @@ export default function BulkTagWorkbench() {
       setExpanded(new Set())
       setRowErrors({})
       anchorIndexRef.current = null
+      setLoadError(null)
     } catch (err) {
-      toast({
-        title: 'Kunde inte hämta verifikat',
-        description: getErrorMessage(err, { locale: 'sv' }),
-        variant: 'destructive',
-      })
+      setLoadError(getErrorMessage(err, { locale: 'sv' }))
     } finally {
       setIsLoading(false)
     }
@@ -461,7 +465,7 @@ export default function BulkTagWorkbench() {
     <div className="space-y-8">
       {/* Filter bar */}
       <Card>
-        <CardContent className="p-6 space-y-4">
+        <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <Label htmlFor="tag-date-from" className="text-xs text-muted-foreground">
@@ -549,18 +553,28 @@ export default function BulkTagWorkbench() {
                 Visa annullerade
               </Label>
             </div>
-            <Button onClick={() => void loadVouchers()} loading={isLoading}>
-              {!isLoading && <MagnifyingGlassIcon className="mr-2 h-4 w-4" />}
+            {/* A fetch is never the filled button: the page's primary is
+                Tagga N verifikat in the bar below. */}
+            <Button variant="outline" onClick={() => void loadVouchers()} loading={isLoading}>
+              {!isLoading && <MagnifyingGlassIcon className="h-4 w-4" />}
               Hämta verifikat
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Result list */}
-      {vouchers === null && !isLoading ? (
+      {/* Result list. A failed fetch with rows on screen keeps them under
+          one line; with nothing on screen it says so in place of the rows. */}
+      {loadError && vouchers !== null && !isLoading && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadVouchers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      {vouchers === null && !isLoading && loadError ? (
+        <LoadError description={loadError} onRetry={() => void loadVouchers()} />
+      ) : vouchers === null && !isLoading ? (
         <Card>
-          <CardContent className="p-0">
+          <CardContent>
             <DataListEmpty
               icon={<HashtagIcon className="h-6 w-6" />}
               title="Hämta verifikat att tagga"
@@ -591,7 +605,9 @@ export default function BulkTagWorkbench() {
             )}
           </DataListHeader>
           {isLoading ? (
-            <DataListLoading />
+            <LateReveal>
+              <DataListLoading />
+            </LateReveal>
           ) : vouchers && vouchers.length === 0 ? (
             <DataListEmpty
               icon={<MagnifyingGlassIcon className="h-6 w-6" />}
@@ -624,7 +640,7 @@ export default function BulkTagWorkbench() {
                         />
                         <Button
                           variant="ghost"
-                          size="icon-sm"
+                          size="icon"
                           onClick={(e) => {
                             e.stopPropagation()
                             toggleExpanded(voucher.journal_entry_id)
@@ -677,7 +693,7 @@ export default function BulkTagWorkbench() {
                           key={mapKey(bag)}
                           data-ph-mask=""
                           variant="outline"
-                          className="px-1.5 py-0 text-[11px] font-normal"
+                          className="px-1.5 py-0 text-xs font-normal"
                         >
                           {Object.entries(bag)
                             .sort(([a], [b]) => Number(a) - Number(b))
@@ -688,7 +704,7 @@ export default function BulkTagWorkbench() {
                       {partial && (
                         <Badge
                           variant="secondary"
-                          className="px-1.5 py-0 text-[11px] font-normal"
+                          className="px-1.5 py-0 text-xs font-normal"
                         >
                           Delvis taggad
                         </Badge>
@@ -741,7 +757,7 @@ export default function BulkTagWorkbench() {
                                   key={dimNo}
                                   data-ph-mask=""
                                   variant="outline"
-                                  className="px-1.5 py-0 text-[11px] font-normal"
+                                  className="px-1.5 py-0 text-xs font-normal"
                                 >
                                   {dimensionLabel(dimNo)}{' '}
                                   <span className="ml-1 font-mono">{code}</span>
@@ -769,9 +785,9 @@ export default function BulkTagWorkbench() {
 
       {/* Apply panel: fixed footer bar while a selection is active */}
       {selected.size > 0 && (
-        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-[var(--shadow-md)] md:bottom-6">
+        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-pop p-4 md:bottom-6 bg-popover shadow-float">
           {missingPairLineIds.length > 0 && (
-            <div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mb-4 flex flex-col gap-3 rounded-lg bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised">
               <div className="flex items-start gap-2">
                 <ExclamationTriangleIcon
                   className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
@@ -782,7 +798,7 @@ export default function BulkTagWorkbench() {
                   projektresultatet kan bli skevt.
                 </p>
               </div>
-              <Button variant="outline" size="sm" onClick={includeCounterVouchers}>
+              <Button variant="outline" onClick={includeCounterVouchers}>
                 Inkludera motverifikat
               </Button>
             </div>
@@ -794,13 +810,12 @@ export default function BulkTagWorkbench() {
             </Badge>
             <Button
               variant="ghost"
-              size="sm"
               onClick={() => {
                 setSelected(new Set())
                 anchorIndexRef.current = null
               }}
             >
-              <XMarkIcon className="mr-1 h-3 w-3" />
+              <XMarkIcon className="h-3 w-3" />
               Avmarkera
             </Button>
             <div className="ml-auto flex items-center gap-2">
@@ -837,7 +852,7 @@ export default function BulkTagWorkbench() {
                   className="flex-1"
                 />
                 <Button onClick={() => void handleApply()} disabled={!canApply} loading={isApplying}>
-                  {!isApplying && <HashtagIcon className="mr-2 h-4 w-4" />}
+                  {!isApplying && <HashtagIcon className="h-4 w-4" />}
                   Tagga {selectedVoucherCount} verifikat
                 </Button>
               </div>

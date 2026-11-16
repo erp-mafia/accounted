@@ -9,6 +9,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,6 +42,12 @@ interface AddAccountDialogProps {
   onCreated: (account: CreatedAccount) => void
   initialAccountNumber?: string
   initialAccountName?: string
+  /**
+   * Over the chart of accounts the form opens as a drawer (V7 creation forms:
+   * a small record is added over its list). Opened from inside another dialog
+   * or drawer (a voucher line, an article) it stays the dialog on top of it.
+   */
+  drawer?: boolean
 }
 
 export function AddAccountDialog({
@@ -49,6 +56,7 @@ export function AddAccountDialog({
   onCreated,
   initialAccountNumber,
   initialAccountName,
+  drawer = false,
 }: AddAccountDialogProps) {
   // Loads the BAS chart chunk after mount so classification and the
   // standard-account check get the authoritative answer once it lands.
@@ -188,19 +196,13 @@ export function AddAccountDialog({
     }
   }
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Lägg till eget konto</DialogTitle>
-          <DialogDescription>
-            Skapa ett eget konto utanför BAS-standarden
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
+  // One wording for both shells.
+  const title = 'Lägg till eget konto'
+  const lead = 'Skapa ett eget konto utanför BAS-standarden'
+  const fields = (
+        <div className={drawer ? 'space-y-4' : 'space-y-4 py-2'}>
           {isBASMatch && (
-            <div className="flex items-start gap-2 rounded-lg bg-muted/30 border border-border p-3">
+            <div className="flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised">
               <ExclamationTriangleIcon className="h-4 w-4 text-attn mt-0.5 shrink-0" />
               <p className="text-sm text-attn">
                 Kontonummer {accountNumber} finns i BAS-standarden. Använd &quot;BAS-katalog&quot;-fliken för att aktivera standardkonton istället.
@@ -329,7 +331,7 @@ export function AddAccountDialog({
           )}
 
           {inactiveConflict && (
-            <div className="space-y-3 rounded-lg border border-border p-3">
+            <div className="space-y-3 rounded-lg p-3 bg-control shadow-raised">
               <p className="text-sm text-foreground">{error}</p>
               <Button
                 type="button"
@@ -341,9 +343,10 @@ export function AddAccountDialog({
             </div>
           )}
         </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  )
+  const actions = (
+    <>
+          <Button variant={drawer ? 'ghost' : 'outline'} onClick={() => onOpenChange(false)}>
             Avbryt
           </Button>
           <Button
@@ -353,7 +356,32 @@ export function AddAccountDialog({
           >
             Skapa konto
           </Button>
-        </DialogFooter>
+    </>
+  )
+
+  if (drawer) {
+    return (
+      <SlideOver open={open} onOpenChange={onOpenChange}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={title} kicker={lead} />
+          <SlideOverBody>{fields}</SlideOverBody>
+          <SlideOverFooter>{actions}</SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{lead}</DialogDescription>
+        </DialogHeader>
+
+        {fields}
+
+        <DialogFooter>{actions}</DialogFooter>
       </DialogContent>
     </Dialog>
   )

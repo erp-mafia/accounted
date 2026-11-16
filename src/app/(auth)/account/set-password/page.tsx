@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { KeyIcon } from '@/components/icons'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -24,6 +25,8 @@ function SetPasswordContent() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // A failed save says so in the form, not in a toast.
+  const [formError, setFormError] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -53,6 +56,7 @@ function SetPasswordContent() {
   const handleSetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError(null)
 
     const strong =
       password.length >= 8 &&
@@ -62,22 +66,15 @@ function SetPasswordContent() {
       /[^a-zA-Z0-9]/.test(password)
 
     if (!strong) {
-      toast({
-        title: 'Lösenordet är för svagt',
-        description:
-          'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
-        variant: 'destructive',
-      })
+      setFormError(
+        'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
+      )
       setIsLoading(false)
       return
     }
 
     if (password !== confirmPassword) {
-      toast({
-        title: 'Lösenorden matchar inte',
-        description: 'Kontrollera att du skrev samma lösenord i båda fälten.',
-        variant: 'destructive',
-      })
+      setFormError('Lösenorden matchar inte. Kontrollera att du skrev samma lösenord i båda fälten.')
       setIsLoading(false)
       return
     }
@@ -91,11 +88,7 @@ function SetPasswordContent() {
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
-        toast({
-          title: 'Kunde inte spara lösenord',
-          description: getErrorMessage(body, { fallback: 'Försök igen senare.' }),
-          variant: 'destructive',
-        })
+        setFormError(getErrorMessage(body, { fallback: 'Kunde inte spara lösenord. Försök igen senare.' }))
         return
       }
 
@@ -107,36 +100,21 @@ function SetPasswordContent() {
       router.push(returnTo)
       router.refresh()
     } catch {
-      toast({
-        title: 'Något gick fel',
-        description: 'Försök igen senare.',
-        variant: 'destructive',
-      })
+      setFormError('Något gick fel. Försök igen senare.')
     } finally {
       setIsLoading(false)
     }
   }
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-lg bg-secondary flex items-center justify-center">
-              <KeyIcon className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="font-display text-3xl tracking-tight">
-            Sätt ett lösenord
-          </h1>
-          <p className="text-muted-foreground text-sm mt-2">
-            Du loggade in med BankID. För att aktivera tvåfaktorsautentisering
-            eller logga in med e-post behöver du först sätta ett lösenord.
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-border bg-card p-6">
-          <form onSubmit={handleSetPassword} className="space-y-4">
+    <StandalonePage>
+        <StandaloneHeading
+          title="Sätt ett lösenord"
+          sub="Du loggade in med BankID. För att aktivera tvåfaktorsautentisering eller logga in med e-post behöver du först sätta ett lösenord."
+        />
+        <StandaloneStack>
+          {formError && <AuthFormError message={formError} />}
+          <form onSubmit={handleSetPassword} className="flex flex-col gap-3">
             <div className="space-y-2">
               <Label htmlFor="password">Lösenord</Label>
               <Input
@@ -171,8 +149,7 @@ function SetPasswordContent() {
               {isLoading ? 'Sparar...' : 'Spara lösenord'}
             </Button>
           </form>
-        </div>
-      </div>
-    </div>
+        </StandaloneStack>
+    </StandalonePage>
   )
 }

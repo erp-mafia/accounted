@@ -43,7 +43,7 @@ export function ApiSettingsContent() {
           type="button"
           aria-expanded={showOAuthClients}
           onClick={() => setShowOAuthClients(!showOAuthClients)}
-          className="flex w-full items-center gap-2 border-b border-border px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          className="flex w-full items-center gap-2 border-b-hairline px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
           <ChevronDownIcon
             className={cn('h-3.5 w-3.5 transition-transform duration-150', !showOAuthClients && '-rotate-90')}

@@ -17,7 +17,8 @@ import {
 } from '@/components/ui/dialog'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -51,7 +52,7 @@ interface EmployeeRecurringLine {
 
 // In-row text action: same idiom as EmployeeBenefitsPanel.
 const ROW_ACTION_CLASS =
-  'text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
+  'text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
 
 export function EmployeeRecurringLinesPanel({
   employeeId,
@@ -69,6 +70,9 @@ export function EmployeeRecurringLinesPanel({
   const { toast } = useToast()
   const [lines, setLines] = useState<EmployeeRecurringLine[]>([])
   const [loading, setLoading] = useState(true)
+  // The list could not be read: say so with "Försök igen" rather than
+  // "no recurring lines", which would be a claim about the employee.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // Monotonic request id: a reload issued after a create/delete must not be
@@ -97,9 +101,11 @@ export function EmployeeRecurringLinesPanel({
         const { data } = await res.json()
         if (seq === loadSeq.current) setLines(data || [])
       }
+      if (seq === loadSeq.current) setLoadFailed(!res.ok)
     } catch {
-      // Network failure: keep whatever is shown; the empty/stale list plus
-      // the still-enabled actions let the user retry.
+      // Network failure: keep whatever is shown; with nothing shown the
+      // section says it could not load, with "Försök igen".
+      if (seq === loadSeq.current) setLoadFailed(true)
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
@@ -199,17 +205,19 @@ export function EmployeeRecurringLinesPanel({
       help={<HelpPopover>{t('recurring_help')}</HelpPopover>}
       aside={
         canWrite ? (
-          <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
+          <Button type="button" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
             {t('recurring_add')}
           </Button>
         ) : undefined
       }
     >
       {loading ? (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-2/3" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && lines.length === 0 ? (
+        <LoadError onRetry={() => void load()} />
       ) : lines.filter((l) => l.is_active).length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('recurring_empty')}</p>
       ) : (
@@ -271,7 +279,7 @@ export function EmployeeRecurringLinesPanel({
           if (!open && !submitting) reset()
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('recurring_add')}</DialogTitle>
             <DialogDescription>{t('recurring_help')}</DialogDescription>

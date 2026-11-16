@@ -51,7 +51,7 @@ export function ReportPrintHeader({
       )}
       {/* The server's date can differ from the browser's near midnight; the
           client's own render (and every print) puts the right one in. */}
-      <p data-ph-mask="" suppressHydrationWarning className="text-[12.5px] text-muted-foreground tabular-nums">
+      <p data-ph-mask="" suppressHydrationWarning className="text-xs text-muted-foreground tabular-nums">
         {facts.join(' · ')}
       </p>
     </div>

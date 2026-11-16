@@ -15,13 +15,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { TH_CLASS, TD_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryName } from '@/lib/vat/country-codes'
@@ -283,28 +283,26 @@ export default function OrdersPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-        </div>
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="hidden h-3.5 w-16 md:block" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
       ) : loadFailed ? (
-        <div className="space-y-4 py-8 text-center">
-          <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {t('retry')}
-          </Button>
-        </div>
+        <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
       ) : visibleRows.length === 0 && (tab !== 'all' || storeScope) ? (
         // Filtered to nothing: the orders exist, so no connect-your-shop CTA.
         // A live region so a filter change that empties the list is announced.
-        <div role="status" aria-live="polite">
-          <EmptyState
-            icon={ShoppingCartIcon}
-            title={t('empty_filtered_title')}
-            description={t('empty_filtered_description')}
-          />
-        </div>
+        <p role="status" aria-live="polite" className="py-3 text-[13px] text-muted-foreground">
+          {t('empty_filtered_title')}
+        </p>
       ) : visibleRows.length === 0 ? (
         <EmptyState
           icon={ShoppingCartIcon}
@@ -327,14 +325,14 @@ export default function OrdersPage() {
             selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
             clearLabel={t('bulk_clear')}
           >
-            <Button size="sm" onClick={openBulkBooking}>
+            <Button onClick={openBulkBooking}>
               {t('bulk_book_selected')}
             </Button>
           </BulkSelectionBar>
           {/* Negative margin + matching padding: lets the hover-revealed
               selection checkbox hang into the page margins without being
               clipped by the overflow container (transactions-page pattern). */}
-          <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
+          <div className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -372,7 +370,7 @@ export default function OrdersPage() {
           </table>
           </div>
           {count > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between text-[12.5px] text-muted-foreground">
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
               <span>
                 {t('pagination', {
                   from: page * PAGE_SIZE + 1,
@@ -383,7 +381,6 @@ export default function OrdersPage() {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  size="sm"
                   disabled={page === 0}
                   onClick={() => setPage((p) => p - 1)}
                 >
@@ -391,7 +388,6 @@ export default function OrdersPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
                   disabled={(page + 1) * PAGE_SIZE >= count}
                   onClick={() => setPage((p) => p + 1)}
                 >
@@ -542,7 +538,7 @@ function OrderRow({
           />
         )}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(order.order_date)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
@@ -590,7 +586,7 @@ function OrderRow({
         {order.payment_method_title || order.payment_method || ''}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-        {formatCurrency(order.total, order.currency)}
+        {formatRowAmount(order.total, order.currency)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
         <OrderStatus order={order} t={t} />
@@ -608,11 +604,11 @@ function OrderRow({
               already says which rows wait, so a button on every row only
               repeats it. */}
           {bookable ? (
-            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onBook}>
+            <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onBook}>
               {t('action_book')}
             </Button>
           ) : invoiceable ? (
-            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
+            <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
               {t('action_create_invoice')}
             </Button>
           ) : null}
@@ -622,7 +618,7 @@ function OrderRow({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                   aria-label={t('row_menu_aria', { number: order.order_number })}
                 >
@@ -693,7 +689,7 @@ function OrderStatus({
     return order.manually_booked_journal_entry_id ? (
       <Link
         href={`/bookkeeping/${order.manually_booked_journal_entry_id}`}
-        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
       >
         {t('status_marked_booked')}
       </Link>
@@ -705,7 +701,7 @@ function OrderStatus({
     return (
       <Link
         href={`/invoices/${order.invoice_id}`}
-        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
       >
         {t('status_invoiced')}
       </Link>

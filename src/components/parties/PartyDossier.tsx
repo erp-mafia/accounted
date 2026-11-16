@@ -7,10 +7,11 @@ import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/components/ui/slide-over'
 import type { Dossier, PartyRole, RegisterPeriod } from '@/lib/parties/register'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { AccountNub } from './AccountNub'
 import { CounterpartyOpenItems } from './CounterpartyOpenItems'
@@ -21,7 +22,7 @@ import type { MergeCandidate } from './MergeDialog'
 import { displayNameFromVoucherText } from '@/lib/parties/ledger-key'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{children}</h2>
+  return <h2 className="text-sm font-medium text-muted-foreground">{children}</h2>
 }
 
 function Row({ label, value, note }: { label: string; value: React.ReactNode; note?: React.ReactNode }) {
@@ -86,10 +87,18 @@ export function PartyDossier({
 }) {
   const t = useTranslations('parties')
   const locale = useLocale()
-  // { partyId, reloadKey } stamps the loaded dossier, so "loading" and
-  // "failed" are derived instead of set from inside the effect.
-  const [loaded, setLoaded] = useState<{ partyId: string; reloadKey: number; dossier: Dossier | null } | null>(null)
-  const current = loaded && loaded.partyId === partyId && loaded.reloadKey === reloadKey ? loaded : null
+  // "Försök igen" after a failed read: the drawer's own reload, beside the page's reloadKey.
+  const [retryKey, setRetryKey] = useState(0)
+  // { partyId, reloadKey, retryKey } stamps the loaded dossier, so "loading"
+  // and "failed" are derived instead of set from inside the effect.
+  const [loaded, setLoaded] = useState<{
+    partyId: string
+    reloadKey: number
+    retryKey: number
+    dossier: Dossier | null
+  } | null>(null)
+  const current =
+    loaded && loaded.partyId === partyId && loaded.reloadKey === reloadKey && loaded.retryKey === retryKey ? loaded : null
   const dossier = partyId ? (current?.dossier ?? (loaded?.partyId === partyId ? loaded.dossier : null)) : null
   const loading = Boolean(partyId) && current === null
   const failed = Boolean(partyId) && current !== null && current.dossier === null
@@ -98,19 +107,20 @@ export function PartyDossier({
     if (!partyId) return
     let cancelled = false
     const key = reloadKey
+    const retry = retryKey
     fetch(`/api/parties/${partyId}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status))
         const json = (await res.json()) as { data: Dossier }
-        if (!cancelled) setLoaded({ partyId, reloadKey: key, dossier: json.data })
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, dossier: json.data })
       })
       .catch(() => {
-        if (!cancelled) setLoaded({ partyId, reloadKey: key, dossier: null })
+        if (!cancelled) setLoaded({ partyId, reloadKey: key, retryKey: retry, dossier: null })
       })
     return () => {
       cancelled = true
     }
-  }, [partyId, reloadKey])
+  }, [partyId, reloadKey, retryKey])
 
   const p = dossier?.party
   const stats = p?.stats ?? null
@@ -164,13 +174,13 @@ export function PartyDossier({
         <SlideOverHeader kicker={kicker} title={p?.displayName ?? (loading ? '…' : '')} />
         <SlideOverBody>
           {loading && !dossier ? (
-            <div className="space-y-3">
+            <LateReveal className="space-y-3">
               <Skeleton className="h-4 w-2/3" />
               <Skeleton className="h-4 w-1/2" />
               <Skeleton className="h-24 w-full" />
-            </div>
+            </LateReveal>
           ) : failed || !dossier || !p ? (
-            <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
+            <LoadError title={t('load_failed')} onRetry={() => setRetryKey((k) => k + 1)} />
           ) : (
             <div className="space-y-8">
               <div className="space-y-3">
@@ -182,13 +192,13 @@ export function PartyDossier({
                 ) : null}
                 <div className="flex items-center gap-2">
                   {primaryRole ? (
-                    <Button type="button" size="sm" onClick={() => onPromote(p.id, [primaryRole])} disabled={!canWrite || busy}>
+                    <Button type="button" onClick={() => onPromote(p.id, [primaryRole])} disabled={!canWrite || busy}>
                       {primaryRole === 'supplier' ? t('promote_supplier') : t('promote_customer')}
                     </Button>
                   ) : null}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button type="button" size="sm" variant="outline" aria-label={t('more_actions')} disabled={!canWrite || busy}>
+                      <Button type="button" variant="outline" aria-label={t('more_actions')} disabled={!canWrite || busy}>
                         <EllipsisHorizontalIcon className="h-4 w-4" aria-hidden="true" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -304,7 +314,7 @@ export function PartyDossier({
                     ))}
                     {scbFetchedAt && registryFacts(dossier.facts).length > 0 ? (
                       <tr>
-                        <td colSpan={2} className="pt-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+                        <td colSpan={2} className="pt-4 pb-1 text-xs text-muted-foreground date-figures">
                           {t('registry_group', { date: formatDate(scbFetchedAt) })}
                         </td>
                       </tr>
@@ -334,7 +344,7 @@ export function PartyDossier({
                             {v.voucher ? <span className="text-muted-foreground">{v.voucher} · </span> : null}
                             {v.description}
                           </td>
-                          <td className={`${VTD_CLASS} text-right tabular-nums`}>{v.amount ? formatCurrency(v.amount) : ''}</td>
+                          <td className={`${VTD_CLASS} text-right tabular-nums`}>{v.amount ? formatRowAmount(v.amount) : ''}</td>
                         </tr>
                       ))}
                     </tbody>

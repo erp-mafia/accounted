@@ -38,7 +38,6 @@ import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
 import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { cn } from '@/lib/utils'
-import { HUE_DOT_CLASS, accountHue, templateGroupHue, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
 
 /** The account a template books against: the leg that is not the cash account. */
 function categoryAccount(debit: string, credit: string): string {
@@ -50,14 +49,12 @@ function categoryAccount(debit: string, credit: string): string {
  * template with a colour dot for its family, the name, and the account.
  */
 function DenseRow({
-  hue,
   name,
   account,
   note,
   selected,
   onClick,
 }: {
-  hue: TemplateHue
   name: string
   account?: string | null
   note?: string | null
@@ -73,10 +70,9 @@ function DenseRow({
         selected && 'bg-secondary',
       )}
     >
-      <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', HUE_DOT_CLASS[hue])} aria-hidden />
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      {note && <span className="shrink-0 text-[11px] text-muted-foreground">{note}</span>}
-      {account && <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{account}</span>}
+      {note && <span className="shrink-0 text-xs text-muted-foreground">{note}</span>}
+      {account && <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{account}</span>}
     </button>
   )
 }
@@ -142,7 +138,7 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
   const vatLabelKey = converted ? getVatLabelKey(converted) : null
   if (dense) {
     const account = converted ? categoryAccount(converted.debit_account, converted.credit_account) : (shownLine?.account ?? null)
-    return <DenseRow hue={templateGroupHue(libraryTemplateGroup(raw))} name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
+    return <DenseRow name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
   }
 
   return (
@@ -171,13 +167,13 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(converted?.vat_treatment)}
-                className="text-[11px] px-1.5 py-0"
+                className="text-xs px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {!converted && (
-              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <PencilSquareIcon className="h-3 w-3" />
                 {t('opens_editor_badge')}
               </span>
@@ -186,7 +182,7 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
         </div>
       </div>
       {raw.description && (
-        <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+        <p className="text-xs text-muted-foreground mt-1.5 leading-snug">
           {raw.description}
         </p>
       )}
@@ -200,7 +196,6 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
   if (dense) {
     return (
       <DenseRow
-        hue={templateGroupHue(template.group)}
         name={template.name_sv}
         account={categoryAccount(template.debit_account, template.credit_account)}
         note={vatLabelKey ? t(vatLabelKey) : null}
@@ -232,13 +227,13 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(template.vat_treatment)}
-                className="text-[11px] px-1.5 py-0"
+                className="text-xs px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
-              <Badge variant="warning" className="text-[11px] px-1.5 py-0 gap-0.5">
+              <Badge variant="warning" className="text-xs px-1.5 py-0 gap-0.5">
                 <ExclamationTriangleIcon className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>
@@ -250,7 +245,7 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
         )}
       </div>
       {template.special_rules_sv && !compact && (
-        <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
+        <p className="text-xs text-muted-foreground mt-1.5 leading-snug">
           {template.special_rules_sv}
         </p>
       )}
@@ -269,20 +264,20 @@ function AccountResultCard({ account, onClick, dense }: { account: AccountSearch
   // booking dialogs' kontoväljare: the booking adds it.
   const note = account.isActive ? t('opens_editor_badge') : tJournal('account_not_activated')
   if (dense) {
-    return <DenseRow hue={accountHue(account.account_number)} name={account.account_name} account={account.account_number} note={note} onClick={onClick} />
+    return <DenseRow name={account.account_name} account={account.account_number} note={note} onClick={onClick} />
   }
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-secondary/60"
+      className="w-full text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/60 bg-control shadow-raised"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="font-mono text-sm shrink-0">{account.account_number}</span>
           <span className="font-medium text-sm leading-tight truncate">{account.account_name}</span>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <PencilSquareIcon className="h-3 w-3" />
           {note}
         </span>
@@ -661,7 +656,6 @@ export default function TemplatePicker({
                   {counterpartySuggestions.slice(0, 3).map((s) => dense ? (
                     <DenseRow
                       key={s.template_id}
-                      hue={accountHue(s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account))}
                       name={s.name_sv}
                       account={s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account)}
                       note={s.description_sv}
@@ -672,7 +666,7 @@ export default function TemplatePicker({
                       key={s.template_id}
                       type="button"
                       onClick={() => onSelectCounterparty!(s.template_id)}
-                      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-secondary/60"
+                      className="w-full text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/60 bg-control shadow-raised"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -691,7 +685,7 @@ export default function TemplatePicker({
                             )}
                           </div>
                         </div>
-                        <span className="text-[11px] text-muted-foreground flex-shrink-0 mt-0.5">
+                        <span className="text-xs text-muted-foreground flex-shrink-0 mt-0.5">
                           {s.description_sv}
                         </span>
                       </div>
@@ -732,7 +726,7 @@ export default function TemplatePicker({
               <div className="space-y-3">
                 {commonGroups.map((group) => (
                   <div key={group}>
-                    <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">
                       {t(GROUP_LABEL_KEYS[group])}
                     </p>
                     <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
@@ -767,7 +761,6 @@ export default function TemplatePicker({
               <div>
                 <Button
                   variant="ghost"
-                  size="sm"
                   className="w-full justify-between text-muted-foreground"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
@@ -782,7 +775,7 @@ export default function TemplatePicker({
                   <div className="space-y-3 mt-2">
                     {GROUP_ORDER.filter((g) => advancedGrouped.has(g)).map((group) => (
                       <div key={group}>
-                        <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
                           {t(GROUP_LABEL_KEYS[group])}
                         </p>
                         <div className={dense ? 'space-y-px' : 'space-y-1.5'}>

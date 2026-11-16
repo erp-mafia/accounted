@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   ArchiveBoxIcon,
   BookmarkIcon,
@@ -8,9 +9,11 @@ import {
   ChatBubbleLeftIcon,
   MagnifyingGlassIcon,
   PencilIcon,
-  SpinnerIcon,
   XMarkIcon,
 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import {
   type ConversationRow,
@@ -52,8 +55,11 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
     cancelEdit,
     commitEdit,
   } = useConversationList([])
+  const tCommon = useTranslations('common')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to fetch the list again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -75,13 +81,14 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
       cancelled = true
     }
     // setConversations is the hook's stable useState setter; listing it would
-    // not change when this runs, and this must fire exactly once on mount.
+    // not change when this runs, and this must fire once on mount (and on
+    // "Försök igen").
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [attempt])
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
-      <div className="border-b border-border px-5 py-3">
+      <div className="border-b-hairline px-5 py-3">
         <div className="relative">
           <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
@@ -89,7 +96,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Sök konversationer…"
-            className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full rounded-lg pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
           />
           {query.length > 0 && (
             <button
@@ -106,20 +113,35 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
-            <SpinnerIcon className="h-4 w-4 animate-spin" /> Hämtar…
-          </div>
+          <LateReveal aria-label="Hämtar konversationer" className="px-4 py-2">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex h-11 items-center gap-3">
+                <Skeleton className="h-3.5 w-48" />
+                <Skeleton className="ml-auto h-3.5 w-12" />
+              </div>
+            ))}
+          </LateReveal>
         ) : error ? (
-          <div className="p-6 text-sm text-destructive">{error}</div>
-        ) : grouped.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
-            <ChatBubbleLeftIcon className="h-6 w-6 opacity-40" />
-            {conversations.length === 0 ? 'Inga konversationer ännu.' : 'Inga träffar.'}
+          <div className="px-4">
+            <LoadError title={error} onRetry={() => setAttempt((n) => n + 1)} />
           </div>
+        ) : grouped.length === 0 ? (
+          conversations.length === 0 ? (
+            <div className="px-4">
+              <EmptyState icon={ChatBubbleLeftIcon} title="Inga konversationer ännu." />
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-3 px-4 py-3 text-[13px] text-muted-foreground">
+              <span>Inga träffar.</span>
+              <Button variant="link" onClick={() => setQuery('')}>
+                {tCommon('clear_search')}
+              </Button>
+            </div>
+          )
         ) : (
           grouped.map(({ bucket, rows }) => (
             <section key={bucket} className="py-2">
-              <p className="px-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+              <p className="px-4 pb-1 text-xs text-muted-foreground">
                 {BUCKET_LABELS[bucket]}
               </p>
               <ul className="space-y-1">
@@ -144,7 +166,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                           placeholder="Namnge konversationen…"
                           maxLength={200}
                           aria-label="Nytt namn på konversationen"
-                          className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="w-full rounded-lg px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                         />
                       </div>
                     ) : (
@@ -166,7 +188,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                               <p className="text-sm font-medium truncate flex-1 min-w-0">
                                 {c.title ?? intentLabel(c.intent_id)}
                               </p>
-                              <p className="text-[11px] text-muted-foreground tabular-nums shrink-0">
+                              <p className="text-xs text-muted-foreground tabular-nums shrink-0">
                                 {relativeTime(c.last_message_at ?? c.created_at)}
                               </p>
                             </div>
@@ -184,7 +206,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                               c.pinned ? 'Lossa konversationen' : 'Fäst konversationen överst'
                             }
                             aria-pressed={c.pinned}
-                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
                           >
                             {c.pinned ? (
                               <BookmarkSlashIcon className="h-3.5 w-3.5" />
@@ -197,7 +219,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             onClick={() => startEdit(c)}
                             title="Byt namn"
                             aria-label="Byt namn på konversation"
-                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
                           >
                             <PencilIcon className="h-3.5 w-3.5" />
                           </button>
@@ -206,7 +228,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             onClick={() => void archive(c.id)}
                             title="Arkivera"
                             aria-label="Arkivera konversationen"
-                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
                           >
                             <ArchiveBoxIcon className="h-3.5 w-3.5" />
                           </button>

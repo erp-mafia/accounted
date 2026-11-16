@@ -130,7 +130,7 @@ export function ResumeStep({ ctx, importId }: { ctx: BooksCtx; importId: string 
       ) : null}
       {error ? (
         <div className="jny-qactions">
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
             {t('provider_change_source')}
           </Button>
         </div>

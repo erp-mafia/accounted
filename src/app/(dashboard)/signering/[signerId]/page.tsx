@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { getDashboardAuthContext } from '../../request-context'
 import { PageHeader } from '@/components/ui/page-header'
+import { RouteLoadError } from '@/components/ui/route-load-error'
 import { annualReportStepAnchor } from '@/components/bokslut/StepSectionHeader'
 import { SigningPage } from '@/components/signing/SigningPage'
 import { memberSignerBase } from '@/components/signing/signing-client'
@@ -36,7 +37,14 @@ export default async function MemberSigningPage({ params }: { params: Promise<{ 
       <p className="text-[13px] text-muted-foreground">{body}</p>
     </div>
   )
-  if (!resolved) return message(t('load_failed_title'), t('load_failed_body'))
+  // A read that failed says so where the document would be, with "Försök igen".
+  const loadFailed = (
+    <div className="space-y-8">
+      <PageHeader title={t('load_failed_title')} />
+      <RouteLoadError title={t('load_failed_title')} description={t('load_failed_body')} />
+    </div>
+  )
+  if (!resolved) return loadFailed
   if (!resolved.ok) {
     if (resolved.reason === 'not_signer') return message(t('member_not_signer_title'), t('member_not_signer_body'))
     notFound()
@@ -46,7 +54,7 @@ export default async function MemberSigningPage({ params }: { params: Promise<{ 
     log.error('member signing page describe failed', error instanceof Error ? error : new Error(String(error)))
     return null
   })
-  if (!initial) return message(t('load_failed_title'), t('load_failed_body'))
+  if (!initial) return loadFailed
 
   // The board's årsredovisning: once signed, the årsstämma date is next, then
   // Digital inlämning (the fastställelseintyg is signed at Bolagsverket).

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { settingsMessageKey, visibleSettingsSections } from '../settings-sections'
+import {
+  SETTINGS_GROUP_ORDER,
+  SETTINGS_SECTION_PARENT,
+  SETTINGS_SECTIONS_IN_AGENTS,
+  settingsMessageKey,
+  visibleSettingsSections,
+} from '../settings-sections'
 
 const ids = (scope: Parameters<typeof visibleSettingsSections>[0]) => visibleSettingsSections(scope).map((s) => s.id)
 
@@ -14,13 +20,14 @@ describe('visibleSettingsSections', () => {
       'members',
       'billing',
       'bookkeeping',
-      'attest',
       'fiscal-years',
       'tax',
       'salary',
+      'attest',
       'templates',
       'invoicing',
       'sending',
+      'collections',
       'connections',
       'data-sharing',
     ])
@@ -51,5 +58,44 @@ describe('visibleSettingsSections', () => {
   it('maps a section id to its settings_nav key', () => {
     expect(settingsMessageKey('fiscal-years')).toBe('fiscal_years')
     expect(settingsMessageKey('bookkeeping')).toBe('bookkeeping')
+  })
+
+  it('groups the sidebar as the V7 shell does: the company first, then Du, then Byrå', () => {
+    expect(SETTINGS_GROUP_ORDER).toEqual(['company', 'accounting', 'sales', 'tools', 'account', 'byra'])
+    const owner = { hasCompany: true, byraScope: true, byraRole: 'owner' as const, hasMcpExtension: true }
+    const group = (id: string) => visibleSettingsSections(owner).find((s) => s.id === id)?.group
+    expect(group('team')).toBe('byra')
+    expect(group('brand')).toBe('byra')
+    expect(group('account')).toBe('account')
+    const company = { hasCompany: true, byraScope: false, byraRole: null, hasMcpExtension: true }
+    expect(visibleSettingsSections(company).find((s) => s.id === 'collections')).toEqual({
+      id: 'collections',
+      href: '/settings/collections',
+      group: 'sales',
+    })
+  })
+
+  it('keeps every hub child pointing at a section that exists', () => {
+    const company = { hasCompany: true, byraScope: false, byraRole: null, hasMcpExtension: true }
+    const sections = new Set(ids(company))
+    for (const [child, hub] of Object.entries(SETTINGS_SECTION_PARENT)) {
+      expect(sections.has(hub), `${child} -> ${hub}`).toBe(true)
+      expect(sections.has(child), `${child} has a row of its own and a hub`).toBe(false)
+    }
+    // Koppla en agent (Agenter) opens the API section; the Inställningar sidebar leaves it to that area.
+    expect([...SETTINGS_SECTIONS_IN_AGENTS].every((id) => sections.has(id))).toBe(true)
+  })
+})
+
+describe('the invoicing-only role', () => {
+  it('is listed its own account and no section that would send it back to Fakturor', () => {
+    expect(ids({ hasCompany: true, byraScope: false, byraRole: null, hasMcpExtension: true, role: 'invoicer' })).toEqual(['account'])
+  })
+
+  it('changes nothing for the other roles, or when the role is not known', () => {
+    const scope = { hasCompany: true, byraScope: false, byraRole: null, hasMcpExtension: true }
+    for (const role of ['owner', 'admin', 'member', 'viewer', null, undefined]) {
+      expect(ids({ ...scope, role })).toEqual(ids(scope))
+    }
   })
 })

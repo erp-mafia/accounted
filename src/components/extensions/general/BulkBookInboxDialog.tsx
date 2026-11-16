@@ -232,7 +232,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>Bokför {bookable.length} underlag</DialogTitle>
           <DialogDescription>
@@ -287,7 +287,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
                 reads it off the seller and the category, and leaves out an
                 underlag whose box cannot be told (lib/vat/reverse-charge-box.ts). */}
             {vatTreatment === 'reverse_charge' && (
-              <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg bg-secondary/40 p-3 text-xs text-muted-foreground bg-control shadow-raised">
                 <strong className="font-medium text-foreground">{t('reverse_charge_check_title')}</strong>{' '}
                 {t('reverse_charge_check_body')}
               </div>
@@ -310,7 +310,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           )}
 
           {isMixedCurrency && (
-            <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            <div className="rounded-lg bg-secondary/40 p-3 text-xs text-muted-foreground bg-control shadow-raised">
               <p className="font-medium text-foreground">{t('mixed_currency_totals_label')}</p>
               <ul className="mt-2 space-y-1">
                 {underlagTotals.map(({ currency, total }) => (

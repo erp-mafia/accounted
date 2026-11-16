@@ -3,14 +3,17 @@
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
+import { OpenOnParam } from '@/components/ui/open-on-param'
 import { useTranslations } from 'next-intl'
+import { ArrowUpTrayIcon, LockClosedIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { createRefreshCoalescer } from '@/lib/arkiv/refresh-coalescer'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ArkivSearch, SEARCH_MIN } from './ArkivSearch'
-import { ArkivTree } from './ArkivTree'
+import { ArkivTree, ArkivYearPicker } from './ArkivTree'
 import { UploadDrop } from './UploadDrop'
 
 /**
@@ -24,6 +27,8 @@ import { UploadDrop } from './UploadDrop'
 function ArkivHomeInner() {
   const t = useTranslations('arkiv')
   const params = useSearchParams()
+  // A viewer uploads nothing: the button is locked and ?upload opens nothing.
+  const { canWrite } = useCanWrite()
   const [uploading, setUploading] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   // Each landed upload asks the tree to reload; a batch of files gives one reload, not one per file (J17).
@@ -31,9 +36,12 @@ function ArkivHomeInner() {
   useEffect(() => () => refresh.cancel(), [refresh])
   const [query, setQuery] = useState(params.get('q') ?? '')
   const searching = query.trim().length >= SEARCH_MIN
+  const [year, setYear] = useState('all')
 
   return (
     <div className="space-y-6">
+      {/* ?upload opens the drop zone: the Dokument area's create button links here. */}
+      {canWrite && <OpenOnParam param="upload" onOpen={() => setUploading(true)} />}
       <PageHeader
         title={t('home_title')}
         help={
@@ -49,14 +57,26 @@ function ArkivHomeInner() {
           </HelpPopover>
         }
         action={
-          <Button size="sm" onClick={() => setUploading((v) => !v)} aria-expanded={uploading}>
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setUploading((v) => !v)}
+            aria-expanded={uploading}
+          >
+            {canWrite ? <ArrowUpTrayIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
             {t('action_upload')}
           </Button>
         }
       />
-      <ArkivSearch query={query} onQueryChange={setQuery} />
-      {uploading && <UploadDrop onLanded={refresh.trigger} />}
-      {!searching && <ArkivTree refreshKey={refreshKey} />}
+      <ArkivSearch
+        query={query}
+        onQueryChange={setQuery}
+        // The year narrows the folders, not a search: it steps aside while one is on.
+        filters={searching ? undefined : <ArkivYearPicker year={year} onYear={setYear} />}
+      />
+      {uploading && canWrite && <UploadDrop onLanded={refresh.trigger} />}
+      {!searching && <ArkivTree refreshKey={refreshKey} year={year} />}
     </div>
   )
 }

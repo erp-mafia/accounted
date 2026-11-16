@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 
 export interface OpeningBalanceDifferenceRow {
   account: string
@@ -35,7 +35,7 @@ export function OpeningBalanceDifferencesTable({
   const shown = rows.slice(0, limit)
 
   return (
-    <div className="overflow-x-auto">
+    <div className="-mx-2 overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
@@ -49,9 +49,9 @@ export function OpeningBalanceDifferencesTable({
           {shown.map((row) => (
             <tr key={row.account}>
               <td className={`${TD_CLASS} font-mono`}>{row.account}</td>
-              <td className={`${TD_CLASS} text-right tabular-nums`}>{formatCurrency(row.left)}</td>
-              <td className={`${TD_CLASS} text-right tabular-nums`}>{formatCurrency(row.right)}</td>
-              <td className={`${TD_CLASS} text-right tabular-nums text-warning`}>{formatCurrency(row.difference)}</td>
+              <td className={`${TD_CLASS} text-right tabular-nums`}>{formatRowAmount(row.left)}</td>
+              <td className={`${TD_CLASS} text-right tabular-nums`}>{formatRowAmount(row.right)}</td>
+              <td className={`${TD_CLASS} text-right tabular-nums text-warning`}>{formatRowAmount(row.difference)}</td>
             </tr>
           ))}
         </tbody>

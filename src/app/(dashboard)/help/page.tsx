@@ -5,14 +5,13 @@ import { useTranslations } from 'next-intl'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { EmptyState } from '@/components/ui/empty-state'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { Button } from '@/components/ui/button'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
   ArrowTopRightOnSquareIcon,
   ChevronDownIcon,
   DocumentArrowDownIcon,
-  MagnifyingGlassIcon,
 } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
@@ -224,7 +223,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
   const t = useTranslations('help')
 
   return (
-    <div className="border-b border-border">
+    <div className="border-b-hairline">
       <button
         type="button"
         onClick={onToggle}
@@ -273,10 +272,11 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
 // Quiet link row for the resources below the glossary: title with the muted
 // description on the same line, hairline between rows.
 const LINK_ROW_CLASS =
-  'flex items-baseline gap-3 border-b border-border px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
+  'flex items-baseline gap-3 border-b-hairline px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
 
 export default function HelpPage() {
   const t = useTranslations('help')
+  const tCommon = useTranslations('common')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set())
@@ -331,14 +331,8 @@ export default function HelpPage() {
         }
       />
 
-      {/* Toolbar: search + category filter on one row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <ToolbarSearch
-          placeholder={t('search_placeholder')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          aria-label={t('search_placeholder')}
-        />
+      {/* Toolbar: the category segments first, search at the right end (V7 list toolbars) */}
+      <div className="flex flex-wrap items-center gap-2">
         <div className="max-w-full overflow-x-auto">
           <SegmentedControl
             value={selectedCategory ?? 'all'}
@@ -347,16 +341,27 @@ export default function HelpPage() {
             aria-label={t('category_filter_label')}
           />
         </div>
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label={t('search_placeholder')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
       {/* Terms list */}
       <div>
         {filteredTerms.length === 0 ? (
-          <EmptyState
-            icon={MagnifyingGlassIcon}
-            title={t('no_results_title')}
-            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
-          />
+          // No hits: one muted line in the list, not a block.
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>
+            {searchQuery && (
+              <Button variant="link" onClick={() => setSearchQuery('')}>
+                {tCommon('clear_search')}
+              </Button>
+            )}
+          </div>
         ) : (
           <div className="stagger-enter">
             {filteredTerms.map((term) => (
@@ -373,7 +378,7 @@ export default function HelpPage() {
 
       {/* Document templates */}
       <section>
-        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium text-muted-foreground">
           {t('templates_title')}
           <HelpPopover className="shrink-0">{t('templates_subtitle')}</HelpPopover>
         </h2>
@@ -395,7 +400,7 @@ export default function HelpPage() {
 
       {/* External resources */}
       <section>
-        <h2 className="px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="px-1 pb-2 text-sm font-medium text-muted-foreground">
           {t('external_resources_title')}
         </h2>
         <HelpLink

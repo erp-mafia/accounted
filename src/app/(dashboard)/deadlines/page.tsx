@@ -13,7 +13,8 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,10 +58,14 @@ export default function DeadlinesPage() {
   const companyId = company?.id
   const t = useTranslations('deadlines')
   const tCommon = useTranslations('common')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
   const [isLoading, setIsLoading] = useState(true)
+  // The last load failed: said in the page, never a toast (Stil v3 states).
+  const [loadFailed, setLoadFailed] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
@@ -147,18 +152,15 @@ export default function DeadlinesPage() {
         total: overdue?.remaining_sek ?? 0,
         unconverted: overdue?.unconverted_count ?? 0,
       })
+      setLoadFailed(false)
       return true
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      setLoadFailed(true)
       return false
     } finally {
       setIsLoading(false)
     }
-  }, [companyId, toast, t])
+  }, [companyId])
 
   useEffect(() => {
     fetchData()
@@ -299,8 +301,8 @@ export default function DeadlinesPage() {
       }
 
       // Confirm only once the row is provably back. When the reload failed,
-      // fetchData has already said so and TOAST_LIMIT is 1, so a success
-      // sentence here would evict that warning and render alone.
+      // the page already says so, and a success sentence here would
+      // describe a list the user is not looking at.
       if (!(await fetchData())) return
 
       toast({ title: t('marked_not_done', { title: deadline.title }) })
@@ -441,7 +443,7 @@ export default function DeadlinesPage() {
 
   const pageHeader = (
     <PageHeader
-      title={t('title')}
+      title={tNav('v3_deadlines')}
       help={
         <HelpPopover>
           <p>{t('help_text')}</p>
@@ -453,20 +455,12 @@ export default function DeadlinesPage() {
         </HelpPopover>
       }
       action={
-        // The primary, and the calendar subscription behind the ⋯ beside it.
+        // The calendar subscription behind the ⋯, then the primary last.
         <div className="flex items-center gap-2">
-          <Button size="sm"
-            onClick={() => setShowForm(true)}
-            disabled={!canWrite}
-            title={!canWrite ? t('read_only_tooltip') : undefined}
-          >
-            {canWrite ? <PlusIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
-            {t('new_deadline')}
-          </Button>
           {ENABLED_EXTENSION_IDS.has('calendar') && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                <Button variant="ghost" size="icon-toolbar" aria-label={tCommon('more_options')}>
                   <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -480,6 +474,14 @@ export default function DeadlinesPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          <Button size="toolbar"
+            onClick={() => setShowForm(true)}
+            disabled={!canWrite}
+            title={!canWrite ? t('read_only_tooltip') : undefined}
+          >
+            {canWrite ? <PlusIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
+            {t('new_deadline')}
+          </Button>
         </div>
       }
     />
@@ -489,14 +491,14 @@ export default function DeadlinesPage() {
     return (
       <div className="space-y-8">
         {pageHeader}
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="flex items-center gap-3 py-3">
               <Skeleton className="h-7 w-7 rounded-full" />
               <Skeleton className="h-4 w-48" />
             </div>
           ))}
-        </div>
+        </LateReveal>
       </div>
     )
   }
@@ -512,14 +514,22 @@ export default function DeadlinesPage() {
     <div className="space-y-8">
       {pageHeader}
 
-      {!hasSystemDeadlines ? (
+      {loadFailed ? (
+        // A failed refresh keeps the rows and takes the page's one line;
+        // a failed first load says so in place of the list below.
+        deadlines.length > 0 ? (
+          <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchData() }}>
+            {tCommon('refresh_failed')}
+          </AttnLine>
+        ) : null
+      ) : !hasSystemDeadlines ? (
         <AttnLine
-          action={{
+          action={canWrite ? {
             label: isGenerating ? t('generating') : t('generate_action'),
             onClick: () => {
               if (!isGenerating) void handleGenerateSystemDeadlines()
             },
-          }}
+          } : undefined}
         >
           {t('no_system_deadlines')}
         </AttnLine>
@@ -539,11 +549,19 @@ export default function DeadlinesPage() {
         </AttnLine>
       ) : null}
 
-      <DeadlineList
-        deadlines={deadlines}
-        onDeadlineToggle={handleDeadlineToggle}
-        onDeadlineEdit={openEdit}
-      />
+      {loadFailed && deadlines.length === 0 ? (
+        <LoadError
+          title={t('load_failed_title')}
+          description={t('load_failed_description')}
+          onRetry={() => void fetchData()}
+        />
+      ) : (
+        <DeadlineList
+          deadlines={deadlines}
+          onDeadlineToggle={handleDeadlineToggle}
+          onDeadlineEdit={openEdit}
+        />
+      )}
 
       <DeadlineForm
         open={showForm}
@@ -554,7 +572,7 @@ export default function DeadlinesPage() {
           }
         }}
         onSubmit={handleFormSubmit}
-        onDelete={(deadline) => {
+        onDelete={!canWrite ? undefined : (deadline) => {
           if (deadline.id) {
             const full = deadlines.find((d) => d.id === deadline.id)
             if (full) void handleDeadlineDelete(full)

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { ChevronDownIcon } from '@/components/icons'
 import {
@@ -98,6 +99,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const tCommon = useTranslations('dashboard')
   const t = useTranslations('settings_bookkeeping')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const saveSettings = useSaveSettings()
   const initialMap = settings.default_voucher_series_per_source_type || {}
   const [draft, setDraft] = useState<Partial<Record<JournalEntrySourceType, string>>>(
@@ -237,9 +239,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={handleUseStandardSet}
-            disabled={onStandardSet || isSaving}
+            disabled={!canWrite || onStandardSet || isSaving}
+            title={lockedTitle}
           >
             {t('series_standard_set_button')}
           </Button>
@@ -247,9 +249,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         </div>
         <Button
           type="button"
-          size="sm"
           onClick={handleSave}
-          disabled={!hasChanges}
+          disabled={!canWrite || !hasChanges}
+          title={lockedTitle}
           loading={isSaving}
         >
           Spara serier

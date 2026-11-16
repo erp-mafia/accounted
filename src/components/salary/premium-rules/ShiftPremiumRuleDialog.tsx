@@ -67,7 +67,7 @@ function ChipToggle({
       aria-pressed={pressed}
       onClick={onClick}
       className={cn(
-        'h-8 rounded-full border px-3 text-[12.5px] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+        'h-8 rounded-md border px-3 text-xs transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         pressed
           ? 'border-foreground bg-foreground text-background'
           : 'border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
@@ -81,7 +81,7 @@ function ChipToggle({
 function FieldError({ id, message }: { id: string; message: string | null }) {
   if (!message) return null
   return (
-    <p id={id} className="text-[12.5px] text-destructive">
+    <p id={id} className="text-xs text-destructive">
       {message}
     </p>
   )
@@ -200,7 +200,7 @@ export function ShiftPremiumRuleDialog({
         }
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{editing ? t('edit_title') : t('new_title')}</DialogTitle>
         </DialogHeader>
@@ -366,7 +366,7 @@ export function ShiftPremiumRuleDialog({
             </div>
             {!draft.applies_to_all_employees ? (
               employees.length === 0 ? (
-                <p className="text-[12.5px] text-muted-foreground">{t('employees_none')}</p>
+                <p className="text-xs text-muted-foreground">{t('employees_none')}</p>
               ) : (
                 <div className="flex flex-wrap gap-2" role="group" aria-labelledby={id('employees-label')} data-ph-mask="">
                   {employees.map((employee) => (
@@ -390,7 +390,7 @@ export function ShiftPremiumRuleDialog({
               aria-expanded={advanced}
               aria-controls={id('advanced')}
               onClick={() => setAdvanced((v) => !v)}
-              className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
               <ChevronDownIcon
                 className={cn('h-3.5 w-3.5 transition-transform duration-150', !advanced && '-rotate-90')}
@@ -435,7 +435,7 @@ export function ShiftPremiumRuleDialog({
           </div>
 
           {example ? (
-            <p className="text-[12.5px] text-muted-foreground tabular-nums">
+            <p className="text-xs text-muted-foreground tabular-nums">
               {example.monthlySalary === null
                 ? t('example_fixed', {
                     hours: example.hours,

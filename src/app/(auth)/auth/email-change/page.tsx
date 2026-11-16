@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { headers } from 'next/headers'
-import { EnvelopeIcon, EnvelopeOpenIcon, InboxStackIcon } from '@/components/icons'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/server'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
@@ -75,23 +75,14 @@ export default async function EmailChangeStatusPage({
       href = content.href
     }
   }
-  const Icon =
-    resolved === 'done' ? EnvelopeOpenIcon : resolved === 'partial' ? InboxStackIcon : EnvelopeIcon
-
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm animate-slide-up text-center">
-        <div className="flex justify-center mb-4">
-          <div className="h-14 w-14 rounded-lg bg-secondary flex items-center justify-center">
-            <Icon className="h-7 w-7 text-primary" />
-          </div>
-        </div>
-        <h1 className="font-display text-3xl tracking-tight">{content.heading}</h1>
-        <p className="text-muted-foreground text-sm mt-2">{content.body}</p>
-        <Button asChild size="lg" className="mt-8">
+    <StandalonePage>
+      <StandaloneHeading title={content.heading} sub={content.body} />
+      <StandaloneStack>
+        <Button asChild size="lg" className="w-full">
           <Link href={href}>{content.cta}</Link>
         </Button>
-      </div>
-    </div>
+      </StandaloneStack>
+    </StandalonePage>
   )
 }

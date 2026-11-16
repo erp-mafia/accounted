@@ -10,6 +10,7 @@ import {
 } from '@/lib/salary/agi/reporting-period'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { RecordHeader } from '@/components/ui/record-header'
 import { Input } from '@/components/ui/input'
 import {
   Dialog,
@@ -115,6 +116,7 @@ export function RunHeader({
 }: RunHeaderProps) {
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
+  const tNav = useTranslations('nav')
   const [correctOpen, setCorrectOpen] = useState(false)
   // The channel dialog: open only when a mailbox can be chosen.
   const [channelDialogOpen, setChannelDialogOpen] = useState(false)
@@ -263,42 +265,41 @@ export function RunHeader({
     )
   }
 
+  const statusChips = (
+    <>
+      {statusDisplay && statusDisplay.chip === null ? (
+        <span className="text-sm text-muted-foreground">{statusLabel}</span>
+      ) : (
+        <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
+      )}
+      {run.is_correction && run.corrects_run_id && (
+        <Badge variant="outline">{t('correction_badge')}</Badge>
+      )}
+    </>
+  )
+  // Separated in the text, as the other detail pages do: the top bar sets
+  // the parts inline, where a flex gap does not apply.
+  const runFacts = metaParts.map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 && ' · '}
+      {part}
+    </Fragment>
+  ))
+
   return (
     <>
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu.
           The page-header hooks turn it into the top bar; the sidebar says
           where we are, so there is no back link. */}
-      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
-              {t('title', { period: periodLabel })}
-            </h1>
-            {statusDisplay && statusDisplay.chip === null ? (
-              <span className="text-sm text-muted-foreground">{statusLabel}</span>
-            ) : (
-              <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
-            )}
-            {run.is_correction && run.corrects_run_id && (
-              <Badge variant="outline">{t('correction_badge')}</Badge>
-            )}
-          </div>
-          {/* Separated in the text, as the other detail pages do: the top bar
-              sets the parts inline, where a flex gap does not apply. */}
-          <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-            {metaParts.map((part, i) => (
-              <Fragment key={i}>
-                {i > 0 && ' · '}
-                {part}
-              </Fragment>
-            ))}
-          </p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+      <RecordHeader
+        parent={{ label: tNav('v2_salary_runs'), href: '/salary' }}
+        title={t('title', { period: periodLabel })}
+        status={statusChips}
+        facts={runFacts}
+        actions={<>
           {primaryAction && (
-            <Button size="sm" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
+            <Button size="toolbar" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
               {primaryAction.label}
             </Button>
           )}
@@ -306,7 +307,7 @@ export function RunHeader({
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label={t('more_actions')} loading={menuBusy}>
+                <Button variant="ghost" size="icon-toolbar" aria-label={t('more_actions')} loading={menuBusy}>
                   {!menuBusy && <EllipsisHorizontalIcon className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
@@ -348,7 +349,7 @@ export function RunHeader({
                         : t('action_send_payslips')}
                     </span>
                     {!hasEmailSend && (
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-xs text-muted-foreground">
                         {t('payslips_send_requires_subscription')}
                       </span>
                     )}
@@ -417,8 +418,8 @@ export function RunHeader({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       {/* How the payslips go out, when a digital mailbox can carry them: the
           email link (default), or Billo or Kivra first with the email link
@@ -431,7 +432,7 @@ export function RunHeader({
           </DialogHeader>
           <div className="space-y-3 text-[13px]" role="radiogroup" aria-label={t('payslips_channel_title')}>
             {payslipChannels.map((channel) => (
-              <label key={channel} className="flex items-start gap-3 rounded-lg border border-border p-4">
+              <label key={channel} className="flex items-start gap-3 rounded-lg p-4 bg-control shadow-raised">
                 <input
                   type="radio"
                   name="payslip-channel"
@@ -441,7 +442,7 @@ export function RunHeader({
                 />
                 <span>
                   <span className="block">{t(`payslips_channel_${channel}`)}</span>
-                  <span className="block text-[12.5px] text-muted-foreground">
+                  <span className="block text-xs text-muted-foreground">
                     {t(`payslips_channel_${channel}_hint`)}
                   </span>
                 </span>
@@ -473,7 +474,7 @@ export function RunHeader({
             <DialogDescription className="space-y-3 pt-2 text-left">
               <span className="block">{t('correct_dialog_body', { period: periodLabel })}</span>
               {run.agi_generated_at && (
-                <span className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
+                <span className="flex items-start gap-2 rounded-lg p-3 text-xs bg-control shadow-raised">
                   <ExclamationTriangleIcon className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>{t('correct_dialog_agi_warning')}</span>
                 </span>

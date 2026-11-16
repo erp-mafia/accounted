@@ -3,7 +3,7 @@
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { SpinnerIcon } from '@/components/icons'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import {
@@ -853,10 +853,10 @@ export function InvoicePaymentAccountsSettings({
                           {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
                         </button>
                         <div className="flex gap-2">
-                          <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                          <Button type="button" variant="outline" onClick={cancelEdit} disabled={isSaving}>
                             {t('cancel')}
                           </Button>
-                          <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
+                          <Button type="button" onClick={saveEdit} disabled={isSaving}>
                             {isSaving ? t('saving') : t('save_account')}
                           </Button>
                         </div>
@@ -870,12 +870,13 @@ export function InvoicePaymentAccountsSettings({
 
           {!isAdding ? (
             <div className="flex justify-end px-1 py-3">
-              <Button type="button" variant="outline" size="sm" onClick={() => startAdd()} disabled={isSaving}>
+              <Button type="button" variant="outline" onClick={() => startAdd()} disabled={isSaving}>
+                <PlusIcon className="h-4 w-4" />
                 {t('add_account')}
               </Button>
             </div>
           ) : (
-            <div className="mt-2 border-t border-border">
+            <div className="mt-2 border-t-hairline">
               <SettingsRow label={t('name_label')} htmlFor="payee-new-name" align="baseline">
                 <SettingsInput
                   id="payee-new-name"
@@ -911,17 +912,17 @@ export function InvoicePaymentAccountsSettings({
               </SettingsRow>
               {renderPayeeFields(newCurrency, 'payee-new')}
               <div className="flex justify-end gap-2 px-1 py-3">
-                <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                <Button type="button" variant="outline" onClick={cancelEdit} disabled={isSaving}>
                   {t('cancel')}
                 </Button>
-                <Button type="button" size="sm" onClick={saveNew} disabled={isSaving}>
+                <Button type="button" onClick={saveNew} disabled={isSaving}>
                   {isSaving ? t('saving') : t('create_account')}
                 </Button>
               </div>
             </div>
           )}
 
-          <p className="mt-6 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="mt-6 px-1 text-xs font-medium text-muted-foreground">
             {t('defaults_heading')}
           </p>
           {shownCurrencies.map((currency, i) => {
@@ -991,7 +992,6 @@ export function InvoicePaymentAccountsSettings({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 disabled={!currencyToAdd}
                 onClick={() => {
                   if (!currencyToAdd) return

@@ -12,9 +12,11 @@ import {
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   Select,
   SelectContent,
@@ -160,9 +162,13 @@ export function AnnualReportStudio({
 }: AnnualReportStudioProps) {
   const t = useTranslations('annualReportStudio')
   const tSteps = useTranslations('annualReportSteps')
+  const tCommon = useTranslations('common')
   const { appName } = useBranding()
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [compliance, setCompliance] = useState<ComplianceResponse | null>(null)
+  // The last load's failure, said in the page (Stil v3 states), never a toast.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [profile, setProfile] = useState<AnnualReportProfile | null>(null)
   const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
   const [saving, setSaving] = useState(false)
@@ -191,14 +197,11 @@ export function AnnualReportStudio({
       const nextVersions = (versionsBody.data ?? []) as AnnualReportVersionSummary[]
       setVersions(nextVersions)
       onVersionsChanged?.(nextVersions)
+      setLoadError(null)
     } catch (err) {
-      toast({
-        title: t('load_error'),
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
+      setLoadError(err instanceof Error ? getUserErrorMessage(err) : t('load_error'))
     }
-  }, [complianceUrl, versionsUrl, onVersionsChanged, t, toast])
+  }, [complianceUrl, versionsUrl, onVersionsChanged, t])
 
   useEffect(() => {
     void load()
@@ -387,30 +390,42 @@ export function AnnualReportStudio({
   const variantFor = (action: AnnualReportNextAction) =>
     primaryAction === action ? ('default' as const) : ('outline' as const)
   const skeleton = (
-    <div className="space-y-3 px-1 py-6" aria-busy="true" aria-label={t('loading')}>
+    <LateReveal className="space-y-3 px-1 py-6" aria-label={t('loading')}>
       <Skeleton className="h-4 w-1/3" />
       <Skeleton className="h-4 w-full" />
       <Skeleton className="h-4 w-5/6" />
       <Skeleton className="h-4 w-2/3" />
-    </div>
+    </LateReveal>
   )
 
   return (
     <div className="space-y-8">
-      {framework === 'k3' && !k3ArsredovisningEnabled() && (
+      {/* A failed reload keeps the sections on screen and takes the page's
+          one attention line; a failed first load says so in the first step. */}
+      {ready && loadError ? (
+        <div className="px-1">
+          <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>
+            {tCommon('refresh_failed')}
+          </AttnLine>
+        </div>
+      ) : framework === 'k3' && !k3ArsredovisningEnabled() ? (
         <div className="px-1">
           <AttnLine>{t('k3_draft_notice')}</AttnLine>
         </div>
-      )}
+      ) : null}
 
       <section id={annualReportStepAnchor('scope')} className="scroll-mt-24">
         <StepSectionHeader step="scope" title={t('scope_title')} />
         {!ready ? (
-          skeleton
+          loadError ? (
+            <LoadError title={t('load_error')} description={loadError} onRetry={() => void load()} />
+          ) : (
+            skeleton
+          )
         ) : (
           <>
             <p className="px-1 text-sm text-muted-foreground">{t('scope_description', { appName })}</p>
-            <div className="space-y-6 px-1 pt-4">
+            <div className="max-w-[760px] space-y-6 px-1 pt-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <BooleanQuestion
                   id="ar-public"
@@ -510,7 +525,7 @@ export function AnnualReportStudio({
               </div>
 
               {profile.is_parent_company && (
-                <div className="grid gap-4 border-t border-border pt-4 md:grid-cols-2">
+                <div className="grid gap-4 border-t-hairline pt-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="ar-group-size">{t('group_size')}</Label>
                     <Select
@@ -541,7 +556,7 @@ export function AnnualReportStudio({
               )}
 
               {framework === 'k3' && (
-                <div className="space-y-4 border-t border-border pt-4">
+                <div className="space-y-4 border-t-hairline pt-4">
                   <p className="text-sm font-medium">{t('k3_scope_title')}</p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
@@ -576,7 +591,7 @@ export function AnnualReportStudio({
               )}
 
               {framework === 'k2' && showNewK2Questions && (
-                <div className="space-y-4 border-t border-border pt-4">
+                <div className="space-y-4 border-t-hairline pt-4">
                   <p className="text-sm font-medium">{t('k2_2026_title')}</p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <BooleanQuestion id="ar-foreign-branch" label={t('foreign_branch')} value={profile.has_foreign_branch} onChange={(value) => updateProfile('has_foreign_branch', value)} />
@@ -606,7 +621,7 @@ export function AnnualReportStudio({
               )}
 
               {compliance.report_summary.proposed_dividend > 0 && (
-                <div className="space-y-3 border-t border-border pt-4">
+                <div className="space-y-3 border-t-hairline pt-4">
                   <BooleanQuestion
                     id="ar-dividend-prudence"
                     label={t('dividend_prudence')}
@@ -625,8 +640,8 @@ export function AnnualReportStudio({
               <IssueList issues={issuesFor('scope')} />
 
               <div className="flex justify-end">
-                <Button variant={variantFor('save_scope')} onClick={() => void saveProfile()} loading={saving}>
-                  {!saving && <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />}
+                <Button variant={variantFor('save_scope')} onClick={() => void saveProfile()} loading={saving} disabled={!canWrite} title={lockedTitle}>
+                  {!saving && <ArrowDownOnSquareIcon className="h-4 w-4" />}
                   {t('save_scope')}
                 </Button>
               </div>
@@ -645,9 +660,10 @@ export function AnnualReportStudio({
               <Button
                 variant={variantFor('confirm_content')}
                 onClick={() => void confirmNarrative()}
-                disabled={saving || hasUnsavedNarrative || Boolean(profile.narrative_confirmed_at)}
+                disabled={!canWrite || saving || hasUnsavedNarrative || Boolean(profile.narrative_confirmed_at)}
+                title={lockedTitle}
               >
-                <CheckCircleIcon className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="h-4 w-4" />
                 {profile.narrative_confirmed_at ? t('content_confirmed') : t('confirm_content')}
               </Button>
             </div>
@@ -665,9 +681,10 @@ export function AnnualReportStudio({
               <Button
                 variant={variantFor('confirm_roster')}
                 onClick={() => void confirmSignerRoster()}
-                disabled={saving || Boolean(profile.signer_roster_confirmed_at)}
+                disabled={!canWrite || saving || Boolean(profile.signer_roster_confirmed_at)}
+                title={lockedTitle}
               >
-                <CheckCircleIcon className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="h-4 w-4" />
                 {profile.signer_roster_confirmed_at
                   ? t('signer_roster_confirmed')
                   : t('confirm_signer_roster')}
@@ -680,9 +697,9 @@ export function AnnualReportStudio({
       <section id={annualReportStepAnchor('lock')} className="scroll-mt-24">
         <StepSectionHeader step="lock" title={tSteps('section_lock')} />
         {!ready ? (
-          skeleton
+          loadError ? null : skeleton
         ) : (
-          <div className="space-y-4 px-1 pt-2">
+          <div className="max-w-[760px] space-y-4 px-1 pt-2">
             {blockingIssues.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CheckCircleIcon className="h-4 w-4" /> {t('no_blockers')}
@@ -692,7 +709,7 @@ export function AnnualReportStudio({
             )}
             {digitalOnlyIssues.length > 0 && (
               <div className="space-y-2">
-                <p className="text-[12.5px] font-medium leading-5 text-attn">{t('digital_checks_title')}</p>
+                <p className="text-xs font-medium leading-5 text-attn">{t('digital_checks_title')}</p>
                 <ul className="space-y-2">
                   {digitalOnlyIssues.map((issue) => (
                     <li key={issue.code} className="text-sm text-muted-foreground">
@@ -714,10 +731,11 @@ export function AnnualReportStudio({
                   variant="outline"
                   className="w-full shrink-0 sm:w-auto"
                   onClick={() => void createVersion('snapshot')}
-                  disabled={creatingVersion !== null}
+                  disabled={!canWrite || creatingVersion !== null}
+                  title={lockedTitle}
                   loading={creatingVersion === 'snapshot'}
                 >
-                  {creatingVersion !== 'snapshot' && <DocumentIcon className="mr-2 h-4 w-4" />}
+                  {creatingVersion !== 'snapshot' && <DocumentIcon className="h-4 w-4" />}
                   {t('create_snapshot')}
                 </Button>
               </div>
@@ -737,10 +755,11 @@ export function AnnualReportStudio({
                   variant={variantFor('lock_version')}
                   className="w-full shrink-0 sm:w-auto"
                   onClick={() => void createVersion('finalize')}
-                  disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}
+                  disabled={!canWrite || creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}
+                  title={lockedTitle}
                   loading={creatingVersion === 'finalize'}
                 >
-                  {creatingVersion !== 'finalize' && <LockClosedIcon className="mr-2 h-4 w-4" />}
+                  {creatingVersion !== 'finalize' && <LockClosedIcon className="h-4 w-4" />}
                   {t('lock_version')}
                 </Button>
               </div>
@@ -766,7 +785,7 @@ export function AnnualReportStudio({
                             {t(`status_${version.status}`)}
                           </Badge>
                         )}
-                        <Button variant="outline" size="sm" asChild>
+                        <Button variant="outline" asChild>
                           <a href={`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf?version=${version.id}`} target="_blank" rel="noopener noreferrer">
                             {t('open_pdf')}
                           </a>

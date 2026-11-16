@@ -88,12 +88,12 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
         aria-controls={open ? panelId : undefined}
         aria-label={tNav('help')}
         className={cn(
-          // The ::after pseudo-element widens the hit area to 45px for touch
-          // without changing the 17px visual.
+          // The ::after pseudo-element widens the hit area to 44px for touch
+          // without changing the 16px visual (Stil v3: a raised dot, 11px "?").
           'relative after:absolute after:-inset-[14px]',
-          'inline-flex h-[17px] w-[17px] items-center justify-center rounded-full border border-border',
-          'text-[11px] leading-none text-muted-foreground transition-colors duration-150',
-          'hover:border-foreground/30 hover:text-foreground',
+          'inline-flex h-4 w-4 items-center justify-center rounded-full bg-control shadow-raised',
+          'text-[11px] font-medium leading-none text-muted-foreground transition-[box-shadow,color] duration-150',
+          'hover:shadow-raised-hover hover:text-foreground',
           className,
         )}
       >

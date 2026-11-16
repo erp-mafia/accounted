@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/table'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
-import { formatCurrency, cn } from '@/lib/utils'
+import { formatCurrency, cn, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 
@@ -102,8 +102,8 @@ export default function SkattekontoFilePreviewStep({
       />
 
       {orgNumberMismatch && (
-        <Card className="border-destructive/40">
-          <CardHeader className="py-3">
+        <Card>
+          <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
               <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_org_mismatch_title')}
@@ -130,8 +130,8 @@ export default function SkattekontoFilePreviewStep({
       )}
 
       {sumGap && (
-        <Card className="border-destructive/40">
-          <CardHeader className="py-3">
+        <Card>
+          <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
               <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_sum_gap_title')}
@@ -192,7 +192,7 @@ export default function SkattekontoFilePreviewStep({
       <ImportNotices notices={noticesFromParseIssues(warnings)} />
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
@@ -215,7 +215,7 @@ export default function SkattekontoFilePreviewStep({
                         row.belopp < 0 ? 'text-destructive' : undefined,
                       )}
                     >
-                      {formatCurrency(row.belopp)}
+                      {formatRowAmount(row.belopp)}
                     </TableCell>
                     <TableCell className="text-right">
                       {isDuplicate ? (
@@ -242,12 +242,12 @@ export default function SkattekontoFilePreviewStep({
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
-          <ArrowLeftIcon className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('skattekonto_back')}
         </Button>
         <Button onClick={onExecute} disabled={isLoading || importBlocked || newCount === 0}>
           {t('skattekonto_import_button', { count: newCount })}
-          <ArrowRightIcon className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

@@ -31,7 +31,7 @@ import { ReminderMailPreview, useReminderPreview } from './ReminderMailPreview'
 import { ReminderSendResults } from './ReminderSendResults'
 import { errorLocale, fetchReminderOverview, saveReminderSettings, sendPickedReminders } from './reminders-client'
 
-const SECTION_HEADING_CLASS = 'text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADING_CLASS = 'text-xs font-medium text-muted-foreground'
 
 type Busy = 'turn_on' | 'days' | 'turn_off' | 'send' | null
 
@@ -230,7 +230,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
               (loadError ? (
                 <div className="flex items-center justify-between gap-3 text-[13px] text-muted-foreground">
                   <span>{loadError}</span>
-                  <Button variant="outline" size="sm" onClick={() => void load()}>
+                  <Button variant="outline" onClick={() => void load()}>
                     {t('retry')}
                   </Button>
                 </div>
@@ -246,7 +246,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
             {mode !== 'loading' && loadError && (
               <div className="flex items-center justify-between gap-3 text-[13px] text-destructive">
                 <span>{loadError}</span>
-                <Button variant="outline" size="sm" onClick={() => void load()}>
+                <Button variant="outline" onClick={() => void load()}>
                   {t('retry')}
                 </Button>
               </div>
@@ -278,7 +278,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                   <h2 className={SECTION_HEADING_CLASS}>{t('days_heading')}</h2>
                   <div className="grid grid-cols-3 gap-3">
                     {REMINDER_LEVELS.map((dayLevel) => (
-                      <label key={dayLevel} className="block space-y-1 text-[12.5px] text-muted-foreground">
+                      <label key={dayLevel} className="block space-y-1 text-xs text-muted-foreground">
                         <span className="block truncate">{t(`level_name_${dayLevel}`)}</span>
                         <Input
                           type="number"
@@ -296,7 +296,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                     ))}
                   </div>
                   {daysCheck && !daysCheck.ok && (
-                    <p id={daysErrorId} className="text-[12.5px] text-destructive">
+                    <p id={daysErrorId} className="text-xs text-destructive">
                       {t(`days_error_${daysCheck.error}`, { level: t(`level_name_${daysCheck.level}`) })}
                     </p>
                   )}
@@ -327,7 +327,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                       />
                     </div>
                     <ReminderMailPreview result={preview.result} onRetry={preview.retry} />
-                    <p className="text-[12.5px] text-muted-foreground">{t('preview_no_fee')}</p>
+                    <p className="text-xs text-muted-foreground">{t('preview_no_fee')}</p>
                   </section>
                 )}
 
@@ -336,7 +336,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                 {pickable.length > 0 && (
                   <section className="space-y-2">
                     <p className="text-[13px]">{t('pick_question', { count: pickable.length })}</p>
-                    <p className="text-[12.5px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {mode === 'off' && !canManage ? t('pick_hint_send_only') : t('pick_hint')}
                       {overview.pickableTruncated && <> {t('pick_truncated')}</>}
                     </p>
@@ -344,7 +344,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                   </section>
                 )}
 
-                {!canManage && <p className="text-[12.5px] text-muted-foreground">{t('admin_only')}</p>}
+                {!canManage && <p className="text-xs text-muted-foreground">{t('admin_only')}</p>}
               </>
             )}
           </SlideOverBody>
@@ -459,7 +459,7 @@ function PickList({
                 </span>
                 <span className="shrink-0 tabular-nums">{formatCurrency(invoice.remaining_amount, invoice.currency)}</span>
               </span>
-              <span className="block truncate text-[12.5px] text-muted-foreground">
+              <span className="block truncate text-xs text-muted-foreground">
                 <span className="tabular-nums">{invoice.invoice_number ?? t('pick_no_number')}</span>
                 {' · '}
                 <span className="tabular-nums">{t('pick_days', { count: invoice.overdue_days })}</span>

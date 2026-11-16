@@ -10,19 +10,19 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { CalendarDaysIcon } from '@/components/icons'
+import { CalendarDaysIcon, PlusIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { AccrualReplanDialog, canReplanSchedule } from '@/components/bookkeeping/AccrualReplanDialog'
@@ -69,12 +69,15 @@ export default function AccrualSchedulesPage() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const tAccruals = useTranslations('accruals')
+  const tCommon = useTranslations('common')
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
   const [schedules, setSchedules] = useState<ScheduleWithInstallments[]>([])
   const [dueCount, setDueCount] = useState(0)
   const [activeCount, setActiveCount] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // The last load's failure, said in the page (Stil v3 states), never a toast.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [isPosting, setIsPosting] = useState(false)
   const [postConfirmOpen, setPostConfirmOpen] = useState(false)
@@ -92,16 +95,13 @@ export default function AccrualSchedulesPage() {
       setSchedules(json.data ?? [])
       setDueCount(json.due_count ?? 0)
       if (filter === 'active') setActiveCount((json.data ?? []).length)
+      setLoadError(null)
     } catch (error) {
-      toast({
-        title: t('load_failed'),
-        description: getErrorMessage(error, { context: 'journal_entry', locale }),
-        variant: 'destructive',
-      })
+      setLoadError(getErrorMessage(error, { context: 'journal_entry', locale }))
     } finally {
       setIsLoading(false)
     }
-  }, [toast, t, locale])
+  }, [locale])
 
   useEffect(() => {
     fetchSchedules(statusFilter)
@@ -219,10 +219,14 @@ export default function AccrualSchedulesPage() {
             <p>{t('help')}</p>
           </HelpPopover>
         }
-        action={canWrite ? <Button size="sm" onClick={() => setCreateOpen(true)}>{tAccruals('manual_title')}</Button> : undefined}
+        action={canWrite ? <Button size="toolbar" onClick={() => setCreateOpen(true)}><PlusIcon className="h-4 w-4" />{tAccruals('manual_title')}</Button> : undefined}
       />
 
-      {dueCount > 0 ? (
+      {loadError && schedules.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchSchedules(statusFilter) }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      ) : dueCount > 0 ? (
         <AttnLine
           action={
             canWrite
@@ -255,11 +259,18 @@ export default function AccrualSchedulesPage() {
       />
 
       {isLoading ? (
-        <div className="space-y-3">
+        <LateReveal>
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+              <Skeleton className="h-3.5 w-56" />
+              <Skeleton className="h-3.5 w-24" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadError && schedules.length === 0 ? (
+        <LoadError title={t('load_failed')} description={loadError} onRetry={() => void fetchSchedules(statusFilter)} />
       ) : schedules.length === 0 ? (
         <EmptyState
           icon={CalendarDaysIcon}
@@ -268,7 +279,7 @@ export default function AccrualSchedulesPage() {
         />
       ) : (
         <>
-          <div className="overflow-x-auto" role="region" aria-label={tNav('periodiseringar')}>
+          <div className="-mx-2 overflow-x-auto" role="region" aria-label={tNav('periodiseringar')}>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -310,17 +321,17 @@ export default function AccrualSchedulesPage() {
                         <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
                           {schedule.balance_account} → {schedule.target_account}
                         </td>
-                        <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                        <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
                           {t('period_range', {
                             from: formatDate(schedule.period_start),
                             to: formatDate(schedule.period_end),
                           })}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                          {formatCurrency(schedule.total_amount)}
+                          {formatRowAmount(schedule.total_amount)}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                          {formatCurrency(remaining)}
+                          {formatRowAmount(remaining)}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                           {schedule.status === 'cancelled' ? (
@@ -374,7 +385,7 @@ export default function AccrualSchedulesPage() {
                       </tr>
                       {isOpen && (
                         <tr data-no-stagger className="hover:bg-transparent">
-                          <td colSpan={7} className="border-b border-border bg-muted/30 p-0">
+                          <td colSpan={7} className="border-b-hairline bg-muted/30 p-0">
                             <RowFoldout>
                               <div className="space-y-3 px-6 py-4">
                                 {sourceHref && (
@@ -393,7 +404,7 @@ export default function AccrualSchedulesPage() {
                                 ))}
                                 <table className="w-full text-sm">
                                   <thead>
-                                    <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                                    <tr className="text-left text-xs font-medium text-muted-foreground">
                                       <th className="pb-2">{t('col_month')}</th>
                                       <th className="pb-2 text-right">{t('col_amount')}</th>
                                       <th className="pb-2 pl-6">{t('col_status')}</th>
@@ -402,12 +413,12 @@ export default function AccrualSchedulesPage() {
                                   </thead>
                                   <tbody>
                                     {schedule.installments.map((installment) => (
-                                      <tr key={installment.id} className="border-t border-border">
+                                      <tr key={installment.id} className="border-t-hairline">
                                         <td className="py-1.5 tabular-nums">
                                           {monthLabel(installment.period_month)}
                                         </td>
                                         <td className="py-1.5 text-right tabular-nums">
-                                          {formatCurrency(installment.amount)}
+                                          {formatRowAmount(installment.amount)}
                                         </td>
                                         <td className="py-1.5 pl-6">
                                           {installment.status === 'posted' ? (

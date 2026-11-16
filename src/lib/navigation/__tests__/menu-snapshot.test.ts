@@ -1,9 +1,10 @@
 /**
  * The menu each representative company sees (tests/fixtures/
- * representative-companies.ts): the desktop sidebar tree (nav-v2.ts), the
- * phone menu and the byrå cockpit list (nav-phone.ts), gated exactly as the
- * app gates them, from the company's database rows through the server read
- * path the assistant's UI map shares with the sidebar (loadNavGateContext).
+ * representative-companies.ts): the shell's areas and their rows (nav-v3.ts,
+ * which the phone menu is drawn from too) and the v2 tree the assistant's UI
+ * map still reads (nav-v2.ts), gated exactly as the app gates them, from the
+ * company's database rows through the server read path the assistant's UI
+ * map shares with the shell (loadNavGateContext).
  *
  * Written before the menu read the resolved capabilities object
  * (lib/modules/capabilities.ts) and kept byte-identical since: the packages
@@ -14,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboard/nav-v2'
-import { cockpitNavItems, navItems } from '@/components/dashboard/nav-phone'
+import { NAV_V3_AREAS, areaCreate, areaItems, gateAreas } from '@/components/dashboard/nav-v3'
 import { loadNavGateContext } from '@/lib/agent/ask/ui-map'
 import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
 import { createTableMockSupabase } from '@/tests/helpers'
@@ -42,15 +43,22 @@ function sidebar(ctx: NavGateContext): string[] {
   return [...gateNavTree(NAV_V2_TOP, ctx), ...gateNavTree(NAV_V2_COMPANY, ctx)].map(line)
 }
 
+/** The shell as the company sees it: one line per area that has a row left, its create route first when it has one. */
+function areas(ctx: NavGateContext): string[] {
+  return gateAreas(NAV_V3_AREAS, (item) => passesNavGates(item, ctx))
+    // Inställningar draws the settings sections; Byrå belongs to the byrå team, not to the company.
+    .filter((area) => area.id !== 'settings' && area.id !== 'byra' && areaItems(area).length > 0)
+    .map((area) => `${area.id}${areaCreate(area) ? ` [+ ${areaCreate(area)!.href}]` : ''}: ${areaItems(area).map((item) => item.href).join(' ')}`)
+}
+
 describe('the menu of each representative company', () => {
   it.each(REPRESENTATIVE_COMPANIES.map((c) => [c.name, c] as const))('%s', async (_name, company) => {
     const { supabase } = createTableMockSupabase(representativeCompanyTables(company))
     const ctx = await loadNavGateContext(supabase as unknown as SupabaseClient, company.id)
     expect(ctx).not.toBeNull()
     expect({
-      sidebar: sidebar(ctx!),
-      phone: navItems.filter((i) => passesNavGates(i, ctx!)).map((i) => i.href),
-      cockpit: cockpitNavItems.filter((i) => passesNavGates(i, ctx!)).map((i) => i.href),
+      areas: areas(ctx!),
+      assistantMap: sidebar(ctx!),
     }).toMatchSnapshot()
   })
 })
@@ -72,11 +80,14 @@ describe('the menu of a company with a stored profile', () => {
         : { data: row }
     const { supabase } = createTableMockSupabase(tables as never)
     const ctx = await loadNavGateContext(supabase as unknown as SupabaseClient, company.id)
-    const hrefs = [...gateNavTree(NAV_V2_TOP, ctx!), ...gateNavTree(NAV_V2_COMPANY, ctx!)].flatMap((item) => [
+    const hrefs = gateAreas(NAV_V3_AREAS, (item) => passesNavGates(item, ctx!))
+      .filter((area) => area.id !== 'byra')
+      .flatMap((area) => areaItems(area).map((item) => item.href))
+    const assistantMap = [...gateNavTree(NAV_V2_TOP, ctx!), ...gateNavTree(NAV_V2_COMPANY, ctx!)].flatMap((item) => [
       item.href,
       ...(item.sub ?? []).map((s) => s.href),
     ])
-    return { hrefs, phone: navItems.filter((i) => passesNavGates(i, ctx!)).map((i) => i.href) }
+    return { hrefs, assistantMap }
   }
 
   it('shows exactly the menu of no profile when Standard is stored', async () => {

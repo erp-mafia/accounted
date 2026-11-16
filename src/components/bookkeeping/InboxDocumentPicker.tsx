@@ -11,7 +11,9 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useToast } from '@/components/ui/use-toast'
@@ -106,6 +108,7 @@ function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) 
 
 export default function InboxDocumentPicker({ open, onClose, journalEntryId, onLinked, onSelect }: Props) {
   const t = useTranslations('journal_attachments')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
@@ -281,7 +284,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{showingLinked ? t('picker_linked_title') : t('picker_title')}</DialogTitle>
           </DialogHeader>
@@ -309,26 +312,30 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
           </div>
 
           {!listLoading && listCount > 0 && (
-            <div className="flex justify-end px-1 text-[11px] text-muted-foreground tabular-nums">
+            <div className="flex justify-end px-1 text-xs text-muted-foreground tabular-nums">
               {t('picker_results', { count: listCount })}
             </div>
           )}
 
           <div className="max-h-[55vh] overflow-y-auto -mx-6 px-6 divide-y">
             {listLoading ? (
-              <div className="space-y-3 py-3">
+              <LateReveal className="space-y-3 py-3">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
-              </div>
+              </LateReveal>
             ) : showingLinked ? (
               linkedFiltered.length === 0 ? (
-                <div className="py-10 flex flex-col items-center gap-2 text-center">
-                  <DocumentTextIcon className="h-6 w-6 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_linked_empty')}
+                hasSearch ? (
+                  <p className="py-3 text-[13px] text-muted-foreground">
+                    <span data-ph-mask="">{t('picker_empty_search', { query: search.trim() })}</span>{' '}
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearch('')}>
+                      {tCommon('clear_search')}
+                    </button>
                   </p>
-                </div>
+                ) : (
+                  <EmptyState icon={DocumentTextIcon} title={t('picker_linked_empty')} />
+                )
               ) : (
                 linkedFiltered.map((it) => (
                   <button
@@ -355,12 +362,16 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                 ))
               )
             ) : filtered.length === 0 ? (
-              <div className="py-10 flex flex-col items-center gap-2 text-center">
-                <InboxIcon className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_empty')}
+              hasSearch ? (
+                <p className="py-3 text-[13px] text-muted-foreground">
+                  <span data-ph-mask="">{t('picker_empty_search', { query: search.trim() })}</span>{' '}
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearch('')}>
+                    {tCommon('clear_search')}
+                  </button>
                 </p>
-              </div>
+              ) : (
+                <EmptyState icon={InboxIcon} title={t('picker_empty')} />
+              )
             ) : (
               filtered.map((it) => {
                 const isLinking = linkingId === it.document_id
@@ -403,7 +414,6 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                     </button>
                     <Button
                       variant="ghost"
-                      size="sm"
                       className="shrink-0 text-muted-foreground"
                       onClick={(e) => {
                         e.stopPropagation()
@@ -421,7 +431,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       </Dialog>
 
       <Dialog open={previewItem !== null} onOpenChange={(o) => !o && setPreviewItem(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent size="wide">
           <DialogHeader>
             {/* data-ph-mask: the file name and supplier details are user data */}
             <DialogTitle data-ph-mask="" className="truncate pr-6">{previewItem?.file_name}</DialogTitle>
@@ -442,8 +452,8 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                 src={previewSrc}
                 kind={pickerPreviewKind(previewItem.mime_type, previewItem.file_name)}
                 label={previewItem.file_name}
-                className="h-[70vh] w-full rounded-lg border"
-                imageClassName="max-h-[70vh] w-full rounded-lg border object-contain"
+                className="h-[70vh] w-full rounded-lg bg-control shadow-raised"
+                imageClassName="max-h-[70vh] w-full object-contain"
                 fallback={
                   <a
                     href={previewSrc}
@@ -476,7 +486,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       </Dialog>
 
       <Dialog open={copyItem !== null} onOpenChange={(o) => !o && setCopyItem(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent size="wide">
           <DialogHeader>
             {/* data-ph-mask: the file name is user data */}
             <DialogTitle data-ph-mask="" className="truncate pr-6">{copyItem?.title}</DialogTitle>
@@ -493,8 +503,8 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                 src={copySrc}
                 kind={pickerPreviewKind(null, copyItem.file_name)}
                 label={copyItem.file_name}
-                className="h-[60vh] w-full rounded-lg border"
-                imageClassName="max-h-[60vh] w-full rounded-lg border object-contain"
+                className="h-[60vh] w-full rounded-lg bg-control shadow-raised"
+                imageClassName="max-h-[60vh] w-full object-contain"
                 fallback={
                   <a
                     href={copySrc}

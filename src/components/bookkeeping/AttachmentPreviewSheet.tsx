@@ -23,7 +23,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { postDocumentForm } from '@/lib/documents/direct-upload'
@@ -216,7 +217,7 @@ export default function AttachmentPreviewSheet({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-4xl overflow-y-auto">
+      <DialogContent size="document">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
         </DialogHeader>
@@ -230,17 +231,12 @@ export default function AttachmentPreviewSheet({
         />
 
         {loading ? (
-          <div className="space-y-3">
+          <LateReveal className="space-y-3">
             <Skeleton className="h-5 w-2/3" />
             <Skeleton className="h-[60vh] w-full rounded-lg" />
-          </div>
+          </LateReveal>
         ) : documents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="mb-3 rounded-full bg-muted p-3">
-              <PaperClipIcon className="h-5 w-5 text-muted-foreground" />
-            </div>
-            <p className="text-sm text-muted-foreground">{t('empty')}</p>
-          </div>
+          <EmptyState icon={PaperClipIcon} title={t('empty')} />
         ) : (
           <div className="space-y-6">
             {documents.map((doc) => {
@@ -269,7 +265,7 @@ export default function AttachmentPreviewSheet({
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         onClick={() => handleOpenReplacePicker(doc.id)}
                         loading={isReplacing}
                         title={t('replace')}
@@ -279,7 +275,7 @@ export default function AttachmentPreviewSheet({
                       </Button>
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         onClick={() => setBlockedDoc(doc)}
                         title={t('remove')}
                         aria-label={t('remove')}
@@ -301,7 +297,7 @@ export default function AttachmentPreviewSheet({
                   </div>
 
                   {kind === 'pdf' && integrity[doc.id] === 'invalid' && (
-                    <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
+                    <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg p-6 text-center bg-control shadow-raised">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
                         <ExclamationTriangleIcon className="h-5 w-5 text-attn" />
                       </div>
@@ -340,9 +336,9 @@ export default function AttachmentPreviewSheet({
                         src={inlineSrc}
                         kind="pdf"
                         label={doc.file_name}
-                        className="h-[70vh] w-full rounded-lg border border-border"
+                        className="h-[70vh] w-full rounded-lg bg-control shadow-raised"
                         fallback={
-                          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg p-4 text-center text-sm text-muted-foreground bg-control shadow-raised">
                             {t('not_previewable')}
                             {doc.download_url && (
                               <>
@@ -364,7 +360,7 @@ export default function AttachmentPreviewSheet({
                   )}
 
                   {kind === 'image' && (
-                    <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
+                    <div className="overflow-hidden">
                       <DocumentPreview
                         src={inlineSrc}
                         kind="image"
@@ -376,7 +372,7 @@ export default function AttachmentPreviewSheet({
                   )}
 
                   {!previewable && (
-                    <p className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                    <p className="rounded-lg p-4 text-sm text-muted-foreground bg-control shadow-raised">
                       {t('not_previewable')}
                     </p>
                   )}
@@ -405,7 +401,7 @@ export default function AttachmentPreviewSheet({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <div className="rounded-lg p-3 text-sm bg-control shadow-raised">
               <div className="flex items-start gap-2">
                 <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-muted-foreground">{tj('remove_blocked_hint')}</p>

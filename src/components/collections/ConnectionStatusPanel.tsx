@@ -97,7 +97,7 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
           </SettingsRowNote>
           {canManage && connection.state !== 'disconnected' && (connection.submittedAt || connection.onboarded) ? (
             <SettingsRowEnd>
-              <Button variant="outline" size="sm" loading={busy === 'refresh'} onClick={() => run('refresh', '/refresh')}>
+              <Button variant="outline" loading={busy === 'refresh'} onClick={() => run('refresh', '/refresh')}>
                 {t('refresh')}
               </Button>
             </SettingsRowEnd>
@@ -114,7 +114,7 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
               </a>
             </SettingsRow>
           ) : null}
-          <label className="flex items-start gap-3 border-b border-border py-3 text-[13px]">
+          <label className="flex items-start gap-3 border-b-hairline py-3 text-[13px]">
             <Checkbox className="mt-0.5" checked={termsAccepted} onCheckedChange={(v) => setTermsAccepted(v === true)} />
             <span>{tp('terms_accept')}</span>
           </label>
@@ -135,7 +135,7 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
           <SettingsRow label={t('sign')}>
             {signOpened ? <SettingsRowNote>{t('sign_opened')}</SettingsRowNote> : null}
             <SettingsRowEnd>
-              <Button size="sm" loading={busy === 'sign'} onClick={sign}>
+              <Button loading={busy === 'sign'} onClick={sign}>
                 {t('sign')}
               </Button>
             </SettingsRowEnd>
@@ -149,7 +149,7 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
               value={signerEmail}
               onChange={(e) => setSignerEmail(e.target.value)}
             />
-            <Button variant="outline" size="sm" disabled={!isEmail(signerEmail.trim())} loading={busy === 'link'} onClick={sendLink}>
+            <Button variant="outline" disabled={!isEmail(signerEmail.trim())} loading={busy === 'link'} onClick={sendLink}>
               {t('sign_send_link')}
             </Button>
             {sentTo ? <SettingsRowNote className="basis-full">{t('sign_link_sent', { email: sentTo })}</SettingsRowNote> : null}
@@ -157,7 +157,7 @@ export function ConnectionStatusPanel({ data, connection, onChanged }: Props) {
         </SettingsGroup>
       ) : null}
 
-      {message ? <p className="pt-4 text-[12.5px] text-attn">{message}</p> : null}
+      {message ? <p className="pt-4 text-xs text-attn">{message}</p> : null}
 
       {canManage && connection.state !== 'active' && connection.state !== 'disconnected' ? (
         <div className="flex justify-end pt-6">

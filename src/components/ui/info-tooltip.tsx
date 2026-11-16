@@ -27,7 +27,7 @@ const TooltipContent = React.forwardRef<
       sideOffset={sideOffset}
       data-ph-unmask=""
       className={cn(
-        'z-50 overflow-hidden px-3 py-2 text-sm',
+        'z-50 overflow-hidden px-2.5 py-1.5 text-[12px] leading-4',
         POPOVER_SURFACE_CLASS,
         RADIX_POPOVER_MOTION_CLASS,
         className
@@ -100,7 +100,7 @@ function InfoTooltip({
               {children}
               <Icon
                 className={cn(
-                  'h-3.5 w-3.5 text-muted-foreground/70 hover:text-muted-foreground transition-colors flex-shrink-0',
+                  'h-3.5 w-3.5 text-muted-foreground hover:text-muted-foreground transition-colors flex-shrink-0',
                   iconClassName
                 )}
               />
@@ -109,7 +109,7 @@ function InfoTooltip({
             <button
               type="button"
               className={cn(
-                'inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground/70 hover:text-muted-foreground hover:bg-secondary/60 transition-colors cursor-help',
+                'inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground hover:text-muted-foreground hover:bg-secondary/60 transition-colors cursor-help',
                 className
               )}
             >
@@ -124,7 +124,7 @@ function InfoTooltip({
           className="max-w-[var(--tooltip-max-width)]"
           style={{ '--tooltip-max-width': maxWidth } as React.CSSProperties}
         >
-          <div className="text-sm leading-relaxed">{content}</div>
+          <div className="text-[12px] leading-[18px]">{content}</div>
         </TooltipContent>
       </Tooltip>
   )

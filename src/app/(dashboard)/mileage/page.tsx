@@ -29,10 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -43,6 +44,7 @@ import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memo
 import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
+  ArrowDownTrayIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   EllipsisHorizontalIcon,
@@ -141,6 +143,9 @@ export default function MileagePage() {
 
   const [trips, setTrips] = useState<MileageTrip[]>([])
   const [loading, setLoading] = useState(true)
+  // The last read failed. With no trips on screen the list says so in place
+  // of them; trips already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [month, setMonth] = useState<string>('all')
 
   const [formOpen, setFormOpen] = useState(false)
@@ -170,6 +175,10 @@ export default function MileagePage() {
   const tSalary = useTranslations('salary')
   const [pushOpen, setPushOpen] = useState(false)
   const [pushRuns, setPushRuns] = useState<OpenSalaryRun[] | null>(null)
+  // A failed read of the runs or of a run's employees says so in the dialog,
+  // where the picker would be, instead of reading as "none".
+  const [pushRunsFailed, setPushRunsFailed] = useState(false)
+  const [pushEmployeesFailed, setPushEmployeesFailed] = useState(false)
   const [pushRunId, setPushRunId] = useState('')
   const [pushEmployees, setPushEmployees] = useState<RunEmployeeOption[] | null>(null)
   const [pushEmployeeId, setPushEmployeeId] = useState('')
@@ -185,17 +194,18 @@ export default function MileagePage() {
     try {
       const res = await fetch('/api/mileage/trips')
       if (!res.ok) {
-        toast({ title: t('load_error'), variant: 'destructive' })
+        setLoadFailed(true)
         return
       }
       const body = await res.json()
       setTrips(body.data || [])
+      setLoadFailed(false)
     } catch {
-      toast({ title: t('load_error'), variant: 'destructive' })
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [t, toast])
+  }, [])
 
   useEffect(() => {
     loadTrips()
@@ -442,12 +452,13 @@ export default function MileagePage() {
     const generation = ++pushEmployeesRequest.current
     setPushEmployees(null)
     setPushEmployeeId('')
+    setPushEmployeesFailed(false)
     try {
       const res = await fetch(`/api/salary/runs/${runId}`)
       const body = await res.json().catch(() => null)
       if (generation !== pushEmployeesRequest.current) return
       if (!res.ok) {
-        toast({ title: t('runs_load_error'), variant: 'destructive' })
+        setPushEmployeesFailed(true)
         setPushEmployees([])
         return
       }
@@ -465,7 +476,7 @@ export default function MileagePage() {
       if (options.length === 1) setPushEmployeeId(options[0].id)
     } catch {
       if (generation !== pushEmployeesRequest.current) return
-      toast({ title: t('runs_load_error'), variant: 'destructive' })
+      setPushEmployeesFailed(true)
       setPushEmployees([])
     }
   }
@@ -482,6 +493,7 @@ export default function MileagePage() {
     setPushTo(bounds.to)
     setPushIncludeUnassigned(true)
     setPushRuns(null)
+    setPushRunsFailed(false)
     setPushRunId('')
     setPushEmployees(null)
     setPushEmployeeId('')
@@ -491,7 +503,7 @@ export default function MileagePage() {
       const res = await fetch('/api/salary/runs')
       const body = await res.json().catch(() => null)
       if (!res.ok) {
-        toast({ title: t('runs_load_error'), variant: 'destructive' })
+        setPushRunsFailed(true)
         setPushRuns([])
         return
       }
@@ -501,7 +513,7 @@ export default function MileagePage() {
       setPushRuns(open)
       if (open.length === 1) selectPushRun(open[0].id)
     } catch {
-      toast({ title: t('runs_load_error'), variant: 'destructive' })
+      setPushRunsFailed(true)
       setPushRuns([])
     }
   }
@@ -565,7 +577,7 @@ export default function MileagePage() {
               {(canSettle || canExport) && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
+                    <Button variant="ghost" size="icon-toolbar" aria-label={tCommon('more_options')}>
                       <EllipsisHorizontalIcon className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -580,6 +592,7 @@ export default function MileagePage() {
                     {canExport && (
                       <DropdownMenuItem asChild>
                         <a href={exportHref} download>
+                          <ArrowDownTrayIcon className="h-4 w-4" />
                           {t('export_csv')}
                         </a>
                       </DropdownMenuItem>
@@ -588,8 +601,8 @@ export default function MileagePage() {
                 </DropdownMenu>
               )}
               {canWrite && (
-                <Button size="sm" onClick={openCreate}>
-                  <PlusIcon className="mr-2 h-4 w-4" />
+                <Button size="toolbar" onClick={openCreate}>
+                  <PlusIcon className="h-4 w-4" />
                   {t('new_trip')}
                 </Button>
               )}
@@ -618,12 +631,28 @@ export default function MileagePage() {
         </div>
       </div>
 
+      {loadFailed && trips.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadTrips() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-2" role="status">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </div>
+        <LateReveal role="status">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="hidden h-3.5 w-48 sm:block" />
+              <Skeleton className="ml-auto h-3.5 w-10" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : loadFailed && trips.length === 0 ? (
+        <LoadError title={t('load_error')} onRetry={() => void loadTrips()} />
+      ) : visibleTrips.length === 0 && trips.length > 0 ? (
+        <p className="py-3 text-[13px] text-muted-foreground">{t('no_trips_in_month')}</p>
       ) : visibleTrips.length === 0 ? (
         <EmptyState
           icon={MapIcon}
@@ -636,7 +665,7 @@ export default function MileagePage() {
         // One-line rows (convention 4): purpose truncates with the full text
         // in the tooltip and steps aside on a phone; the wrapper scrolls
         // instead of the page.
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -722,7 +751,7 @@ export default function MileagePage() {
           setFormOpen(open)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{editingId ? t('edit_trip') : t('new_trip')}</DialogTitle>
           </DialogHeader>
@@ -938,7 +967,7 @@ export default function MileagePage() {
       </Dialog>
 
       <Dialog open={bookOpen} onOpenChange={setBookOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('book_period')}</DialogTitle>
           </DialogHeader>
@@ -1006,20 +1035,22 @@ export default function MileagePage() {
       </Dialog>
 
       <Dialog open={pushOpen} onOpenChange={setPushOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('push_title')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {pushRuns === null ? (
-              <div className="space-y-2" role="status">
+              <LateReveal className="space-y-2" role="status">
                 <Skeleton className="h-9 w-full" />
                 <Skeleton className="h-9 w-full" />
-              </div>
+              </LateReveal>
+            ) : pushRunsFailed ? (
+              <LoadError title={t('runs_load_error')} onRetry={() => void openPush()} />
             ) : pushRuns.length === 0 ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">{t('push_no_runs')}</p>
-                <Button size="sm" variant="secondary" asChild>
+                <Button variant="outline" asChild>
                   <Link href="/salary">{t('push_go_to_salary')}</Link>
                 </Button>
               </div>
@@ -1047,7 +1078,16 @@ export default function MileagePage() {
                   <div className="space-y-2">
                     <Label htmlFor="push_employee">{t('field_employee')}</Label>
                     {pushEmployees === null ? (
-                      <Skeleton className="h-9 w-full" />
+                      <LateReveal>
+                        <Skeleton className="h-9 w-full" />
+                      </LateReveal>
+                    ) : pushEmployeesFailed ? (
+                      <div className="flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground" role="alert">
+                        <span>{t('runs_load_error')}</span>
+                        <Button variant="link" onClick={() => void loadRunEmployees(pushRunId)}>
+                          {tCommon('retry')}
+                        </Button>
+                      </div>
                     ) : pushEmployees.length === 0 ? (
                       <p className="text-sm text-muted-foreground">{t('push_no_employees')}</p>
                     ) : (

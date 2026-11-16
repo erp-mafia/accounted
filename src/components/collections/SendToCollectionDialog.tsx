@@ -140,9 +140,9 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
 
   return (
     <Dialog open={open} onOpenChange={(next) => !sending && onOpenChange(next)}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
-          <DialogTitle data-ph-mask="" className="flex items-center gap-2.5 font-display text-lg tracking-tight">
+          <DialogTitle data-ph-mask="" className="flex items-center gap-2.5 text-lg">
             {availability.displayName && (
               <BrandMark name={availability.displayName} variant="mark" size={28} logoUrl={availability.markUrl} />
             )}
@@ -194,7 +194,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
               <>
                 {readiness.blocks.length > 0 && (
                   <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('send_checklist_heading')}</p>
+                    <p className="text-xs font-medium text-muted-foreground">{tp('send_checklist_heading')}</p>
                     <ul className="mt-2 space-y-1 text-[13px]">
                       {readiness.blocks.map((block) => (
                         <li key={block.code} className="flex items-baseline gap-2">
@@ -270,7 +270,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
 
                 {readiness.deliveryAttestation && (
                   <div className="space-y-2 text-[13px]">
-                    <p className="text-attn text-[12.5px]">
+                    <p className="text-attn text-xs">
                       {tp(readiness.deliveryAttestation === 'imported' ? 'imported_warning' : 'not_delivered_warning')}
                     </p>
                     <label className="flex items-start gap-2">
@@ -281,7 +281,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                 )}
                 {readiness.responseAttestation && (
                   <div className="space-y-2 text-[13px]">
-                    <p className="text-attn text-[12.5px]">{tp('response_warning', { response: readiness.responseAttestation })}</p>
+                    <p className="text-attn text-xs">{tp('response_warning', { response: readiness.responseAttestation })}</p>
                     <label className="flex items-start gap-2">
                       <Checkbox checked={responseAttested} onCheckedChange={(v) => setResponseAttested(v === true)} className="mt-0.5" />
                       <span>{tp('response_attest')}</span>
@@ -291,12 +291,12 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
 
                 {startSteps.length > 1 && (
                   <fieldset className="space-y-2">
-                    <legend className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tp('send_start_with')}</legend>
+                    <legend className="text-xs font-medium text-muted-foreground">{tp('send_start_with')}</legend>
                     {startSteps.map((step) => (
                       <label
                         key={step}
                         className={cn(
-                          'flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-2 text-[13px] transition-colors duration-150 hover:bg-secondary/35',
+                          'flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-[13px] transition-colors duration-150 hover:bg-secondary/35 bg-control shadow-raised',
                           startStep === step && 'bg-secondary/40',
                         )}
                       >
@@ -310,7 +310,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                         />
                         <span>
                           <span className="block">{tp(step === 'reminder' ? 'send_start_reminder' : 'send_start_collection')}</span>
-                          <span className="block text-[12.5px] text-muted-foreground">
+                          <span className="block text-xs text-muted-foreground">
                             {tp(step === 'reminder' ? 'send_start_reminder_help' : 'send_start_collection_help')}
                           </span>
                         </span>
@@ -319,7 +319,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
                   </fieldset>
                 )}
 
-                <details className="group text-[12.5px] text-muted-foreground">
+                <details className="group text-xs text-muted-foreground">
                   <summary className="flex cursor-pointer list-none items-center gap-1 text-[13px] text-foreground [&::-webkit-details-marker]:hidden">
                     <ChevronRightIcon aria-hidden className="h-3.5 w-3.5 transition-transform duration-150 group-open:rotate-90" />
                     {tp('send_details_summary')}

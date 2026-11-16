@@ -288,7 +288,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         title: 'Ändringsverifikation skapad',
         description: 'Storno och rättelse har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
+          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
             Visa rättelsen
           </Button>
         ) : undefined,
@@ -309,7 +309,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -394,13 +394,13 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </div>
 
           {accountsStatus !== 'ready' && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
+            <div className="flex items-center justify-between gap-3 rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
               <span className="flex items-center gap-2">
                 {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (
-                <Button variant="outline" size="sm" onClick={() => void refreshAccounts()}>
+                <Button variant="outline" onClick={() => void refreshAccounts()}>
                   {t('accounts_retry')}
                 </Button>
               )}
@@ -455,7 +455,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           )}
 
           {linesNegateOriginal && (
-            <p className="attn text-[12.5px]">
+            <p className="attn text-xs">
               {t('negates_original_inline', { voucher: formatVoucher(entry) })}{' '}
               <button
                 type="button"
@@ -484,7 +484,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             already sits deep in a rättelse chain. Advisory, never a dead end:
             "Rätta ändå" resubmits with allow_deep_chain=true. */}
         <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
               <DialogTitle>{t('deep_chain_title')}</DialogTitle>
             </DialogHeader>
@@ -509,7 +509,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             with debit and credit swapped. Cancelling is the default; the
             override is for an original booked the wrong way round. */}
         <Dialog open={negatesOriginal} onOpenChange={(next) => { if (!next) setNegatesOriginal(false) }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
               <DialogTitle>{t('negates_original_title')}</DialogTitle>
             </DialogHeader>

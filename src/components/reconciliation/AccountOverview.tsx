@@ -7,8 +7,10 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
@@ -108,10 +110,13 @@ interface AccountOverviewProps {
    * sign-off details and Öppna igen render there, so the date is said once.
    */
   headerSlot?: HTMLElement | null
+  /** Where the sign-off primary renders instead of the actions row: the top bar's action group. */
+  primarySlot?: HTMLElement | null
 }
 
-export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually, headerSlot = null }: AccountOverviewProps) {
+export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually, headerSlot = null, primarySlot = null }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const { toast } = useToast()
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
@@ -122,6 +127,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const [items, setItems] = useState<ItemsPayload | null>(null)
   const [loadError, setLoadError] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  // Every action here writes (match, book, sign off, reopen): locked while one runs, and for a read-only member.
+  const { canWrite } = useViewerLock()
+  const locked = busy !== null || !canWrite
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
   // Skattekonto: every proposal linked in one previewed action (PH 171).
@@ -505,24 +513,17 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
 
   // ---- render -------------------------------------------------------------
 
-  if (loadError) {
-    return (
-      <div>
-        <div className="min-w-0">
-          <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
-            {t('load_failed')}
-          </AttnLine>
-        </div>
-      </div>
-    )
+  // Nothing on screen yet: the load failure says so in place of the account.
+  if (loadError && (!status || !items)) {
+    return <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
   }
 
   if (!status || !items) {
     // The silhouette of the page that follows: the strip of figures, the
     // action row and the paired rows, so nothing moves when the data lands.
     return (
-      <div className="space-y-6" aria-busy>
-        <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
+      <LateReveal className="space-y-6">
+        <div className="grid grid-cols-2 gap-6 border-b-hairline pb-4 md:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="space-y-2">
               <Skeleton className="h-3 w-24" />
@@ -531,25 +532,25 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           ))}
         </div>
         <div className="flex items-center gap-4">
-          <Skeleton className="h-9 w-64 rounded-full" />
+          <Skeleton className="h-8 w-64 rounded-md" />
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-3 w-24" />
         </div>
         <div className="space-y-px">
-          <div className="flex items-center gap-6 border-b border-border py-2">
+          <div className="flex items-center gap-6 border-b-hairline py-2">
             <Skeleton className="h-3 w-12" />
             <Skeleton className="h-3 w-24" />
             <Skeleton className="ml-auto h-3 w-16" />
           </div>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-6 border-b border-border py-3.5">
+            <div key={i} className="flex items-center gap-6 border-b-hairline py-3.5">
               <Skeleton className="h-3.5 w-20" />
               <Skeleton className="h-3.5 w-48" />
               <Skeleton className="ml-auto h-3.5 w-20" />
             </div>
           ))}
         </div>
-      </div>
+      </LateReveal>
     )
   }
 
@@ -779,10 +780,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         {/* The two sides and what separates them, on one line (Kick's
             reconciliation strip): the outside, the ledger, the difference,
             the part of it nothing explains. */}
-        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b-hairline pb-4 md:grid-cols-4">
           {tiles.map((tile) => (
             <div key={tile.key} className="min-w-0">
-              <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+              <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <span className="truncate">{tile.label}</span>
                 {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
               </div>
@@ -796,18 +797,18 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               >
                 {tile.value}
               </div>
-              {tile.sub && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{tile.sub}</div>}
+              {tile.sub && <div className="mt-0.5 truncate text-xs text-muted-foreground">{tile.sub}</div>}
             </div>
           ))}
         </div>
         <p className={cn('text-[13px]', status.is_reconciled && !balanceDiffers ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
-          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, verdict && 'ml-3', 'text-[12.5px]')}>
+          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, verdict && 'ml-3', 'text-xs')}>
             {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
           </button>
         </p>
         {balanceCheck && (
-          <div className="space-y-1 text-[12.5px] text-muted-foreground" data-ph-mask>
+          <div className="space-y-1 text-xs text-muted-foreground" data-ph-mask>
             <p>
               {balanceDiffers
                 ? t('balance_check_diff', {
@@ -834,14 +835,14 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           <div className="space-y-2">
             <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
             {bankReportedLine && (
-              <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+              <p className="text-xs text-muted-foreground" data-ph-mask>
                 {bankReportedLine}
               </p>
             )}
             {/* Where the books stood when the bank's history begins: part of
                 the bridge's story, so it waits behind the bridge. */}
             {openingDifference != null && (
-              <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+              <p className="text-xs text-muted-foreground" data-ph-mask>
                 {Math.abs(openingDifference) < 0.005
                   ? t('before_history_opening_ok', { account: status.account_number })
                   : t('before_history_opening_diff', {
@@ -853,7 +854,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           </div>
         )}
         {beforeCount > 0 && historyStart && (
-          <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+          <p className="text-xs text-muted-foreground" data-ph-mask>
             {t('before_history_line', {
               count: beforeCount,
               date: formatDate(historyStart),
@@ -865,7 +866,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           </p>
         )}
         {periodBeforeHistory && historyStart && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {t('before_history_window', { date: formatDate(historyStart) })}{' '}
             <Link href="/import?mode=bank" className={QUIET_LINK_CLASS}>
               {t('before_history_import')}
@@ -878,7 +879,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           verifikat already covers, with the way to link them. One line: the
           why behind the "?". A skattekonto without a saldo has nothing to be
           stale: the verdict already says why there is none (crm#1701). */}
-      {status.stale && !lacksSkatteverketSaldo(status) ? (
+      {loadError ? (
+        // A failed refresh keeps the rows and takes the one notice slot.
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : status.stale && !lacksSkatteverketSaldo(status) ? (
         <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
       ) : isSkv && status.skattekonto?.covered ? (
         <AttnLine
@@ -917,7 +921,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             <button
               type="button"
               onClick={() => void reopen(status.signoff!.id)}
-              disabled={busy !== null}
+              disabled={locked}
               className={cn(QUIET_LINK_CLASS, 'text-xs')}
             >
               {t('reopen')}
@@ -934,31 +938,40 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           // its proposals directly, as before. Outline: the one filled
           // button on the page is the sign-off.
           <Button
-            size="sm"
             variant="outline"
             onClick={() => (isSkv ? setLinkAllOpen(true) : void matchProposals())}
-            disabled={busy !== null}
+            disabled={locked}
           >
             {t('action_match_proposals', { count: proposedCount })}
           </Button>
         )}
         {isSkv && bookableIds.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => void bookAll()} disabled={busy !== null}>
+          <Button variant="outline" onClick={() => void bookAll()} disabled={locked}>
             {t('action_book_rows', { count: bookableIds.length })}
           </Button>
         )}
-        {signoffEnabled && (
-          <Button size="sm" onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
-            {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
-          </Button>
-        )}
+        {/* The page's one filled primary rides in the top bar when the
+            workspace gives a slot for it (V7 Pengar, Avstämning). */}
+        {signoffEnabled &&
+          (primarySlot ? (
+            createPortal(
+              <Button size="toolbar" onClick={() => setSignoffOpen(true)} disabled={locked}>
+                {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
+              </Button>,
+              primarySlot,
+            )
+          ) : (
+            <Button onClick={() => setSignoffOpen(true)} disabled={locked}>
+              {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
+            </Button>
+          ))}
         {!isSkv && !isManual && (
-          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={locked} aria-busy={busy === 'matcher'}>
             {t('action_run_bank_matcher')}
           </button>
         )}
         {onMatchManually && (
-          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={busy !== null}>
+          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={locked}>
             {t('mode_match')}
           </button>
         )}
@@ -995,7 +1008,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <MatcherPreview
           matches={matcher}
           currency={currency}
-          busy={busy !== null}
+          busy={locked}
           onApply={(pairs, strongOnly) => void applyMatches(pairs, strongOnly)}
           onClose={() => setMatcher(null)}
         />
@@ -1031,12 +1044,12 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                     <tr className="bg-muted/30">
                       <td
                         colSpan={7}
-                        className="px-0 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                        className="px-0 py-2 text-xs font-semibold text-muted-foreground"
                       >
                         <span className="flex items-center gap-3">
                           <span>
                             {bucketLabel(bucket)}
-                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground/70" data-ph-mask>
+                            <span className="ml-1.5 font-normal tabular-nums text-muted-foreground" data-ph-mask>
                               {rows.length}
                             </span>
                           </span>
@@ -1044,7 +1057,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                             <button
                               type="button"
                               onClick={toggle}
-                              className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                              className="normal-case tracking-normal text-xs font-normal text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
                             >
                               {folded ? t('show_all', { count: rows.length }) : t('hide')}
                             </button>
@@ -1056,8 +1069,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                             <button
                               type="button"
                               onClick={onMatchManually}
-                              disabled={busy !== null}
-                              className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                              disabled={locked}
+                              className="normal-case tracking-normal text-xs font-normal text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
                             >
                               {t('action_settle_ledger')}
                             </button>
@@ -1074,7 +1087,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                           sourceLabel={sourceLabel}
                           currency={currency}
                           busy={busy === item.item_id}
-                          anyBusy={busy !== null}
+                          anyBusy={locked}
                           onMatch={() => void matchOne(item)}
                           onUnmatch={() => void unmatchOne(item)}
                           onIgnore={() => void setIgnored(item, true)}
@@ -1092,7 +1105,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             </tbody>
           </table>
           {items.has_more && (
-            <p className="px-4 pt-3 text-[12.5px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
+            <p className="px-4 pt-3 text-xs text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
           )}
         </div>
       )}
@@ -1101,9 +1114,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       )}
 
-      <div className="space-y-2 border-t border-border pt-4">
+      <div className="space-y-2 border-t-hairline pt-4">
         {items.older_unmatched_count > 0 && (
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {t('older_unmatched', { count: items.older_unmatched_count })}
             {isSkv && (
               <>
@@ -1116,6 +1129,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           </p>
         )}
         <ReconciliationUnderlag
+          canWrite={canWrite}
           accountKey={account.account_key}
           throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
         />

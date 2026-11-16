@@ -43,6 +43,7 @@ export function MissingFocusStage({
   finishing,
   onFiles,
   onAddPortal,
+  canWrite = true,
 }: {
   purchase: MissingPurchase
   decision: MissingDecision
@@ -54,8 +55,12 @@ export function MissingFocusStage({
   onFiles: (files: File[]) => void
   /** Saves the purchase's supplier as a portal at this link; resolves true when it was saved. */
   onAddPortal?: (url: string) => Promise<boolean>
+  /** False for a read-only member: no file can be chosen or dropped. */
+  canWrite?: boolean
 }) {
   const t = useTranslations('inkorg')
+  const tCommon = useTranslations('common')
+  const lockedTitle = canWrite ? undefined : tCommon('viewer_disabled_tooltip')
   const locale = useLocale()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -85,11 +90,11 @@ export function MissingFocusStage({
       e.stopPropagation()
       setDragging(false)
       const files = Array.from(e.dataTransfer.files ?? [])
-      if (files.length > 0 && !busy) onFiles(files)
+      if (files.length > 0 && !busy && canWrite) onFiles(files)
     },
   }
 
-  const variantAt = (index: number): ButtonProps['variant'] => (index === 0 ? 'default' : index === 1 ? 'secondary' : 'ghost')
+  const variantAt = (index: number): ButtonProps['variant'] => (index === 0 ? 'default' : index === 1 ? 'outline' : 'ghost')
   // Two pills side by side from a tablet up, stacked on a phone; a third is a quiet text button under them.
   const widthAt = (index: number) => (index < 2 ? 'w-full sm:w-auto' : undefined)
 
@@ -108,7 +113,7 @@ export function MissingFocusStage({
         ) : null
       case 'choose_file':
         return (
-          <Button key={action} variant={variant} className={width} onClick={chooseFile} loading={busy}>
+          <Button key={action} variant={variant} className={width} onClick={chooseFile} loading={busy} disabled={!canWrite} title={lockedTitle}>
             <span className="pointer-coarse:hidden">{t('action_upload')}</span>
             <span className="hidden pointer-coarse:inline">{t('action_upload_phone')}</span>
           </Button>
@@ -138,7 +143,8 @@ export function MissingFocusStage({
           <button
             type="button"
             onClick={chooseFile}
-            disabled={busy}
+            disabled={busy || !canWrite}
+            title={lockedTitle}
             className={cn(
               'flex h-48 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border px-6 text-center text-[13px] text-muted-foreground transition-colors duration-150 lg:aspect-[210/297] lg:h-[calc(100vh-12rem)] lg:w-auto lg:max-w-[40rem]',
               'hover:bg-secondary/60 hover:text-foreground active:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
@@ -156,20 +162,20 @@ export function MissingFocusStage({
                 <span className="hidden pointer-coarse:inline">{t('drop_area_phone')}</span>
               </>
             )}
-            <span data-ph-mask="" className="tabular-nums text-[12.5px]">
+            <span data-ph-mask="" className="tabular-nums text-xs">
               {formatCurrency(Math.abs(purchase.amount), purchase.currency)} · {date}
             </span>
           </button>
         </div>
 
         <div className="order-1 min-w-0 space-y-6 lg:order-2 lg:max-w-[36rem]">
-          <header className="flex items-start gap-3 border-b border-border pb-6">
+          <header className="flex items-start gap-3 border-b-hairline pb-6">
             <BrandMark name={name ?? '?'} vendor={vendor} variant="mark" size={40} logoUrl={purchase.logo_url} />
             <div className="min-w-0 flex-1">
-              <h2 data-ph-mask="" className="font-display text-2xl leading-8 tracking-[-0.02em] [overflow-wrap:anywhere] sm:text-3xl sm:leading-9">
+              <h2 data-ph-mask="" className="text-2xl leading-8 tracking-[-0.02em] [overflow-wrap:anywhere] sm:text-3xl sm:leading-9">
                 {name ?? t('missing_unknown')}
               </h2>
-              <p data-ph-mask="" className="mt-1 truncate text-[12.5px] text-muted-foreground">
+              <p data-ph-mask="" className="mt-1 truncate text-xs text-muted-foreground">
                 {meta}
               </p>
             </div>
@@ -180,7 +186,7 @@ export function MissingFocusStage({
 
           <section aria-labelledby={`q-${purchase.id}`} className="space-y-6">
             <div className="space-y-3">
-              <h3 id={`q-${purchase.id}`} className="font-display text-2xl leading-8 tracking-[-0.02em]">
+              <h3 id={`q-${purchase.id}`} className="text-2xl leading-8 tracking-[-0.02em]">
                 {t('q_missing')}
               </h3>
               <RouteEvidence route={decision.route} />
@@ -217,7 +223,7 @@ export function MissingFocusStage({
 
       {finishing && (
         <div className="absolute inset-0 flex items-start justify-center bg-background/70 pt-12 animate-fade-in" aria-live="polite">
-          <span className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium">
+          <span className="flex items-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-[13px] font-medium">
             <CheckIcon aria-hidden="true" className="h-4 w-4" />
             {t('done')}
           </span>

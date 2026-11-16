@@ -7,8 +7,9 @@ import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import ExtractionStatus from '@/components/ui/extraction-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { TD_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { canOfferSplitMatch } from '@/lib/transactions/split-match'
 import {
@@ -38,7 +39,7 @@ import type { DrawerAction } from './TransactionDrawer'
 // The drawer, and the document viewer it carries, load on the first expand:
 // the list's own chunk stays free of them.
 const TransactionDrawer = dynamic(() => import('./TransactionDrawer').then((m) => m.TransactionDrawer), { ssr: false })
-import { HUE_DOT_CLASS, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
+import type { TemplateHue } from '@/lib/bookkeeping/template-group-colors'
 
 /** The top suggestion for an unbooked row, shown in the Kategori cell. */
 export interface RowProposal {
@@ -56,7 +57,6 @@ export interface RowProposal {
 // upload functional but drop the "AI:n läser dokumentet" promise.
 const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
-import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
@@ -198,7 +198,7 @@ export default function TransactionInboxCard({
   const shiftHeld = useRef(false)
   // Attaching underlag is a write: hide the affordance from viewers so they
   // don't dead-end on a 403 (mirrors the gate in TransactionHistoryList).
-  const { canWrite } = useCanWrite()
+  const { canWrite, lockedTitle } = useViewerLock()
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
@@ -344,8 +344,10 @@ export default function TransactionInboxCard({
     isTitleEditable && canWrite && (cashAccounts?.length ?? 0) > 1 && !!onMoveCashAccount
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
+  // Every item in the menu writes: a read-only member gets no menu.
   const showOverflowMenu =
-    showInvoiceMatchButton || showMatchVoucherItem || showMatchExpenseItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
+    canWrite &&
+    (showInvoiceMatchButton || showMatchVoucherItem || showMatchExpenseItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem)
 
   // Pre-migration history row the imported bokföring explains: it carries a
   // quiet marker steering toward matching rather than re-booking.
@@ -431,7 +433,7 @@ export default function TransactionInboxCard({
           )}
         </td>
         {show('date') && (
-          <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
+          <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
             {formatDate(transaction.date)}
           </td>
         )}
@@ -464,7 +466,7 @@ export default function TransactionInboxCard({
               </span>
             )}
             {skvCounterpartDate && (
-              <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px] md:inline-flex">
+              <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-xs md:inline-flex">
                 <ExclamationCircleIcon className="h-3 w-3" />
                 Möjlig bank↔skattekonto
               </Badge>
@@ -488,24 +490,22 @@ export default function TransactionInboxCard({
             <button
               type="button"
               className={cn(
-                'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-3 py-0.5 text-xs transition-colors duration-150',
+                'inline-flex max-w-[16rem] items-center gap-1.5 rounded-md border border-border px-3 py-0.5 text-xs transition-colors duration-150',
                 categoryLabel || proposal
                   ? 'text-foreground hover:bg-secondary/60'
                   : 'text-muted-foreground hover:text-foreground',
               )}
               onClick={(e) => onOpenCategoryDialog(transaction, e.currentTarget)}
-              disabled={isProcessing || isDisabled}
+              disabled={!canWrite || isProcessing || isDisabled}
               title={
-                !categoryLabel && proposal
+                lockedTitle ??
+                (!categoryLabel && proposal
                   ? proposal.own
                     ? proposal.why
                     : t('proposal_title', { label: proposal.label, percent: Math.round(proposal.confidence * 100) })
-                  : undefined
+                  : undefined)
               }
             >
-              {!categoryLabel && proposal && (
-                <span className={cn('h-2 w-2 shrink-0 rounded-full', HUE_DOT_CLASS[proposal.hue])} aria-hidden />
-              )}
               <span className="truncate">{categoryLabel ?? proposal?.label ?? t('category_pick')}</span>
             </button>
           </td>
@@ -530,19 +530,22 @@ export default function TransactionInboxCard({
             )}
           >
             {isIncome ? '+' : ''}
-            {formatCurrency(transaction.amount, transaction.currency)}
+            {formatRowAmount(transaction.amount, transaction.currency)}
           </td>
         )}
-        <td className={cn(TD_CLASS, 'relative whitespace-nowrap text-right !pr-0 py-[9px]')}>
+        <td className={cn(TD_CLASS, 'relative whitespace-nowrap py-2 text-right')}>
           <span className="row-collapsible inline-flex items-center justify-end gap-2">
+            {/* Stil v3 polish P1: Bokför is the routine row action, quiet until
+                the row is hovered; a match (Matcha Faktura 1043) needs a look,
+                so it keeps the raised button. */}
             <Button
-              size="sm"
-              variant="outline"
+              variant={matchLabel ? 'outline' : 'row-primary'}
               onClick={(e) => {
                 e.stopPropagation()
                 runPrimary(e.currentTarget)
               }}
-              disabled={isDisabled}
+              disabled={!canWrite || isDisabled}
+              title={lockedTitle}
               loading={isProcessing}
             >
               {primaryLabel}
@@ -550,12 +553,10 @@ export default function TransactionInboxCard({
             {showOverflowMenu && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  {/* mr-2 tucks the button in so the dots glyph sits under
-                      the middle of the STATUS header, not at the page edge. */}
                   <Button
                     variant="ghost"
-                    size="icon-sm"
-                    className={cn('mr-2 text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
+                    size="icon"
+                    className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                     onClick={(e) => e.stopPropagation()}
                     aria-label={t('more_actions_aria')}
                     title={t('more_actions_aria')}
@@ -609,20 +610,21 @@ export default function TransactionInboxCard({
             primaryLabel={primaryLabel}
             onPrimary={(anchor) => runPrimary(anchor)}
             onOpenCategory={(anchor) => onOpenCategoryDialog(transaction, anchor)}
-            actions={[...overflowItems, ...dangerItems]}
+            actions={canWrite ? [...overflowItems, ...dangerItems] : []}
             methodLabel={transaction.transaction_method ? tMethod(transaction.transaction_method) : null}
             originalName={originalName ?? null}
             skvCounterpartDate={skvCounterpartDate}
             isPreMigration={isPreMigration}
             giroCounterparty={giroCounterparty}
             attachedDocumentId={attachedDocumentId}
-            onMatchParts={showSplitItem ? (prefill) => onOpenSplitMatch!(transaction, prefill) : undefined}
+            onMatchParts={showSplitItem && canWrite ? (prefill) => onOpenSplitMatch!(transaction, prefill) : undefined}
             extra={
               HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed') ? (
                 <ExtractionStatus status={extraction.status} elapsedMs={extraction.elapsedMs} />
               ) : null
             }
-            processing={isProcessing}
+            // The drawer's category, primary and attach controls lock for a read-only member.
+            processing={isProcessing || !canWrite}
             onClose={() => onToggleExpand(transaction.id)}
           />,
           document.body,

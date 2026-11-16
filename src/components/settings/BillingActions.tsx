@@ -65,7 +65,7 @@ export function BillingActions({
 
   if (isPaying) {
     return (
-      <Button variant="outline" size="sm" onClick={() => go('/api/billing/portal')} disabled={loading}>
+      <Button variant="outline" onClick={() => go('/api/billing/portal')} disabled={loading}>
         {t('manage_cta')}
       </Button>
     )

@@ -94,7 +94,7 @@ export function ResolvePaymentOrderDialog({ order, onOpenChange, onResolved }: R
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-[13px]">
-          <label className="flex items-start gap-3 rounded-lg border border-border p-4">
+          <label className="flex items-start gap-3 rounded-lg p-4 bg-control shadow-raised">
             <input
               type="radio"
               name="resolution"
@@ -104,22 +104,22 @@ export function ResolvePaymentOrderDialog({ order, onOpenChange, onResolved }: R
             />
             <span>
               <span className="block">{t('resolve_not_at_bank')}</span>
-              <span className="block text-[12.5px] text-muted-foreground">{t('resolve_not_at_bank_hint')}</span>
+              <span className="block text-xs text-muted-foreground">{t('resolve_not_at_bank_hint')}</span>
             </span>
           </label>
-          <label className="flex items-start gap-3 rounded-lg border border-border p-4">
+          <label className="flex items-start gap-3 rounded-lg p-4 bg-control shadow-raised">
             <input type="radio" name="resolution" className="mt-1" checked={choice === 'paid'} onChange={() => setChoice('paid')} />
             <span className="min-w-0 flex-1">
               <span className="block">{t('resolve_paid')}</span>
-              <span className="block text-[12.5px] text-muted-foreground">{t('resolve_paid_hint')}</span>
+              <span className="block text-xs text-muted-foreground">{t('resolve_paid_hint')}</span>
               {choice === 'paid' &&
                 (payments === null ? (
                   <Skeleton className="mt-3 h-9 w-full" />
                 ) : payments.length === 0 ? (
-                  <span className="mt-3 block text-[12.5px] text-attn">{t('resolve_no_payment_rows')}</span>
+                  <span className="mt-3 block text-xs text-attn">{t('resolve_no_payment_rows')}</span>
                 ) : (
                   <select
-                    className="mt-3 h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px]"
+                    className="mt-3 h-9 w-full rounded-lg px-3 text-[13px] bg-control shadow-raised"
                     value={paymentId}
                     onChange={(e) => setPaymentId(e.target.value)}
                   >
@@ -135,7 +135,7 @@ export function ResolvePaymentOrderDialog({ order, onOpenChange, onResolved }: R
           </label>
         </div>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {t('cancel')}
           </Button>
           <Button onClick={resolve} loading={busy} disabled={!canResolve}>

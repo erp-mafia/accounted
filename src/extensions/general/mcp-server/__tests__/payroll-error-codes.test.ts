@@ -393,7 +393,7 @@ describe('gnubok_generate_agi', () => {
     expect(error.retryable).toBe(false)
     expect(error.message_sv).toBe(
       'AGI kan inte genereras, följande uppgifter saknas: telefon. Fyll i telefon under Inställningar → Moms och skatt → ' +
-        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt).',
+        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Företagsuppgifter).',
     )
     expect(error.message_en).toBe(error.message_sv)
     expect(error.remediation).toMatchObject({ tool: 'gnubok_update_company_settings' })

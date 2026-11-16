@@ -134,7 +134,7 @@ function ARCustomerInvoiceRows({
         return (
           <tr key={inv.invoice_id} className="bg-muted/30 border-b last:border-0">
             <td></td>
-            <td className="py-1 text-xs" colSpan={2}>
+            <td className="py-1 text-xs date-figures" colSpan={2}>
               <Link href={targetHref} className="font-mono hover:underline underline-offset-4">
                 {inv.invoice_number || '(utkast)'}
               </Link>
@@ -162,7 +162,7 @@ function ARCustomerInvoiceRows({
       {loading && (
         <tr className="bg-muted/30">
           <td></td>
-          <td colSpan={7} className="py-1 text-[11px] text-muted-foreground">Letar verifikat…</td>
+          <td colSpan={7} className="py-1 text-xs text-muted-foreground">Letar verifikat…</td>
         </tr>
       )}
     </>
@@ -172,7 +172,7 @@ function ARCustomerInvoiceRows({
 export default function ARLedgerView({ periodId }: { periodId: string }) {
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
   const [asOfDate, setAsOfDate] = useState(() => todayIsoStockholm())
-  const { data, loading, error } = useReportData<ARLedgerData>(
+  const { data, loading, error, refetch } = useReportData<ARLedgerData>(
     periodId ? `/api/reports/ar-ledger?period_id=${periodId}&as_of_date=${asOfDate}` : null,
     'Kunde inte hämta kundreskontra',
   )
@@ -194,7 +194,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
   }
 
   if (error) {
-    return <ReskontraErrorCard message={error} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="ar-ledger-as-of" exportBase="/api/reports/ar-ledger" />
+    return <ReskontraErrorCard message={error} onRetry={refetch} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="ar-ledger-as-of" exportBase="/api/reports/ar-ledger" />
   }
 
   if (!data || !data.ledger) {
@@ -219,7 +219,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Totalt utestående</CardTitle>
           </CardHeader>
           <CardContent>
@@ -238,7 +238,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Ej förfallet</CardTitle>
           </CardHeader>
           <CardContent>
@@ -246,7 +246,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Förfallet</CardTitle>
           </CardHeader>
           <CardContent>
@@ -263,7 +263,7 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm tabular-nums min-w-[500px]">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
                   <th className="py-2">Kund</th>

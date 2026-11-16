@@ -2,7 +2,7 @@
 
 import { Fragment } from 'react'
 import { useTranslations } from 'next-intl'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 
@@ -156,7 +156,7 @@ export function ReconciliationMatchPreview({
   return (
     <div className="space-y-3 text-sm">
       {shownPairs.length > 0 && (
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {t('recon_preview_heading', { count: stagedPairs })}
         </p>
       )}
@@ -167,7 +167,7 @@ export function ReconciliationMatchPreview({
         return (
           <div key={i} className={cn('space-y-2', i > 0 && 'border-t pt-3')}>
             {/* data-ph-mask: event texts and amounts are user data */}
-            <table className="w-full border-collapse text-[12.5px]" aria-label={t('recon_preview_rows_label')} data-ph-mask="">
+            <table className="w-full border-collapse text-xs" aria-label={t('recon_preview_rows_label')} data-ph-mask="">
               <thead>
                 <tr>
                   <th className={VTH_CLASS}>{t('recon_preview_date')}</th>
@@ -178,12 +178,12 @@ export function ReconciliationMatchPreview({
               <tbody>
                 {rows.map((row, j) => (
                   <tr key={row.external_id ?? j}>
-                    <td className={cn(VTD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                    <td className={cn(VTD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
                       {formatDate(row.date)}
                     </td>
                     <td className={cn(VTD_CLASS, 'min-w-0 break-words')}>{row.text || '-'}</td>
                     <td className={cn(VTD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>
-                      {formatCurrency(row.amount, row.currency ?? 'SEK')}
+                      {formatRowAmount(row.amount, row.currency ?? 'SEK')}
                     </td>
                   </tr>
                 ))}
@@ -266,12 +266,12 @@ export function ReconciliationMatchPreview({
       })}
       {settlements.map((settlement, i) => (
         <div key={`settled-${i}`} className={cn('space-y-2', (i > 0 || shownPairs.length > 0) && 'border-t pt-3')}>
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {settlement.account_number
               ? t('recon_preview_settled_heading_account', { account: settlement.account_number })
               : t('recon_preview_settled_heading')}
           </p>
-          <table className="w-full border-collapse text-[12.5px]" aria-label={t('recon_preview_settled_heading')}>
+          <table className="w-full border-collapse text-xs" aria-label={t('recon_preview_settled_heading')}>
             <thead>
               <tr>
                 <th className={VTH_CLASS}>{t('recon_preview_voucher')}</th>
@@ -283,7 +283,7 @@ export function ReconciliationMatchPreview({
               {settlement.entries.map((entry, j) => (
                 <tr key={entry.journal_entry_id ?? j}>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>{formatVoucher(entry)}</td>
-                  <td className={cn(VTD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                  <td className={cn(VTD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
                     {formatDate(entry.entry_date)}
                   </td>
                   <td className={cn(VTD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>{sek(entry.amount)}</td>

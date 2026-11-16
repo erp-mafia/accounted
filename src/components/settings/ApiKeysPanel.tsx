@@ -3,6 +3,7 @@
 import { useTranslations, useLocale } from 'next-intl'
 import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -77,11 +79,9 @@ export function ScopeCard({
     // new line, so the cards below never move under the pointer).
     <label
       className={cn(
-        'flex min-h-[68px] flex-col gap-1 rounded-lg border p-2 transition-colors',
+        'flex min-h-[68px] flex-col gap-1 rounded-lg p-2 transition-colors bg-control shadow-raised',
         locked ? 'cursor-default' : 'cursor-pointer',
-        checked
-          ? 'border-border bg-secondary'
-          : 'border-border hover:bg-secondary/60'
+        checked ? 'bg-secondary' : 'hover:bg-secondary/60'
       )}
     >
       <div className="flex items-center gap-2">
@@ -96,17 +96,17 @@ export function ScopeCard({
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span id={`${id}-verb`} className="text-xs font-medium text-foreground">{verb}</span>
           {locked && (
-            <span id={`${id}-note`} className="truncate text-[11px] text-muted-foreground">
+            <span id={`${id}-note`} className="truncate text-xs text-muted-foreground">
               {lockedNote}
             </span>
           )}
         </span>
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {tools > 0 ? t('tools_count', { count: tools }) : t('rest_badge')}
         </span>
       </div>
       {description && (
-        <p id={`${id}-desc`} className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+        <p id={`${id}-desc`} className="ml-6 line-clamp-2 text-xs leading-snug text-muted-foreground">
           {description}
         </p>
       )}
@@ -138,6 +138,7 @@ export function ApiKeysPanel({
   const t = useTranslations('settings_api_keys')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps: sodDialogProps, confirm: confirmSod } = useDestructiveConfirm()
 
   const [isCreating, setIsCreating] = useState(false)
@@ -268,24 +269,22 @@ export function ApiKeysPanel({
           <Button
             variant="outline"
             onClick={openCreateDialog}
-            disabled={keyCount >= MAX_KEYS}
+            disabled={!canWrite || keyCount >= MAX_KEYS}
+            title={lockedTitle}
           >
-            <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
+            <PlusIcon className="h-3.5 w-3.5" />
             {t('create_key')}
           </Button>
         </SettingsRowEnd>
       </SettingsRow>
 
-      {/* Create key dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-xl p-4 sm:max-w-3xl sm:p-6">
-          <DialogHeader>
-            <DialogTitle>{t('create_dialog_title')}</DialogTitle>
-            <DialogDescription>
-              {t('create_dialog_description')}
-            </DialogDescription>
-          </DialogHeader>
+      {/* Create key: a small record, made in a drawer over the list (V7 creation forms) */}
+      <SlideOver open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <SlideOverContent aria-describedby={undefined}>
+          <SlideOverHeader title={t('create_dialog_title')} />
+          <SlideOverBody>
           <div className="space-y-6">
+            <p className="text-[13px] text-muted-foreground">{t('create_dialog_description')}</p>
             <div className="space-y-2">
               <Label htmlFor="key-name">{t('name_label')}</Label>
               <Input
@@ -298,7 +297,7 @@ export function ApiKeysPanel({
             </div>
             <div className="space-y-2">
               <Label>{t('mode_label')}</Label>
-              <div className="flex w-fit rounded-full border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
+              <div className="flex w-fit rounded-md border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
                 {(['live', 'test'] as const).map((m) => (
                   <button
                     key={m}
@@ -307,7 +306,7 @@ export function ApiKeysPanel({
                     aria-checked={newKeyMode === m}
                     onClick={() => setNewKeyMode(m)}
                     className={cn(
-                      'rounded-full px-3 py-1.5 text-xs transition-colors',
+                      'rounded-md px-3 py-1.5 text-xs transition-colors',
                       newKeyMode === m
                         ? 'bg-secondary text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
@@ -391,7 +390,7 @@ export function ApiKeysPanel({
               {hasSodConflict && (
                 <div
                   role="alert"
-                  className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-foreground"
+                  className="flex items-start gap-2 rounded-lg p-3 text-xs text-foreground bg-control shadow-raised"
                 >
                   <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   <p className="leading-snug">{t('sod_warning')}</p>
@@ -399,8 +398,9 @@ export function ApiKeysPanel({
               )}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+          </SlideOverBody>
+          <SlideOverFooter>
+            <Button variant="ghost" onClick={() => setShowCreateDialog(false)}>
               {t('cancel')}
             </Button>
             <Button
@@ -408,11 +408,11 @@ export function ApiKeysPanel({
               disabled={newKeyScopes.size === 0 || (hasCompanyPicker && newKeyCompanies.size === 0)}
               loading={isCreating}
             >
-              {t('create')}
+              {t('create_key')}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SlideOverFooter>
+        </SlideOverContent>
+      </SlideOver>
 
       <DestructiveConfirmDialog {...sodDialogProps} />
 

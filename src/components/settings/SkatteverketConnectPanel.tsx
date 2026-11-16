@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
@@ -68,7 +69,7 @@ interface SystemConnectionState {
 /** Live warning inside a settings group: one warning-tone line, no banner. */
 function WarningLine({ children }: { children: React.ReactNode }) {
   return (
-    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+    <p className="border-b-hairline px-1 py-3 text-xs leading-relaxed text-attn">
       {children}
     </p>
   )
@@ -77,7 +78,7 @@ function WarningLine({ children }: { children: React.ReactNode }) {
 /** One quiet line inside a settings group, for a state that needs no action. */
 function NoteLine({ children }: { children: React.ReactNode }) {
   return (
-    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+    <p className="border-b-hairline px-1 py-3 text-xs leading-relaxed text-muted-foreground">
       {children}
     </p>
   )
@@ -174,6 +175,8 @@ function readsRunOnOmbud(appointment: OmbudAppointment | undefined): boolean {
  * does.
  */
 function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: () => Promise<void> }) {
+  // Appointing the ombud is a company write; the personal session below is the user's own.
+  const { canWrite, lockedTitle } = useViewerLock()
   const t = useTranslations('settings_skatteverket_connect')
   const tOmbud = useTranslations('skatteverket_ombud')
   const { appName } = useBranding()
@@ -201,7 +204,7 @@ function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: ()
         : t('system_status_not_included')
 
   const status = done ? (
-    <span className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
       <CheckCircleIcon className="h-3.5 w-3.5" />
       {tOmbud('done')}
     </span>
@@ -261,13 +264,13 @@ function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: ()
             {/* Waiting: the signature may be unfinished, so the same button
                 opens the link again, quieter, as on Hem and Kom igång. */}
             <Button
-              size="sm"
               variant={appointment.state === 'waiting' ? 'outline' : 'default'}
               onClick={() => void appoint()}
               loading={busy}
-              title={t('system_deeplink_hint', { appName })}
+              disabled={!canWrite}
+              title={lockedTitle ?? t('system_deeplink_hint', { appName })}
             >
-              {!busy && <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />}
+              {!busy && <ArrowTopRightOnSquareIcon className="h-4 w-4" />}
               {appointment.state === 'waiting' ? tOmbud('reopen') : t('system_deeplink', { appName })}
             </Button>
           </SettingsRowEnd>
@@ -521,7 +524,7 @@ function SkatteverketPersonalConnectionCard({
         {t('bankid_label')}
         {connectHelp ? <HelpPopover className="shrink-0">{connectHelp}</HelpPopover> : null}
       </span>
-      <span className="text-[12.5px] text-muted-foreground">{t('bankid_line')}</span>
+      <span className="text-xs text-muted-foreground">{t('bankid_line')}</span>
     </span>
   ) : (
     <span className="inline-flex items-center gap-2">
@@ -554,13 +557,12 @@ function SkatteverketPersonalConnectionCard({
           <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} quietProd={secondary} />
           <SettingsRowEnd>
             <Button
-              size="sm"
               variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status?.disabled || !hasSkatteverket || connecting}
               title={connectTitle}
             >
-              <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_with_bankid')}
             </Button>
           </SettingsRowEnd>
@@ -626,13 +628,12 @@ function SkatteverketPersonalConnectionCard({
         <SettingsRowEnd>
           {offerReconnect && (
             <Button
-              size="sm"
               variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
               title={connectTitle}
             >
-              <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               {connecting ? t('connect_waiting') : t('reconnect')}
             </Button>
           )}
@@ -640,7 +641,7 @@ function SkatteverketPersonalConnectionCard({
           {offerReconnect ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon-sm" aria-label={t('more_actions')} disabled={disconnecting || connecting}>
+                <Button variant="outline" size="icon" aria-label={t('more_actions')} disabled={disconnecting || connecting}>
                   <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                 </Button>
               </DropdownMenuTrigger>
@@ -649,8 +650,8 @@ function SkatteverketPersonalConnectionCard({
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <Button variant="outline" size="sm" onClick={disconnect} loading={disconnecting} disabled={connecting}>
-              {!disconnecting && <ShieldExclamationIcon className="mr-2 h-4 w-4" />}
+            <Button variant="outline" onClick={disconnect} loading={disconnecting} disabled={connecting}>
+              {!disconnecting && <ShieldExclamationIcon className="h-4 w-4" />}
               {t('disconnect')}
             </Button>
           )}
@@ -674,7 +675,7 @@ function SkatteverketPersonalConnectionCard({
         onClick={() => setDetailsOpen((open) => !open)}
         aria-expanded={detailsOpen}
         aria-controls={detailsId}
-        className="flex w-full items-center gap-2 px-1 py-3 text-left text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        className="flex w-full items-center gap-2 px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
       >
         <ChevronDownIcon
           className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-180')}

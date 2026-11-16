@@ -302,16 +302,19 @@ describe('ProviderStep, underlag left on reversed copies by a re-run migration (
     nextCursor: null,
     stalled: false,
   }
-  // The sentence and its action: one ochre line, the action a button in it.
+  // The sentence and its action: one attention line (the amber glyph, then
+  // the sentence), the action a button in it.
   const attnLine = (html: string) => {
     const start = html.indexOf(line)
-    return start === -1 ? null : html.slice(html.lastIndexOf('<p', start), html.indexOf('</p>', start))
+    if (start === -1) return null
+    const end = html.indexOf('</button>', start)
+    return html.slice(html.lastIndexOf('<svg', start), end === -1 ? undefined : end + '</button>'.length)
   }
 
   it('says how many verifikat lack their underlag and offers Hämta underlag in the same line', () => {
     const html = render({ ...status(true), underlagOnReplacedCopies: 12 })
     const attn = attnLine(html)
-    expect(attn).toContain('text-attn')
+    expect(attn).toContain('fill-warning')
     expect(attn).toContain(`>${fetchDocuments}</button>`)
   })
 

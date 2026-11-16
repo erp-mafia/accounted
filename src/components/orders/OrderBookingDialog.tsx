@@ -162,7 +162,7 @@ export default function OrderBookingDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           {/* data-ph-mask: the order number is user data */}
           <DialogTitle data-ph-mask="">
@@ -199,17 +199,17 @@ export default function OrderBookingDialog({
                 {underlagRetryError}
               </p>
             )}
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t('underlag_attach_by_hand')}{' '}
               <Link
                 href={`/bookkeeping/${underlagMissingEntryId}`}
-                className="underline decoration-border underline-offset-4 hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
               >
                 {t('action_open_entry')}
               </Link>
             </p>
             <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)}>
+              <Button variant="outline" onClick={() => handleOpenChange(false)}>
                 {t('close')}
               </Button>
             </div>
@@ -226,23 +226,23 @@ export default function OrderBookingDialog({
               const warnings = resolveBookingWarnings(order, storeSettings)
               if (warnings.length > 0) {
                 return (
-                  <p className="attn text-[12.5px]">{t(`warning_${warnings[0]}`)}</p>
+                  <p className="attn text-xs">{t(`warning_${warnings[0]}`)}</p>
                 )
               }
               if (resolved.invoiceMode && !isRefund) {
-                return <p className="attn text-[12.5px]">{t('invoice_mode_hint')}</p>
+                return <p className="attn text-xs">{t('invoice_mode_hint')}</p>
               }
               return null
             })()}
             {/* What lands on the verifikat besides the lines: the
                 orderunderlag PDF, previewed from the same renderer. */}
-            <p className="text-[12.5px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {t('underlag_note')}{' '}
               <a
                 href={`/api/webshop-orders/${order.id}/underlag`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline decoration-border underline-offset-4 hover:text-foreground"
+                className="underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
               >
                 {t('underlag_preview')}
               </a>
@@ -273,7 +273,7 @@ export default function OrderBookingDialog({
                 )}
               </div>
               {order.payment_method && (
-                <label className="flex items-center gap-2 pb-2 text-[12.5px] text-muted-foreground">
+                <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
                   <Checkbox
                     checked={remember}
                     onCheckedChange={(v) => setRemember(v === true)}

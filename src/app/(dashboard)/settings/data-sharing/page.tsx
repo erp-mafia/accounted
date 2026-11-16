@@ -3,7 +3,7 @@ import { DataSharingSettingsContent } from '@/components/settings/sections/DataS
 import { getDashboardAuthContext, getDashboardCompanyId, redirectInvoicerOffPage } from '../../request-context'
 
 /**
- * AI och kopplingar → Datadelning och AI: the company's AI switch and what it
+ * Kopplingar → Datadelning och AI: the company's AI switch and what it
  * lets us do with its data (lib/legal/data-choices.ts). Read on the server so
  * the switches render in their real state; a failed read renders the retry
  * state rather than a guess.

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
@@ -18,18 +18,8 @@ import {
   type SearchableAccount,
   type AccountSearchItem,
 } from '@/lib/bookkeeping/account-search'
-import {
-  computeDropdownPosition,
-  isSameDropdownPosition,
-  type DropdownPosition,
-} from '@/components/bookkeeping/account-combobox-position'
+import { useAnchoredDropdown } from '@/components/bookkeeping/use-anchored-dropdown'
 import type { BASAccount } from '@/types'
-
-// Shared by every portaled panel instance: only stops propagation so the
-// browser's default scrolling still runs on the panel itself.
-function stopScrollPropagation(e: Event) {
-  e.stopPropagation()
-}
 
 interface AccountComboboxProps {
   value: string
@@ -82,10 +72,15 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   const containerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
-  // The portaled (non-flat) dropdown panel. It is not a DOM descendant of
-  // containerRef, so outside-click detection must check it separately.
-  const portalPanelRef = useRef<HTMLDivElement | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
+  // The portaled (non-flat) dropdown panel, glued to the trigger. It is not a
+  // DOM descendant of containerRef, so outside-click detection must check it
+  // separately.
+  const {
+    pos: dropdownPos,
+    style: portalPanelStyle,
+    panelRef: portalPanelRef,
+    attachPanel: attachPortalPanel,
+  } = useAnchoredDropdown(containerRef, isOpen && !flat)
   const selectedNameId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted item after an actual interaction: a
@@ -140,58 +135,6 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
   // Flat list for keyboard navigation
   const flatList = useMemo(() => filteredAccounts, [filteredAccounts])
-
-  // Keep the portaled (non-flat) dropdown glued to the trigger: measure off
-  // containerRef when it opens, and re-measure while anything scrolls or the
-  // window resizes underneath it. The capture-phase scroll listener also
-  // catches scrolling ancestors such as DialogContent's overflow-y-auto body.
-  const updateDropdownPosition = useCallback(() => {
-    if (flat || !containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    const next = computeDropdownPosition(
-      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-      { width: window.innerWidth, height: window.innerHeight },
-    )
-    // Bail out when nothing moved (e.g. scroll ticks that did not shift the
-    // anchor): returning the previous reference lets React skip the re-render.
-    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
-  }, [flat])
-
-  useLayoutEffect(() => {
-    if (!isOpen || flat) return
-    updateDropdownPosition()
-    const handleScroll = (e: Event) => {
-      // Scrolling the portaled panel's own list never moves the anchor (the
-      // panel is position: fixed): repositioning on it would just churn state
-      // while the user scrolls the account list.
-      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
-      updateDropdownPosition()
-    }
-    window.addEventListener('scroll', handleScroll, true)
-    window.addEventListener('resize', updateDropdownPosition)
-    return () => {
-      window.removeEventListener('scroll', handleScroll, true)
-      window.removeEventListener('resize', updateDropdownPosition)
-    }
-  }, [isOpen, flat, updateDropdownPosition])
-
-  // react-remove-scroll (active inside every modal dialog) preventDefaults
-  // wheel/touchmove events that reach document from outside the dialog's DOM
-  // tree, and the portaled panel lives outside that tree. Stopping the events
-  // at the panel lets the browser scroll it natively; overscroll-contain on
-  // the panel stops chained page scrolling at the list's edges.
-  const attachPortalPanel = useCallback((el: HTMLDivElement | null) => {
-    const prev = portalPanelRef.current
-    if (prev) {
-      prev.removeEventListener('wheel', stopScrollPropagation)
-      prev.removeEventListener('touchmove', stopScrollPropagation)
-    }
-    portalPanelRef.current = el
-    if (el) {
-      el.addEventListener('wheel', stopScrollPropagation)
-      el.addEventListener('touchmove', stopScrollPropagation)
-    }
-  }, [])
 
   const attachPortalListPanel = useCallback((el: HTMLDivElement | null) => {
     listRef.current = el
@@ -328,16 +271,6 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   // TooltipContent, extended to this dropdown).
   const flatListWidthClass = 'w-full min-w-0'
 
-  const portalPanelStyle: React.CSSProperties | undefined = dropdownPos
-    ? {
-        left: dropdownPos.left,
-        width: dropdownPos.width,
-        maxHeight: dropdownPos.maxHeight,
-        ...(dropdownPos.top !== undefined
-          ? { top: dropdownPos.top }
-          : { bottom: dropdownPos.bottom }),
-      }
-    : undefined
   // A portal panel flips above the input when there is no room below.
   const portalEnterClass =
     dropdownPos?.top !== undefined ? POPOVER_ENTER_CLASS : POPOVER_ENTER_UP_CLASS
@@ -372,7 +305,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             </span>
             <span className="flex-1 min-w-0 break-words">{item.account_name}</span>
             {!item.isActive && (
-              <span className="shrink-0 self-center text-[11px] text-muted-foreground whitespace-nowrap">
+              <span className="shrink-0 self-center text-xs text-muted-foreground whitespace-nowrap">
                 {notActivatedLabel}
               </span>
             )}

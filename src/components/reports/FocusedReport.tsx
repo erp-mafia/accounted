@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -10,7 +10,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
 import { REPORT_TOOLBAR_SLOT_ID } from '@/components/reports/ReportExportMenu'
 import { useCompany } from '@/contexts/CompanyContext'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { BudgetPicker } from '@/components/reports/BudgetPicker'
@@ -82,6 +82,16 @@ const LonejournalView = dynamic(() =>
   { loading: ReportBodyLoading },
 )
 
+/** The income declarations belong to Bokslut in the menu (nav-v3), so that is their parent. */
+const YEAR_END_DECLARATION_SLUGS = new Set(['ink2-declaration', 'ne-declaration', 'ink3-declaration'])
+
+/** The reports that are rows of the Rapporter menu (nav-v3), with the row's label key. */
+const MENU_REPORT_LABEL_KEYS: Record<string, string> = {
+  resultatrapport: 'v3_report_result',
+  balansrapport: 'v3_report_balance',
+  huvudbok: 'v3_report_ledger',
+}
+
 /** The reports that take a budget (accounted#134): Budget and Avvikelse beside the actuals. */
 const BUDGET_SLUGS = new Set(['resultatrapport', 'dimension-pnl'])
 
@@ -108,22 +118,32 @@ function FocusedReportInner({
   const searchParams = useSearchParams()
   const { company } = useCompany()
   const t = useTranslations('reports')
+  const tNav = useTranslations('nav')
 
   // A drill-down arrives with the clicked report's window and dimension
   // filter in the URL (lib/reports/report-drilldown.ts), and a report reached
   // by back, reload or a second window with its own. Read once: after that
   // the page's own controls own the state, and the effect below writes it back.
   const [fromUrl] = useState(() => parseDrilldownParams(searchParams))
-  // The year the URL's window lies in opens instead of the remembered one;
-  // FyPicker restores nothing over a value it is given.
+  // The year is app-wide context (the sidebar). The year the URL's window
+  // lies in opens instead of it, and the sidebar follows that year once.
   const [urlPeriod] = useState(() =>
     initialCompanyId === company?.id
       ? periodForWindow(prepareFiscalPeriods(initialPeriods, true), fromUrl.range)
       : null,
   )
-  const [selectedPeriod, setSelectedPeriod] = useState(urlPeriod?.id ?? '')
-  const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(
-    urlPeriod ? { start: urlPeriod.period_start, end: urlPeriod.period_end } : null,
+  const scope = useFiscalScope({ allowAll: false, hideFuture: true })
+  const [urlYearAdopted, setUrlYearAdopted] = useState(!urlPeriod)
+  useEffect(() => {
+    if (!scope.ready || urlYearAdopted || !urlPeriod) return
+    setUrlYearAdopted(true)
+    if (scope.periodId !== urlPeriod.id) scope.setPeriodId(urlPeriod.id)
+  }, [scope, urlYearAdopted, urlPeriod])
+  const shownPeriod = urlYearAdopted ? scope.period : urlPeriod
+  const selectedPeriod = shownPeriod?.id ?? ''
+  const selectedPeriodBounds = useMemo(
+    () => (shownPeriod ? { start: shownPeriod.period_start, end: shownPeriod.period_end } : null),
+    [shownPeriod],
   )
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
   const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(() =>
@@ -132,7 +152,17 @@ function FocusedReportInner({
   // The budget the report compares with (accounted#134): a year's own, so it
   // resets with the year.
   const [budgetId, setBudgetId] = useState<string | null>(null)
-  const [isReady, setIsReady] = useState(false)
+  // Another year starts on its own default range and budget (adjusting state
+  // during render, not in an effect).
+  const [rangeYear, setRangeYear] = useState(selectedPeriod)
+  if (selectedPeriod !== rangeYear) {
+    setRangeYear(selectedPeriod)
+    if (rangeYear) {
+      setDateRange({})
+      setBudgetId(null)
+    }
+  }
+  const isReady = scope.ready
 
   const report = getReport(slug)
   // The nav names Rapporter, so no back link over the title, and the period
@@ -146,6 +176,7 @@ function FocusedReportInner({
   // link, no shell fiscal-year selector — the view owns its period controls.
   const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
+  const menuLabelKey = MENU_REPORT_LABEL_KEYS[slug]
   // What the figures cover: the picked date range inside the fiscal year, else
   // the whole year. Printed under the title, where the pickers are hidden.
   const printPeriod =
@@ -207,7 +238,27 @@ function FocusedReportInner({
           title via pageTitle instead. */}
       {!isStandalone && (
         <PageHeader
-          title={reportName}
+          // A report with its own menu row says what the row says and has no
+          // parent (design.md convention 2); the others sit under the library.
+          // On paper the title is the document heading, so it prints the
+          // report's own name (Resultatrapport, Balansrapport) as before.
+          title={
+            menuLabelKey ? (
+              <>
+                <span className="print:hidden">{tNav(menuLabelKey)}</span>
+                <span className="hidden print:inline">{reportName}</span>
+              </>
+            ) : (
+              reportName
+            )
+          }
+          parent={
+            menuLabelKey
+              ? undefined
+              : YEAR_END_DECLARATION_SLUGS.has(slug)
+                ? { label: tNav('v2_closing'), href: '/bookkeeping/year-end' }
+                : { label: tNav('v3_more_reports'), href: '/reports' }
+          }
           // Page help behind a "?" (UI-migration convention 7): the report
           // bodies carry no instructional copy in the page flow.
           help={
@@ -217,34 +268,16 @@ function FocusedReportInner({
               </HelpPopover>
             ) : undefined
           }
-          action={
-            <FyPicker
-              value={selectedPeriod || null}
-              onChange={(id, period) => {
-                setSelectedPeriod(id || '')
-                setSelectedPeriodBounds(
-                  period ? { start: period.period_start, end: period.period_end } : null,
-                )
-                setDateRange({})
-                setBudgetId(null)
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-              onReady={() => setIsReady(true)}
-              initialPeriods={initialPeriods}
-              initialCompanyId={initialCompanyId}
-            />
-          }
+          // The report's Exportera is a page-level action: ReportExportMenu
+          // portals into this slot at the top bar's right end (V7 reports).
+          action={<div id={REPORT_TOOLBAR_SLOT_ID} className="flex items-center justify-end gap-2 print:hidden" />}
         />
       )}
       {!isStandalone && <ReportPrintHeader period={printPeriod} />}
 
-      {/* One toolbar row per report: the pickers on the left and the
-          report's Exportera on the right (ReportExportMenu portals into the
-          slot), so no report spends a row on one button. A standalone page
-          with no filter renders no row, which would still take the stack's
-          gap. */}
-      {(showRange || showDim || showBudget || !isStandalone) && (
+      {/* One toolbar row per report: its pickers. A report with no filter
+          renders no row, which would still take the stack's gap. */}
+      {(showRange || showDim || showBudget) && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           {showRange && selectedPeriodBounds && (
             <ReportDateRange
@@ -261,7 +294,6 @@ function FocusedReportInner({
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
           {showBudget && <BudgetPicker periodId={selectedPeriod} value={budgetId} onChange={setBudgetId} />}
-          {!isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2 print:hidden" />}
         </div>
       )}
 
@@ -270,7 +302,8 @@ function FocusedReportInner({
       ) : isPeriodless || selectedPeriod ? (
         <FocusedView
           slug={slug}
-          reportName={reportName}
+          // The standalone page's top bar says what its menu row says (Moms).
+          reportName={slug === 'vat-declaration' ? tNav('vat_declaration') : reportName}
           periodId={selectedPeriod}
           dateRange={dateRange}
           dimensionFilter={dimensionFilter}
@@ -340,11 +373,11 @@ function FocusedView({
     case 'oss-underlag':
       return <OssUnderlagView />
     case 'ne-declaration':
-      return isEnskildFirma ? <NEDeclarationView periodId={periodId} /> : null
+      return isEnskildFirma ? <NEDeclarationView periodId={periodId} /> : <ReportNotApplicable />
     case 'ink2-declaration':
-      return filesInk2 ? <INK2DeclarationView periodId={periodId} /> : null
+      return filesInk2 ? <INK2DeclarationView periodId={periodId} /> : <ReportNotApplicable />
     case 'ink3-declaration':
-      return filesInk3 ? <INK3UnderlagView key={periodId} periodId={periodId} /> : null
+      return filesInk3 ? <INK3UnderlagView key={periodId} periodId={periodId} /> : <ReportNotApplicable />
     case 'huvudbok':
       return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} dateRange={dateRange} />
     case 'grundbok':
@@ -385,5 +418,22 @@ export function FocusedReport({
         initialCompanyId={initialCompanyId}
       />
     </Suspense>
+  )
+}
+
+/**
+ * A declaration this company's legal form does not file (INK2 for an enskild
+ * firma, NE for an aktiebolag), reached by its address: said in the page
+ * instead of an empty body under the title.
+ */
+function ReportNotApplicable() {
+  const t = useTranslations('reports')
+  return (
+    <EmptyState
+      title={t('not_applicable_title')}
+      description={t('not_applicable_description')}
+      secondaryActionLabel={t('not_applicable_back')}
+      secondaryActionHref="/reports"
+    />
   )
 }

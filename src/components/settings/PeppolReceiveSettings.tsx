@@ -73,7 +73,7 @@ export function PeppolReceiveSettings() {
   const t = useTranslations('settings_peppol')
   const locale = useLocale()
   const { toast } = useToast()
-  const canWrite = useCanWrite()
+  const { canWrite } = useCanWrite()
   const [state, setState] = useState<PeppolSettingsPayload | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -276,7 +276,6 @@ export function PeppolReceiveSettings() {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     onClick={() => void toggleReceiving(!retryRepeatsWithdrawal)}
                     disabled={isSaving || !canWrite}
                   >

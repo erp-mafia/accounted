@@ -89,8 +89,10 @@ export function KopplingarChips({
   const agentChip = agentChipView(aiConnection)
   const showAgent = !firstTaskOnly && !agentChip.on
   const agentLogos = AI_CLIENTS.filter((c) => agentChip.logos.includes(c.id))
-  const showBank = !firstTaskOnly && !hasBank
-  const showSkvChip = !firstTaskOnly && showSkv && !hasSkatteverket
+  // Connecting the bank or Skatteverket is a write: not offered to a read-only member.
+  const canWrite = useCompanyOptional()?.role !== 'viewer'
+  const showBank = canWrite && !firstTaskOnly && !hasBank
+  const showSkvChip = canWrite && !firstTaskOnly && showSkv && !hasSkatteverket
   const firstTaskAgent = AI_CLIENTS.find((c) => c.id === firstTask)
 
   function connect(client: AiClient) {
@@ -107,7 +109,8 @@ export function KopplingarChips({
   if (!showAgent && !firstTaskAgent && !showBank && !showSkvChip) return null
 
   return (
-    <div className="px-1 pt-4 pb-2">
+    // No padding of its own: Hem's section rhythm (32px) spaces it like every other block.
+    <div>
       <AiConnectorDialog action={connectAction} onClose={() => setConnectAction(null)} />
       <ul aria-label={t('kopplingar_title')} className="flex flex-wrap items-center gap-2">
         {showAgent && (
@@ -211,7 +214,7 @@ export function KopplingarChips({
 }
 
 const pillClass =
-  'inline-flex h-6 items-center rounded-full bg-secondary px-3 text-[11px] text-foreground transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50'
+  'inline-flex h-6 items-center rounded-md px-2 text-xs font-medium text-strong transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 disabled:pointer-events-none disabled:opacity-40'
 
 function Chip({
   icon,
@@ -225,10 +228,10 @@ function Chip({
   action: ReactNode
 }) {
   return (
-    <li className="inline-flex h-8 items-center gap-2 rounded-full border border-border pl-3 pr-1 text-[12.5px]">
+    <li className="inline-flex h-8 items-center gap-2 rounded-md bg-control pl-3 pr-1 text-xs shadow-raised">
       <span className="flex shrink-0 items-center" aria-hidden>{icon}</span>
       <span className="truncate">{name}</span>
-      <span className="text-[11px] text-muted-foreground">{status}</span>
+      <span className="text-xs text-muted-foreground">{status}</span>
       {action}
     </li>
   )

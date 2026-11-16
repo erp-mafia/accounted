@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ClockIcon, ExclamationCircleIcon } from '@/components/icons'
+import { ClockIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatDateTime } from '@/lib/utils'
@@ -43,6 +43,8 @@ export function BehandlingshistorikView({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<CategoryFilter>('all')
+  // Bumped by "Försök igen" to ask again for the same query.
+  const [attempt, setAttempt] = useState(0)
 
   const query = buildQuery(periodId, dateRange)
 
@@ -73,7 +75,7 @@ export function BehandlingshistorikView({
     }
     // t is stable for the mounted locale; the query string is the real input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periodId, query])
+  }, [periodId, query, attempt])
 
   const visible = useMemo(() => {
     if (!data) return []
@@ -83,24 +85,21 @@ export function BehandlingshistorikView({
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-2">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Skeleton key={i} className="h-4 w-full" />
-          ))}
-        </CardContent>
-      </Card>
+      <LateReveal>
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div key={i} className="flex h-9 items-center gap-6 border-b-hairline">
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="h-3.5 w-72" />
+            <Skeleton className="ml-auto h-3.5 w-24" />
+          </div>
+        ))}
+      </LateReveal>
     )
   }
 
   if (error) {
     return (
-      <Card>
-        <CardContent className="p-8 text-center text-destructive">
-          <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
-          {error}
-        </CardContent>
-      </Card>
+      <LoadError title={error} onRetry={() => setAttempt((n) => n + 1)} />
     )
   }
 
@@ -143,10 +142,10 @@ export function BehandlingshistorikView({
       </p>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[760px]">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="px-4 py-2 w-40">{t('bh_col_time')}</th>
                   <th className="px-4 py-2">{t('bh_col_event')}</th>

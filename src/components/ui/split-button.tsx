@@ -120,32 +120,32 @@ export function SplitButton({
           9), so it takes the toolbar height like everything else there. */}
       <Button
         variant={variant}
-        size="sm"
+        size="toolbar"
         className="rounded-r-none"
         disabled={active.disabled}
         loading={active.busy}
         title={active.disabled ? active.disabledTitle : undefined}
         onClick={() => runOption(active)}
       >
-        {!active.busy && active.icon && <active.icon className="mr-1.5 h-4 w-4" />}
+        {!active.busy && active.icon && <active.icon className="h-4 w-4" />}
         {active.busy ? (active.busyLabel ?? active.label) : active.label}
       </Button>
+      {/* Stil v3: the caret is its own 30px rectangle a hairline gap away,
+          the pair reading as one control with a seam. */}
       <Button
         ref={caretRef}
         variant={variant}
-        size="sm"
+        size="toolbar"
         aria-label={tCommon('more_options')}
         aria-expanded={open}
         aria-haspopup="menu"
-        className={cn(
-          'rounded-l-none px-2',
-          variant === 'default' && 'border-l border-primary-foreground/20',
-          variant === 'outline' && 'border-l-0',
-          variant === 'secondary' && 'border-l border-foreground/10',
-        )}
+        // The caret stays beside its primary when a phone's top bar folds
+        // the other actions (PageHeaderActions).
+        data-topbar-keep=""
+        className="ml-px w-[30px] rounded-l-none px-0"
         onClick={() => setOpen((v) => !v)}
       >
-        <ChevronDownIcon className="h-4 w-4" />
+        <ChevronDownIcon className="h-3 w-3" />
       </Button>
 
       {open &&
@@ -153,10 +153,10 @@ export function SplitButton({
           <div
             ref={menuRef}
             role="menu"
-            className={cn('fixed z-[60] min-w-[240px] py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
+            className={cn('fixed z-[60] min-w-[240px] p-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
-            <div className="px-1">
+            <div>
               {options.map((option) => (
                 <button
                   key={option.key}
@@ -169,9 +169,9 @@ export function SplitButton({
                     runOption(option)
                   }}
                   className={cn(
-                    'flex w-full items-start gap-2.5 rounded-sm px-2.5 py-2 text-left transition-colors',
+                    'flex min-h-7.5 w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors duration-150',
                     option.disabled
-                      ? 'cursor-not-allowed text-muted-foreground/40'
+                      ? 'cursor-not-allowed text-muted-foreground/60'
                       : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                   )}
                 >
@@ -185,13 +185,13 @@ export function SplitButton({
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] text-foreground">{option.label}</span>
                     {option.description && (
-                      <span className="block text-[11px] leading-snug text-muted-foreground">
+                      <span className="block text-[12px] leading-4 text-muted-foreground">
                         {option.description}
                       </span>
                     )}
                   </span>
                   {option.key === activeKey && (
-                    <CheckIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                    <CheckIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-strong" />
                   )}
                 </button>
               ))}

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
+import { StandaloneBrand } from '@/components/standalone/StandaloneBrand'
 import { LEGAL_PROVIDER } from '@/lib/legal/documents'
 
 /**
@@ -20,12 +21,15 @@ export function LegalShell({
   children: ReactNode
 }) {
   return (
-    <div className="min-h-dvh bg-background py-12 px-4">
+    <div className="min-h-dvh bg-background px-4 pb-12 pt-4 sm:pt-8">
       <div className="max-w-3xl mx-auto space-y-6">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl text-foreground mb-2">{title}</h1>
-          {subtitle && <p className="text-muted-foreground">{subtitle}</p>}
-          <p className="text-muted-foreground">Senast uppdaterad: {updatedAt}</p>
+        {/* The standalone pages' brand mark and 20px heading; the document
+            itself keeps its own reading column. */}
+        <StandaloneBrand />
+        <div className="mb-8 pt-2">
+          <h1 className="text-xl text-strong">{title}</h1>
+          {subtitle && <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>}
+          <p className="mt-1 text-sm text-muted-foreground">Senast uppdaterad: {updatedAt}</p>
         </div>
         {children}
         <p className="text-center text-xs text-muted-foreground">

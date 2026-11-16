@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -138,6 +139,10 @@ export default function LinkVoucherPicker({
 
   const [candidates, setCandidates] = useState<VoucherCandidate[] | null>(null)
   const [loading, setLoading] = useState(true)
+  // The candidates could not be read: said in place of the list, with
+  // "Försök igen" (bumps retryKey), instead of reading as "none".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [amountText, setAmountText] = useState('')
@@ -157,6 +162,7 @@ export default function LinkVoucherPicker({
         if (!response.ok) {
           if (cancelled) return
           setCandidates([])
+          setLoadFailed(true)
           return
         }
         const body = await response.json()
@@ -164,8 +170,11 @@ export default function LinkVoucherPicker({
         const side = body?.data?.settlement_side
         setSupplierSide(side === 'bank_credit' || side === 'ap_debit' ? side : 'ap_debit')
         setCandidates(body?.data?.candidates ?? [])
+        setLoadFailed(false)
       } catch {
-        if (!cancelled) setCandidates([])
+        if (cancelled) return
+        setCandidates([])
+        setLoadFailed(true)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -174,7 +183,7 @@ export default function LinkVoucherPicker({
     return () => {
       cancelled = true
     }
-  }, [apiBase])
+  }, [apiBase, retryKey])
 
   const wanted = useMemo(() => parseVoucherNumber(search), [search])
   const lookupKey = wanted ? (wanted.series ? `${wanted.series}-${wanted.number}` : String(wanted.number)) : null
@@ -293,19 +302,23 @@ export default function LinkVoucherPicker({
       </div>
 
       {loading || (lookupPending && filtered.length === 0) ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && filtered.length === 0 ? (
+        <LoadError onRetry={() => setRetryKey((key) => key + 1)} />
       ) : filtered.length === 0 ? (
-        <div className="rounded-lg border border-dashed bg-muted/30 p-6 text-center">
-          <p className="text-sm font-medium">{t('empty_title')}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t(emptyDescriptionKey)}</p>
-          {wanted === null && (
-            <p className="mt-2 text-xs text-muted-foreground">{t('empty_search_hint')}</p>
-          )}
-        </div>
+        <EmptyState
+          title={t('empty_title')}
+          description={
+            <div className="space-y-1">
+              <p>{t(emptyDescriptionKey)}</p>
+              {wanted === null && <p>{t('empty_search_hint')}</p>}
+            </div>
+          }
+        />
       ) : (
         <ul className="space-y-2 max-h-[320px] overflow-y-auto">
           {filtered.map((c) => {
@@ -361,7 +374,7 @@ export default function LinkVoucherPicker({
       )}
 
       {selected && (
-        <div className="space-y-3 rounded-lg border bg-secondary/40 p-3">
+        <div className="space-y-3 rounded-lg bg-secondary/40 p-3 bg-control shadow-raised">
           {canChooseAmount(selected) && (
             <div className="space-y-1.5">
               <Label htmlFor="link-voucher-amount">{t('amount_label')}</Label>

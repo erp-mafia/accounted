@@ -86,13 +86,15 @@
  *      Killed a self-hosted instance after 42 idle hours (2026-08-13). No
  *      baseline: the count is 0 today.
  *   10. off-ladder-radius: a border-radius class outside the locked ladder
- *      (pill / rounded-xl overlays / rounded-lg surfaces / rounded-sm leaves;
- *      see .claude/rules/design.md). Before the 2026-08 migration the UI had
- *      seven radii in circulation (4/5/6/8/12/16px + pill) and one toolbar row
- *      could mix four of them. `rounded-md`, bare `rounded`, `rounded-2xl`+
- *      and arbitrary `rounded-[Npx]` are dead vocabulary in app/ and
- *      components/. No baseline: the count is 0, any new one is a hard
- *      failure.
+ *      (Stil v3, 2026-10-29: rounded-sm 4px leaves, rounded-md 6px buttons
+ *      and chips, rounded-lg 8px fields and single objects, rounded-pop 10px
+ *      menus and popovers, rounded-xl 12px the panel, dialogs and drawers,
+ *      rounded-full only for dots, avatars and switch tracks; see
+ *      .claude/rules/design.md). Before the 2026-08 migration the UI had
+ *      seven radii in circulation and one toolbar row could mix four of
+ *      them. Bare `rounded`, `rounded-2xl`+ and arbitrary `rounded-[Npx]` are
+ *      dead vocabulary in app/ and components/. No baseline: the count is 0,
+ *      any new one is a hard failure.
  *  10. folded-public-flag: `process.env.NEXT_PUBLIC_X === 'true'` compared in
  *      place. The Docker image bakes sentinels that docker-entrypoint.sh
  *      substitutes at container start; an in-place comparison is constant-
@@ -726,16 +728,17 @@ function countHandRolledInvariants() {
   return count
 }
 
-// 9. off-ladder-radius. The radius ladder (.claude/rules/design.md) allows
-// exactly: rounded-full (interactive toolbar controls, chips, dots),
-// rounded-xl (page panel, dialogs, slide-overs, hero surfaces), rounded-lg
-// (cards, form fields, popover/menu content, bordered boxes), rounded-sm
-// (nested leaf elements), rounded-none, and directional variants of those.
-// Everything else is off-ladder. Bare `rounded` is banned as vocabulary: it
-// renders the same 4px as rounded-sm but hides from a rounded-sm grep.
+// 9. off-ladder-radius. The radius ladder (.claude/rules/design.md, Stil v3)
+// allows exactly: rounded-sm (4px leaves), rounded-md (6px buttons, chips,
+// segments, menu rows), rounded-lg (8px fields, single objects),
+// rounded-pop (10px menus, popovers, toasts), rounded-xl (12px page panel,
+// dialogs, drawers), rounded-full (dots, avatars, switch tracks),
+// rounded-none, and directional variants of those. Everything else is
+// off-ladder. Bare `rounded` is banned as vocabulary: it renders the same
+// 4px as rounded-sm but hides from a rounded-sm grep.
 const OFF_LADDER_RADIUS_RES = [
-  // rounded-md and any directional variant (rounded-t-md, rounded-bl-md, ...)
-  /\brounded(?:-[trbl]{1,2})?-(?:md|2xl|3xl|4xl)\b/,
+  // rounded-2xl+ and any directional variant (rounded-t-2xl, ...)
+  /\brounded(?:-[trbl]{1,2})?-(?:2xl|3xl|4xl)\b/,
   // arbitrary radius values: rounded-[5px], rounded-t-[10px], ...
   /\brounded(?:-[trbl]{1,2})?-\[/,
 ]
@@ -1788,9 +1791,10 @@ if (current.offLadderRadii.length) {
   )
   current.offLadderRadii.forEach((f) => console.error(`    ${f}`))
   console.error(
-    '  → use the radius ladder (.claude/rules/design.md): rounded-full for toolbar controls/chips,\n' +
-      '    rounded-xl for overlays, rounded-lg for cards/fields/menu content, rounded-sm for nested\n' +
-      '    leaves. rounded-md, bare `rounded`, rounded-2xl and rounded-[Npx] are dead vocabulary.',
+    '  → use the radius ladder (.claude/rules/design.md): rounded-md for buttons/chips, rounded-lg for\n' +
+      '    fields/single objects, rounded-pop for menus/popovers, rounded-xl for the panel/dialogs/drawers,\n' +
+      '    rounded-sm for leaves, rounded-full for dots/avatars. Bare `rounded`, rounded-2xl and\n' +
+      '    rounded-[Npx] are dead vocabulary.',
   )
 }
 

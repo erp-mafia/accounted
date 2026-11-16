@@ -7,8 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -158,7 +158,7 @@ export function PeriodiskSammanstallningView() {
     <div className="space-y-8">
       {/* Period selection: the report below follows it automatically */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent>
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <Label htmlFor="ps-period-type">Periodicitet</Label>
@@ -224,25 +224,13 @@ export function PeriodiskSammanstallningView() {
         </CardContent>
       </Card>
 
-      {error && (
-        <Card>
-          <CardContent className="p-6 flex flex-wrap items-center gap-3 text-destructive">
-            <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
-            <span className="text-sm">{error}</span>
-            <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-              Försök igen
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      {error && <LoadError title={error} onRetry={() => setRetryKey((k) => k + 1)} />}
 
       {!error && loading && !data && (
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-5 w-40" />
-            <Skeleton className="h-32" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-3">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-32" />
+        </LateReveal>
       )}
 
       {data && !error && (
@@ -266,19 +254,19 @@ export function PeriodiskSammanstallningView() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Tjänster (typ 3)</div>
+                  <div className="text-xs text-muted-foreground">Tjänster (typ 3)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.services)} kr
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Varor (typ 1)</div>
+                  <div className="text-xs text-muted-foreground">Varor (typ 1)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.goods)} kr
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Trepart (typ 2)</div>
+                  <div className="text-xs text-muted-foreground">Trepart (typ 2)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.triangulation)} kr
                   </div>
@@ -366,12 +354,12 @@ export function PeriodiskSammanstallningView() {
                     onClick={downloadCsv}
                     disabled={hasBlockingErrors}
                   >
-                    <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                    <ArrowDownTrayIcon className="h-4 w-4" />
                     Ladda ner CSV (SKV 5740)
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>

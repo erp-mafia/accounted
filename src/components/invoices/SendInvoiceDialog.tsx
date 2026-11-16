@@ -10,6 +10,7 @@ import { chooseForeignInvoicePayee } from '@/lib/invoices/choose-foreign-payee'
 import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
+  DialogConsequence,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -20,15 +21,17 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
-import { formatCurrency } from '@/lib/utils'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { lineBalance, storedLineAmount } from '@/lib/bookkeeping/line-balance'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
@@ -43,8 +46,8 @@ import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/in
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
-import { BuildingLibraryIcon, EnvelopeIcon, PaperAirplaneIcon } from '@/components/icons'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ChevronDownIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Customer, EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
@@ -89,6 +92,7 @@ export default function SendInvoiceDialog({
   const canCustomizeRecipients = role === 'owner' || role === 'admin'
   const canEmail = useCapability(CAPABILITY.email_send)
   const t = useTranslations('invoice_send_dialog')
+  const tCommon = useTranslations('common')
   const tVat = useTranslations('vat_treatment_notice')
   const tPay = useTranslations('invoice_editor_pay')
   const locale = useLocale() as 'sv' | 'en'
@@ -136,6 +140,7 @@ export default function SendInvoiceDialog({
     periods: fiscalPeriods,
     isLoading: periodsLoading,
     error: periodsError,
+    refresh: refreshPeriods,
   } = useFiscalPeriods()
   const { accounts } = useAccounts()
   // /api/settings used to fall back to the company row's entity type when
@@ -154,6 +159,17 @@ export default function SendInvoiceDialog({
   )
   const deferBooking = !!companySettings?.defer_invoice_booking
   const [isInitialized, setIsInitialized] = useState(false)
+  // The dialog could not load what it needs: said in the dialog with
+  // "Försök igen" (Stil v3, never a toast that closes it); the attempt
+  // counter re-runs the load.
+  const [initError, setInitError] = useState<string | null>(null)
+  const [initAttempt, setInitAttempt] = useState(0)
+  // A refused send says so in the footer, where the action is.
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  // The proposed rows read as a table; "Ändra konteringen" turns them into
+  // the editor. Extra copies sit behind "Fler alternativ".
+  const [editingLines, setEditingLines] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [shouldBookOnIssue, setShouldBookOnIssue] = useState(true)
   // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
   // yet: its credit reverses the customer's share alone.
@@ -214,6 +230,10 @@ export default function SendInvoiceDialog({
   useEffect(() => {
     if (!open) {
       setIsInitialized(false)
+      setInitError(null)
+      setSubmitError(null)
+      setEditingLines(false)
+      setMoreOpen(false)
       setAdditionalCcText('')
       setAdditionalBccText('')
       setSwedishVatAcknowledged(false)
@@ -226,6 +246,7 @@ export default function SendInvoiceDialog({
     if (settingsLoading || periodsLoading) return
 
     let cancelled = false
+    setInitError(null)
 
     async function init() {
       try {
@@ -294,12 +315,7 @@ export default function SendInvoiceDialog({
         setIsInitialized(true)
       } catch (err) {
         if (cancelled) return
-        toast({
-          title: t('load_failed_title'),
-          description: err instanceof Error ? getUserErrorMessage(err) : t('try_again'),
-          variant: 'destructive',
-        })
-        onOpenChange(false)
+        setInitError(err instanceof Error ? getUserErrorMessage(err) : t('try_again'))
       }
     }
 
@@ -308,7 +324,7 @@ export default function SendInvoiceDialog({
   // companySettings is read at init time on purpose: a background
   // revalidation of the settings row must not re-run init() mid-dialog.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, invoice.id, invoice.invoice_date, company?.id, canCustomizeRecipients, settingsLoading, periodsLoading, settingsError, periodsError])
+  }, [open, invoice.id, invoice.invoice_date, company?.id, canCustomizeRecipients, settingsLoading, periodsLoading, settingsError, periodsError, initAttempt])
 
   const proposedLines = useMemo(() => {
     if (!isInitialized || !shouldBookOnIssue) return []
@@ -413,6 +429,7 @@ export default function SendInvoiceDialog({
     if (foreignPayee) return
     if (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) return
     setIsSubmitting(true)
+    setSubmitError(null)
 
     try {
       const url = mode === 'email'
@@ -531,11 +548,7 @@ export default function SendInvoiceDialog({
         })
       }
     } catch (error) {
-      toast({
-        title: t(isCreditNote ? 'credit_send_failed_title' : isQuote ? 'send_quote_failed_title' : 'send_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('try_again'),
-        variant: 'destructive',
-      })
+      setSubmitError(error instanceof Error ? getUserErrorMessage(error) : t('try_again'))
     }
 
     setIsSubmitting(false)
@@ -572,11 +585,56 @@ export default function SendInvoiceDialog({
     onOpenChange(false)
   }
 
+  const retryInit = () => {
+    if (settingsError) void refetchCompanySettings()
+    if (periodsError) void refreshPeriods()
+    setInitAttempt((n) => n + 1)
+  }
+
   const showJournalPreview = shouldBookOnIssue && proposedLines.length > 0
+  const customerEmail = invoice.customer?.email ?? ''
+  const voucherDescription = t(isCreditNote ? 'credit_voucher_description' : 'voucher_description', {
+    numberSpace: invoice.invoice_number ? ` ${invoice.invoice_number}` : '',
+    customerSuffix: invoice.customer?.name ? `, ${invoice.customer.name}` : '',
+  })
+  // Rows that carry an amount: a blank row added in the editor is not
+  // something that books (an amount without an account stays visible).
+  const shownLines = activeLines.filter(
+    (line) => (parseFloat(line.debit_amount) || 0) !== 0 || (parseFloat(line.credit_amount) || 0) !== 0,
+  )
+  const journalLabel = periodName
+    ? t('journal_label_dated', { date: formatDate(invoice.invoice_date) })
+    : t('journal_label')
+  // Why nothing books now (an offert, kontantmetoden, a deferred booking):
+  // where the document goes is the footer's job.
+  const explainText = isQuote
+    ? mode === 'email'
+      ? t('explain_quote_email', { email: customerEmail })
+      : t('explain_quote_manual')
+    : !shouldBookOnIssue && isRealInvoice
+      ? t(isCreditNote ? 'explain_credit_cash' : deferBooking ? 'explain_deferred' : 'explain_cash')
+      : null
+
+  // The footer's left (Stil v3): what the primary does, or why it failed.
+  const footerError = submitError
+    ? { title: t(isCreditNote ? 'credit_send_failed_title' : isQuote ? 'send_quote_failed_title' : 'send_failed_title'), message: submitError }
+    : mode === 'email' && recipientError
+      ? { title: null, message: recipientError }
+      : null
+  const consequence = !isInitialized
+    ? null
+    : mode === 'email'
+      ? customerEmail
+        ? t(shouldBookOnIssue ? 'consequence_email_book' : 'consequence_email', { email: customerEmail })
+        : null
+      : t(shouldBookOnIssue ? 'consequence_manual_book' : 'consequence_manual')
+
+  const labelClass = 'text-[12px] font-medium leading-4 text-muted-foreground'
+  const recipientRowClass = 'grid min-h-9 grid-cols-[7rem_minmax(0,1fr)_auto] items-center gap-x-4 border-b-hairline py-1.5'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>
             {t(
@@ -597,128 +655,268 @@ export default function SendInvoiceDialog({
               <span data-ph-mask="">{t('title_suffix', { number: invoice.invoice_number })}</span>
             ) : ''}
           </DialogTitle>
-          {/* data-ph-mask: amount and customer email are user data. The amount
-              is what the mail and the PDF ask for (getAmountToPay):
-              öresavrundning and any ROT/RUT deduction applied. */}
+          {/* The document as the context line: customer, amount, due date.
+              data-ph-mask: all of it is user data. The amount is what the
+              mail and the PDF ask for (getAmountToPay): öresavrundning and
+              any ROT/RUT deduction applied. */}
           <DialogDescription data-ph-mask="">
+            {invoice.customer?.name && <>{invoice.customer.name} · </>}
             {formatCurrency(getAmountToPay(invoice, companySettings).toPay, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}
-            {mode === 'email' && invoice.customer?.email && (
-              <>{t('description_to_email', { email: invoice.customer.email })}</>
+            {isRealInvoice && !isCreditNote && invoice.due_date && (
+              <> · {t('description_due', { date: formatDate(invoice.due_date) })}</>
             )}
           </DialogDescription>
         </DialogHeader>
 
-        {!isInitialized ? (
-          <div className="space-y-3 py-2">
+        {initError ? (
+          <LoadError
+            title={t('load_failed_title')}
+            description={initError}
+            onRetry={retryInit}
+            className="pt-0"
+          />
+        ) : !isInitialized ? (
+          <LateReveal className="space-y-3 py-2">
             <Skeleton className="h-4 w-2/3" />
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-1/2" />
-          </div>
+          </LateReveal>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-5">
             {isSandbox && mode === 'email' && (
-              <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground">
+              <AttnLine tone="info">
                 E-postutskick är avstängt i sandlådan. Använd istället
                 &laquo;Markera som skickad&raquo; för att testa det resterande
                 flödet.
-              </div>
+              </AttnLine>
             )}
             {!isSandbox && !canEmail && mode === 'email' && (
-              <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground">
+              <AttnLine tone="info">
                 E-postutskick kräver ett abonnemang.{' '}
-                <a href="/settings/billing" className="underline underline-offset-2">
+                <a href="/settings/billing" className="font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60">
                   Uppgradera
                 </a>{' '}
                 eller använd &laquo;Markera som skickad&raquo;.
-              </div>
+              </AttnLine>
             )}
             {foreignPayee && !cashAccountsLoading && (
-              <div className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 text-sm">
-                <BuildingLibraryIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <div className="min-w-0 flex-1 leading-5">
-                  <p className="text-muted-foreground">
-                    {tPay(foreignPayee.options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', {
-                      currency: foreignPayee.currency,
-                    })}
-                  </p>
-                  {foreignPayee.options.length > 0 ? (
-                    isCompanyAdmin ? (
-                      <div className="mt-1 flex flex-col items-start gap-1">
-                        {foreignPayee.options.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            disabled={choosingPayee || isSubmitting}
-                            onClick={() => void choosePayee(option)}
-                            className="text-left text-foreground underline underline-offset-2 hover:text-muted-foreground disabled:opacity-50"
-                            data-ph-mask=""
-                          >
-                            {tPay('foreign_use_account', {
-                              account: option.label,
-                              printed: option.printed,
-                              currency: foreignPayee.currency,
-                            })}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      // A member may pick an account for this invoice alone,
-                      // which the editor saves with the draft.
-                      <Link
-                        href={`/invoices/${invoice.id}/edit`}
-                        className="mt-1 inline-block text-foreground underline underline-offset-2 hover:text-muted-foreground"
-                      >
-                        {t('foreign_payee_choose_in_editor')}
-                      </Link>
-                    )
-                  ) : isCompanyAdmin ? (
-                    <Link
-                      href="/settings/invoicing"
-                      className="mt-1 inline-block text-foreground underline underline-offset-2 hover:text-muted-foreground"
-                    >
-                      {tPay('foreign_open_settings')}
-                    </Link>
+              <AttnLine>
+                <p>
+                  {tPay(foreignPayee.options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', {
+                    currency: foreignPayee.currency,
+                  })}
+                </p>
+                {foreignPayee.options.length > 0 ? (
+                  isCompanyAdmin ? (
+                    <div className="mt-1 flex flex-col items-start gap-1">
+                      {foreignPayee.options.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          disabled={choosingPayee || isSubmitting}
+                          onClick={() => void choosePayee(option)}
+                          className="text-left font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60 disabled:opacity-50"
+                          data-ph-mask=""
+                        >
+                          {tPay('foreign_use_account', {
+                            account: option.label,
+                            printed: option.printed,
+                            currency: foreignPayee.currency,
+                          })}
+                        </button>
+                      ))}
+                    </div>
                   ) : (
-                    <p className="text-muted-foreground">{tPay('ask_admin')}</p>
-                  )}
-                </div>
-              </div>
+                    // A member may pick an account for this invoice alone,
+                    // which the editor saves with the draft.
+                    <Link
+                      href={`/invoices/${invoice.id}/edit`}
+                      className="mt-1 inline-block font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60"
+                    >
+                      {t('foreign_payee_choose_in_editor')}
+                    </Link>
+                  )
+                ) : isCompanyAdmin ? (
+                  <Link
+                    href="/settings/invoicing"
+                    className="mt-1 inline-block font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60"
+                  >
+                    {tPay('foreign_open_settings')}
+                  </Link>
+                ) : (
+                  <p className="text-muted-foreground">{tPay('ask_admin')}</p>
+                )}
+              </AttnLine>
             )}
+
+            {/* Who gets it: the customer, then the fixed copies from the
+                settings and the customer card. Convention 7: why they are
+                fixed lives behind the "?". */}
             {mode === 'email' && (
-              <div className="space-y-3 rounded-lg border border-border p-3">
-                <div className="space-y-1 text-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="min-w-0">
-                      <span className="font-medium">{t('recipient_to_label')}:</span>{' '}
-                      <span className="break-all">{invoice.customer?.email}</span>
-                    </p>
-                    {/* Convention 7: the why of fixed CC/BCC and the extra
-                        address rules live behind the "?": only the actual
-                        addresses stay inline. */}
+              <dl className="border-t-hairline text-[13px]" data-ph-mask="">
+                <div className={recipientRowClass}>
+                  <dt className="text-muted-foreground">{t('recipient_to_label')}</dt>
+                  {/* break-all, not truncate: the whole address shows before the send. */}
+                  <dd className="min-w-0 break-all">{customerEmail}</dd>
+                  <dd>
                     <HelpPopover>
                       <p>{t('recipient_help_fixed')}</p>
-                      {canCustomizeRecipients && (
-                        <p className="mt-2">{t('recipient_help_additional')}</p>
-                      )}
+                      {canCustomizeRecipients && <p className="mt-2">{t('recipient_help_additional')}</p>}
                     </HelpPopover>
-                  </div>
-                  <p className="text-muted-foreground">
-                    <span className="font-medium text-foreground">{t('recipient_fixed_cc_label')}:</span>{' '}
+                  </dd>
+                </div>
+                <div className={recipientRowClass}>
+                  <dt className="text-muted-foreground">{t('recipient_fixed_cc_label')}</dt>
+                  <dd className="col-span-2 min-w-0">
                     {fixedRecipients.cc.length > 0 ? fixedRecipients.cc.join(', ') : t('recipient_none')}
-                  </p>
-                  {canCustomizeRecipients && (
-                    <p className="text-muted-foreground">
-                      <span className="font-medium text-foreground">{t('recipient_fixed_bcc_label')}:</span>{' '}
-                      {fixedRecipients.bcc.length > 0 ? fixedRecipients.bcc.join(', ') : t('recipient_none')}
-                    </p>
-                  )}
+                  </dd>
                 </div>
                 {canCustomizeRecipients && (
-                  <>
+                  <div className={recipientRowClass}>
+                    <dt className="text-muted-foreground">{t('recipient_fixed_bcc_label')}</dt>
+                    <dd className="col-span-2 min-w-0">
+                      {fixedRecipients.bcc.length > 0 ? fixedRecipients.bcc.join(', ') : t('recipient_none')}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
+
+            {showAttachments && (
+              <InvoiceAttachmentsSection
+                target={{ kind: 'invoice', invoiceId: invoice.id }}
+                disabled={isSubmitting}
+                onBusyChange={setAttachmentsBusy}
+              />
+            )}
+
+            {/* "Det här bokförs": the verifikat the send books, as a flat
+                ledger table. On the accrual book-at-issue path the rows can
+                be changed first ("Ändra konteringen"); what the table shows
+                is what books, and the primary waits while it does not
+                balance. */}
+            {showJournalPreview && (
+              <section className="space-y-1.5" aria-label={journalLabel}>
+                <div className="flex min-h-7 items-center justify-between gap-3">
+                  <span className={labelClass}>{journalLabel}</span>
+                  {editable && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setEditingLines((v) => !v)}
+                      aria-expanded={editingLines}
+                      disabled={isSubmitting}
+                      className="-mr-2.5 text-muted-foreground"
+                    >
+                      {editingLines ? t('edit_lines_done') : t('edit_lines')}
+                    </Button>
+                  )}
+                </div>
+                {editable && editingLines ? (
+                  <KonteringLinesEditor
+                    lines={editLines}
+                    accounts={accounts}
+                    accountName={(number) => accountNameByNumber.get(number)}
+                    onAccountChange={(index, value) => updateLine(index, 'account_number', value)}
+                    onAmountChange={(index, field, value) => updateLine(index, field, value)}
+                    onAdd={addLine}
+                    onRemove={removeLine}
+                    labels={{
+                      account: t('account_label'),
+                      debit: t('debit_label'),
+                      credit: t('credit_label'),
+                      addRow: t('add_row'),
+                      removeRow: t('remove_row'),
+                    }}
+                  />
+                ) : (
+                  <div data-ph-mask="">
+                    <VoucherLinesTable
+                      lines={voucherLineViews(shownLines)}
+                      redundantTexts={[voucherDescription]}
+                      showTotals
+                    />
+                  </div>
+                )}
+                {editable && (
+                  <div className="flex items-center justify-between gap-3 pt-1 text-[12px] leading-4">
+                    {isBalanced ? (
+                      <span className="text-muted-foreground">{t('lines_balanced')}</span>
+                    ) : (
+                      <span className="text-destructive">
+                        {t('lines_unbalanced', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
+                      </span>
+                    )}
+                    {editingLines && (
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatCurrency(totalDebit)} / {formatCurrency(totalCredit)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+            {!showJournalPreview && explainText && (
+              <p className="text-[13px] text-muted-foreground">{explainText}</p>
+            )}
+
+            {vatCustomer && vatWarnings.length > 0 && (
+              <div className="space-y-3">
+                <VatTreatmentNotice
+                  customer={vatCustomer}
+                  lineVatRates={invoiceLineVatRates}
+                  onValidated={(result) =>
+                    setValidatedCustomer({
+                      ...vatCustomer,
+                      vat_number: result.vat_number,
+                      vat_number_validated: true,
+                      vat_number_validated_at: new Date().toISOString(),
+                    })
+                  }
+                  editHref={`/invoices/${invoice.id}/edit`}
+                />
+                {needsSwedishVatAcknowledgement && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="send-swedish-vat-acknowledged"
+                      checked={swedishVatAcknowledged}
+                      onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor="send-swedish-vat-acknowledged" className="text-[13px] font-normal leading-5">
+                      {tVat('acknowledge_swedish_vat')}
+                    </Label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Extra copies for this send only (owner/admin), behind "Fler
+                alternativ"; an invalid address keeps them open. */}
+            {mode === 'email' && canCustomizeRecipients && (
+              <section className="space-y-3">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setMoreOpen((v) => !v)}
+                  aria-expanded={moreOpen || !!recipientError}
+                  aria-controls="send-invoice-more-options"
+                  className="-ml-2.5 text-muted-foreground"
+                >
+                  {tCommon('more_options')}
+                  <ChevronDownIcon
+                    className={cn(
+                      'h-3.5 w-3.5 transition-transform duration-150',
+                      (moreOpen || !!recipientError) && 'rotate-180',
+                    )}
+                  />
+                </Button>
+                {(moreOpen || !!recipientError) && (
+                  <div id="send-invoice-more-options" className="space-y-3">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="invoice-additional-cc">{t('recipient_additional_cc_label')}</Label>
@@ -741,130 +939,33 @@ export default function SendInvoiceDialog({
                         />
                       </div>
                     </div>
-                    {recipientError && (
-                      <p className="text-sm text-destructive" role="alert">{recipientError}</p>
+                    {recipientError ? (
+                      <p className="text-[12px] leading-4 text-destructive" role="alert">{recipientError}</p>
+                    ) : (
+                      <p className="text-[12px] leading-4 text-muted-foreground">{t('recipient_help_additional')}</p>
                     )}
-                  </>
-                )}
-              </div>
-            )}
-            {showAttachments && (
-              <InvoiceAttachmentsSection
-                target={{ kind: 'invoice', invoiceId: invoice.id }}
-                disabled={isSubmitting}
-                onBusyChange={setAttachmentsBusy}
-              />
-            )}
-            {showJournalPreview && editable ? (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  {t('journal_edit_intro')}
-                </p>
-
-                <KonteringLinesEditor
-                  lines={editLines}
-                  accounts={accounts}
-                  accountName={(number) => accountNameByNumber.get(number)}
-                  onAccountChange={(index, value) => updateLine(index, 'account_number', value)}
-                  onAmountChange={(index, field, value) => updateLine(index, field, value)}
-                  onAdd={addLine}
-                  onRemove={removeLine}
-                  labels={{
-                    account: t('account_label'),
-                    debit: t('debit_label'),
-                    credit: t('credit_label'),
-                    addRow: t('add_row'),
-                    removeRow: t('remove_row'),
-                  }}
-                />
-
-                {/* Balance indicator */}
-                <div className="flex items-center justify-between border-t pt-3">
-                  {isBalanced ? (
-                    <span className="text-xs text-muted-foreground">{t('balanced_badge')}</span>
-                  ) : (
-                    <Badge variant="destructive">
-                      {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
-                    </Badge>
-                  )}
-                  <div className="text-sm text-muted-foreground tabular-nums">
-                    {formatCurrency(totalDebit)} / {formatCurrency(totalCredit)}
                   </div>
-                </div>
-              </>
-            ) : showJournalPreview ? (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  {t('journal_preview_intro')}
-                </p>
-                <JournalEntryReviewContent
-                  periodName={periodName}
-                  entryDate={invoice.invoice_date}
-                  description={t(isCreditNote ? 'credit_voucher_description' : 'voucher_description', {
-                    numberSpace: invoice.invoice_number ? ` ${invoice.invoice_number}` : '',
-                    customerSuffix: invoice.customer?.name ? `, ${invoice.customer.name}` : '',
-                  })}
-                  lines={proposedLines}
-                  showBalanceBadge={true}
-                  hideDate={!periodName}
-                />
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {isQuote
-                  ? mode === 'email'
-                    ? t('explain_quote_email', { email: invoice.customer?.email ?? '' })
-                    : t('explain_quote_manual')
-                  : !shouldBookOnIssue && isRealInvoice
-                    ? t(
-                        isCreditNote
-                          ? 'explain_credit_cash'
-                          : deferBooking
-                            ? 'explain_deferred'
-                            : 'explain_cash',
-                      )
-                    : mode === 'email'
-                      ? t('explain_email', { email: invoice.customer?.email ?? '' })
-                      : t('explain_manual')}
-              </p>
-            )}
-          </div>
-        )}
-
-        {vatCustomer && vatWarnings.length > 0 && (
-          <div className="space-y-3">
-            <VatTreatmentNotice
-              customer={vatCustomer}
-              lineVatRates={invoiceLineVatRates}
-              onValidated={(result) =>
-                setValidatedCustomer({
-                  ...vatCustomer,
-                  vat_number: result.vat_number,
-                  vat_number_validated: true,
-                  vat_number_validated_at: new Date().toISOString(),
-                })
-              }
-              editHref={`/invoices/${invoice.id}/edit`}
-            />
-            {needsSwedishVatAcknowledgement && (
-              <div className="flex items-start gap-2">
-                <Checkbox
-                  id="send-swedish-vat-acknowledged"
-                  checked={swedishVatAcknowledged}
-                  onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
-                  className="mt-0.5"
-                />
-                <Label htmlFor="send-swedish-vat-acknowledged" className="text-sm font-normal leading-5">
-                  {tVat('acknowledge_swedish_vat')}
-                </Label>
-              </div>
+                )}
+              </section>
             )}
           </div>
         )}
 
         <DialogFooter>
+          {footerError ? (
+            <DialogConsequence role="alert" className="text-destructive">
+              {footerError.title && <span className="font-medium">{footerError.title}.</span>} {footerError.message}
+            </DialogConsequence>
+          ) : (
+            consequence && (
+              <DialogConsequence>
+                {/* data-ph-mask: the customer's address is user data. */}
+                <span data-ph-mask="">{consequence}</span>
+              </DialogConsequence>
+            )
+          )}
           <Button
-            variant="outline"
+            variant="ghost"
             onClick={handleClose}
             disabled={isSubmitting}
           >
@@ -888,11 +989,6 @@ export default function SendInvoiceDialog({
                   : undefined
             }
           >
-            {!isSubmitting && (mode === 'email' ? (
-              <EnvelopeIcon className="mr-2 h-4 w-4" />
-            ) : (
-              <PaperAirplaneIcon className="mr-2 h-4 w-4" />
-            ))}
             {t(
               isCreditRepair
                 ? 'complete_credit_bookkeeping'

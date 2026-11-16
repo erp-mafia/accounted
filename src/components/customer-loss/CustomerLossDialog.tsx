@@ -147,7 +147,7 @@ export function CustomerLossDialog({ invoiceId, invoiceNumber, view, providerNam
         aria-checked={kind === value}
         onClick={() => setKind(value)}
         className={cn(
-          'w-full rounded-lg border border-border px-4 py-3 text-left transition-colors',
+          'w-full rounded-lg px-4 py-3 text-left transition-colors bg-control shadow-raised',
           kind === value ? 'bg-secondary' : 'hover:bg-secondary/60',
         )}
       >
@@ -160,7 +160,7 @@ export function CustomerLossDialog({ invoiceId, invoiceNumber, view, providerNam
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('title', { number: invoiceNumber ?? '' })}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
@@ -188,7 +188,7 @@ export function CustomerLossDialog({ invoiceId, invoiceNumber, view, providerNam
                 onChange={(e) => void pickEvidence(e.target.files?.[0])}
               />
               <div className="flex items-center gap-3">
-                <Button type="button" variant="outline" size="sm" loading={uploading} onClick={() => fileInput.current?.click()}>
+                <Button type="button" variant="outline" loading={uploading} onClick={() => fileInput.current?.click()}>
                   {t('evidence_choose')}
                 </Button>
                 {evidence && <span className="text-xs text-muted-foreground">{t('evidence_uploaded', { filename: evidence.name })}</span>}
@@ -225,7 +225,7 @@ export function CustomerLossDialog({ invoiceId, invoiceNumber, view, providerNam
             <div className="space-y-1.5">
               <button
                 type="button"
-                className="text-[12.5px] underline underline-offset-2"
+                className="text-xs underline underline-offset-2"
                 aria-expanded={showVoucher}
                 onClick={() => setShowVoucher((v) => !v)}
               >
@@ -272,7 +272,7 @@ function LossVoucherTable({ lines, t }: { lines: PreviewLine[]; t: (key: string)
       </thead>
       <tbody>
         {lines.map((line, i) => (
-          <tr key={`${line.account_number}-${i}`} className="border-t border-border">
+          <tr key={`${line.account_number}-${i}`} className="border-t-hairline">
             <td className="py-1 pr-3">{accountWithName(line.account_number, accounts, getBasLoadedByNumber(line.account_number)?.account_name)}</td>
             <td className="py-1 text-right tabular-nums">{line.debit_amount > 0 ? formatLossAmount(line.debit_amount) : ''}</td>
             <td className="py-1 text-right tabular-nums">{line.credit_amount > 0 ? formatLossAmount(line.credit_amount) : ''}</td>

@@ -579,7 +579,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'resumable') {
     return (
-      <div className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="rounded-lg p-4 bg-control shadow-raised">
         <div className="space-y-3">
           <div className="space-y-2">
             <p className="text-sm font-medium">{t('bankid_resume_title')}</p>
@@ -638,7 +638,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'service_unavailable') {
     return (
-      <div className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="rounded-lg p-4 bg-control shadow-raised">
         <div className="flex items-start gap-3">
           <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="space-y-1.5">
@@ -655,7 +655,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             <Button
               onClick={startSession}
               variant="ghost"
-              size="sm"
               className="mt-1 h-auto px-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               Försök med BankID igen
@@ -702,7 +701,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             <Button
               onClick={openBankIdOnDevice}
               variant="ghost"
-              size="sm"
               className="gap-1.5 text-muted-foreground"
             >
               <ComputerDesktopIcon className="h-3.5 w-3.5" />
@@ -731,7 +729,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         onClick={handleCancel}
         disabled={!activeFlowId}
         variant="ghost"
-        size="sm"
         className="text-muted-foreground"
       >
         Avbryt

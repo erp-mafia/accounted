@@ -2,10 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import {
@@ -84,25 +83,19 @@ export function SemesterskuldView({ periodId }: { periodId: string }) {
 
   if (loading && !data) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-2">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-4 w-full" />
-          ))}
-        </CardContent>
-      </Card>
+      <LateReveal>
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="flex h-9 items-center justify-between border-b-hairline">
+            <Skeleton className="h-3.5 w-48" />
+            <Skeleton className="h-3.5 w-20" />
+          </div>
+        ))}
+      </LateReveal>
     )
   }
 
-  if (error) {
-    return (
-      <Card>
-        <CardContent className="p-8 text-center text-destructive">
-          <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
-          {error}
-        </CardContent>
-      </Card>
-    )
+  if (error && !data) {
+    return <LoadError title={error} onRetry={refresh} />
   }
 
   if (!data) return null
@@ -112,6 +105,7 @@ export function SemesterskuldView({ periodId }: { periodId: string }) {
       data={data}
       exportBase={`/api/reports/vacation-liability?period_id=${encodeURIComponent(periodId)}`}
       onReconciled={refresh}
+      onRefreshFailedRetry={error ? refresh : undefined}
     />
   )
 }
@@ -124,11 +118,15 @@ export function SemesterskuldReport({
   data,
   exportBase,
   onReconciled,
+  onRefreshFailedRetry,
 }: {
   data: SemesterskuldData
   exportBase: string
   onReconciled: () => void
+  /** Set when a refresh failed with the report on screen: its line takes the page's one attention line. */
+  onRefreshFailedRetry?: () => void
 }) {
+  const tCommon = useTranslations('common')
   const t = useTranslations('reports')
   const { canWrite } = useCanWrite()
   const [reconcileOpen, setReconcileOpen] = useState(false)
@@ -154,18 +152,20 @@ export function SemesterskuldReport({
         ]}
       />
 
-      <p className="text-[12.5px] text-muted-foreground tabular-nums">
+      <p className="text-xs text-muted-foreground tabular-nums">
         {t('ss_summary', { date: formatDate(data.asOfDate), start: formatDate(data.vacationYearStart) })}
       </p>
 
-      {differenceText && (
+      {onRefreshFailedRetry ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: onRefreshFailedRetry }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : differenceText ? (
         <AttnLine action={canWrite ? { label: t('ss_attn_action'), onClick: () => setReconcileOpen(true) } : undefined}>
           {differenceText}
         </AttnLine>
-      )}
+      ) : null}
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <div className="overflow-x-auto stagger-enter">
             <Table className="min-w-[640px]">
               <TableHeader>
@@ -208,7 +208,7 @@ export function SemesterskuldReport({
       </Card>
 
       {check && (
-        <p className="text-[12.5px] text-muted-foreground tabular-nums">
+        <p className="text-xs text-muted-foreground tabular-nums">
           {/* The Summa row is the calculated liability and the ochre line names
               the difference, so this line only adds what the books hold. */}
           {t(hasDifference ? 'ss_line_booked' : 'ss_line_booked_matches', {
@@ -221,7 +221,7 @@ export function SemesterskuldReport({
       )}
 
       {totals.advanceVacationDebt !== 0 && (
-        <p className="text-[12.5px] text-muted-foreground tabular-nums">
+        <p className="text-xs text-muted-foreground tabular-nums">
           {t('ss_advance_debt', { amount: formatAmount(totals.advanceVacationDebt) })}
         </p>
       )}
@@ -242,7 +242,7 @@ export function SemesterskuldReport({
 function LiabilityDetail({ row }: { row: VacationLiabilityRow }) {
   const t = useTranslations('reports')
   return (
-    <div className="space-y-1 text-[12.5px] tabular-nums">
+    <div className="space-y-1 text-xs tabular-nums">
       <div>{t('ss_detail_days', { days: DAYS.format(row.liabilityDays), value: formatCurrency(row.dayValue) })}</div>
       {row.earningPay !== 0 && <div>{t('ss_detail_earning', { amount: formatCurrency(row.earningPay) })}</div>}
       {row.variablePay !== 0 && <div>{t('ss_detail_variable', { amount: formatCurrency(row.variablePay) })}</div>}

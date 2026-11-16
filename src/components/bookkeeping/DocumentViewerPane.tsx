@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ArrowTopRightOnSquareIcon, DocumentTextIcon } from '@/components/icons'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { cn } from '@/lib/utils'
 
@@ -84,7 +84,7 @@ export default function DocumentViewerPane({
     return (
       <div
         className={cn(
-          'flex h-full w-full items-center justify-center rounded-lg border bg-muted/20 text-sm text-muted-foreground',
+          'flex h-full w-full items-center justify-center rounded-lg text-sm text-muted-foreground bg-control shadow-raised',
           className,
         )}
       >
@@ -103,7 +103,7 @@ export default function DocumentViewerPane({
   return (
     <div
       className={cn(
-        'flex h-full w-full flex-col overflow-hidden rounded-lg border bg-muted/20',
+        'flex h-full w-full flex-col overflow-hidden',
         className,
       )}
     >
@@ -124,9 +124,9 @@ export default function DocumentViewerPane({
 
       <div className="min-h-0 flex-1 overflow-auto bg-background">
         {loadingMeta ? (
-          <div className="p-3">
+          <LateReveal className="p-3">
             <Skeleton className="h-full min-h-[40vh] w-full" />
-          </div>
+          </LateReveal>
         ) : kind === 'pdf' || kind === 'image' ? (
           <DocumentPreview
             src={inlineSrc}

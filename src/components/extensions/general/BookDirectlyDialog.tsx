@@ -4,7 +4,9 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
+  DialogConsequence,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -18,12 +20,17 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   BookmarkIcon,
   CheckIcon,
+  ChevronDownIcon,
   HashtagIcon,
   MagnifyingGlassIcon,
   PlusIcon,
-  TrashIcon,
+  XMarkIcon,
 } from '@/components/icons'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { TOTAL_TD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
+import { MENU_SEPARATOR_CLASS } from '@/components/ui/field-classes'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn, formatCurrency, formatAmount } from '@/lib/utils'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -90,6 +97,41 @@ function txSekAmount(tx: PickerTransaction): number {
   if (cur === 'SEK') return Math.abs(tx.amount)
   return Math.abs(
     resolveSekAmount(tx.amount, tx.amount_sek ?? null, tx.currency, tx.exchange_rate ?? null),
+  )
+}
+
+/** A section label (Stil v3): 12px/500 in sentence case, the same look as a field label. */
+const SECTION_LABEL_CLASS = 'text-[12px] font-medium leading-4 text-foreground/80'
+/** A help or status line under a field or section: 12px, muted unless it reports a problem. */
+const HELP_CLASS = 'text-[12px] leading-4 text-muted-foreground'
+/** A konteringsrad cell: a 36px ledger row holding a 28px field, over a hairline. */
+const LINE_TD_CLASS = 'h-9 border-b-hairline py-1 pr-2 align-middle'
+
+/**
+ * One bank row as the payment line and the picker show it: date, text,
+ * amount (a foreign row with its kronor value under it) and the inbox's
+ * "Matchad" mark when the inbox already paired this row with the underlag.
+ */
+function BankRowText({ tx, matched }: { tx: PickerTransaction; matched: boolean }) {
+  const cur = (tx.currency || 'SEK').toUpperCase()
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-3 text-[13px]">
+      <span className="date-figures shrink-0 text-[12px] text-muted-foreground">{tx.date}</span>
+      <span className="min-w-0 flex-1 truncate">{tx.description}</span>
+      {matched && (
+        <Badge variant="secondary" className="shrink-0">
+          Matchad
+        </Badge>
+      )}
+      <span className="shrink-0 text-right tabular-nums">
+        {formatCurrency(tx.amount, cur)}
+        {cur !== 'SEK' && (
+          <span className="block text-[12px] leading-4 text-muted-foreground">
+            ≈ {formatCurrency(txSekAmount(tx), 'SEK')}
+          </span>
+        )}
+      </span>
+    </span>
   )
 }
 
@@ -190,6 +232,8 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     ranked: rankedCandidates,
     rowById,
     loading: isLoadingTransactions,
+    error: transactionsError,
+    retry: retryTransactions,
     fxRate,
   } = useUnderlagBankCandidates({ open, extractedData: item.extracted_data, search: txSearch })
 
@@ -199,11 +243,24 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
   const acknowledgedWarningsRef = useRef<string[] | null>(null)
 
-  // "Spara som mall" — derive amount-parameterised template lines from the
+  // "Spara som mall": derive amount-parameterised template lines from the
   // current konteringsrader so the user can save the pattern they just worked
   // out. Labels come from the loaded BAS chart; the user reviews/edits in the
   // shared TemplateForm before saving.
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+
+  // Stil v3 anatomy: the bank row picker is a popover anchored under the
+  // payment line; the template actions and the note sit behind "Fler
+  // alternativ" (open on arrival when the note is prefilled, so the person
+  // reads what lands on the verifikat); a failed submit is said in the
+  // footer, not only in the toast.
+  const tCommon = useTranslations('common')
+  const [bankPickerOpen, setBankPickerOpen] = useState(false)
+  const bankTriggerRef = useRef<HTMLButtonElement>(null)
+  const bankPanelRef = useRef<HTMLDivElement>(null)
+  const bankSearchRef = useRef<HTMLInputElement>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   // Reset state when a different item opens the dialog. Lines are a fresh
   // prefill (no transaction yet) on the '1930' placeholder. The reconcile
@@ -231,9 +288,29 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     // The dialog always submits the field, empty string included, so clearing
     // the prefill really clears it: the server only defaults when the field is
     // absent from the request.
-    setNotes(renderChannelContextNotes(item.channel_context, { includeCaption: true }) ?? '')
+    const prefilledNotes = renderChannelContextNotes(item.channel_context, { includeCaption: true }) ?? ''
+    setNotes(prefilledNotes)
+    setMoreOpen(prefilledNotes.trim().length > 0)
+    setBankPickerOpen(false)
+    setSubmitError(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
+
+  // The bank row picker closes on a press outside it (its trigger toggles it)
+  // and takes focus into its search field when it opens. Escape is handled by
+  // the dialog's onEscapeKeyDown below, so it closes the picker, not the dialog.
+  useEffect(() => {
+    if (!bankPickerOpen) return
+    bankSearchRef.current?.focus()
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (bankPanelRef.current?.contains(target) || bankTriggerRef.current?.contains(target)) return
+      setBankPickerOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [bankPickerOpen])
 
   // Cost-account prefill from the company's own booking history for this
   // supplier (counterparty templates). Fills only a still-empty generated
@@ -554,6 +631,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return
     setIsSubmitting(true)
+    setSubmitError(null)
     try {
       const json = await runSubmit()
       const voucher = json?.data?.journal_entry
@@ -575,12 +653,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
           setVoucherWarnings(warnings)
           return
         }
+        const message = getErrorMessage(anyErr.body ?? err, {
+          context: 'journal_entry',
+          statusCode: anyErr.status,
+        })
+        setSubmitError(message)
         toast({
           title: 'Kunde inte bokföra',
-          description: getErrorMessage(anyErr.body ?? err, {
-            context: 'journal_entry',
-            statusCode: anyErr.status,
-          }),
+          description: message,
           variant: 'destructive',
         })
       }
@@ -602,13 +682,56 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     }
   }, [voucherWarnings, handleSubmit])
 
+  // The header's context line: the underlag as the inbox names it
+  // (supplier · kind · total), the object this dialog books.
+  const documentKind = item.extracted_data?.documentKind
+  const contextLine = [
+    item.extracted_data?.supplier?.name?.trim() || null,
+    documentKind ? tInbox(`doc_kind_${documentKind}`) : null,
+    targetAmount != null ? formatCurrency(targetAmount, targetCurrency) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  // Account names beside the numbers: the active chart first, the BAS
+  // catalogue for an account that activates at commit.
+  const catalogNameMap = useMemo(
+    () => Object.fromEntries(catalog.map((a) => [a.account_number, a.account_name])),
+    [catalog],
+  )
+  const accountLabel = (accountNumber: string): string | null =>
+    accountNameMap[accountNumber] ?? catalogNameMap[accountNumber] ?? null
+
+  // The date field reads as invalid while it lands in no open period.
+  const periodProblem = !entryDate || (periods.length > 0 && (!periodId || derivedPeriodBlocked))
+
+  // The footer's left side: what is still missing, a refused submit, or what
+  // Bokför will do.
+  // What is still missing reads quietly (it is why Bokför waits, not an
+  // error); only a submit that failed is red.
+  const footerProblem = disabledReason ?? submitError
+  const footerFailed = !disabledReason && Boolean(submitError)
+  const consequence = selectedTransactionId
+    ? tInbox('book_direct_consequence_bank')
+    : tInbox('book_direct_consequence')
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        size="document"
+        onEscapeKeyDown={(event) => {
+          // Escape closes the open bank row picker first, then the dialog.
+          if (bankPickerOpen) {
+            event.preventDefault()
+            setBankPickerOpen(false)
+            bankTriggerRef.current?.focus()
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Bokför direkt</DialogTitle>
-          <DialogDescription>
-            Skapa en verifikation från underlaget. Dokumentet bifogas verifikationen som underlag.
+          <DialogDescription data-ph-mask="" className="tabular-nums">
+            {contextLine}
           </DialogDescription>
         </DialogHeader>
 
@@ -624,235 +747,269 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             />
           </div>
 
-          {/* Booking form */}
-          <div className="space-y-6 pt-2">
-          {/* Metadata row */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Booking form: sections 20px apart, no boxes. */}
+          <div className="min-w-0 space-y-5">
             <div className="space-y-1.5">
-              <Label htmlFor="bd-date">Datum</Label>
-              <Input
-                id="bd-date"
-                type="date"
-                value={entryDate}
-                onChange={(e) => setEntryDate(e.target.value)}
-                disabled={isSubmitting}
-                className="tabular-nums"
-              />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label>Räkenskapsperiod</Label>
-              {/* Derived from the entry date (periods never overlap): text,
-                  not a picker, so it can never disagree with the date. */}
-              {periods.length === 0 ? (
-                <p className="text-sm text-muted-foreground pt-2">Hämtar perioder …</p>
-              ) : derivedPeriod ? (
-                <p className="text-sm pt-2 tabular-nums">
-                  {derivedPeriod.period_start}: {derivedPeriod.period_end}
-                  {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
-                    <span className="text-attn">
-                      {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
-                    </span>
-                  )}
-                </p>
-              ) : (
-                <AttnLine className="pt-2">
-                  Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
-                </AttnLine>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="bd-description">Beskrivning</Label>
-            <Input
-              id="bd-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={isSubmitting}
-              placeholder="Leverantör · fakturanummer"
-            />
-          </div>
-
-          {/* Transaction picker: always shown, selection is optional. */}
-          <div className="rounded-lg border p-4 space-y-3">
-            <div className="space-y-0.5">
-              <Label className="text-sm">Koppla till banktransaktion (valfritt)</Label>
-              <p className="text-xs text-muted-foreground">
-                Välj en transaktion om dokumentet motsvarar en redan-bokad
-                bankhändelse: den bokas då samtidigt. Lämna tom för en
-                fristående verifikation.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <div className="relative">
-                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Sök på beskrivning…"
-                  value={txSearch}
-                  onChange={(e) => setTxSearch(e.target.value)}
-                  className="pl-10"
-                  disabled={isSubmitting}
-                />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
+                <div className="space-y-1">
+                  <Label htmlFor="bd-date">Datum</Label>
+                  <Input
+                    id="bd-date"
+                    type="date"
+                    value={entryDate}
+                    onChange={(e) => setEntryDate(e.target.value)}
+                    disabled={isSubmitting}
+                    aria-invalid={periodProblem || undefined}
+                    aria-describedby="bd-period"
+                    className="date-figures tabular-nums"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="bd-description">Beskrivning</Label>
+                  <Input
+                    id="bd-description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    disabled={isSubmitting}
+                    aria-invalid={description.trim().length === 0 || undefined}
+                    placeholder="Leverantör · fakturanummer"
+                  />
+                </div>
               </div>
-              <div className="max-h-56 overflow-y-auto rounded-lg border">
-                {isLoadingTransactions ? (
-                  <div className="space-y-2 px-3 py-3" aria-busy="true" aria-label="Laddar…">
-                    {[0, 1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-8 w-full" />
-                    ))}
-                  </div>
-                ) : filteredTransactions.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">
-                    Inga okategoriserade transaktioner.
+              {/* The fiscal period, derived from the date (periods never
+                  overlap): text, not a picker, so it can never disagree with
+                  the date. Red when the date cannot be booked. */}
+              <div id="bd-period" aria-live="polite">
+                {periods.length === 0 ? (
+                  <p className={HELP_CLASS}>Hämtar perioder …</p>
+                ) : derivedPeriod ? (
+                  <p className={cn(HELP_CLASS, 'tabular-nums', derivedPeriodBlocked && 'text-destructive')}>
+                    Räkenskapsperiod {derivedPeriod.period_start}: {derivedPeriod.period_end}
+                    {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
+                      <>
+                        {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
+                      </>
+                    )}
                   </p>
                 ) : (
-                  <ul className="divide-y">
-                    {displayedTransactions.slice(0, 30).map((tx) => {
-                      const isSelected = selectedTransactionId === tx.id
-                      const isInboxMatch = item.matched_transaction_id === tx.id
-                      const cur = (tx.currency || 'SEK').toUpperCase()
-                      const sek = txSekAmount(tx)
-                      return (
-                        <li key={tx.id}>
-                          <button
-                            type="button"
-                            className={cn(
-                              'w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors',
-                              isSelected
-                                ? 'bg-primary/10 border-l-2 border-primary'
-                                : 'border-l-2 border-transparent hover:bg-secondary/35'
-                            )}
-                            onClick={() =>
-                              setSelectedTransactionId(isSelected ? null : tx.id)
-                            }
-                            disabled={isSubmitting}
-                          >
-                            <span className="shrink-0 w-4 flex items-center justify-center">
-                              {isSelected ? (
-                                <CheckIcon className="h-3.5 w-3.5 text-primary" />
-                              ) : null}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <p className="truncate">{tx.description}</p>
-                                {isInboxMatch && (
-                                  <Badge variant="secondary" className="shrink-0 text-[11px] px-1.5 py-0">
-                                    Matchad
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="text-xs text-muted-foreground tabular-nums">{tx.date}</p>
-                            </div>
-                            <div className="text-right shrink-0">
-                              <span
-                                className={cn(
-                                  'tabular-nums text-sm block',
-                                  tx.amount < 0 ? 'text-destructive' : 'text-foreground'
-                                )}
-                              >
-                                {formatCurrency(tx.amount, tx.currency || 'SEK')}
-                              </span>
-                              {cur !== 'SEK' && (
-                                <span className="text-[11px] text-muted-foreground tabular-nums">
-                                  ≈ {formatCurrency(sek, 'SEK')}
-                                </span>
-                              )}
-                            </div>
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
+                  <p className={cn(HELP_CLASS, 'text-destructive')}>
+                    Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
+                  </p>
                 )}
               </div>
-              {selectedTransactionId && (
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground hover:text-foreground underline"
-                  onClick={() => setSelectedTransactionId(null)}
-                  disabled={isSubmitting}
-                >
-                  Rensa val
-                </button>
-              )}
             </div>
-          </div>
 
-          {/* Journal entry lines */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <Label className="text-sm">Konteringsrader</Label>
-              <div className="text-xs text-muted-foreground text-right">
-                {targetAmount != null && (
-                  <span>
-                    Underlag:{' '}
-                    <span className="tabular-nums font-medium text-foreground">
-                      {formatCurrency(targetAmount, targetCurrency)}
-                    </span>
-                  </span>
-                )}
-                {selectedTransactionAmount != null && (
-                  <span>
-                    {targetAmount != null && ' · '}
-                    Transaktion:{' '}
-                    <span className="tabular-nums font-medium text-foreground">
-                      {formatCurrency(Math.abs(selectedTransactionAmount), 'SEK')}
-                    </span>
-                  </span>
+            {/* Payment: the bank row this underlag settles (optional). One
+                line with the picked row; the picker is a popover under it. */}
+            <section className="space-y-1.5">
+              <div className={SECTION_LABEL_CLASS}>Koppla till banktransaktion (valfritt)</div>
+              <div className="relative">
+                <div className="flex min-h-10 items-center gap-3 border-b-hairline py-1">
+                  <div className="flex min-w-0 flex-1 items-center">
+                    {selectedTransaction ? (
+                      <BankRowText
+                        tx={selectedTransaction}
+                        matched={item.matched_transaction_id === selectedTransaction.id}
+                      />
+                    ) : selectedTransactionId && isLoadingTransactions ? (
+                      <Skeleton className="h-4 w-48" />
+                    ) : (
+                      <span className="text-[13px] text-muted-foreground">
+                        {selectedTransactionId
+                          ? tInbox('book_direct_bank_row_selected')
+                          : tInbox('book_direct_no_bank_row')}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    ref={bankTriggerRef}
+                    type="button"
+                    variant="ghost"
+                    aria-haspopup="dialog"
+                    aria-expanded={bankPickerOpen}
+                    aria-controls={bankPickerOpen ? 'bd-bank-picker' : undefined}
+                    onClick={() => setBankPickerOpen((wasOpen) => !wasOpen)}
+                    disabled={isSubmitting}
+                    className="-mr-2.5 shrink-0"
+                  >
+                    {selectedTransactionId ? tInbox('book_direct_bank_change') : tInbox('book_direct_bank_pick')}
+                    <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
+
+                {bankPickerOpen && (
+                  <div
+                    ref={bankPanelRef}
+                    id="bd-bank-picker"
+                    role="dialog"
+                    aria-label="Koppla till banktransaktion (valfritt)"
+                    className={cn(
+                      'absolute right-0 top-full z-20 mt-1 flex w-full max-w-[440px] flex-col p-1',
+                      POPOVER_SURFACE_CLASS,
+                      POPOVER_ENTER_CLASS,
+                    )}
+                  >
+                    <div className="relative p-1">
+                      <MagnifyingGlassIcon className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        ref={bankSearchRef}
+                        placeholder="Sök på beskrivning…"
+                        value={txSearch}
+                        onChange={(e) => setTxSearch(e.target.value)}
+                        className="pl-8"
+                        disabled={isSubmitting}
+                      />
+                    </div>
+                    <div className="max-h-64 overflow-y-auto">
+                      {isLoadingTransactions ? (
+                        <LateReveal className="space-y-2 px-2 py-2" aria-label="Laddar…">
+                          {[0, 1, 2, 3].map((i) => (
+                            <Skeleton key={i} className="h-7 w-full" />
+                          ))}
+                        </LateReveal>
+                      ) : transactionsError ? (
+                        // The rows could not load: said in place of them, not as "none".
+                        <LoadError className="px-2" title="Kunde inte hämta transaktioner" description={transactionsError} onRetry={retryTransactions} />
+                      ) : filteredTransactions.length === 0 ? (
+                        <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
+                          Inga okategoriserade transaktioner.
+                        </p>
+                      ) : (
+                        <ul role="listbox" aria-label="Koppla till banktransaktion (valfritt)">
+                          {displayedTransactions.slice(0, 30).map((tx) => {
+                            const isSelected = selectedTransactionId === tx.id
+                            return (
+                              <li key={tx.id} role="none">
+                                <button
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isSelected}
+                                  className="flex min-h-7.5 w-full items-center gap-2 rounded-md px-2.5 py-1 text-left transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none disabled:opacity-40"
+                                  onClick={() => {
+                                    setSelectedTransactionId(isSelected ? null : tx.id)
+                                    setBankPickerOpen(false)
+                                  }}
+                                  disabled={isSubmitting}
+                                >
+                                  <span className="flex w-4 shrink-0 justify-center">
+                                    {isSelected ? <CheckIcon className="h-3.5 w-3.5" /> : null}
+                                  </span>
+                                  <BankRowText tx={tx} matched={item.matched_transaction_id === tx.id} />
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                    {selectedTransactionId && (
+                      <>
+                        <div className={MENU_SEPARATOR_CLASS} />
+                        <button
+                          type="button"
+                          className="flex min-h-7.5 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none"
+                          onClick={() => {
+                            setSelectedTransactionId(null)
+                            setBankPickerOpen(false)
+                          }}
+                          disabled={isSubmitting}
+                        >
+                          <span className="w-4 shrink-0" aria-hidden="true" />
+                          Rensa val
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
-            </div>
-            {/* A hint, not a stop: without a bank row the kronor are typed. */}
-            {targetCurrency !== 'SEK' && !selectedTransactionId && (
-              <AttnLine>{tInbox('book_direct_fx_hint', { currency: targetCurrency })}</AttnLine>
-            )}
-            {fxRefusal === 'bank_row_without_sek' && (
-              <AttnLine>{tInbox('book_direct_fx_bank_row_without_sek', { currency: targetCurrency })}</AttnLine>
-            )}
-            {targetCurrency !== 'SEK' && selectedTransactionAmount != null && (
-              <p className="text-[11px] text-muted-foreground">
-                Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
-                transaktionens belopp. Momsraden har lämnats bort: vid behov
-                lägg till en rad för omvänd skattskyldighet manuellt.
-              </p>
-            )}
-            {accountSuggestion && lines.some((l) => l.role === 'cost' && l.account_number === accountSuggestion.account) && (
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-                Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
-                {formatCounterpartyName(accountSuggestion.counterparty)}
-              </p>
-            )}
-            <div className="rounded-lg border overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40">
-                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="text-left font-medium px-3 py-2 w-[40%]">Konto</th>
-                    <th className="text-right font-medium px-3 py-2">Debet</th>
-                    <th className="text-right font-medium px-3 py-2">Kredit</th>
-                    <th className="w-10" />
+              {!selectedTransactionId && (
+                <p className={HELP_CLASS}>
+                  Välj en transaktion om dokumentet motsvarar en redan-bokad
+                  bankhändelse: den bokas då samtidigt. Lämna tom för en
+                  fristående verifikation.
+                </p>
+              )}
+            </section>
+
+            {/* Journal entry lines: Konto | Debet | Kredit with a Summa row. */}
+            <section className="space-y-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className={SECTION_LABEL_CLASS}>Konteringsrader</h3>
+                <div className="text-right text-[12px] leading-4 text-muted-foreground">
+                  {targetAmount != null && (
+                    <span>
+                      Underlag:{' '}
+                      <span className="tabular-nums font-medium text-foreground">
+                        {formatCurrency(targetAmount, targetCurrency)}
+                      </span>
+                    </span>
+                  )}
+                  {selectedTransactionAmount != null && (
+                    <span>
+                      {targetAmount != null && ' · '}
+                      Transaktion:{' '}
+                      <span className="tabular-nums font-medium text-foreground">
+                        {formatCurrency(Math.abs(selectedTransactionAmount), 'SEK')}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </div>
+              {/* A hint, not a stop: without a bank row the kronor are typed. */}
+              {targetCurrency !== 'SEK' && !selectedTransactionId && (
+                <AttnLine>{tInbox('book_direct_fx_hint', { currency: targetCurrency })}</AttnLine>
+              )}
+              {fxRefusal === 'bank_row_without_sek' && (
+                <AttnLine>{tInbox('book_direct_fx_bank_row_without_sek', { currency: targetCurrency })}</AttnLine>
+              )}
+              {targetCurrency !== 'SEK' && selectedTransactionAmount != null && (
+                <p className={HELP_CLASS}>
+                  Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
+                  transaktionens belopp. Momsraden har lämnats bort: vid behov
+                  lägg till en rad för omvänd skattskyldighet manuellt.
+                </p>
+              )}
+              {accountSuggestion && lines.some((l) => l.role === 'cost' && l.account_number === accountSuggestion.account) && (
+                <p className={HELP_CLASS}>
+                  Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
+                  {formatCounterpartyName(accountSuggestion.counterparty)}
+                </p>
+              )}
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={cn(VTH_CLASS, 'pr-3')}>Konto</th>
+                    <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Debet</th>
+                    <th className={cn(VTH_CLASS, 'w-[112px] pr-2 text-right')}>Kredit</th>
+                    <th className={cn(VTH_CLASS, 'w-8 pr-0')}>
+                      <span className="sr-only">{tJournal('remove_line')}</span>
+                    </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody>
                   {lines.flatMap((line, idx) => [
                     <tr key={`line-${idx}`}>
-                      <td className="px-3 py-2">
-                        {/* The line's tag toggle sits with its account: a
-                            bag describes the account's line. */}
-                        <div className="flex items-center gap-1">
-                          <div className="min-w-0 flex-1">
+                      <td className={cn(LINE_TD_CLASS, 'pr-3')}>
+                        {/* The account, its name, and the line's tag toggle:
+                            a bag describes the account's line. */}
+                        <div className="flex items-center gap-2">
+                          <div className="w-[120px] shrink-0">
                             <AccountCombobox
                               value={line.account_number}
                               accounts={accounts}
                               catalog={catalog}
                               onChange={(v) => updateLine(idx, { account_number: v })}
+                              className="h-7"
                             />
                           </div>
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                            {accountLabel(line.account_number)}
+                          </span>
                           {dimensionsEnabled && (
                             <Button
                               type="button"
                               variant="ghost"
-                              size="icon-sm"
+                              size="icon"
                               onClick={() => toggleLineDimensions(idx)}
                               disabled={isSubmitting}
                               aria-label={tJournal('row_dimensions_aria')}
@@ -865,7 +1022,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-2">
+                      <td className={LINE_TD_CLASS}>
                         <Input
                           type="number"
                           step="0.01"
@@ -874,11 +1031,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           onChange={(e) => updateLine(idx, { debit_amount: e.target.value, credit_amount: e.target.value ? '' : line.credit_amount })}
                           onDoubleClick={() => handleFillBalance(idx, 'debit')}
                           disabled={isSubmitting}
-                          className="text-right tabular-nums"
+                          className="h-7 text-right tabular-nums"
                           placeholder="0,00"
                         />
                       </td>
-                      <td className="px-3 py-2">
+                      <td className={LINE_TD_CLASS}>
                         <Input
                           type="number"
                           step="0.01"
@@ -887,28 +1044,29 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           onChange={(e) => updateLine(idx, { credit_amount: e.target.value, debit_amount: e.target.value ? '' : line.debit_amount })}
                           onDoubleClick={() => handleFillBalance(idx, 'credit')}
                           disabled={isSubmitting}
-                          className="text-right tabular-nums"
+                          className="h-7 text-right tabular-nums"
                           placeholder="0,00"
                         />
                       </td>
-                      <td className="px-2 py-2 text-right">
+                      <td className={cn(LINE_TD_CLASS, 'pr-0 text-right')}>
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon-sm"
+                          size="icon"
+                          className="text-muted-foreground"
                           onClick={() => removeLine(idx)}
                           disabled={isSubmitting || lines.length <= 2}
-                          aria-label="Ta bort rad"
+                          aria-label={tJournal('remove_line')}
                         >
-                          <TrashIcon className="h-3.5 w-3.5" />
+                          <XMarkIcon className="h-3.5 w-3.5" />
                         </Button>
                       </td>
                     </tr>,
                     // The line's kostnadsställe/projekt, posted with the line.
                     ...(dimensionsEnabled && line.dimensions != null
                       ? [
-                          <tr key={`dims-${idx}`} className="bg-muted/20">
-                            <td colSpan={4} className="px-3 py-2">
+                          <tr key={`dims-${idx}`}>
+                            <td colSpan={4} className="border-b-hairline py-2 pr-0">
                               <div className="max-w-md">
                                 <LineDimensionFields
                                   dimensions={line.dimensions}
@@ -923,144 +1081,134 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                       : []),
                   ])}
                 </tbody>
-                <tfoot className="bg-muted/20 text-xs">
+                <tfoot>
                   <tr>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        {/* The remaining debit/credit gap, right where the user
-                            reconciles the sums: what is still missing to balance. */}
-                        {totals.diff !== 0 ? (
-                          <span className="tabular-nums font-medium text-destructive">
-                            Differens {formatAmount(Math.abs(totals.diff))}
-                          </span>
-                        ) : (
-                          <span />
-                        )}
-                        <span className="text-right font-medium uppercase tracking-wider text-muted-foreground">
-                          Summa
+                    {/* Where the user reconciles the sums: whether it
+                        balances, or what is still missing to balance. */}
+                    <td className={cn(TOTAL_TD_CLASS, 'pr-3')}>
+                      {totals.balanced ? (
+                        <span className="font-normal text-muted-foreground">{tInbox('book_direct_balanced')}</span>
+                      ) : totals.diff !== 0 ? (
+                        <span className="text-destructive">
+                          {tInbox('book_direct_off_by', { amount: formatAmount(Math.abs(totals.diff)) })}
                         </span>
-                      </div>
-                    </td>
-                    <td
-                      className={cn(
-                        'px-3 py-2 text-right tabular-nums font-medium',
-                        totals.diff !== 0 && 'text-destructive'
+                      ) : (
+                        <span className="font-normal text-muted-foreground">{tJournal('sum')}</span>
                       )}
-                    >
-                      {formatAmount(totals.debit)}
                     </td>
-                    <td
-                      className={cn(
-                        'px-3 py-2 text-right tabular-nums font-medium',
-                        totals.diff !== 0 && 'text-destructive'
-                      )}
-                    >
-                      {formatAmount(totals.credit)}
-                    </td>
-                    <td />
+                    <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.debit)}</td>
+                    <td className={cn(TOTAL_TD_CLASS, 'pr-2 text-right')}>{formatAmount(totals.credit)}</td>
+                    <td className={cn(TOTAL_TD_CLASS, 'pr-0')} />
                   </tr>
                 </tfoot>
               </table>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
                   onClick={addLine}
                   disabled={isSubmitting}
+                  className="-ml-2.5"
                 >
-                  <PlusIcon className="h-3.5 w-3.5 mr-1.5" />
-                  Lägg till rad
+                  <PlusIcon className="h-3.5 w-3.5" />
+                  {tJournal('add_line')}
                 </Button>
-                <TemplateApplyButton
-                  onApply={handleTemplateApply}
-                  entityType={company?.entity_type}
-                  disabled={isSubmitting}
-                  // A foreign underlag has no amount to offer before a bank
-                  // row is picked: targetSek is then a Riksbank estimate for
-                  // ranking, not what the bank drew.
-                  defaultAmount={
-                    selectedTransactionAmount != null
-                      ? Math.abs(selectedTransactionAmount)
-                      : targetCurrency === 'SEK'
-                        ? targetSek ?? undefined
-                        : undefined
-                  }
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowSaveTemplate(true)}
-                  disabled={isSubmitting || derivedTemplateLines.length < 2}
-                  title={
-                    derivedTemplateLines.length < 2
-                      ? 'Fyll i minst två konteringsrader med konto och belopp'
-                      : undefined
-                  }
-                >
-                  <BookmarkIcon className="h-3.5 w-3.5 mr-1.5" />
-                  Spara som mall
-                </Button>
+                {totals.diff !== 0 && (
+                  <span className={HELP_CLASS}>
+                    Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
+                  </span>
+                )}
               </div>
-              {totals.balanced ? (
-                <span className="text-xs text-muted-foreground">Balanserad</span>
-              ) : totals.diff !== 0 ? (
-                <span className="text-xs text-muted-foreground">
-                  Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
-                </span>
-              ) : null}
-            </div>
-          </div>
+            </section>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="bd-notes" className="text-xs uppercase tracking-wider text-muted-foreground">
-              Anteckningar (valfritt)
-            </Label>
-            <Textarea
-              id="bd-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              disabled={isSubmitting}
-              rows={2}
-              placeholder="Intern kommentar om verifikationen"
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-3 pt-2 border-t">
-            <p
-              className={cn(
-                'text-xs tabular-nums',
-                disabledReason ? 'text-attn' : 'text-muted-foreground'
-              )}
-              aria-live="polite"
-            >
-              {disabledReason ?? 'Klar att bokföra.'}
-            </p>
-            <div className="flex items-center gap-2">
+            {/* Fler alternativ: a booking template (apply one, or save this
+                kontering as one) and the internal note. */}
+            <section className="space-y-3">
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => onOpenChange(false)}
-                disabled={isSubmitting}
+                onClick={() => setMoreOpen((wasOpen) => !wasOpen)}
+                aria-expanded={moreOpen}
+                aria-controls="bd-more"
+                className="-ml-2.5"
               >
-                Avbryt
+                {tCommon('more_options')}
+                <ChevronDownIcon
+                  className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform duration-150', moreOpen && 'rotate-180')}
+                />
               </Button>
-              <Button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                loading={isSubmitting}
-                title={disabledReason ?? undefined}
-              >
-                {isSubmitting ? 'Bokför…' : 'Bokför'}
-              </Button>
-            </div>
-          </div>
+              {moreOpen && (
+                <div id="bd-more" className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TemplateApplyButton
+                      onApply={handleTemplateApply}
+                      entityType={company?.entity_type}
+                      disabled={isSubmitting}
+                      // A foreign underlag has no amount to offer before a bank
+                      // row is picked: targetSek is then a Riksbank estimate for
+                      // ranking, not what the bank drew.
+                      defaultAmount={
+                        selectedTransactionAmount != null
+                          ? Math.abs(selectedTransactionAmount)
+                          : targetCurrency === 'SEK'
+                            ? targetSek ?? undefined
+                            : undefined
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowSaveTemplate(true)}
+                      disabled={isSubmitting || derivedTemplateLines.length < 2}
+                      title={
+                        derivedTemplateLines.length < 2
+                          ? 'Fyll i minst två konteringsrader med konto och belopp'
+                          : undefined
+                      }
+                    >
+                      <BookmarkIcon className="h-3.5 w-3.5" />
+                      Spara som mall
+                    </Button>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="bd-notes">Anteckningar (valfritt)</Label>
+                    <Textarea
+                      id="bd-notes"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      disabled={isSubmitting}
+                      rows={2}
+                      placeholder="Intern kommentar om verifikationen"
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         </div>
+
+        <DialogFooter>
+          <DialogConsequence aria-live="polite" className={cn('tabular-nums', footerFailed && 'text-destructive')}>
+            {footerProblem ?? consequence}
+          </DialogConsequence>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={isSubmitting}
+          >
+            {tCommon('cancel')}
+          </Button>
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            loading={isSubmitting}
+            title={disabledReason ?? undefined}
+          >
+            {isSubmitting ? 'Bokför…' : 'Bokför'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
       <ActivateAccountsDialog
         open={activationDialog.open}
@@ -1081,14 +1229,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
           the mall later. The shared TemplateForm re-seeds from the derived lines
           each time the dialog opens (Radix unmounts its content when closed). */}
       <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
-            <DialogTitle>Spara som bokföringsmall</DialogTitle>
-            <DialogDescription>
-              Spara den här konteringen som en återanvändbar mall. Beloppen sparas
-              som andelar av totalsumman — du anger ett nytt belopp när du använder
-              mallen. Kontrollera raderna nedan innan du sparar.
-            </DialogDescription>
+            <DialogTitle>{tJournal('save_template_dialog_title')}</DialogTitle>
+            <DialogDescription>{tJournal('save_template_dialog_description')}</DialogDescription>
           </DialogHeader>
           {showSaveTemplate && (
             <TemplateForm

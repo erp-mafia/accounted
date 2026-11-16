@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { CheckIcon, LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
+import { SettingsViewerScope } from '@/components/settings/SettingsRows'
 import type { CompanySettings } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -82,7 +83,8 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
       }}
       className={className}
     >
-      {children}
+      {/* Saves company settings: a read-only member's rows are locked. */}
+      <SettingsViewerScope>{children}</SettingsViewerScope>
 
       <SettingsSaveBar visible={barVisible} saving={isSaving} saved={saved} canWrite={canWrite} />
     </form>
@@ -138,7 +140,6 @@ export function SettingsSaveBar({
         onClick={onSave}
         disabled={!canWrite || disabled}
         loading={saving}
-        size="sm"
         tabIndex={visible ? 0 : -1}
         title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
       >
@@ -146,7 +147,7 @@ export function SettingsSaveBar({
           t('wrapper_saving')
         ) : !canWrite ? (
           <>
-            <LockClosedIcon className="mr-2 h-3.5 w-3.5" />
+            <LockClosedIcon className="h-3.5 w-3.5" />
             {t('wrapper_save_changes')}
           </>
         ) : (

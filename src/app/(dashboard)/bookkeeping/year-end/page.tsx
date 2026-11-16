@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { closableFiscalPeriods } from '@/lib/reference-data/fiscal-scope'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Card, CardContent } from '@/components/ui/card'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -17,9 +19,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { CalendarIcon, EllipsisHorizontalIcon, LockClosedIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
@@ -30,7 +33,6 @@ import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
 import { StepRail } from '@/components/bokslut/StepRail'
-import { hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   filesIncomeReturn,
   isEntityType,
@@ -65,6 +67,8 @@ interface PeriodOption {
 
 export default function YearEndPage() {
   const router = useRouter()
+  // The top bar says what the menu row says.
+  const tNav = useTranslations('nav')
   const searchParams = useSearchParams()
   const { toast } = useToast()
 
@@ -73,16 +77,19 @@ export default function YearEndPage() {
   // Whether the company has ANY fiscal periods (eligible or not) — separates
   // "inget att stänga ännu" from "inget räkenskapsår har skapats".
   const [hasAnyPeriods, setHasAnyPeriods] = useState(true)
-  const [periodsError, setPeriodsError] = useState<string | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
   )
+
+  const { canWrite } = useViewerLock()
 
   // ---- Wizard state ----
   const [step, setStep] = useState<Step>('preflight')
   const [report, setReport] = useState<BokslutReadinessReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to run the readiness fetch again for the same period.
+  const [reportAttempt, setReportAttempt] = useState(0)
   const [preview, setPreview] = useState<YearEndPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -94,20 +101,17 @@ export default function YearEndPage() {
   // ---- Eligible periods, from the session-cached list (lib/reference-data) ----
   // Recomputed whenever the cached list changes: the close actions below
   // invalidate it, which is what drops a just-closed year out of the picker.
-  const { periods: allPeriods, isLoading: periodsLoading, error: periodsFetchError } = useFiscalPeriods()
+  const {
+    periods: allPeriods,
+    isLoading: periodsLoading,
+    error: periodsFetchError,
+    refresh: refreshPeriods,
+  } = useFiscalPeriods()
+  const periodsFailed = Boolean(periodsFetchError)
   useEffect(() => {
-    if (periodsLoading) return
-    if (periodsFetchError) {
-      setPeriodsError('Kunde inte hämta perioder')
-      return
-    }
+    if (periodsLoading || periodsFailed) return
     const all: FiscalPeriod[] = allPeriods
-    const today = todayIsoStockholm()
-    const eligible: PeriodOption[] = all
-      .filter((p) => !p.is_closed && !p.closing_entry_id && hasEnded(p.period_end, today))
-      .map((p) => ({ ...p, eligible: true }))
-    // Oldest first: accountants close in order.
-    eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+    const eligible: PeriodOption[] = closableFiscalPeriods(all).map((p) => ({ ...p, eligible: true }))
     setHasAnyPeriods(all.length > 0)
 
     // The URL ?period= param may point anywhere: at an ineligible period
@@ -131,7 +135,7 @@ export default function YearEndPage() {
       setSelectedPeriodId(eligible[0].id)
     }
     setPeriods(options)
-  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFetchError])
+  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFailed])
 
   // ---- Sync selected period to URL so users can bookmark / share ----
   useEffect(() => {
@@ -168,7 +172,7 @@ export default function YearEndPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, reportAttempt])
 
   // ---- Step navigation ----
   const goToPreview = useCallback(async () => {
@@ -285,16 +289,16 @@ export default function YearEndPage() {
     <div className="space-y-8">
       <div className="page-header flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
+          <h1 className="page-header-title">{tNav('v2_closing')}</h1>
           <HelpPopover>
             <StepHelp step={step} entityType={report?.entityType ?? null} />
           </HelpPopover>
         </div>
-        <div className="flex items-center gap-2">
+        <PageHeaderActions className="flex items-center gap-2">
           {canMarkClosedExternally && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
+                <Button variant="ghost" size="icon-toolbar" aria-label="Fler åtgärder">
                   <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -327,10 +331,10 @@ export default function YearEndPage() {
               ariaLabel="Period"
             />
           )}
-        </div>
+        </PageHeaderActions>
       </div>
 
-      {askMarkClosedExternally && selectedOption && (
+      {canWrite && askMarkClosedExternally && selectedOption && (
         <AttnLine
           action={{ label: 'Klarmarkera perioden', onClick: () => setConfirmExternalOpen(true) }}
         >
@@ -356,20 +360,14 @@ export default function YearEndPage() {
         onConfirm={markClosedExternally}
       />
 
-      {periods === null && !periodsError && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-4 w-full" />
-          </CardContent>
-        </Card>
+      {periods === null && !periodsFailed && (
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-full" />
+        </LateReveal>
       )}
 
-      {periodsError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{periodsError}</CardContent>
-        </Card>
-      )}
+      {periodsFailed && <LoadError title="Kunde inte hämta perioder" onRetry={() => void refreshPeriods()} />}
 
       {periods !== null && periods.length === 0 && (
         hasAnyPeriods ? (
@@ -411,6 +409,7 @@ export default function YearEndPage() {
           report={report}
           isLoading={reportLoading}
           error={reportError}
+          onRetry={() => setReportAttempt((n) => n + 1)}
           onContinue={() => setStep('accruals')}
         /></div>
       )}
@@ -437,6 +436,7 @@ export default function YearEndPage() {
           preview={preview}
           isLoading={previewLoading}
           error={previewError}
+          onRetry={() => void goToPreview()}
           onBack={() => setStep('dispositions')}
           onContinue={() => setStep('execute')}
         /></div>

@@ -36,7 +36,7 @@ export function ImportWizardRail<S extends string>({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
+          className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
         >
           <ChevronLeftIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('back_to_choices')}

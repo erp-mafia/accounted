@@ -135,7 +135,7 @@ export function AssetIdentificationFields({
 
   if (category === 'building') {
     return (
-      <div className="space-y-3 rounded-lg border border-border p-4">
+      <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
         <p className="text-sm font-medium">{t('building_title')}</p>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">
@@ -166,7 +166,7 @@ export function AssetIdentificationFields({
   }
   if (category === 'vehicle') {
     return (
-      <div className="space-y-3 rounded-lg border border-border p-4">
+      <div className="space-y-3 rounded-lg p-4 bg-control shadow-raised">
         <p className="text-sm font-medium">{t('vehicle_title')}</p>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">

@@ -199,10 +199,10 @@ export default function ReviewCard({
   return (
     <div className="w-full">
       <header className="mb-6">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
+        <p className="text-xs text-muted-foreground mb-1">
           {companyName}
         </p>
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">{stepTitle}</h1>
+        <h1 className="text-3xl md:text-4xl">{stepTitle}</h1>
         <p className="text-muted-foreground mt-2">{stepSubtitle}</p>
       </header>
 
@@ -220,14 +220,14 @@ export default function ReviewCard({
         ))}
       </div>
 
-      <Card className="border-border">
-        <CardContent className="p-6 md:p-8 space-y-6">
+      <Card>
+        <CardContent className="space-y-6">
           {step === 1 && (
             <section className="space-y-6">
               <div className="flex flex-col items-center text-center gap-3 py-4">
                 <AgentAvatar avatarId={avatarId} size="lg" className="h-20 w-20" />
                 <div>
-                  <p className="font-display text-xl tracking-tight">
+                  <p className="text-[15px] font-medium leading-[22px] text-strong">
                     {displayName.trim() || 'Din assistent'}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
@@ -279,7 +279,7 @@ export default function ReviewCard({
                   check dry registry facts. */}
               <section>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
+                  <h2 className="text-sm text-muted-foreground">
                     Så här har jag förstått dig
                   </h2>
                   {!editingSummary && summary && (
@@ -299,7 +299,7 @@ export default function ReviewCard({
                     onBlur={() => setEditingSummary(false)}
                     autoFocus
                     rows={5}
-                    className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="w-full rounded-lg px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                   />
                 ) : (
                   <p className="text-sm leading-6 italic text-muted-foreground">
@@ -313,7 +313,7 @@ export default function ReviewCard({
                   "atoms/specialiteter" framing. */}
               {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
                 <section>
-                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
+                  <h2 className="text-sm text-muted-foreground mb-1">
                     Vad jag kan hjälpa dig med
                   </h2>
                   <p className="text-xs text-muted-foreground mb-3">
@@ -338,7 +338,7 @@ export default function ReviewCard({
 
               {/* Inferred facts to confirm */}
               <section>
-                <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-4">
+                <h2 className="text-sm text-muted-foreground mb-4">
                   Uppgifter
                 </h2>
                 <dl className="divide-y divide-border">
@@ -405,7 +405,7 @@ export default function ReviewCard({
                   authoritative legal text. Hidden when TIC didn't return one. */}
               {fields.purpose && (
                 <section>
-                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
+                  <h2 className="text-sm text-muted-foreground mb-3">
                     Verksamhet
                   </h2>
                   <p className="text-sm leading-6 text-muted-foreground italic">
@@ -418,7 +418,7 @@ export default function ReviewCard({
                   one thing than chat. The Phase C intake will draw the rest
                   out conversationally. */}
               <section>
-                <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
+                <h2 className="text-sm text-muted-foreground mb-1">
                   Bra att veta
                 </h2>
                 <p className="text-xs text-muted-foreground mb-3">
@@ -430,7 +430,7 @@ export default function ReviewCard({
                   onChange={(e) => setSeedMemory(e.target.value)}
                   rows={3}
                   placeholder="Skriv något, eller lämna tomt"
-                  className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="w-full rounded-lg px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                 />
               </section>
             </>
@@ -448,14 +448,14 @@ export default function ReviewCard({
               onClick={() => setStep(1)}
               disabled={step === 1}
             >
-              <ArrowLeftIcon className="h-4 w-4 mr-2" />
+              <ArrowLeftIcon className="h-4 w-4" />
               Tillbaka
             </Button>
 
             {step === 1 && (
               <Button onClick={() => setStep(2)}>
                 Nästa
-                <ArrowRightIcon className="h-4 w-4 ml-2" />
+                <ArrowRightIcon className="h-4 w-4" />
               </Button>
             )}
             {step === 2 && (
@@ -467,7 +467,7 @@ export default function ReviewCard({
                 ) : (
                   <>
                     Möt {agentName}
-                    <ArrowRightIcon className="h-4 w-4 ml-2" />
+                    <ArrowRightIcon className="h-4 w-4" />
                   </>
                 )}
               </Button>
@@ -499,7 +499,7 @@ function SniRow({ sniCodes }: { sniCodes: { code: string; name: string }[] }) {
       <dt className="w-32 text-sm text-muted-foreground shrink-0">SNI</dt>
       <dd className="flex-1 min-w-0">
         {uniqueCodes.length === 0 ? (
-          <span className="text-sm italic text-muted-foreground/60">Saknas</span>
+          <span className="text-sm italic text-muted-foreground">Saknas</span>
         ) : (
           <ul className="space-y-1">
             {uniqueCodes.map((s) => (
@@ -554,7 +554,7 @@ function FieldRow({
           <span
             className={cn(
               'text-sm',
-              !value && 'text-muted-foreground/60 italic',
+              !value && 'text-muted-foreground italic',
             )}
           >
             {value || placeholder || '-'}
@@ -635,7 +635,7 @@ function Chip({
       {label}
       <button
         onClick={onRemove}
-        className="ml-1 rounded-full hover:bg-secondary/60 p-0.5 transition-colors"
+        className="ml-1 rounded-md hover:bg-secondary/60 p-0.5 transition-colors"
         aria-label={`Ta bort ${label}`}
       >
         <XMarkIcon className="h-3 w-3" />

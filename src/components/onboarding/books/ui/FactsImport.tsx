@@ -59,14 +59,14 @@ export function FactsImport({
     <div className="found-note">
       {t('facts_import_lead', { client: primary.name })}{' '}
       <span className="inline-flex items-center gap-1">
-        <Button type="button" variant="outline" size="sm" onClick={() => open(primary.id)} disabled={disabled}>
+        <Button type="button" variant="outline" onClick={() => open(primary.id)} disabled={disabled}>
           {logo(primary.logo, 'mr-1.5 h-3.5 w-3.5 rounded-full')}
           {t('facts_import', { client: primary.name })}
         </Button>
         {others.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline" size="icon-sm" disabled={disabled} aria-label={t('facts_import_other')}>
+              <Button type="button" variant="outline" size="icon" disabled={disabled} aria-label={t('facts_import_other')}>
                 <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden />
               </Button>
             </DropdownMenuTrigger>

@@ -1,0 +1,1 @@
+[2026-11-15] Page JS budgets met without raising them: the root layout names the root error boundary and the dashboard layout its loading fallback (void X), because sibling segments each bundled a copy of shared modules (next/image, support dialog, top bar); a layout's chunk group is reused by all.

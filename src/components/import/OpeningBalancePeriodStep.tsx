@@ -9,7 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
-import { CheckCircleIcon, ExclamationCircleIcon, SpinnerIcon } from '@/components/icons'
+import { CheckCircleIcon, ExclamationCircleIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 
 interface EditableRow {
   id: string
@@ -88,10 +89,10 @@ export default function OpeningBalancePeriodStep({
         <div className="space-y-2">
           <Label>Räkenskapsperiod</Label>
           {loadingPeriods ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-              <SpinnerIcon className="h-4 w-4 animate-spin" />
-              Hämtar perioder...
-            </div>
+            // The field's own shape while the periods load.
+            <LateReveal aria-label="Hämtar perioder">
+              <Skeleton className="h-8 w-full rounded-lg" />
+            </LateReveal>
           ) : periods.length === 0 ? (
             <ImportNotices notices={[makeNotice('ob_no_periods', 'action')]} />
           ) : (
@@ -119,7 +120,7 @@ export default function OpeningBalancePeriodStep({
         )}
 
         {/* Summary */}
-        <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+        <div className="rounded-lg p-4 space-y-3 bg-control shadow-raised">
           <h4 className="text-sm font-medium">Sammanfattning</h4>
           <div className="grid grid-cols-2 gap-y-2 text-sm">
             <span className="text-muted-foreground">Antal konton:</span>
@@ -154,7 +155,7 @@ export default function OpeningBalancePeriodStep({
 
         {/* Error */}
         {error && (
-          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <div className="bg-destructive/8 flex items-start gap-3 rounded-lg px-4 py-3">
             <ExclamationCircleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>

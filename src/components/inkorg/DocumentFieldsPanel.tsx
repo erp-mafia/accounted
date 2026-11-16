@@ -145,7 +145,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
           const isEditing = editing === row.name && row.editable
           return (
             <div key={row.name} className="grid grid-cols-1 gap-x-4 gap-y-1 py-2 sm:grid-cols-3">
-              <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
+              <dt className="text-xs text-muted-foreground">{label}</dt>
               <dd className="min-w-0 text-[13px] sm:col-span-2">
                 {isEditing ? (
                   <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => void save(e, row as PanelRow & { name: EditableFieldName })}>
@@ -164,14 +164,14 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
                       aria-describedby={error ? errorId : undefined}
                       className="min-w-0 flex-1 tabular-nums sm:max-w-sm"
                     />
-                    <Button type="submit" size="sm" loading={saving}>
+                    <Button type="submit" loading={saving}>
                       {t('save')}
                     </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={cancelEdit} disabled={saving}>
+                    <Button type="button" variant="ghost" onClick={cancelEdit} disabled={saving}>
                       {t('cancel')}
                     </Button>
                     {error && (
-                      <p id={errorId} role="alert" className="w-full text-[12.5px] text-destructive">
+                      <p id={errorId} role="alert" className="w-full text-xs text-destructive">
                         {t(`errors.${error}`)}
                       </p>
                     )}
@@ -193,7 +193,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
                         <Button
                           type="button"
                           variant="link"
-                          className="h-auto p-0 text-[12.5px] text-muted-foreground hover:text-foreground"
+                          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
                           onClick={() => startEdit(row as PanelRow & { name: EditableFieldName })}
                           aria-label={t('edit_label', { field: label })}
                           disabled={editing !== null && editing !== row.name}
@@ -203,7 +203,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
                       )}
                     </div>
                     {row.field && (
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{t(sourceLabelKey(row.field.source))}</span>
                         <span aria-hidden>·</span>
                         <span className={cn(row.field.evidence === 'ditt_val' && 'text-foreground')}>
@@ -213,7 +213,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
                           <Button
                             type="button"
                             variant="link"
-                            className="h-auto p-0 text-[11px] text-muted-foreground hover:text-foreground"
+                            className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
                             aria-expanded={shownWhere === row.name}
                             aria-controls={whereId}
                             aria-label={t('where_label', { field: label })}
@@ -225,7 +225,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
                       </div>
                     )}
                     {where && shownWhere === row.name && (
-                      <p id={whereId} className="mt-1 animate-fade-in text-[12.5px] text-muted-foreground">
+                      <p id={whereId} className="mt-1 animate-fade-in text-xs text-muted-foreground">
                         {where.page !== undefined && <span>{t('page', { page: where.page })}</span>}
                         {where.page !== undefined && where.quote && <span aria-hidden>: </span>}
                         {where.quote && <q className="break-words italic">{where.quote}</q>}
@@ -293,7 +293,7 @@ function FieldValue({
           <Button
             type="button"
             variant="link"
-            className="h-auto p-0 text-[12.5px] text-muted-foreground hover:text-foreground"
+            className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
             aria-expanded={linesOpen}
             onClick={onToggleLines}
           >

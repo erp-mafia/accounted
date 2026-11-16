@@ -61,7 +61,7 @@ export function PaymentAccountPicker({
       {accounts.length > 1 ? (
         <select
           aria-label={t('account_label')}
-          className="h-8 rounded-lg border border-border bg-background px-2 text-[13px]"
+          className="h-8 rounded-lg px-2 text-[13px] bg-control shadow-raised"
           value={accountId}
           onChange={(e) => onChange(e.target.value)}
         >

@@ -1,9 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { ChatBubbleLeftIcon, CheckCircleIcon } from '@/components/icons'
+import { PaperAirplaneIcon } from '@/components/icons'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneLabel, StandaloneOutcome } from '@/components/standalone/StandalonePage'
+import { StatusGlyph } from '@/components/ui/status-glyph'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { REMINDER_ANSWER_NOTE_MAX } from '@/lib/reminders/answer-limits'
 import { cn } from '@/lib/utils'
@@ -36,27 +38,16 @@ export interface InvoiceActionTexts {
 export function AnsweredCard({
   texts,
   response,
-  invoiceNumber,
 }: {
   texts: Pick<InvoiceActionTexts, 'thanks' | 'thanksBody' | 'answeredPaid' | 'answeredDisputed' | 'invoiceLabel'>
   response: ReminderResponseType | null
   invoiceNumber: string | null
 }) {
   return (
-    <Card className="w-full">
-      <CardContent className="pt-6 text-center">
-        <CheckCircleIcon className="h-12 w-12 text-success mx-auto mb-4" />
-        <h2 className="text-lg mb-2">{texts.thanks}</h2>
-        <p className="text-muted-foreground mb-4">
-          {response === 'marked_paid' ? `${texts.answeredPaid} ` : response === 'disputed' ? `${texts.answeredDisputed} ` : ''}
-          {texts.thanksBody}
-        </p>
-        <div className="bg-muted rounded-lg p-4 text-left">
-          <p className="text-sm text-muted-foreground">{texts.invoiceLabel}</p>
-          <p className="font-medium">{invoiceNumber}</p>
-        </div>
-      </CardContent>
-    </Card>
+    <StandaloneOutcome className="mt-5 border-t-hairline pt-4" mark={<StatusGlyph tone="ok" size={16} />} title={texts.thanks}>
+      {response === 'marked_paid' ? `${texts.answeredPaid} ` : response === 'disputed' ? `${texts.answeredDisputed} ` : ''}
+      {texts.thanksBody}
+    </StandaloneOutcome>
   )
 }
 
@@ -108,59 +99,63 @@ export function InvoiceActionForm({
   if (answered) return <AnsweredCard texts={texts} response={answer} invoiceNumber={invoiceNumber} />
 
   const options = [
-    { value: 'marked_paid', label: texts.paidOption, help: texts.paidHelp, icon: <CheckCircleIcon className="h-5 w-5 text-success" /> },
-    { value: 'disputed', label: texts.disputedOption, help: texts.disputedHelp, icon: <ChatBubbleLeftIcon className="h-5 w-5 text-muted-foreground" /> },
+    { value: 'marked_paid', label: texts.paidOption, help: texts.paidHelp },
+    { value: 'disputed', label: texts.disputedOption, help: texts.disputedHelp },
   ] as const
 
   return (
     <>
       {children}
-      <Card>
-        <CardHeader>
-          <CardTitle>{texts.question}</CardTitle>
-          <CardDescription>{texts.questionHelp}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div role="radiogroup" aria-label={texts.question} className="space-y-3">
-            {options.map((option) => (
+      <section className="mt-5 flex flex-col gap-3">
+        <div role="radiogroup" aria-label={texts.question} className="flex flex-col gap-2">
+          <StandaloneLabel>{texts.question}</StandaloneLabel>
+          {options.map((option) => {
+            const checked = answer === option.value
+            return (
               <button
                 key={option.value}
                 type="button"
                 role="radio"
-                aria-checked={answer === option.value}
+                aria-checked={checked}
                 onClick={() => setAnswer(option.value)}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
-                  answer === option.value ? 'border-foreground bg-muted' : 'border-border hover:bg-secondary/60',
+                  'flex min-h-[52px] w-full items-center gap-3 rounded-lg bg-control px-3 py-2 text-left shadow-raised transition-shadow duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70',
+                  checked && 'ring-1 ring-inset ring-strong',
                 )}
               >
-                {option.icon}
-                <span>
-                  <span className="block font-medium">{option.label}</span>
-                  <span className="block text-sm text-muted-foreground">{option.help}</span>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'h-4 w-4 shrink-0 rounded-full border border-muted-foreground',
+                    checked && 'border-[5px] border-strong',
+                  )}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium text-strong">{option.label}</span>
+                  <span className="block text-xs text-muted-foreground">{option.help}</span>
                 </span>
               </button>
-            ))}
-          </div>
+            )
+          })}
+        </div>
 
-          {answer && (
-            <div className="space-y-3 pt-1">
-              <Textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value.slice(0, REMINDER_ANSWER_NOTE_MAX))}
-                placeholder={answer === 'marked_paid' ? texts.notePaid : texts.noteDisputed}
-                aria-label={answer === 'marked_paid' ? texts.notePaid : texts.noteDisputed}
-                rows={3}
-                maxLength={REMINDER_ANSWER_NOTE_MAX}
-              />
-              {error && <p className="text-sm text-destructive">{error}</p>}
-              <Button className="w-full" onClick={submit} loading={isSubmitting}>
-                {texts.send}
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {answer && (
+          <Textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value.slice(0, REMINDER_ANSWER_NOTE_MAX))}
+            placeholder={answer === 'marked_paid' ? texts.notePaid : texts.noteDisputed}
+            aria-label={answer === 'marked_paid' ? texts.notePaid : texts.noteDisputed}
+            rows={3}
+            maxLength={REMINDER_ANSWER_NOTE_MAX}
+          />
+        )}
+        {error && <AuthFormError message={error} />}
+        <Button size="lg" className="w-full" onClick={submit} loading={isSubmitting} disabled={!answer}>
+          <PaperAirplaneIcon className="h-4 w-4" />
+          {texts.send}
+        </Button>
+        <p className="text-sm text-foreground">{texts.questionHelp}</p>
+      </section>
     </>
   )
 }

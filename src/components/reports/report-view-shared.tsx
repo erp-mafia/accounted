@@ -6,43 +6,44 @@
 
 import React from 'react'
 import Link from 'next/link'
-import { DocumentTextIcon, ExclamationCircleIcon } from '@/components/icons'
-import { Card, CardContent } from '@/components/ui/card'
+import { DocumentTextIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
-import { formatAmount } from '@/lib/utils'
+import { cn, formatAmount } from '@/lib/utils'
+import { LIST_BLEED_CLASS } from '@/components/ui/dry-table'
 import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 
 // Shared shells for the report bodies, so all views read as the same
-// instrument: Skeleton while loading, EmptyState when the period has no data,
-// a quiet destructive card on fetch errors (design.md primitives).
+// instrument: skeleton report rows while loading, EmptyState when the period
+// has no data, LoadError with "Försök igen" on fetch errors (design.md
+// convention 17).
 export function ReportLoadingCard() {
   return (
-    <Card>
-      <CardContent className="p-6 space-y-2">
-        {[1, 2, 3, 4, 5, 6].map((i) => (
-          <Skeleton key={i} className="h-4 w-full" />
-        ))}
-      </CardContent>
-    </Card>
+    <LateReveal>
+      {[1, 2, 3, 4, 5, 6].map((i) => (
+        <div key={i} className="flex h-9 items-center justify-between border-b-hairline">
+          <Skeleton className="h-3.5 w-56" />
+          <Skeleton className="h-3.5 w-20" />
+        </div>
+      ))}
+    </LateReveal>
   )
 }
 
-export function ReportErrorCard({ message }: { message: string }) {
-  return (
-    <Card>
-      <CardContent className="p-8 text-center text-destructive">
-        <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
-        {message}
-      </CardContent>
-    </Card>
-  )
+/**
+ * The report could not load. With `onRetry` it is the LoadError block; a view
+ * whose fetch cannot be asked again (a paged report) says it without the
+ * button.
+ */
+export function ReportErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  if (onRetry) return <LoadError title={message} onRetry={onRetry} />
+  return <EmptyState tone="error" icon={ExclamationTriangleIcon} title={message} />
 }
 
 export function ReportEmptyState({ title, description }: { title: string; description: string }) {
@@ -73,57 +74,72 @@ export function ReportSectionTable({
   sections: { title: string; rows: { account_number: string; account_name: string; amount: number }[]; subtotal: number }[]
   negate?: boolean
   drilldown?: AccountDrilldown
-  /** Report total, rendered as the table's tfoot (e.g. "Summa tillgångar"). */
-  footer?: { label: string; amount: number; negate?: boolean }
+  /**
+   * Report total, rendered as the table's tfoot (e.g. "Summa tillgångar").
+   * `headline` sets the amount as the headline number, for a statement's
+   * grand totals; a section total stays in the row type.
+   */
+  footer?: { label: string; amount: number; negate?: boolean; headline?: boolean }
 }) {
   const fmt = (amount: number, neg?: boolean) =>
     neg ? `-${formatAmount(amount)}` : formatAmount(amount)
 
   if (sections.length === 0) {
-    return <p className="p-6 pt-0 text-sm text-muted-foreground">Inga poster.</p>
+    return <p className="text-[13px] text-muted-foreground">Inga poster.</p>
   }
 
-  // One table with group-band rows (design.md tabular rules), matching the
-  // Resultatrapport/Balansrapport idiom, instead of one boxed sub-table per
-  // section with a repeated title line.
+  // One ledger table with group-band rows (board Rapporter-v3): cells 8px in
+  // with the list's 8px bleed, rows without "kr", each Summa with it, and the
+  // report total as the headline number.
+  const cell = 'h-9 px-2 py-2 align-top border-b-hairline'
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm min-w-[400px]">
+    <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+      <table className="w-full border-collapse text-[13px]">
         <tbody>
           {sections.map((section) => (
             <React.Fragment key={section.title}>
-              <tr className="bg-muted/30">
-                <td colSpan={3} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
+              <tr className="bg-muted/40">
+                <td colSpan={3} className="h-8 px-2 align-middle text-xs font-medium text-muted-foreground border-b-hairline">
                   {section.title}
                 </td>
               </tr>
               {section.rows.map((row) => (
                 <tr
                   key={row.account_number}
-                  className={`border-b last:border-0 ${drilldown ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
+                  className={cn(drilldown && 'cursor-pointer transition-colors duration-150 hover:bg-secondary/35')}
                   onClick={drilldown ? accountDrilldownClick(drilldown, row.account_number) : undefined}
                 >
-                  <td className="px-4 py-1.5 w-20"><AccountNumber number={row.account_number} name={row.account_name} /></td>
-                  <td className="px-4 py-1.5">
+                  <td className={cn(cell, 'w-20')}><AccountNumber number={row.account_number} name={row.account_name} /></td>
+                  <td className={cell}>
                     {drilldown ? <Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link> : row.account_name}
                   </td>
-                  <td className="px-4 py-1.5 text-right tabular-nums w-32 whitespace-nowrap">
-                    {fmt(row.amount, negate)} kr
-                  </td>
+                  <td className={cn(cell, 'w-32 text-right tabular-nums whitespace-nowrap')}>{fmt(row.amount, negate)}</td>
                 </tr>
               ))}
-              <tr className="border-b font-medium">
-                <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">Summa</td>
-                <td className="px-4 py-1.5 text-right tabular-nums whitespace-nowrap">{fmt(section.subtotal, negate)} kr</td>
-              </tr>
+              {/* A one-account group gets no Summa row: it would repeat the line. */}
+              {section.rows.length > 1 && (
+                <tr>
+                  <td colSpan={2} className={cn(cell, 'text-right text-muted-foreground')}>Summa</td>
+                  <td className={cn(cell, 'text-right font-medium text-strong tabular-nums whitespace-nowrap')}>
+                    {fmt(section.subtotal, negate)} kr
+                  </td>
+                </tr>
+              )}
             </React.Fragment>
           ))}
         </tbody>
         {footer && (
           <tfoot>
-            <tr className="font-medium">
-              <td colSpan={2} className="px-4 py-2">{footer.label}</td>
-              <td className="px-4 py-2 text-right tabular-nums whitespace-nowrap">{fmt(footer.amount, footer.negate)} kr</td>
+            <tr>
+              <td colSpan={2} className="px-2 pb-2 pt-5 align-baseline text-[13px] font-medium text-strong">{footer.label}</td>
+              <td
+                className={cn(
+                  'px-2 pb-2 pt-5 text-right align-baseline text-strong tabular-nums whitespace-nowrap',
+                  footer.headline ? 'font-display text-3xl' : 'text-[13px] font-medium',
+                )}
+              >
+                {fmt(footer.amount, footer.negate)} kr
+              </td>
             </tr>
           </tfoot>
         )}
@@ -153,11 +169,15 @@ interface ReskontraToolbarProps {
 }
 
 /** A reskontra that could not be read. The toolbar stays: a refused date is mended in the field that sent it. */
-export function ReskontraErrorCard({ message, ...toolbar }: ReskontraToolbarProps & { message: string }) {
+export function ReskontraErrorCard({
+  message,
+  onRetry,
+  ...toolbar
+}: ReskontraToolbarProps & { message: string; onRetry?: () => void }) {
   return (
     <div className="space-y-4">
       <ReskontraToolbar {...toolbar} />
-      <ReportErrorCard message={message} />
+      <ReportErrorCard message={message} onRetry={onRetry} />
     </div>
   )
 }

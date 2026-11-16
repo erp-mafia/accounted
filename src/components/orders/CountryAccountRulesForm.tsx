@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { ArrowPathIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   SettingsGroup,
   SettingsInput,
@@ -112,6 +113,7 @@ type LoadState = 'loading' | 'failed' | 'ready'
  */
 export function CountryAccountRulesForm({ platform, storeScope }: CountryAccountRulesFormProps) {
   const t = useTranslations('webshop_orders')
+  const { canWrite, lockedTitle } = useViewerLock()
   const tCommon = useTranslations('common')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { toast } = useToast()
@@ -316,8 +318,8 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
       <SettingsGroup label={t('country_rules_title')}>
         <div className="flex items-center justify-between gap-4 px-1 py-3" role="alert">
           <p className="text-sm text-destructive">{t('country_rules_load_failed')}</p>
-          <Button size="sm" variant="outline" onClick={retryLoad}>
-            <ArrowPathIcon className="mr-2 h-4 w-4" />
+          <Button variant="outline" onClick={retryLoad}>
+            <ArrowPathIcon className="h-4 w-4" />
             {tCommon('retry')}
           </Button>
         </div>
@@ -331,14 +333,12 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
         <SettingsRow label={t('country_rules_preset_label')}>
           <SettingsRowEnd>
             <Button
-              size="sm"
               variant="outline"
               onClick={() => editDraft(OSS_PRESET_RULES.map(toDraft))}
             >
               {t('country_rules_preset_oss')}
             </Button>
             <Button
-              size="sm"
               variant="outline"
               onClick={() => editDraft(NO_OSS_PRESET_RULES.map(toDraft))}
             >
@@ -410,7 +410,6 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
               )}
               <SettingsRowEnd>
                 <Button
-                  size="sm"
                   variant="ghost"
                   onClick={() => removeRule(index)}
                   aria-label={t('country_rules_remove_aria', { country: label })}
@@ -420,9 +419,9 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
               </SettingsRowEnd>
             </SettingsRow>
             {rowProblems.length > 0 && (
-              <ul className="space-y-0.5 border-b border-border pb-3" role="alert">
+              <ul className="space-y-0.5 border-b-hairline pb-3" role="alert">
                 {rowProblems.map((problem) => (
-                  <li key={`${problem.field}-${problem.code}`} className="text-[12.5px] text-destructive">
+                  <li key={`${problem.field}-${problem.code}`} className="text-xs text-destructive">
                     {problemText(problem)}
                   </li>
                 ))}
@@ -472,7 +471,6 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
         )}
         <SettingsRowEnd>
           <Button
-            size="sm"
             variant="outline"
             onClick={addRule}
             disabled={newRate === undefined || newIsDuplicate || newIsEmptySweden}
@@ -485,7 +483,7 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
       <div className="flex items-center justify-between gap-4 px-1 pt-3">
         <SettingsRowNote>{t('country_rules_note')}</SettingsRowNote>
         {dirty && (
-          <Button size="sm" onClick={save} disabled={saving || invalid}>
+          <Button onClick={save} disabled={!canWrite || saving || invalid} title={lockedTitle}>
             {saving ? t('country_rules_saving') : t('country_rules_save')}
           </Button>
         )}

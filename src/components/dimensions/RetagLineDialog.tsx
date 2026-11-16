@@ -102,7 +102,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>Ändra dimensioner</DialogTitle>
           <DialogDescription>
@@ -111,7 +111,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
           </DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-lg border border-border p-3 text-sm">
+        <div className="rounded-lg p-3 text-sm bg-control shadow-raised">
           <AccountNumber number={line.account_number} showName />
           <div className="mt-1 flex items-center justify-between text-muted-foreground">
             <span className="truncate">{line.line_description || '-'}</span>

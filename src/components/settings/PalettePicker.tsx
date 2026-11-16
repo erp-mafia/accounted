@@ -58,17 +58,17 @@ export function PalettePicker({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(palette)}
             className={cn(
-              'flex min-h-10 items-center gap-1 rounded-lg border px-2 py-2 text-left text-xs transition-colors duration-150',
+              'flex min-h-10 items-center gap-1 rounded-lg px-2 py-2 text-left text-xs transition-colors duration-150 bg-control shadow-raised',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
               selected
-                ? 'border-foreground bg-secondary/60 text-foreground'
-                : 'border-border text-muted-foreground hover:bg-secondary/35 hover:text-foreground',
+                ? 'text-strong ring-[1.5px] ring-strong'
+                : 'text-muted-foreground hover:bg-secondary/35 hover:text-foreground',
             )}
           >
             <span
               data-palette-preview={palette}
               aria-hidden="true"
-              className="flex h-6 w-8 shrink-0 items-center gap-1 rounded-full border border-border bg-background px-1"
+              className="flex h-6 w-8 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-1"
             >
               <span className="h-2 w-2 rounded-full bg-primary" />
               <span className="h-2 w-2 rounded-full border border-border bg-secondary" />

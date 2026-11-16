@@ -140,7 +140,7 @@ export function useBankLedgerSuggestionNotice(options: BankLedgerSuggestionNotic
           if (!open) setConfirmingId(null)
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t(title.key, title.values)}</DialogTitle>
             <DialogDescription data-ph-mask="">{t(body.key, body.values)}</DialogDescription>

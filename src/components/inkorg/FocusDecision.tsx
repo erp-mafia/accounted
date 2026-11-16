@@ -129,6 +129,7 @@ export function FocusDecision({
   answers = {},
   onBook,
   openEditor = null,
+  canWrite = true,
 }: {
   item: InkorgItem
   decision: Decision
@@ -151,9 +152,13 @@ export function FocusDecision({
   onBook?: (booking: OneClickBooking) => void
   /** Bumped when a one-click booking was refused for its date: the editor opens, prefilled. */
   openEditor?: number | null
+  /** False for a read-only member: every answer is locked. */
+  canWrite?: boolean
 }) {
   const t = useTranslations('inkorg')
   const tWork = useTranslations('inbox_workspace')
+  const tCommon = useTranslations('common')
+  const lockedTitle = canWrite ? undefined : tCommon('viewer_disabled_tooltip')
   const { toast } = useToast()
   const locale = useLocale()
   const router = useRouter()
@@ -358,9 +363,9 @@ export function FocusDecision({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openEditor, bookingPlan])
 
-  // The first answer is the primary pill, the second the secondary one beside it, the third a quiet text button.
-  const variantAt = (index: number) => (index === 0 ? 'default' : index === 1 ? 'secondary' : 'ghost')
-  // Two pills side by side from a tablet up, the quiet third under them; on a phone all
+  // The first answer is the primary button, the second the raised one beside it, the third a quiet text button.
+  const variantAt = (index: number) => (index === 0 ? 'default' : index === 1 ? 'outline' : 'ghost')
+  // Two buttons side by side from a tablet up, the quiet third under them; on a phone all
   // three full width, the third centred like the others rather than alone at the edge.
   const width = 'w-full sm:w-auto'
 
@@ -430,7 +435,7 @@ export function FocusDecision({
             <DropdownMenuTrigger asChild>
               <Button variant={variant} className={width}>
                 {t('action_expense')}
-                <ChevronDownIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+                <ChevronDownIcon aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
@@ -561,7 +566,7 @@ export function FocusDecision({
   return (
     <section aria-labelledby={`q-${item.id}`} className="space-y-6">
       <div className="space-y-3">
-        <h3 id={`q-${item.id}`} className="font-display text-2xl leading-8 tracking-[-0.02em]">
+        <h3 id={`q-${item.id}`} className="text-2xl leading-8 tracking-[-0.02em]">
           {question}
         </h3>
         {evidence?.kind === 'bank_match' ? (
@@ -575,7 +580,7 @@ export function FocusDecision({
 
       {/* Another item reads as this same supplier invoice (lib/inkorg/same-invoice.ts): its other page or a copy. */}
       {item.same_invoice && (
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {item.same_invoice.handled_item_id
             ? t('same_invoice_handled')
             : t('same_invoice_open', { count: item.same_invoice.item_ids.length })}
@@ -583,48 +588,58 @@ export function FocusDecision({
       )}
 
       {decision.actions.includes('credit') && (
-        <InboxCreditNotePanel
-          itemId={item.id}
-          extracted={(data ?? null) as Record<string, unknown> | null}
-          onCredited={() => onDone({ leaves: true })}
-          onFieldsUpdated={() => void onDone({ leaves: false })}
-        />
+        <ReadOnlyLock locked={!canWrite} title={lockedTitle} block>
+          <InboxCreditNotePanel
+            itemId={item.id}
+            extracted={(data ?? null) as Record<string, unknown> | null}
+            onCredited={() => onDone({ leaves: true })}
+            onFieldsUpdated={() => void onDone({ leaves: false })}
+          />
+        </ReadOnlyLock>
       )}
 
       {rendered.length > 0 && (
         <div className="space-y-2">
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">{rendered.slice(0, 2)}</div>
-          {rendered.length > 2 && <div className="flex">{rendered.slice(2)}</div>}
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <ReadOnlyLock locked={!canWrite} title={lockedTitle}>{rendered.slice(0, 2)}</ReadOnlyLock>
+          </div>
+          {rendered.length > 2 && (
+            <div className="flex">
+              <ReadOnlyLock locked={!canWrite} title={lockedTitle}>{rendered.slice(2)}</ReadOnlyLock>
+            </div>
+          )}
           {/* Why a package has to be switched on first: one plain line. */}
           {decision.actions.includes('turn_on_supplier_invoices') && (
-            <p className="text-[12.5px] text-muted-foreground">{t('why_supplier_invoices')}</p>
+            <p className="text-xs text-muted-foreground">{t('why_supplier_invoices')}</p>
           )}
-          {decision.actions.includes('turn_on_expenses') && <p className="text-[12.5px] text-muted-foreground">{t('why_expenses')}</p>}
+          {decision.actions.includes('turn_on_expenses') && <p className="text-xs text-muted-foreground">{t('why_expenses')}</p>}
         </div>
       )}
 
       {(decision.editorEscape || decision.quietActions.length > 0) && (
         <div className="flex flex-wrap gap-x-4 gap-y-2">
+          <ReadOnlyLock locked={!canWrite} title={lockedTitle}>
           {changesAccounts && (
-            <button type="button" onClick={openPlanEditor} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+            <button type="button" onClick={openPlanEditor} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
               {t('action_change_accounts')}
             </button>
           )}
           {decision.quietActions.includes('register_invoice') && (
-            <button type="button" onClick={() => setOpen('invoice')} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+            <button type="button" onClick={() => setOpen('invoice')} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
               {t('action_register_as_invoice')}
             </button>
           )}
           {decision.editorEscape && (
-            <button type="button" onClick={() => setOpen('editor')} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+            <button type="button" onClick={() => setOpen('editor')} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
               {registersInvoice ? t('action_book_without_invoice') : tWork('payer_open_editor')}
             </button>
           )}
           {decision.quietActions.includes('not_underlag') && (
-            <button type="button" onClick={() => void dropItem()} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+            <button type="button" onClick={() => void dropItem()} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
               {t('action_not_underlag')}
             </button>
           )}
+          </ReadOnlyLock>
         </div>
       )}
 
@@ -759,6 +774,20 @@ export function FocusDecision({
   )
 }
 
+/**
+ * Locks the controls inside for a read-only member (links stay live); a
+ * writer gets the children untouched. No company context is read here: the
+ * page can render outside a provider, so the role comes down as a prop.
+ */
+function ReadOnlyLock({ locked, title, block = false, children }: { locked: boolean; title: string | undefined; block?: boolean; children: ReactNode }) {
+  if (!locked) return <>{children}</>
+  return (
+    <fieldset disabled title={title} className={block ? 'm-0 min-w-0 border-0 p-0' : 'contents'}>
+      {children}
+    </fieldset>
+  )
+}
+
 function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null; suggestion: SuggestedBooking | null }) {
   const t = useTranslations('inkorg')
   const tWork = useTranslations('inbox_workspace')
@@ -835,11 +864,11 @@ function BankMatchEvidence({ evidence, item }: { evidence: Extract<DecisionEvide
       <div
         role="group"
         aria-label={t('bank_row_label')}
-        className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]"
+        className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] bg-control shadow-raised"
       >
         <BrandMark name={evidence.counterparty ?? supplier ?? '?'} variant="mark" size={22} logoUrl={item.logo_url} />
         <span className="shrink-0 tabular-nums">{shortDate(evidence.date, locale)}</span>
-        <span data-ph-mask="" className="min-w-0 flex-1 truncate font-mono text-[12.5px] uppercase tracking-[0.02em]">
+        <span data-ph-mask="" className="min-w-0 flex-1 truncate font-mono text-xs">
           {bankText}
         </span>
         <span data-ph-mask="" className="shrink-0 tabular-nums">
@@ -848,7 +877,7 @@ function BankMatchEvidence({ evidence, item }: { evidence: Extract<DecisionEvide
       </div>
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
         <span>{t(evidence.cardAgrees ? 'reason_rule_amount_date_card' : `reason_${evidence.basis}`, { doc })}</span>
-        <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] leading-none tracking-[0.02em] text-foreground">
+        <span className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs leading-none tracking-[0.02em] text-foreground">
           {t(`level_${evidence.level}`)}
         </span>
       </p>

@@ -7,7 +7,8 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
@@ -15,7 +16,7 @@ import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { usePosReasonText } from './reason-text'
 import type { PosDayDetailJson } from './types'
 
@@ -103,7 +104,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{day ? t('dialog_title', { date: formatDate(day.business_date) }) : t('dialog_title_loading')}</DialogTitle>
           <DialogDescription>
@@ -118,24 +119,24 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
         </DialogHeader>
 
         {loadFailed ? (
-          <div className="space-y-4 py-6 text-center">
-            <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-            <Button variant="outline" size="sm" onClick={() => void load()}>
-              {t('retry')}
-            </Button>
-          </div>
+          <LoadError title={t('load_failed')} onRetry={() => void load()} />
         ) : !detail || !day ? (
-          <div className="space-y-2">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </div>
+          <LateReveal>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex h-9 items-center gap-6 border-b-hairline">
+                <Skeleton className="h-3.5 w-12" />
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="ml-auto h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-20" />
+              </div>
+            ))}
+          </LateReveal>
         ) : (
           <div className="space-y-6">
             {detail.reasons.length > 0 && !booked ? (
               <div className="space-y-2">
                 <AttnLine>{blocking ? t('review_blocking') : t('review_provider')}</AttnLine>
-                <ul className="list-disc space-y-1 pl-4 text-[12.5px] text-muted-foreground">
+                <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
                   {detail.reasons.map((reason, i) => (
                     <li key={i}>{reasonText(reason)}</li>
                   ))}
@@ -145,7 +146,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
             {day.changed_after_booking ? <AttnLine>{t('changed_after_booking')}</AttnLine> : null}
 
             <section className="space-y-2">
-              <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_vat')}</h3>
+              <h3 className="font-sans text-xs font-medium text-muted-foreground">{t('section_vat')}</h3>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -159,9 +160,9 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
                   {day.vat_groups.map((g) => (
                     <TableRow key={g.ratePercent}>
                       <TableCell>{g.ratePercent === 0 ? t('rate_zero') : t('rate_label', { rate: g.ratePercent })}</TableCell>
-                      <TableCell className={NUM}>{formatCurrency(g.net)}</TableCell>
-                      <TableCell className={NUM}>{formatCurrency(g.vat)}</TableCell>
-                      <TableCell className={NUM}>{formatCurrency(g.gross)}</TableCell>
+                      <TableCell className={NUM}>{formatRowAmount(g.net)}</TableCell>
+                      <TableCell className={NUM}>{formatRowAmount(g.vat)}</TableCell>
+                      <TableCell className={NUM}>{formatRowAmount(g.gross)}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
@@ -175,7 +176,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
             </section>
 
             <section className="space-y-2">
-              <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('section_payments')}</h3>
+              <h3 className="font-sans text-xs font-medium text-muted-foreground">{t('section_payments')}</h3>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -193,8 +194,8 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
                         {x.kind === 'other' ? <span className="text-muted-foreground"> ({x.method})</span> : null}
                       </TableCell>
                       <TableCell className={NUM}>{x.receiptCount}</TableCell>
-                      <TableCell className={NUM}>{x.tips ? formatCurrency(x.tips) : ''}</TableCell>
-                      <TableCell className={NUM}>{formatCurrency(x.amount)}</TableCell>
+                      <TableCell className={NUM}>{x.tips ? formatRowAmount(x.tips) : ''}</TableCell>
+                      <TableCell className={NUM}>{formatRowAmount(x.amount)}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
@@ -205,7 +206,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
                   </TableRow>
                 </TableBody>
               </Table>
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {t('discounts_refunds', {
                   discounts: formatCurrency(detail.day.day.discounts),
                   refunds: detail.day.day.refunds.count,
@@ -216,7 +217,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
 
             {lines.length > 0 ? (
               <section className="space-y-2">
-                <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <h3 className="font-sans text-xs font-medium text-muted-foreground">
                   {booked ? t('section_lines_booked') : t('section_lines')}
                 </h3>
                 <VoucherLinesTable lines={voucherLineViews(lines)} withCurrency showTotals />
@@ -233,7 +234,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
             {booked ? (
               <p className="text-[13px]">
                 {t('booked_outcome')}{' '}
-                <Link href={`/bookkeeping/${day.journal_entry_id}`} className="underline decoration-border underline-offset-4 hover:text-foreground">
+                <Link href={`/bookkeeping/${day.journal_entry_id}`} className="underline decoration-foreground/25 underline-offset-4 hover:text-foreground">
                   {t('open_voucher')}
                 </Link>
               </p>

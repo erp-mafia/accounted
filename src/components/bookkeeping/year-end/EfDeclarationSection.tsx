@@ -6,14 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   DocumentArrowDownIcon,
   ExclamationTriangleIcon,
   InformationCircleIcon,
 } from '@/components/icons'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
@@ -213,8 +214,8 @@ export function EfDeclarationSection({
   return (
     <div className="space-y-6">
       {/* BFL distinction banner: EF values are declaration-only, never booked. */}
-      <Card className="border-border bg-secondary/40">
-        <CardContent className="p-4 flex items-start gap-3">
+      <Card>
+        <CardContent className="flex items-start gap-3">
           <InformationCircleIcon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">
@@ -231,8 +232,8 @@ export function EfDeclarationSection({
           zero posted vouchers, so the user knows the surplus is 0 because
           nothing's booked yet, not because the calculators failed. */}
       {noPostedEntries && (
-        <Card className="border-border">
-          <CardContent className="p-4 flex items-start gap-3">
+        <Card>
+          <CardContent className="flex items-start gap-3">
             <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">
               <span className="font-medium">Inga verifikat bokförda i perioden.</span>{' '}
@@ -260,7 +261,7 @@ export function EfDeclarationSection({
             <div className="space-y-1">
               <Label className="text-xs">Egenavgifter: kategori</Label>
               <select
-                className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
+                className="rounded-lg h-9 text-sm px-2 w-full bg-control shadow-raised"
                 value={overrides.category}
                 onChange={(e) => update('category', e.target.value as EgenavgiftCategory)}
               >
@@ -387,7 +388,7 @@ export function EfDeclarationSection({
                   aria-label="Belopp kvar i fonden"
                   className="tabular-nums h-9"
                 />
-                <Button type="button" variant="ghost" size="sm" onClick={() => removeFond(index)}>
+                <Button type="button" variant="ghost" onClick={() => removeFond(index)}>
                   Ta bort
                 </Button>
                 <FondStatusLine
@@ -399,7 +400,7 @@ export function EfDeclarationSection({
                 />
               </div>
             ))}
-            <Button type="button" variant="outline" size="sm" onClick={addFond}>
+            <Button type="button" variant="outline" onClick={addFond}>
               Lägg till fond
             </Button>
           </div>
@@ -408,8 +409,8 @@ export function EfDeclarationSection({
 
       {/* Top-level input warnings (e.g. missing kapitalunderlag) */}
       {inputWarnings.map((w, i) => (
-        <Card key={i} className="border-border">
-          <CardContent className="p-4 flex items-start gap-3">
+        <Card key={i}>
+          <CardContent className="flex items-start gap-3">
             <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">{w}</p>
           </CardContent>
@@ -417,19 +418,13 @@ export function EfDeclarationSection({
       ))}
 
       {/* Loading / error / items */}
-      {error && (
-        <Card>
-          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
-        </Card>
-      )}
+      {error && <LoadError title={error} onRetry={() => void loadPreview()} />}
 
       {loading && !preview && (
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-20 w-full" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-20 w-full" />
+        </LateReveal>
       )}
 
       {items.map((item) => (
@@ -479,7 +474,7 @@ export function EfDeclarationSection({
                   <TableRow key={row.ruta}>
                     <TableCell className="text-sm tabular-nums">{row.ruta}</TableCell>
                     <TableCell className={`text-sm ${row.sum ? 'font-medium' : ''}`}>{row.label}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(rutor[row.ruta])}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(rutor[row.ruta])}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -496,7 +491,7 @@ export function EfDeclarationSection({
                   {ovrigaUppgifter.map((uppgift) => (
                     <TableRow key={uppgift.faltkod}>
                       <TableCell className="text-sm">{uppgift.label}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(uppgift.amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatRowAmount(uppgift.amount)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

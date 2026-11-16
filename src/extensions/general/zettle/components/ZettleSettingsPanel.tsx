@@ -77,7 +77,7 @@ export default function ZettleSettingsPanel() {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">{t('connect_hint')}</p>
             <Button onClick={handleConnect} loading={connecting}>
-              {!connecting && <LinkIcon className="mr-2 h-4 w-4" />}
+              {!connecting && <LinkIcon className="h-4 w-4" />}
               {connecting ? tf('connecting') : t('connect')}
             </Button>
           </div>

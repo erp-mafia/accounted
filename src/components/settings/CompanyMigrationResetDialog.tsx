@@ -206,7 +206,7 @@ export function CompanyMigrationResetDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle data-ph-mask="">
             {t('reset_dialog_title', { companyName })}
@@ -220,12 +220,12 @@ export function CompanyMigrationResetDialog({
             {t('reset_checking')}
           </div>
         ) : loadError ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg p-4 text-sm text-destructive">
             {loadError}
           </div>
         ) : eligibility ? (
           <div className="space-y-5">
-            <div className="flex gap-3 rounded-lg border border-border bg-muted/40 p-4">
+            <div className="flex gap-3 rounded-lg p-4 bg-control shadow-raised">
               <ArchiveBoxIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="space-y-1 text-sm">
                 <p className="font-medium text-foreground">{t('reset_archive_title')}</p>
@@ -234,7 +234,7 @@ export function CompanyMigrationResetDialog({
             </div>
 
             {eligibility.blockers.length > 0 ? (
-              <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <div className="bg-destructive/8 space-y-2 rounded-lg p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
                   <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('reset_blocked_title')}

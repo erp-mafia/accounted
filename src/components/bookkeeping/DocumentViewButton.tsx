@@ -68,7 +68,7 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       <Button
         type="button"
         variant="outline"
-        size="icon-sm"
+        size="icon"
         onClick={handleClick}
         className={className}
         aria-label={label}
@@ -85,13 +85,12 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
     <Button
       type="button"
       variant="outline"
-      size="sm"
       onClick={handleClick}
       className={className}
     >
       {/* It opens a new tab, which is what this glyph says; the eye it
           replaced reads as a show/hide toggle (crm#1003). */}
-      <ArrowTopRightOnSquareIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden />
       {label}
     </Button>
   )

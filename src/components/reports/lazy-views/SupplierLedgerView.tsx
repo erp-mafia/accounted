@@ -48,7 +48,7 @@ interface SupplierLedgerData {
 
 export default function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [asOfDate, setAsOfDate] = useState(() => todayIsoStockholm())
-  const { data, loading, error } = useReportData<SupplierLedgerData>(
+  const { data, loading, error, refetch } = useReportData<SupplierLedgerData>(
     periodId ? `/api/reports/supplier-ledger?period_id=${periodId}&as_of_date=${asOfDate}` : null,
     'Kunde inte hämta leverantörsreskontra',
   )
@@ -58,7 +58,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
   }
 
   if (error) {
-    return <ReskontraErrorCard message={error} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="supplier-ledger-as-of" exportBase="/api/reports/supplier-ledger" />
+    return <ReskontraErrorCard message={error} onRetry={refetch} asOfDate={asOfDate} onAsOfDateChange={setAsOfDate} inputId="supplier-ledger-as-of" exportBase="/api/reports/supplier-ledger" />
   }
 
   if (!data || !data.ledger) {
@@ -83,7 +83,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Totalt utestående</CardTitle>
           </CardHeader>
           <CardContent>
@@ -97,7 +97,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Ej förfallet</CardTitle>
           </CardHeader>
           <CardContent>
@@ -105,7 +105,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader>
             <CardTitle className="text-sm text-muted-foreground">Förfallet</CardTitle>
           </CardHeader>
           <CardContent>
@@ -122,7 +122,7 @@ export default function SupplierLedgerView({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm tabular-nums min-w-[500px]">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
                   <th className="py-2">Leverantör</th>

@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { AdjustmentsHorizontalIcon, PrinterIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPIMonthsTable } from '@/components/kpi/KPIMonthsTable'
@@ -34,7 +35,9 @@ export default function KpiPage() {
   const t = useTranslations('kpi')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('')
+  // The fiscal year is app-wide context (the sidebar); a KPI view needs one started year.
+  const { periodId: scopedPeriodId } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const selectedPeriod = scopedPeriodId ?? ''
   // The catalog flags nyckeltal as dimension-filterable; the API narrows the
   // P&L figures and leaves the balance-side ones company-wide.
   const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
@@ -181,7 +184,7 @@ export default function KpiPage() {
                   rules (globals.css) leave only the page on paper, and
                   ReportPrintHeader below states company, period and date. */}
               <Button
-                size="sm"
+                size="toolbar"
                 variant="outline"
                 className="gap-1.5"
                 onClick={() => window.print()}
@@ -202,7 +205,7 @@ export default function KpiPage() {
                 // complete draft, so while the stored layout is unknown the
                 // control that opens it must not exist: a save from here would
                 // overwrite the row with a layout the user never chose.
-                <Button size="sm"
+                <Button size="toolbar"
                   variant="outline"
                   className="gap-1.5"
                   disabled
@@ -212,12 +215,6 @@ export default function KpiPage() {
                   {t('customize')}
                 </Button>
               )}
-              <FyPicker
-                value={selectedPeriod || null}
-                onChange={(id) => setSelectedPeriod(id || '')}
-                includeAllOption={false}
-                hideFuturePeriods
-              />
             </div>
           }
         />
@@ -257,8 +254,8 @@ export default function KpiPage() {
           picked it shows the partial-view chip the filtered reports carry. */}
       <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
 
-      {error && (
-        <p className="py-8 text-center text-sm text-muted-foreground">{error}</p>
+      {error && selectedPeriod && (
+        <LoadError title={error} onRetry={() => void fetchReport(selectedPeriod)} />
       )}
 
       {(isLoadingReport || (!error && report !== null && isLoadingPrefs)) && (
@@ -291,10 +288,10 @@ export default function KpiPage() {
 
 function LoadingSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <LateReveal className="grid gap-4 sm:grid-cols-2">
       {[1, 2, 3, 4].map((i) => (
         <Skeleton key={i} className="h-40 w-full rounded-lg" />
       ))}
-    </div>
+    </LateReveal>
   )
 }

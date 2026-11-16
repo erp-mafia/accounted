@@ -113,7 +113,7 @@ function SignatoryLinkDialogInner({ options, onClose }: { options: SignatoryLink
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{bankName ? t('description_bank', { bank: bankName }) : t('description')}</DialogDescription>
@@ -123,13 +123,13 @@ function SignatoryLinkDialogInner({ options, onClose }: { options: SignatoryLink
           <div className="space-y-4">
             <p className="text-[13px] leading-relaxed">{issued.email_sent ? t('sent_to', { email: trimmedEmail }) : t('created')}</p>
             <div className="flex items-center gap-2">
-              <Input readOnly value={issued.url} aria-label={t('link_label')} className="font-mono text-[12.5px]" onFocus={(e) => e.currentTarget.select()} />
-              <Button variant="secondary" size="sm" onClick={copy}>
+              <Input readOnly value={issued.url} aria-label={t('link_label')} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              <Button variant="outline" onClick={copy}>
                 {t('copy')}
               </Button>
             </div>
             {error && <AttnLine>{error}</AttnLine>}
-            <p className="text-[12.5px] text-muted-foreground">{t('valid_days')}</p>
+            <p className="text-xs text-muted-foreground">{t('valid_days')}</p>
             <DialogFooter>
               <Button onClick={onClose}>{t('close')}</Button>
             </DialogFooter>
@@ -153,7 +153,7 @@ function SignatoryLinkDialogInner({ options, onClose }: { options: SignatoryLink
                 aria-invalid={!emailValid || undefined}
                 aria-describedby="signatory-link-email-hint"
               />
-              <span id="signatory-link-email-hint" className="block text-[12.5px] text-muted-foreground">
+              <span id="signatory-link-email-hint" className="block text-xs text-muted-foreground">
                 {t('email_hint')}
               </span>
             </label>
@@ -161,13 +161,13 @@ function SignatoryLinkDialogInner({ options, onClose }: { options: SignatoryLink
               <Checkbox checked={offerPayments} onCheckedChange={(checked) => setOfferPayments(checked === true)} className="mt-1" />
               <span>
                 <span className="block">{t('offer_payments')}</span>
-                <span className="block text-[12.5px] text-muted-foreground">{t('offer_payments_hint')}</span>
+                <span className="block text-xs text-muted-foreground">{t('offer_payments_hint')}</span>
               </span>
             </label>
-            <p className="text-[12.5px] text-muted-foreground">{t('valid_days')}</p>
+            <p className="text-xs text-muted-foreground">{t('valid_days')}</p>
             {error && <AttnLine>{error}</AttnLine>}
             <DialogFooter>
-              <Button type="button" variant="secondary" onClick={onClose}>
+              <Button type="button" variant="outline" onClick={onClose}>
                 {t('cancel')}
               </Button>
               <Button type="submit" loading={busy} disabled={!emailValid}>

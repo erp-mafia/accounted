@@ -77,8 +77,8 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
 function PreviewCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-3 space-y-1.5">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="rounded-lg p-3 space-y-1.5 bg-control shadow-raised">
+      <p className="text-xs font-medium text-muted-foreground">
         {label}
       </p>
       {children}

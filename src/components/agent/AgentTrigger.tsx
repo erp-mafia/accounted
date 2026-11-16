@@ -316,11 +316,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
       {...AGENT_FAB_PROPS}
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-[var(--shadow-md)] bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-pop bg-foreground text-background shadow-float bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
     >
       <button
         onClick={handleClick}
-        className={`flex min-w-0 items-center gap-2 pl-2 ${dismissible ? 'rounded-l-full pr-2' : 'rounded-full pr-4'} hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
+        className={`flex min-w-0 items-center gap-2 pl-2 ${dismissible ? 'rounded-l-pop pr-2' : 'rounded-pop pr-4'} hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
         aria-label={labelText}
         // The label changes on its own while the panel is hidden, so it has to be
         // announced rather than only redrawn. Polite: it never interrupts.
@@ -349,7 +349,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
           onClick={hasAi ? () => void hideFab() : dismissUpsellForSession}
           aria-label={hasAi ? t('fab_hide') : 'Dölj tills nästa besök'}
           title={hasAi ? t('fab_hide') : undefined}
-          className="flex items-center rounded-r-full pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="flex items-center rounded-r-pop pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <XMarkIcon className="h-4 w-4" />
         </button>

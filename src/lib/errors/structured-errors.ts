@@ -2795,8 +2795,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   CASH_ACCOUNT_IBAN_DUPLICATE: {
     httpStatus: 409,
-    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN, även om det är avstängt: en bankkoppling hamnar på det kontot. Samma bankkonto ska bara finnas en gång, så lägg uppgifterna på det befintliga kontot. Lades det andra kontot till av misstag: stäng av det och töm dess IBAN, eller ta bort det under Inställningar, Bokföring, Allmänt.',
-    message_en: 'Another bank account of the company already carries this IBAN, also when it is turned off: a bank connection lands on that account. One physical account must exist once, so put the details on the existing account. If the other account was added by mistake, turn it off and clear its IBAN, or remove it under Settings, Bookkeeping, General.',
+    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN, även om det är avstängt: en bankkoppling hamnar på det kontot. Samma bankkonto ska bara finnas en gång, så lägg uppgifterna på det befintliga kontot. Lades det andra kontot till av misstag: stäng av det och töm dess IBAN, eller ta bort det under Inställningar, Bokföring.',
+    message_en: 'Another bank account of the company already carries this IBAN, also when it is turned off: a bank connection lands on that account. One physical account must exist once, so put the details on the existing account. If the other account was added by mistake, turn it off and clear its IBAN, or remove it under Settings, Bookkeeping.',
   },
   // Removing a bank account (remove_cash_account, #3130): one code per
   // refusal, each saying what keeps the account and the way out if there is
@@ -4906,9 +4906,9 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
   FILING_IDENTITY_REFUSED: {
     httpStatus: 422,
     message_sv:
-      'Ogiltigt organisationsnummer: numret passar inte företagsformen. Ett aktiebolag eller en förening lämnar in på sitt organisationsnummer, en enskild firma på ägarens personnummer. Rätta numret under Inställningar → Allmänt. Går det inte att ändra där, kontakta supporten så rättar vi det.',
+      'Ogiltigt organisationsnummer: numret passar inte företagsformen. Ett aktiebolag eller en förening lämnar in på sitt organisationsnummer, en enskild firma på ägarens personnummer. Rätta numret under Inställningar → Företagsuppgifter. Går det inte att ändra där, kontakta supporten så rättar vi det.',
     message_en:
-      "Invalid organisation number: it does not fit the legal form. An aktiebolag or association files on its organisation number, an enskild firma on the owner's personnummer. Correct it under Settings → General. If it cannot be changed there, contact support and we will fix it.",
+      "Invalid organisation number: it does not fit the legal form. An aktiebolag or association files on its organisation number, an enskild firma on the owner's personnummer. Correct it under Settings → Company details. If it cannot be changed there, contact support and we will fix it.",
   },
   // ── Wave 3: filing reports and the momsredovisning verifikat over v1/MCP
   // (lib/reports/filing-report-service.ts, lib/reports/vat-settlement-booking.ts) ──
@@ -8101,7 +8101,7 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   JOURNAL_ENTRY_DELETE_SIE_UNDO_STORNO: {
     httpStatus: 409,
     message_sv:
-      'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.',
+      'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företaget > Företagsuppgifter > Riskzon.',
     message_en:
       'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings > Company.',
     retryable: false,
@@ -11955,8 +11955,8 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   // Same cause and way out as BANK_CONSENT_ORG_NUMBER_MISSING, for a payment.
   PAYMENT_ORG_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för betalningen. Fyll i det under Inställningar, Företag, Allmänt och försök igen.',
-    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the payment. Fill it in under Settings, Company, General and try again.',
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för betalningen. Fyll i det under Inställningar, Företaget, Företagsuppgifter och försök igen.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the payment. Fill it in under Settings, Company, Company details and try again.',
   },
   PAYMENT_COMPANY_VERIFICATION_REQUIRED: {
     httpStatus: 409,
@@ -12126,8 +12126,8 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
   // writable while no valid number is stored), so the text names it.
   BANK_CONSENT_ORG_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för kopplingen. Fyll i det under Inställningar, Företag, Allmänt och försök igen.',
-    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the connection. Fill it in under Settings, Company, General and try again.',
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för kopplingen. Fyll i det under Inställningar, Företaget, Företagsuppgifter och försök igen.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the connection. Fill it in under Settings, Company, Company details and try again.',
   },
   BANK_CONSENT_UNKNOWN_BANK: {
     httpStatus: 400,

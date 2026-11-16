@@ -7,7 +7,6 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import {
-  ArrowLeftIcon,
   ArrowUpRightIcon,
   CheckIcon,
   ChevronLeftIcon,
@@ -15,6 +14,7 @@ import {
   MagnifyingGlassIcon,
   PencilIcon,
   PlusIcon,
+  TrashIcon,
   XMarkIcon,
 } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -75,6 +75,8 @@ export function AgentDetail({ segment, backHref = '/skills' }: { segment: string
 
 function Detail({ companyId, companyName, agentId, backHref }: { companyId: string; companyName: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
+  // The top bar carries the menu row's name (Agenter › Kompetens).
+  const tNav = useTranslations('nav')
   const locale = useLocale()
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -122,8 +124,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   if (!curated && catalog.data && !catalog.isValidating && !own) {
     return (
       <div className={styles.apage}>
-        <PageHeader title={t('title')} />
-        <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <PageHeader title={tNav('v3_skills')} />
         <p className={styles.muted}>{t('not_found')}</p>
       </div>
     )
@@ -225,8 +226,8 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
 
   return (
     <div className={styles.apage}>
-      <PageHeader title={t('title')} />
-      <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {/* The list this flow sits under, then its name: the way back is the breadcrumb. */}
+      <PageHeader title={curated ? name : <span data-ph-mask="">{name}</span>} parent={{ label: tNav('v3_skills'), href: backHref }} />
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={name}>
@@ -324,7 +325,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
               <CopyInstruction body={body.data} />
               {canEdit && changed && (
                 <ActionRow title={t('adv_reset_title')} desc={t('adv_reset_desc')}>
-                  <Button variant="outline" size="sm" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
+                  <Button variant="outline" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
                 </ActionRow>
               )}
               {COMMUNITY_OPEN && own && !own.draft && <ShareBox preview={{ title: name, desc: own.summary ?? '', kind: 'workflow', hue, symbolKey: agentId }} status={own.shareStatus ?? 'private'} publishedUrl={own.publishedUrl} reviewNote={own.reviewNote} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
@@ -388,7 +389,7 @@ export function Field({ label, note, copy, children }: {
 /** "Redigera" on an own item: opens Skriv själv filled in with what was saved. */
 export function EditOwnButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   const t = useTranslations('skills_registry')
-  return <Button variant="outline" size="sm" className="gap-2" disabled={disabled} onClick={onClick}><PencilIcon className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
+  return <Button variant="outline" className="gap-2" disabled={disabled} onClick={onClick}><PencilIcon className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
 }
 
 /** A panel sub-view: back to the agent, a title, its content. `backLabel` names the way out where "Klar" would read as saved. */
@@ -430,7 +431,7 @@ function CopyInstruction({ body }: { body: string | undefined }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   return (
     <ActionRow title={t('adv_copy_title')} desc={t('adv_copy_desc')} alert={state === 'failed' ? t('copy_failed') : undefined}>
-      <Button variant="outline" size="sm" disabled={!body} onClick={() => {
+      <Button variant="outline" disabled={!body} onClick={() => {
         const copying = body && navigator.clipboard ? navigator.clipboard.writeText(body) : Promise.reject(new Error('Nothing to copy'))
         void copying.then(() => setState('copied'), () => setState('failed'))
       }}>{t(state === 'copied' ? 'copied_full' : 'copy')}</Button>
@@ -516,7 +517,7 @@ export function KnowledgePanel({ held, options, onBack, onChange, initialFailed 
               <div key={o.id} className={styles.kcard} data-held={has ? '' : undefined}>
                 <div className={styles.kcardTop}>
                   <b>{name(o.id, o.title)}</b>
-                  <Button variant={has ? 'default' : 'outline'} size="icon-sm" loading={busy === o.id} disabled={busy !== null && busy !== o.id} aria-label={has ? t('knowledge_remove', { name: name(o.id, o.title) }) : t('knowledge_add')} onClick={() => void toggle(o.id)}>
+                  <Button variant={has ? 'default' : 'outline'} size="icon" loading={busy === o.id} disabled={busy !== null && busy !== o.id} aria-label={has ? t('knowledge_remove', { name: name(o.id, o.title) }) : t('knowledge_add')} onClick={() => void toggle(o.id)}>
                     {has ? <CheckIcon className="h-4 w-4" aria-hidden /> : <PlusIcon className="h-4 w-4" aria-hidden />}
                   </Button>
                 </div>
@@ -562,7 +563,7 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
     return (
       <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed} below={status === 'published' && publishedUrl ? <a className={styles.catLink} href={publishedUrl} target="_blank" rel="noreferrer">{t('share_published_link')}</a> : undefined}>
         {/* A published item is in other people's AI: withdrawing it is asked once. A submitted one only leaves the review queue. */}
-        <Button variant="outline" size="sm" disabled={!canWrite} loading={state === 'sending'} onClick={() => status === 'published' ? setConfirmWithdraw(true) : void send('withdraw')}>{t('share_withdraw')}</Button>
+        <Button variant="outline" disabled={!canWrite} loading={state === 'sending'} onClick={() => status === 'published' ? setConfirmWithdraw(true) : void send('withdraw')}>{t('share_withdraw')}</Button>
         <DestructiveConfirmDialog
           open={confirmWithdraw}
           onOpenChange={setConfirmWithdraw}
@@ -577,11 +578,11 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
   }
   return (
     <ActionRow title={t('adv_share_title')} desc={reviewNote ? t('share_returned', { note: reviewNote }) : t('adv_share_desc')}>
-      <Button variant="outline" size="sm" disabled={!canWrite} onClick={() => { setState('idle'); setOpen(true) }}>{t('adv_share')}</Button>
+      <Button variant="outline" disabled={!canWrite} onClick={() => { setState('idle'); setOpen(true) }}>{t('adv_share')}</Button>
       <Dialog open={open} onOpenChange={(next) => state !== 'sending' && setOpen(next)}>
-        <DialogContent className="sm:max-w-[480px]">
+        <DialogContent size="confirm">
           <DialogHeader>
-            <DialogTitle className="font-display text-lg tracking-tight">{t('share_title')}</DialogTitle>
+            <DialogTitle className="text-lg">{t('share_title')}</DialogTitle>
             <DialogDescription className="text-[13px] leading-relaxed">{t('share_body')}</DialogDescription>
           </DialogHeader>
           <form id="share-form" className={styles.shareForm} onSubmit={(e) => { e.preventDefault(); if (handleOk && confirmed) void send({ author_handle: handle }) }}>
@@ -606,8 +607,8 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
             {failed && <p role="alert" className={styles.shareHint}>{failed}</p>}
           </form>
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>{t('cancel')}</Button>
-            <Button type="submit" form="share-form" size="sm" disabled={!canWrite || !confirmed || !handleOk} loading={state === 'sending'}>{t('share_submit')}</Button>
+            <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
+            <Button type="submit" form="share-form" disabled={!canWrite || !confirmed || !handleOk} loading={state === 'sending'}>{t('share_submit')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -622,7 +623,7 @@ export function DeleteOwn({ canWrite, onDelete, kind = 'workflow' }: { canWrite:
   const [failed, setFailed] = useState(false)
   return (
     <ActionRow title={t(`delete_title_${kind}`)} desc={t(`delete_desc_${kind}`)} alert={failed ? t('save_failed') : undefined}>
-      <Button variant="outline" size="sm" className={styles.dangerBtn} disabled={!canWrite} onClick={() => setConfirm(true)}>{t('delete')}</Button>
+      <Button variant="outline" className={styles.dangerBtn} disabled={!canWrite} onClick={() => setConfirm(true)}><TrashIcon className="h-4 w-4" />{t('delete')}</Button>
       <DestructiveConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}

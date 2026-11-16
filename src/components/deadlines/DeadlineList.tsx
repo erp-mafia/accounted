@@ -7,6 +7,8 @@ import { DeadlineRow, deadlineDateLabel } from './DeadlineRow'
 import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
+import { EmptyState } from '@/components/ui/empty-state'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -121,10 +123,10 @@ export function DeadlineList({
   const renderSection = ({ key, label, items }: { key: string; label: string; items: Deadline[] }) => (
     <section key={key}>
       <div className="mb-1 flex items-center gap-3 px-1">
-        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-xs text-muted-foreground">
           {label}
         </h2>
-        <span className="text-xs tabular-nums text-muted-foreground/50">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {items.length}
         </span>
         <div className="h-px flex-1 bg-border/60" />
@@ -151,24 +153,34 @@ export function DeadlineList({
     </section>
   )
 
+  // First time: one sentence where the first row would be, and no toolbar
+  // while there is nothing to filter (design.md convention 17).
+  if (deadlines.length === 0) {
+    return <EmptyState title={t('empty_title')} />
+  }
+
   return (
     <div className="space-y-6">
-      {/* Toolbar: the type seg (concept: Alla / Skatt / Fakturering / Egna) */}
+      {/* Toolbar: the type seg, "Alla" last and still the default (V7 list
+          toolbars T2). */}
       <SegmentedControl
         value={segment}
         onChange={setSegment}
         options={[
-          { value: 'all', label: t('seg_all') },
           { value: 'tax', label: t('seg_tax') },
           { value: 'invoicing', label: t('seg_invoicing') },
           { value: 'own', label: t('seg_own') },
+          { value: 'all', label: t('seg_all') },
         ]}
       />
 
       {/* The thread */}
       {filteredDeadlines.length === 0 ? (
-        <p className="py-16 text-center text-sm text-muted-foreground">
-          {segment !== 'all' ? t('empty_filtered') : t('empty_title')}
+        <p className="px-1 py-3 text-[13px] text-muted-foreground">
+          {t('empty_filtered')}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSegment('all')}>
+            {t('empty_filtered_clear')}
+          </button>
         </p>
       ) : (
         <div className="stagger-enter space-y-8">
@@ -178,7 +190,7 @@ export function DeadlineList({
               type="button"
               onClick={() => setShowCompleted((open) => !open)}
               aria-expanded={showCompleted}
-              className="px-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+              className="px-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
               {showCompleted ? t('hide_completed') : t('show_completed', { count: completed.length })}
             </button>

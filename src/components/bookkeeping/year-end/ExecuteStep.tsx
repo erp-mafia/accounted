@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { StepBar } from '@/components/ui/step-bar'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { LockClosedIcon } from '@/components/icons'
 
@@ -23,13 +25,14 @@ interface ExecuteStepProps {
  */
 export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, onBack, onExecute }: ExecuteStepProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
 
   return (
     <div className="space-y-6">
       <section>
         <div className="mb-3 flex items-center gap-2 px-1">
           <LockClosedIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <h3 className="font-sans text-xs font-medium text-muted-foreground">
             Klar att verkställa
           </h3>
           <div className="h-px flex-1 bg-border/60" />
@@ -51,7 +54,7 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
             stornering eller bokar i den nya perioden.
           </p>
           {bolagsskattMissing && (
-            <p className="text-[12.5px] leading-5 text-attn">
+            <p className="text-xs leading-5 text-attn">
               Ingen bolagsskatt är bokförd, fast skatten på det som är bokfört blir mer än 0 kr.
               Bokför den, eller de dispositioner som sänker den, i dispositionssteget. Varningen
               hindrar inte att du verkställer.
@@ -61,14 +64,16 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
         </div>
       </section>
 
-      <div className="flex justify-between">
-        <Button variant="outline" size="sm" onClick={onBack} disabled={isRunning}>
-          ← Tillbaka
+      <StepBar>
+        <Button variant="ghost" onClick={onBack} disabled={isRunning}>
+          Tillbaka
         </Button>
         <Button
           variant="destructive"
           onClick={() => setConfirmOpen(true)}
           loading={isRunning}
+          disabled={!canWrite}
+          title={lockedTitle}
         >
           {isRunning ? (
             'Verkställer bokslut…'
@@ -76,7 +81,7 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
             <>Verkställ bokslut</>
           )}
         </Button>
-      </div>
+      </StepBar>
 
       <DestructiveConfirmDialog
         open={confirmOpen}

@@ -82,7 +82,7 @@ export function ScbPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('picker_title')}</DialogTitle>
           <DialogDescription>
@@ -104,7 +104,7 @@ export function ScbPickerDialog({
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>{t('picker_try_instead')}</span>
               {alternates.map((q) => (
-                <Button key={q} type="button" variant="outline" size="sm" onClick={() => setQuery(q)}>
+                <Button key={q} type="button" variant="outline" onClick={() => setQuery(q)}>
                   {q}
                 </Button>
               ))}
@@ -127,7 +127,7 @@ export function ScbPickerDialog({
           ) : current?.failed ? (
             <p className="text-sm text-muted-foreground">{t('registry_unavailable_title')}</p>
           ) : candidates.length > 0 ? (
-            <ul className="max-h-80 divide-y divide-border overflow-y-auto rounded-lg border border-border" role="listbox" aria-label={t('picker_title')}>
+            <ul className="max-h-80 divide-y divide-border overflow-y-auto" role="listbox" aria-label={t('picker_title')}>
               {candidates.map((c) => {
                 const isSelected = selected === c.orgNumber
                 return (

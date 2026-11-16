@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConnectPanel'
 import { SkattekontoAccountSetting } from '@/components/settings/SkattekontoAccountSetting'
-import { SettingsBackLink } from '@/components/settings/SettingsRows'
+import { SettingsBackLink, SettingsViewerScope } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
@@ -67,7 +67,9 @@ export function SkatteverketSettingsContent() {
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       {/* The panel draws the header: what the "?" explains depends on whether the ombud step is there. */}
       <SkatteverketConnectPanel title={tNav('skatteverket')} />
-      <SkattekontoAccountSetting />
+      <SettingsViewerScope>
+        <SkattekontoAccountSetting />
+      </SettingsViewerScope>
     </div>
   )
 }

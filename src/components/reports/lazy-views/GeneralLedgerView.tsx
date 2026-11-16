@@ -115,7 +115,7 @@ export default function GeneralLedgerView({ periodId, initialAccountFilter, dime
   }
 
   if (error) {
-    return <ReportErrorCard message={error} />
+    return <ReportErrorCard message={error} onRetry={refetch} />
   }
 
   if (!data || data.accounts.length === 0) {
@@ -191,7 +191,7 @@ function LedgerAccountCard({ account, linesQuery, defaultOpen }: { account: Gene
 
   return (
     <Card>
-      <CardHeader className="pb-2">
+      <CardHeader>
         <div className="flex items-center justify-between">
           {/* data-ph-mask: account number and name are user chart data */}
           <CardTitle data-ph-mask="" className="text-base">
@@ -210,7 +210,7 @@ function LedgerAccountCard({ account, linesQuery, defaultOpen }: { account: Gene
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
             {account.line_count > 0 ? (
-              <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+              <Button variant="outline" onClick={() => setOpen(true)}>
                 {t('show_lines', { count: account.line_count })}
               </Button>
             ) : (
@@ -227,8 +227,9 @@ function LedgerAccountCard({ account, linesQuery, defaultOpen }: { account: Gene
 /** One account's lines, a page at a time, behind its card in a large ledger. */
 function PagedLedgerLines({ account, linesQuery }: { account: GeneralLedgerAccount; linesQuery: string }) {
   const t = useTranslations('general_ledger')
+  const tCommon = useTranslations('common')
   const first = `/api/reports/general-ledger/lines?${linesQuery}&${new URLSearchParams({ account: account.account_number })}`
-  const { pages, loading, error, hasMore, loadMore } = useReportPages<GeneralLedgerLinesPage>(
+  const { pages, loading, error, hasMore, loadMore, retry } = useReportPages<GeneralLedgerLinesPage>(
     first,
     t('lines_failed'),
     (page) => page.next
@@ -247,9 +248,14 @@ function PagedLedgerLines({ account, linesQuery }: { account: GeneralLedgerAccou
       {(loading || error || hasMore) && (
         <div className="mt-3 flex items-center gap-3 text-sm text-muted-foreground">
           {loading && <span>{t('loading_lines')}</span>}
-          {error && <span className="text-destructive">{error}</span>}
+          {error && (
+            <>
+              <span className="text-destructive">{error}</span>
+              <Button variant="link" onClick={retry}>{tCommon('retry')}</Button>
+            </>
+          )}
           {hasMore && (
-            <Button variant="outline" size="sm" onClick={loadMore}>
+            <Button variant="outline" onClick={loadMore}>
               {t('load_more', { shown: lines.length, total: account.line_count })}
             </Button>
           )}
@@ -262,7 +268,7 @@ function PagedLedgerLines({ account, linesQuery }: { account: GeneralLedgerAccou
 function LedgerLinesTable({ account, lines }: { account: GeneralLedgerAccount; lines: GeneralLedgerLine[] }) {
   return (
     <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-      <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+      <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
         <tr className="border-b text-left">
           <th className="py-2 w-16">Ver.nr</th>
           <th className="py-2 w-24">Datum</th>
@@ -278,16 +284,16 @@ function LedgerLinesTable({ account, lines }: { account: GeneralLedgerAccount; l
             <td className="py-1.5 font-mono text-xs">
               <Link
                 href={`/bookkeeping/${line.journal_entry_id}`}
-                className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors"
+                className="text-foreground underline underline-offset-4 decoration-foreground/25 hover:decoration-foreground transition-colors"
               >
                 {formatVoucher(line)}
               </Link>
             </td>
-            <td className="py-1.5">{formatDate(line.date)}</td>
+            <td className="py-1.5 date-figures">{formatDate(line.date)}</td>
             <td className="py-1.5 max-w-[240px]">
               <span className="truncate block">{line.description}</span>
               {line.dimensions && Object.keys(line.dimensions).length > 0 && (
-                <span className="text-[11px] text-muted-foreground tabular-nums">
+                <span className="text-xs text-muted-foreground tabular-nums">
                   {Object.entries(line.dimensions)
                     .sort(([a], [b]) => Number(a) - Number(b))
                     .map(([, code]) => code)

@@ -1,8 +1,10 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
+import { StepBar } from '@/components/ui/step-bar'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ExclamationTriangleIcon, InformationCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
@@ -14,6 +16,8 @@ interface PreflightStepProps {
   report: BokslutReadinessReport | null
   isLoading: boolean
   error: string | null
+  /** Runs the readiness check again after a failed load. */
+  onRetry: () => void
   onContinue: () => void
 }
 
@@ -28,7 +32,7 @@ function SectionHead({ icon, children }: { icon?: React.ReactNode; children: Rea
   return (
     <div className="mb-1 flex items-center gap-2 px-1">
       {icon}
-      <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <h3 className="font-sans text-xs font-medium text-muted-foreground">
         {children}
       </h3>
       <div className="h-px flex-1 bg-border/60" />
@@ -36,20 +40,20 @@ function SectionHead({ icon, children }: { icon?: React.ReactNode; children: Rea
   )
 }
 
-export function PreflightStep({ report, isLoading, error, onContinue }: PreflightStepProps) {
+export function PreflightStep({ report, isLoading, error, onRetry, onContinue }: PreflightStepProps) {
   if (isLoading) {
     return (
-      <div className="space-y-3">
+      <LateReveal className="space-y-3">
         <Skeleton className="h-6 w-1/3" />
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-3/4" />
         <Skeleton className="h-4 w-2/3" />
-      </div>
+      </LateReveal>
     )
   }
 
   if (error) {
-    return <p className="py-4 text-sm text-destructive">{error}</p>
+    return <LoadError title={error} onRetry={onRetry} />
   }
 
   if (!report) {
@@ -95,7 +99,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
             Varningar
           </SectionHead>
           {report.warnings.map((warning, i) => (
-            <p key={i} className="border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
+            <p key={i} className="border-b-hairline px-1 py-3 text-[13px] leading-5 last:border-b-0">
               {warning}
             </p>
           ))}
@@ -114,7 +118,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           {report.reminders.map((reminder) => (
             <div
               key={reminder.code}
-              className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
+              className="flex items-baseline justify-between gap-3 border-b-hairline px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
             >
               <p className="flex-1">{reminder.message}</p>
               {reminder.href && (
@@ -127,11 +131,11 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
         </section>
       )}
 
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onContinue} disabled={!report.ready}>
-          Nästa: Periodiseringar →
+      <StepBar>
+        <Button onClick={onContinue} disabled={!report.ready}>
+          Nästa: Periodiseringar
         </Button>
-      </div>
+      </StepBar>
     </div>
   )
 }
@@ -179,7 +183,7 @@ function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: 
   }
 
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
+    <div className="flex items-baseline justify-between gap-3 border-b-hairline px-1 py-3 text-[13px] leading-5 last:border-b-0">
       <p className="flex-1">{blocker.message}</p>
       {href && actionLabel && (
         <Link href={href} className={QUIET_LINK_CLASS}>

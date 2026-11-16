@@ -6,8 +6,8 @@ import { EllipsisHorizontalIcon, PlusIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import { useAccounts, useDimensions } from '@/lib/reference-data/hooks'
@@ -30,6 +30,7 @@ import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { BudgetGrid } from './BudgetGrid'
 import { CopyActualsDialog, NewBudgetDialog, SpreadDialog } from './BudgetDialogs'
 import { BudgetImportDialog } from './BudgetImportDialog'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { budgetCall, type BudgetGridData, type BudgetSaveCounts, type BudgetSummary } from './budget-api'
 
 /** Which lines the grid shows: the untagged ones, one dimension value, or all summed. */
@@ -49,14 +50,27 @@ export function BudgetPage() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { confirm, dialogProps } = useDestructiveConfirm()
-  const [periodId, setPeriodId] = useState<string | null>(null)
+  // The fiscal year is app-wide context (the sidebar); a budget belongs to
+  // one year, a coming one included.
+  const { periodId } = useFiscalScope({ allowAll: false })
   // The budget the user picked; budgetId below is the one shown.
   const [pickedBudgetId, setPickedBudgetId] = useState<string | null>(null)
   const [view, setView] = useState<View | null>(null)
   const [edits, setEdits] = useState<Map<string, number>>(new Map())
   const [added, setAdded] = useState<{ account_number: string; account_name: string | null }[]>([])
+  // Another year starts from its own budgets, with nothing half-edited
+  // carried over (adjusting state during render, not in an effect).
+  const [shownPeriodId, setShownPeriodId] = useState(periodId)
+  if (periodId !== shownPeriodId) {
+    setShownPeriodId(periodId)
+    setPickedBudgetId(null)
+    setView(null)
+    setEdits(new Map())
+    setAdded([])
+  }
   const [newAccount, setNewAccount] = useState('')
   const [saving, setSaving] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [dialog, setDialog] = useState<'new' | 'spread' | 'copy' | 'import' | null>(null)
 
   const { accounts } = useAccounts()
@@ -175,30 +189,22 @@ export function BudgetPage() {
         }
         action={
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => setDialog('new')} disabled={!periodId}>
+            <Button size="toolbar" onClick={() => setDialog('new')} disabled={!canWrite || !periodId} title={lockedTitle}>
               <PlusIcon className="h-4 w-4" />
               {t('new')}
             </Button>
-            <FyPicker
-              value={periodId}
-              onChange={(id) => {
-                setPeriodId(id)
-                setPickedBudgetId(null)
-                setView(null)
-                resetEdits()
-              }}
-              includeAllOption={false}
-            />
           </div>
         }
       />
 
-      {periodId && !budgets.loading && list.length === 0 ? (
+      {periodId && !budgets.loading && budgets.error && list.length === 0 ? (
+        <LoadError title={budgets.error} onRetry={budgets.refetch} />
+      ) : periodId && !budgets.loading && list.length === 0 ? (
         <EmptyState
           title={t('empty_title')}
           description={t('empty_description')}
-          actionLabel={t('new')}
-          onAction={() => setDialog('new')}
+          actionLabel={canWrite ? t('new') : undefined}
+          onAction={canWrite ? () => setDialog('new') : undefined}
         />
       ) : (
         <div className="space-y-4">
@@ -267,33 +273,33 @@ export function BudgetPage() {
 
             <div className="ml-auto flex items-center gap-2">
               {dirty && (
-                <Button size="sm" variant="ghost" onClick={resetEdits} disabled={saving}>
+                <Button variant="ghost" onClick={resetEdits} disabled={saving}>
                   {t('discard')}
                 </Button>
               )}
-              <Button size="sm" onClick={save} disabled={!dirty} loading={saving}>
+              <Button onClick={save} disabled={!dirty} loading={saving}>
                 {t('save')}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setDialog('import')} disabled={!budget || budget.archived || dirty}>
+              <Button variant="outline" onClick={() => setDialog('import')} disabled={!canWrite || !budget || budget.archived || dirty} title={lockedTitle}>
                 {t('import')}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="icon-sm" variant="outline" aria-label={t('more_actions')} disabled={!budget}>
+                  <Button size="icon" variant="outline" aria-label={t('more_actions')} disabled={!budget}>
                     <EllipsisHorizontalIcon className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setDialog('spread')} disabled={!data?.editable || dirty}>
+                  <DropdownMenuItem onSelect={() => setDialog('spread')} disabled={!canWrite || !data?.editable || dirty}>
                     {t('spread')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setDialog('copy')} disabled={!data?.editable || dirty}>
+                  <DropdownMenuItem onSelect={() => setDialog('copy')} disabled={!canWrite || !data?.editable || dirty}>
                     {t('copy')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={setDefault} disabled={!budget || budget.is_default || budget.archived}>
+                  <DropdownMenuItem onSelect={setDefault} disabled={!canWrite || !budget || budget.is_default || budget.archived}>
                     {t('set_default')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={remove} className="text-destructive">
+                  <DropdownMenuItem onSelect={remove} disabled={!canWrite} className="text-destructive">
                     {t('delete')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -308,9 +314,11 @@ export function BudgetPage() {
             <p className="text-[13px] text-muted-foreground">{t('pick_value')}</p>
           ) : grid.loading || !data ? (
             grid.error ? (
-              <p className="text-sm text-destructive">{grid.error}</p>
+              <LoadError title={grid.error} onRetry={grid.refetch} />
             ) : (
-              <Skeleton className="h-64 w-full" />
+              <LateReveal>
+                <Skeleton className="h-64 w-full" />
+              </LateReveal>
             )
           ) : (
             <>
@@ -320,13 +328,13 @@ export function BudgetPage() {
                 <BudgetGrid
                   months={data.months}
                   rows={rows}
-                  editable={data.editable}
+                  editable={data.editable && canWrite}
                   onCellChange={(account, i, amount) =>
                     setEdits((prev) => new Map(prev).set(cellKey(account, i), amount))
                   }
                 />
               )}
-              {data.editable && (
+              {data.editable && canWrite && (
                 <div className="flex items-center gap-2 max-w-sm">
                   <AccountCombobox
                     value={newAccount}

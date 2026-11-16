@@ -3,12 +3,14 @@
 import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
-import { EllipsisHorizontalIcon } from '@/components/icons'
+import { EllipsisHorizontalIcon, PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS, LIST_BLEED_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -96,6 +98,7 @@ export function draftToBody(draft: Draft): { ok: true; body: Record<string, unkn
  */
 export default function BookingBlocks() {
   const t = useTranslations('rules.blocks')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { formatDateLong } = useFormat()
   const { data: payload, error, isLoading, mutate } = useSWR<BlocksPayload>('/api/rules/blocks', fetchBlocks)
@@ -163,101 +166,121 @@ export default function BookingBlocks() {
     )
   }
 
+  const loaded = !isLoading && !(error && !payload)
+
   return (
-    <section className="stagger-enter" aria-labelledby="booking-blocks-title">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h2 id="booking-blocks-title" className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+    <section className="stagger-enter space-y-3" aria-labelledby="booking-blocks-title">
+      <div className="flex min-h-7 flex-wrap items-center gap-2">
+        <h2 id="booking-blocks-title" className="text-[15px] font-medium text-strong">
           {t('title')}
         </h2>
         {canManage && (
-          <Button size="sm" variant="secondary" className="ml-auto" onClick={openForm}>
+          <Button variant="outline" className="ml-auto" onClick={openForm}>
+            <PlusIcon className="h-4 w-4" />
             {t('add')}
           </Button>
         )}
       </div>
 
-      <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
-        <table className="w-full border-collapse text-[13px]">
-          <thead>
-            <tr>
-              <th className={cn(TH_CLASS, '!pl-0 w-full')}>{t('th_block')}</th>
-              <th className={TH_CLASS}>{t('th_added')}</th>
-              <th className={cn(TH_CLASS, '!pr-0')} aria-hidden="true"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              [1, 2].map((i) => (
-                <tr key={i} aria-busy>
-                  <td colSpan={3} className={cn(TD_CLASS, '!pl-0')}>
-                    <Skeleton className="h-4 w-56" />
-                  </td>
-                </tr>
-              ))
-            ) : error ? (
-              <tr>
-                <td colSpan={3} className={cn(TD_CLASS, '!pl-0 py-8 text-muted-foreground')}>
-                  {t('load_failed')}
-                </td>
-              </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={3} className={cn(TD_CLASS, '!pl-0 py-8 text-muted-foreground')}>
-                  {canManage ? t('empty') : t('empty_read_only')}
-                </td>
-              </tr>
-            ) : (
-              rows.map((r) => (
-                <tr
-                  key={r.id}
-                  className={cn('group transition-colors duration-150 hover:bg-secondary/35', r.revoked_at && 'text-muted-foreground')}
-                >
-                  <td className={cn(TD_CLASS, '!pl-0 max-w-0')}>
-                    <span className="block truncate" title={r.note ?? undefined}>
-                      {blockCriteria(t, r)}
-                      {r.note ? <span className="text-muted-foreground"> · {r.note}</span> : null}
-                    </span>
-                  </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                    {r.revoked_at ? t('archived_on', { date: formatDateLong(r.revoked_at) }) : formatDateLong(r.valid_from)}
-                  </td>
-                  <td className={cn(TD_CLASS, '!pr-0 text-right')}>
-                    {canManage && !r.revoked_at ? (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
-                            aria-label={t('more')}
-                          >
-                            <EllipsisHorizontalIcon className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => void archive(r)}>{t('archive')}</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    ) : null}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {archived.length > 0 && (
-        <Button variant="link" size="sm" className="h-auto px-0 text-muted-foreground" onClick={() => setShowArchived((v) => !v)}>
-          {showArchived ? t('hide_archived') : t('show_archived', { count: archived.length })}
-        </Button>
+      {/* A failed refresh keeps the rows under one line (Stil v3 states). */}
+      {error && payload && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void mutate() }}>{tCommon('refresh_failed')}</AttnLine>
       )}
-      {!canManage && !isLoading && !error && <p className="mt-2 text-[12.5px] text-muted-foreground">{t('read_only')}</p>}
+
+      {loaded && rows.length === 0 ? (
+        // No blocks: one sentence under the heading, no table head over nothing.
+        <p className="text-[13px] text-muted-foreground">{canManage ? t('empty') : t('empty_read_only')}</p>
+      ) : (
+        <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'w-full')}>{t('th_block')}</th>
+                <th className={TH_CLASS}>{t('th_added')}</th>
+                <th className={cn(TH_CLASS, 'w-10')} aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                // animate-late: LateReveal's hold-back on the row itself, so a
+                // fast load never flashes the skeleton rows.
+                [1, 2].map((i) => (
+                  <tr key={i} aria-busy className="animate-late">
+                    <td className={TD_CLASS}>
+                      <Skeleton className="h-4 w-56" />
+                    </td>
+                    <td className={TD_CLASS}>
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                    <td className={TD_CLASS} />
+                  </tr>
+                ))
+              ) : error && !payload ? (
+                <tr>
+                  <td colSpan={3} className="px-2">
+                    <LoadError title={t('load_failed')} onRetry={() => void mutate()} />
+                  </td>
+                </tr>
+              ) : (
+                rows.map((r) => (
+                  <tr
+                    key={r.id}
+                    className={cn('group transition-colors duration-150 hover:bg-secondary/35', r.revoked_at && 'text-muted-foreground')}
+                  >
+                    <td className={cn(TD_CLASS, 'max-w-0')}>
+                      <span className="block truncate" title={r.note ?? undefined}>
+                        {blockCriteria(t, r)}
+                        {r.note ? <span className="text-muted-foreground"> · {r.note}</span> : null}
+                      </span>
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+                      {r.revoked_at ? t('archived_on', { date: formatDateLong(r.revoked_at) }) : formatDateLong(r.valid_from)}
+                    </td>
+                    {/* py-2 and a flex box keep the 28px menu button inside the 44px row. */}
+                    <td className={cn(TD_CLASS, 'py-2')}>
+                      <div className="flex justify-end">
+                        {canManage && !r.revoked_at ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
+                                aria-label={t('more')}
+                              >
+                                <EllipsisHorizontalIcon className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => void archive(r)}>{t('archive')}</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(archived.length > 0 || (!canManage && loaded)) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {archived.length > 0 && (
+            <button type="button" className={QUIET_LINK_CLASS} onClick={() => setShowArchived((v) => !v)}>
+              {showArchived ? t('hide_archived') : t('show_archived', { count: archived.length })}
+            </button>
+          )}
+          {!canManage && loaded && <p className="text-xs text-muted-foreground">{t('read_only')}</p>}
+        </div>
+      )}
 
       <Dialog open={adding} onOpenChange={(open) => !saving && setAdding(open)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
-            <DialogTitle className="font-display text-lg tracking-tight">{t('form_title')}</DialogTitle>
+            <DialogTitle className="text-lg">{t('form_title')}</DialogTitle>
             <DialogDescription className="text-[13px] leading-relaxed">
               {t('lead')} {t('form_description')}
             </DialogDescription>
@@ -278,7 +301,7 @@ export default function BookingBlocks() {
                 value={draft.accounts}
                 onChange={(e) => setDraft({ ...draft, accounts: e.target.value })}
               />
-              <p className="text-[12.5px] text-muted-foreground">{t('field_accounts_hint')}</p>
+              <p className="text-xs text-muted-foreground">{t('field_accounts_hint')}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="block-counterparty">{t('field_counterparty')}</Label>
@@ -330,7 +353,7 @@ export default function BookingBlocks() {
               />
             </div>
             {formError && (
-              <p role="alert" className="text-[12.5px] text-destructive">
+              <p role="alert" className="text-xs text-destructive">
                 {formError}
               </p>
             )}

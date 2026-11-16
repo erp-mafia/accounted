@@ -7,11 +7,12 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FormSubmitRow } from '@/components/common/FormSubmitRow'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { LockClosedIcon, XMarkIcon } from '@/components/icons'
+import { XMarkIcon } from '@/components/icons'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -30,6 +31,8 @@ interface SupplierFormProps {
   onSubmit: (data: CreateSupplierInput) => Promise<void>
   isLoading: boolean
   initialData?: Partial<CreateSupplierInput>
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 type GiroField = 'bankgiro' | 'plusgiro'
@@ -43,6 +46,7 @@ export default function SupplierForm({
   onSubmit,
   isLoading,
   initialData,
+  formId,
 }: SupplierFormProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('form_supplier')
@@ -225,16 +229,16 @@ export default function SupplierForm({
   /** The check's answer under its field, as long as the field still holds the number that was checked. */
   function giroCheckLine(field: GiroField, current: string | undefined) {
     if (!giroCheck || giroCheck.field !== field || giroCheck.giro !== (current ?? '').trim()) return null
-    if (giroCheck.state === 'checking') return <p className="text-[12.5px] text-muted-foreground">{t('check_giro_checking')}</p>
+    if (giroCheck.state === 'checking') return <p className="text-xs text-muted-foreground">{t('check_giro_checking')}</p>
     const result = giroCheck.result
     if (!result.enabled) return null
     if (!result.available || !result.creditor_name) {
       const key = result.reason === 'not_found' ? 'giro_not_found' : result.reason === 'invalid_number' ? 'giro_invalid' : 'giro_check_unavailable'
-      return <p className="text-[12.5px] text-muted-foreground">{t(key)}</p>
+      return <p className="text-xs text-muted-foreground">{t(key)}</p>
     }
     const name = result.creditor_name
     if (creditorNameMatches(name, supplierName ?? '')) {
-      return <p className="text-[12.5px] text-muted-foreground">{t(field === 'bankgiro' ? 'giro_registered_name_bankgiro' : 'giro_registered_name_plusgiro', { name })}</p>
+      return <p className="text-xs text-muted-foreground">{t(field === 'bankgiro' ? 'giro_registered_name_bankgiro' : 'giro_registered_name_plusgiro', { name })}</p>
     }
     return <AttnLine>{t('giro_registered_name_differs', { name, supplier: supplierName?.trim() || t('giro_no_supplier_name') })}</AttnLine>
   }
@@ -256,7 +260,7 @@ export default function SupplierForm({
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Supplier Type */}
       <div className="space-y-2">
         <Label>{t('type_label')}</Label>
@@ -315,7 +319,7 @@ export default function SupplierForm({
       {/* Contact */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="email">{t('email_label')}</Label>
+          <Label htmlFor="email" optional>{t('email_label')}</Label>
           <Input
             id="email"
             type="email"
@@ -327,7 +331,7 @@ export default function SupplierForm({
           )}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="phone">{t('phone_label')}</Label>
+          <Label htmlFor="phone" optional>{t('phone_label')}</Label>
           <Input
             id="phone"
             placeholder="+46 8 123 45 67"
@@ -340,7 +344,7 @@ export default function SupplierForm({
       <div className="space-y-4 pt-4 border-t">
         <h3>{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">{t('street_label')}</Label>
+          <Label htmlFor="address_line1" optional>{t('street_label')}</Label>
           <Input
             id="address_line1"
             placeholder="Storgatan 1"
@@ -348,7 +352,7 @@ export default function SupplierForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Label htmlFor="address_line2" optional>{t('address_line2_label')}</Label>
           <Input
             id="address_line2"
             placeholder={t('address_line2_placeholder')}
@@ -357,11 +361,11 @@ export default function SupplierForm({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">{t('postal_label')}</Label>
+            <Label htmlFor="postal_code" optional>{t('postal_label')}</Label>
             <Input id="postal_code" placeholder="123 45" {...register('postal_code')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">{t('city_label')}</Label>
+            <Label htmlFor="city" optional>{t('city_label')}</Label>
             <Input id="city" placeholder="Stockholm" {...register('city')} />
           </div>
           <div className="space-y-2">
@@ -407,7 +411,7 @@ export default function SupplierForm({
             <div className="flex items-center gap-2">
               <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
               {giroLookupEnabled && (
-                <Button type="button" variant="outline" size="sm" onClick={() => checkGiro('bankgiro')} disabled={!bankgiroValue?.trim()}>
+                <Button type="button" variant="outline" onClick={() => checkGiro('bankgiro')} disabled={!bankgiroValue?.trim()}>
                   {t('check_giro')}
                 </Button>
               )}
@@ -419,7 +423,7 @@ export default function SupplierForm({
             <div className="flex items-center gap-2">
               <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
               {giroLookupEnabled && (
-                <Button type="button" variant="outline" size="sm" onClick={() => checkGiro('plusgiro')} disabled={!plusgiroValue?.trim()}>
+                <Button type="button" variant="outline" onClick={() => checkGiro('plusgiro')} disabled={!plusgiroValue?.trim()}>
                   {t('check_giro')}
                 </Button>
               )}
@@ -570,7 +574,7 @@ export default function SupplierForm({
 
       {/* Självfaktureringsavtal (crm#1367) */}
       <div className="space-y-2">
-        <Label htmlFor="self_billing_agreement_ref">{t('self_billing_agreement_label')}</Label>
+        <Label htmlFor="self_billing_agreement_ref" optional>{t('self_billing_agreement_label')}</Label>
         <Input
           id="self_billing_agreement_ref"
           placeholder={t('self_billing_agreement_placeholder')}
@@ -585,7 +589,7 @@ export default function SupplierForm({
 
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -593,26 +597,16 @@ export default function SupplierForm({
         />
       </div>
 
-      {/* Submit */}
-      <div className="flex justify-end gap-2">
-        <Button
-          type="submit"
-          disabled={!canWrite}
-          loading={isLoading}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-        >
-          {isLoading ? (
-            t('submit_saving')
-          ) : !canWrite ? (
-            <>
-              <LockClosedIcon className="mr-2 h-4 w-4" />
-              {t('submit_save')}
-            </>
-          ) : (
-            t('submit_save')
-          )}
-        </Button>
-      </div>
+      {/* Submit: the host's footer carries it when the form has an id. */}
+      {!formId && (
+        <FormSubmitRow
+          canWrite={canWrite}
+          isLoading={isLoading}
+          label={t('submit_save')}
+          savingLabel={t('submit_saving')}
+          viewerTitle={t('viewer_disabled_tooltip')}
+        />
+      )}
     </form>
   )
 }

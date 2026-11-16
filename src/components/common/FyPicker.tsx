@@ -47,29 +47,6 @@ interface FyPickerProps {
    * without any cross-session hazard.
    */
   requireExplicitChoice?: boolean
-  /**
-   * Skip ONLY the on-load restore of a persisted selection (and its
-   * newest-period fallback) while keeping manual picks persisted as usual.
-   * For deep-link visits that arrive with a deliberate transient scope (e.g.
-   * /bookkeeping?missingUnderlag=true opens as "Alla räkenskapsår" to match
-   * the all-years dashboard count): without this, the restore fires on
-   * `value === null` and snaps the scope back to the stored year right after
-   * load. Unlike requireExplicitChoice this does not change labels or
-   * persistence semantics.
-   */
-  suppressAutoRestore?: boolean
-  /** Fires once after the initial period load completes. */
-  onReady?: () => void
-  /** Server-loaded periods for the first render, scoped to initialCompanyId. */
-  initialPeriods?: FiscalPeriod[]
-  initialCompanyId?: string | null
-  /**
-   * localStorage prefix for the persisted selection (companyId is appended).
-   * Defaults to the report-wide shared scope; pass a page-specific prefix
-   * when the page's scope must not follow (or steer) the shared one, e.g.
-   * the transactions inbox, where a narrowed scope hides pending rows.
-   */
-  storageKeyPrefix?: string
   className?: string
 }
 
@@ -87,36 +64,22 @@ export function FyPicker({
   hideFuturePeriods = false,
   preferLatestEnded = false,
   requireExplicitChoice = false,
-  suppressAutoRestore = false,
-  onReady,
-  initialPeriods,
-  initialCompanyId,
-  storageKeyPrefix = STORAGE_KEY_PREFIX,
   className,
 }: FyPickerProps) {
   const { company } = useCompany()
   const t = useTranslations('fiscal_year')
   // Session-cached and seeded by the dashboard layout, so on a normal visit
   // the list is already here on the first render: the restore below runs in
-  // the first effect tick and onReady fires without a network round trip.
-  // initialPeriods remains an explicit override for server-rendered pages.
+  // the first effect tick without a network round trip.
   const { periods: cachedPeriods, isLoading } = useFiscalPeriods()
-  const canUseInitial = initialCompanyId === company?.id && initialPeriods !== undefined
-  const periods = useMemo(
-    () => prepareFiscalPeriods(canUseInitial ? initialPeriods : cachedPeriods, hideFuturePeriods),
-    [canUseInitial, initialPeriods, cachedPeriods, hideFuturePeriods],
-  )
-  const loaded = canUseInitial || !isLoading
+  const periods = useMemo(() => prepareFiscalPeriods(cachedPeriods, hideFuturePeriods), [cachedPeriods, hideFuturePeriods])
+  const loaded = !isLoading
   // Restore once per company load, not on every background revalidation of
-  // the cached list (which would re-fire onChange/onReady mid-session).
+  // the cached list (which would re-fire onChange mid-session).
   const restoredForRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!company?.id) {
-      onReady?.()
-      return
-    }
-    if (!loaded || restoredForRef.current === company.id) return
+    if (!company?.id || !loaded || restoredForRef.current === company.id) return
     restoredForRef.current = company.id
 
     // Restore last selection (same key as FiscalYearSelector so pages keep
@@ -127,15 +90,13 @@ export function FyPicker({
     // ALL_YEARS-stored fallback, newest-period, preferLatestEnded), and a
     // per-branch gate already missed one of them once. Nothing auto-fires;
     // the picker stays empty until a human picks.
-    if (value === null && !requireExplicitChoice && !suppressAutoRestore && typeof window !== 'undefined') {
-      const stored = window.localStorage.getItem(storageKeyPrefix + company.id)
+    if (value === null && !requireExplicitChoice && typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
       const pick = resolveInitialFiscalScope(periods, stored, { includeAllOption, preferLatestEnded })
       if (pick) onChange(pick.periodId, pick.period)
     }
-
-    onReady?.()
-  // onReady/onChange are lifecycle callbacks: fire once per load, not on
-  // parent re-renders that re-create them. `value` is read once at restore.
+  // onChange is a lifecycle callback here: it fires once per load, not on
+  // parent re-renders that re-create it. `value` is read once at restore.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [company?.id, loaded, periods])
 
@@ -146,7 +107,7 @@ export function FyPicker({
     // onChange, so a pick the caller rejects (e.g. mid-preview) would still
     // be recorded as if it had taken effect.
     if (!requireExplicitChoice && company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(storageKeyPrefix + company.id, nextId ?? ALL_YEARS_VALUE)
+      window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, nextId ?? ALL_YEARS_VALUE)
     }
     onChange(nextId, nextId ? periods.find((p) => p.id === nextId) ?? null : null)
   }

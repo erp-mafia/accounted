@@ -172,7 +172,7 @@ export function SignoffDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('signoff_title')}</DialogTitle>
           <DialogDescription>{t('signoff_body', { account: accountName })}</DialogDescription>
@@ -188,7 +188,7 @@ export function SignoffDialog({
               onChange={(e) => setDate(e.target.value)}
               className="tabular-nums"
             />
-            {previewing && <p className="text-[12.5px] text-muted-foreground">{t('signoff_preview_pending')}</p>}
+            {previewing && <p className="text-xs text-muted-foreground">{t('signoff_preview_pending')}</p>}
           </div>
           {askExternalBalance && (
             <div className="space-y-1.5">
@@ -201,7 +201,7 @@ export function SignoffDialog({
                 placeholder="0,00"
                 className="tabular-nums"
               />
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {ledgerBalance != null
                   ? t('signoff_external_balance_help', { amount: formatCurrency(ledgerBalance, currency) })
                   : t('signoff_external_balance_optional')}

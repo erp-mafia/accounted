@@ -342,7 +342,7 @@ export function PaymentFilePanel({
             </button>
             <span className="inline-flex items-center gap-3">
               <Button onClick={() => void handleDownload()} loading={downloading}>
-                {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
+                {!downloading && <ArrowDownTrayIcon className="h-4 w-4" />}
                 {t('download')}
               </Button>
               {/* The file downloads fine and only fails at the bank if the
@@ -403,7 +403,7 @@ export function PaymentFilePanel({
         if (!open) setNewVersionConfirmed(false)
       }}
     >
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('new_version_title')}</DialogTitle>
           <DialogDescription>{t('new_version_body')}</DialogDescription>

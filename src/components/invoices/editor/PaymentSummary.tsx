@@ -159,7 +159,7 @@ export function PaymentSummary({
               : t('nothing_printed')}
           </p>
           {reason && (
-            <p className="mt-1 text-[12.5px] leading-5 text-muted-foreground">
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
               {t(reason.key)}
               {reasonAction && (
                 <>
@@ -182,11 +182,11 @@ export function PaymentSummary({
             </p>
           )}
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={onOpenPanel} className="-mt-1 shrink-0">
+        <Button type="button" variant="ghost" onClick={onOpenPanel} className="-mt-1 shrink-0">
           {t('change')}
         </Button>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
+      <div className="mt-3 flex items-center justify-between gap-3 border-t-hairline pt-3">
         {terms.length > 0 ? (
           <p className="min-w-0 truncate text-muted-foreground">{t('terms', { texts: terms.join(' · ') })}</p>
         ) : (

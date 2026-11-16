@@ -14,6 +14,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { InvoiceEditorShell, type EditorPane } from './InvoiceEditorShell'
 import { InvoiceEditorShellSkeleton } from './InvoiceEditorShellSkeleton'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { EditorTopBar, type TopBarMenuEntry } from './EditorTopBar'
 import { EditorPreviewPane } from './EditorPreviewPane'
 import { EditorEmailPreview, type EmailTextOverride } from './EditorEmailPreview'
@@ -46,7 +47,7 @@ import { isEntityType } from '@/lib/company/entity-type'
 import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
 import { hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
@@ -56,7 +57,7 @@ import { invoiceRowStatus } from '@/lib/invoices/status-display'
 type CreditIntent = { kind: 'send'; channel: EditorChannel } | { kind: 'create' }
 
 const NOTE_INPUT_CLASS =
-  'w-full rounded-lg border border-input bg-card px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20'
+  'w-full rounded-lg px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 bg-control shadow-raised'
 
 /**
  * /invoices/[id]/credit: the kreditfaktura of an issued invoice in the
@@ -75,6 +76,8 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const { settings: companySettings } = useCompanySettings()
   const locale = useLocale() as ErrorLocale
   const t = useTranslations('invoice_credit')
+  const tDetail = useTranslations('invoice_detail')
+  const tCommon = useTranslations('common')
   const tInvoices = useTranslations('invoices')
   const tShell = useTranslations('invoice_editor_shell')
   const tSend = useTranslations('invoice_send_dialog')
@@ -82,6 +85,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const isCompanyAdmin = role === 'owner' || role === 'admin'
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
+  // The read failed: the page says so with "Försök igen" (bumps reloadKey).
+  const [loadFailed, setLoadFailed] = useState(false)
+  // No invoice under this id: not a failure to retry.
+  const [notFound, setNotFound] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [reason, setReason] = useState('')
   const [channelChoice, setChannelChoice] = useState<EditorChannel | null>(null)
   const [emailOverride, setEmailOverride] = useState<EmailTextOverride | null>(null)
@@ -107,8 +115,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       if (cancelled) return
 
       if (error || !data) {
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
-        router.push('/invoices')
+        // .single() answers PGRST116 when no row matched.
+        if ((!error && !data) || error?.code === 'PGRST116') setNotFound(true)
+        else setLoadFailed(true)
         return
       }
       // Only an issued invoice has a number a credit note can refer to (ML
@@ -128,7 +137,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     }
     // supabase is memoised; t and toast are stable for the page's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoiceId])
+  }, [invoiceId, reloadKey])
 
   const originalNumber = invoice ? creditNoteOriginalReference(invoice) : null
   const creditNumber = originalNumber ? creditNoteNumber(originalNumber) : null
@@ -315,6 +324,29 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       toast({ title: t('create_failed_title'), description: getErrorMessage(error, { locale }), variant: 'destructive' })
       setIsSubmitting(false)
     }
+  }
+
+  if (notFound) {
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <NotFoundState title={tDetail('not_found')} backHref="/invoices" backLabel={tCommon('back_to_list')} />
+      </div>
+    )
+  }
+
+  if (loadFailed) {
+    // Full-bleed route: the editor owns its padding, so the state brings the gutter.
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <LoadError
+          title={t('load_failed_title')}
+          onRetry={() => {
+            setLoadFailed(false)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      </div>
+    )
   }
 
   if (!invoice) return <InvoiceEditorShellSkeleton />
@@ -506,7 +538,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
           <div className="space-y-8">
             {/* What is credited: one muted line, the only place besides the
                 breadcrumb that names the original invoice. */}
-            <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">
+            <p className="text-xs text-muted-foreground" data-ph-mask="">
               {t('credits_line', {
                 number: originalNumber ?? '',
                 date: formatDate(invoice.invoice_date),
@@ -516,11 +548,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
             </p>
 
             <EditorSection label={t('customer_label')}>
-              <div className="rounded-lg border border-border bg-secondary/35 px-4 py-3" data-ph-mask="">
+              <div className="rounded-lg bg-secondary/35 px-4 py-3 bg-control shadow-raised" data-ph-mask="">
                 <p className="text-[15px]">{customer?.name ?? ''}</p>
-                {customerLine && <p className="text-[12.5px] text-muted-foreground">{customerLine}</p>}
+                {customerLine && <p className="text-xs text-muted-foreground">{customerLine}</p>}
               </div>
-              <p className="mt-3 text-[12.5px] text-muted-foreground">
+              <p className="mt-3 text-xs text-muted-foreground">
                 {t('details_line', {
                   date: formatDate(today),
                   currency,
@@ -532,7 +564,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
             <EditorSection label={t('rows_title')}>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
-                  <tr className="border-b border-border text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                  <tr className="border-b-hairline text-xs text-muted-foreground">
                     <th className="px-2 pb-2 text-left font-normal">{t('th_description')}</th>
                     <th className="px-2 pb-2 text-right font-normal">{t('th_quantity')}</th>
                     <th className="px-2 pb-2 text-right font-normal">{t('th_unit_price')}</th>
@@ -542,13 +574,13 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                 <tbody>
                   {creditRows.map((item) =>
                     item.line_type === 'text' ? (
-                      <tr key={item.id} className="border-b border-border">
+                      <tr key={item.id} className="border-b-hairline">
                         <td colSpan={4} className="px-2 py-2 italic text-muted-foreground">
                           {item.description}
                         </td>
                       </tr>
                     ) : (
-                      <tr key={item.id} className="border-b border-border align-top">
+                      <tr key={item.id} className="border-b-hairline align-top">
                         <td className="px-2 py-2">
                           <span className="block">{item.description}</span>
                           {hasLineDiscount(item.discount_percent) && (
@@ -561,10 +593,10 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                           {item.quantity} {item.unit}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          {formatCurrency(item.unit_price, currency)}
+                          {formatRowAmount(item.unit_price, currency)}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          {formatCurrency(item.line_total, currency)}
+                          {formatRowAmount(item.line_total, currency)}
                         </td>
                       </tr>
                     ),
@@ -594,7 +626,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                   </>
                 ) : null}
                 {/* One row spanning both columns: an unbroken rule above the total. */}
-                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t-hairline pt-2 font-display text-xl">
                   <dt>{t('to_credit')}</dt>
                   <dd className="text-right">{formatCurrency(creditedAmount(invoice.total), currency)}</dd>
                 </div>

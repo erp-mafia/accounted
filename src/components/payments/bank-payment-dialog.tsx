@@ -197,14 +197,14 @@ export function BankPaymentDialogFrame({
   }
 
   const closeButton = (
-    <Button variant="secondary" onClick={() => close(false)}>
+    <Button variant="outline" onClick={() => close(false)}>
       {done ? tb('close') : tb('cancel')}
     </Button>
   )
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{phase === 'sign' ? (done ? t('title_done') : t('title_sign')) : t('title')}</DialogTitle>
           <DialogDescription className="sr-only">{t('title')}</DialogDescription>

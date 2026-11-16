@@ -448,7 +448,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
 
       {step === 'select' && (
         <Card>
-          <CardContent className="space-y-6 pt-6">
+          <CardContent className="space-y-6">
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>{t('underlag_intro')}</p>
               <p>{t('underlag_intro_formats')}</p>
@@ -476,7 +476,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
                 requireExplicitChoice
                 className={isLoading ? 'pointer-events-none opacity-60' : undefined}
               />
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('underlag_year_help')}
               </p>
             </div>
@@ -525,7 +525,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
                 picker never becomes usable. Say why rather than leave two
                 dead controls on screen. */}
             {!fiscalPeriodId && (
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('underlag_year_required')}
               </p>
             )}
@@ -550,17 +550,17 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
             })}
           </p>
           {anyRenumbered && (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('underlag_renumbered_hint')}
             </p>
           )}
           {anyManualInput && (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('underlag_manual_hint')}
             </p>
           )}
 
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -645,7 +645,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
 
       {step === 'result' && (
         <Card>
-          <CardContent className="space-y-6 pt-6">
+          <CardContent className="space-y-6">
             <p className="text-sm">
               {t('underlag_done_body', {
                 linked: outcomes.filter((o) => o.ok).length,
@@ -654,7 +654,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
             </p>
 
             {outcomes.some((o) => !o.ok) ? (
-              <div className="overflow-x-auto">
+              <div className="-mx-2 overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>
                     <tr>
@@ -730,7 +730,7 @@ function TargetCell({
     return (
       <div className="flex items-center gap-2">
         <select
-          className="h-8 rounded-lg border border-border bg-background px-2 text-[13px]"
+          className="h-8 rounded-lg px-2 text-[13px] bg-control shadow-raised"
           value={row.targetId ?? ''}
           aria-label={t('underlag_col_target')}
           onChange={(e) => {

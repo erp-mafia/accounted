@@ -12,13 +12,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 
 // The shapes GET /api/salary/fora answers (lib/salary/fora/monthly-report.ts).
 interface ForaWarning {
@@ -159,18 +159,18 @@ export function ForaReportDialog({ open, onOpenChange, year, month }: ForaReport
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title', { period })}</DialogTitle>
           <DialogDescription>{t('description', { deadline: reportingDeadline(year, month) })}</DialogDescription>
         </DialogHeader>
 
         {state.kind === 'loading' && (
-          <div className="space-y-2" aria-busy="true">
+          <LateReveal className="space-y-2">
             <Skeleton className="h-4 w-full rounded-sm" />
             <Skeleton className="h-4 w-full rounded-sm" />
             <Skeleton className="h-4 w-2/3 rounded-sm" />
-          </div>
+          </LateReveal>
         )}
 
         {state.kind === 'failed' && <p className="text-sm text-destructive">{state.message}</p>}
@@ -209,7 +209,7 @@ export function ForaReportDialog({ open, onOpenChange, year, month }: ForaReport
                       )}
                     </TableCell>
                     <TableCell className="tabular-nums">{p.fok_id}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(p.pay_amount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(p.pay_amount)}</TableCell>
                   </TableRow>
                 ))}
                 <TableRow>
@@ -225,7 +225,7 @@ export function ForaReportDialog({ open, onOpenChange, year, month }: ForaReport
             {state.report.warnings.length > 0 && (
               <ul className="space-y-2">
                 {state.report.warnings.map((w, i) => (
-                  <li key={`${w.code}-${i}`} className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
+                  <li key={`${w.code}-${i}`} className="flex items-start gap-2 rounded-lg p-3 text-xs bg-control shadow-raised">
                     <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>{warningText(w)}</span>
                   </li>

@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import {
+  ArrowUpTrayIcon,
   BanknotesIcon,
   BuildingLibraryIcon,
   BuildingStorefrontIcon,
@@ -15,6 +16,7 @@ import {
   Square2StackIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { OpenPaymentsConnectionRow } from '@/components/bank-feed/OpenPaymentsConnectionRows'
@@ -61,7 +63,7 @@ import { firstSentence } from '@/lib/settings/first-sentence'
 /** 28px tile holding a brand mark, so every connection row starts the same way. */
 function LogoTile({ children }: { children: React.ReactNode }) {
   return (
-    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg border border-border bg-white">
+    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden bg-secondary">
       {children}
     </span>
   )
@@ -69,7 +71,7 @@ function LogoTile({ children }: { children: React.ReactNode }) {
 
 function ImgLogo({ src }: { src: string }) {
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt="" className="h-5 w-5 object-contain" />
+  return <img src={src} alt="" className="h-full w-full bg-white object-contain p-1" />
 }
 
 /**
@@ -125,7 +127,7 @@ interface Status {
 }
 
 /**
- * AI och kopplingar → Kopplingar: every connection that fetches or sends data
+ * Kopplingar → Kopplingar: every connection that fetches or sends data
  * for the company, in one list. Until 2026-09-24 the bank sat under Verktyg,
  * the Skatteverket connection under Skatt, Peppol under Fakturering and
  * WhatsApp under Verktyg. Each row shows its state and links to the page that
@@ -161,6 +163,7 @@ export function ConnectionsSettingsContent() {
   // route and the table's policy say the same).
   const signatoryLink = useSignatoryLinkFlow()
   const canInvite = role === 'owner' || role === 'admin'
+  const { canWrite, lockedTitle } = useViewerLock()
   const bankConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
   const [bankGeneration, setBankGeneration] = useState(0)
   // A second signatory arrives with ?bank_connect=<id> (the reminder link),
@@ -363,7 +366,7 @@ export function ConnectionsSettingsContent() {
         ) : null}
         <SettingsRowEnd>
           {opts.actions ?? (
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href={opts.href}>{opts.connected === null ? t('open') : opts.connected ? t('manage') : t('connect')}</Link>
             </Button>
           )}
@@ -390,17 +393,17 @@ export function ConnectionsSettingsContent() {
         actions: (
           <>
             {hasBanking && (
-              <Button variant="outline" size="sm" asChild>
+              <Button variant="outline" asChild>
                 <Link href="/settings/banking">{t('open')}</Link>
               </Button>
             )}
-            <Button size="sm" onClick={() => bankFlow.open('new')}>
+            <Button onClick={() => bankFlow.open('new')} disabled={!canWrite} title={lockedTitle}>
               {t('connect_bank')}
             </Button>
             {canInvite && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                  <Button variant="outline" size="icon" aria-label={t('more_actions')}>
                     <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -447,12 +450,13 @@ export function ConnectionsSettingsContent() {
           // every bank row ends on the same edge. With no switch or import to
           // offer, Hantera is the button.
           const primaryAction = uncoveredStopped ? (
-            <Button size="sm" asChild>
-              <Link href="/import?mode=bank">{t('import_statements')}</Link>
+            <Button asChild>
+              <Link href="/import?mode=bank"><ArrowUpTrayIcon className="h-4 w-4" />{t('import_statements')}</Link>
             </Button>
           ) : replacedStopped || uncovered ? null : (
             <Button
-              size="sm"
+              disabled={!canWrite}
+              title={lockedTitle}
               onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
             >
               {t('switch_connection')}
@@ -474,14 +478,14 @@ export function ConnectionsSettingsContent() {
                 actions: (
                   <>
                     {primaryAction ?? (
-                      <Button variant="outline" size="sm" asChild>
+                      <Button variant="outline" asChild>
                         <Link href="/settings/banking">{t('manage')}</Link>
                       </Button>
                     )}
                     {(primaryAction || offersSignatoryLink) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                          <Button variant="outline" size="icon" aria-label={t('more_actions')}>
                             <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -557,10 +561,10 @@ export function ConnectionsSettingsContent() {
               actions:
                 trialWithoutCard && (status?.bankCount ?? 0) > 0 ? (
                   <>
-                    <Button variant="outline" size="sm" asChild>
+                    <Button variant="outline" asChild>
                       <Link href="/settings/banking">{t('manage')}</Link>
                     </Button>
-                    <Button variant="outline" size="sm" asChild>
+                    <Button variant="outline" asChild>
                       <Link href="/settings/billing">{t('bank_switch_add_card')}</Link>
                     </Button>
                   </>
@@ -618,7 +622,7 @@ export function ConnectionsSettingsContent() {
               <SettingsRowEnd>
                 <Button
                   variant="outline"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => { void handleCopyInboxAddress(inboxAddress) }}
                   aria-label={inboxCopyState === 'failed' ? t('inbox_address_copy_failed') : t('inbox_address_copy')}
                   title={inboxCopyState === 'failed' ? t('inbox_address_copy_failed') : t('inbox_address_copy')}
@@ -631,7 +635,7 @@ export function ConnectionsSettingsContent() {
                     <Square2StackIcon className="h-3.5 w-3.5" />
                   )}
                 </Button>
-                <Button variant="outline" size="sm" asChild>
+                <Button variant="outline" asChild>
                   <Link href="/e/general/invoice-inbox">{t('open')}</Link>
                 </Button>
               </SettingsRowEnd>
@@ -647,7 +651,7 @@ export function ConnectionsSettingsContent() {
             })
           ))}
         {row({
-          logo: <span className="text-[11px] font-semibold text-foreground">P</span>,
+          logo: <span className="text-xs font-semibold text-foreground">P</span>,
           name: t('peppol'),
           help: t('peppol_help'),
           state: status ? { receiving: t('peppol_on'), sending: t('peppol_sending'), off }[status.peppol] : null,

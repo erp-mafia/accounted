@@ -3985,7 +3985,7 @@ function directCallAdvice(requestedToolName: string, target: McpTool, keyScopes:
   }
   const lacks = `This API key lacks the ${required} scope, so ${requestedToolName} is not in your tools/list and a direct call is refused too.`
   return required === 'pending_operations:approve'
-    ? `${lacks} Do not retry: the user approves or rejects pending operations in the web app at /pending (Att göra > Agentförslag). To take back a proposal you staged yourself, use ${WITHDRAW_TOOL_NAME} through gnubok_stage_tool.`
+    ? `${lacks} Do not retry: the user approves or rejects pending operations in the web app at /pending (Att göra > Rutin). To take back a proposal you staged yourself, use ${WITHDRAW_TOOL_NAME} through gnubok_stage_tool.`
     : `${lacks} Do not retry: ask the user to do this in the web app, or to connect again with a key that carries ${required}.`
 }
 
@@ -6900,7 +6900,7 @@ export const tools: McpTool[] = [
           ? 'This connection uses it automatically from the next call.'
           : reach === 'explicit'
             ? `This connection's default company is unchanged: pass company_id=${result.companyId} on every call for the new company (every company tool accepts it, also when your tool list does not show the parameter).`
-            : `This connection is limited to selected companies and does not reach it: the user adds it to the connection under Settings > API & MCP, then pass company_id=${result.companyId}.`
+            : `This connection is limited to selected companies and does not reach it: the user adds it to the connection under Agents > Connect an agent, then pass company_id=${result.companyId}.`
 
       return {
         created: true,
@@ -15578,7 +15578,7 @@ export const tools: McpTool[] = [
         throw new Error(
           `Inga av de ${itemIds.length} valda underlagen kan bokföras: ${notMatched} saknar matchad banktransaktion, ` +
           `${alreadyBooked} är redan bokförda, ${notFound} hittades inte. Matcha underlagen mot en banktransaktion först ` +
-          `(gnubok_match_transaction_to_invoice eller "Matcha mot transaktion" under Inköp → Underlag).`,
+          `(gnubok_match_transaction_to_invoice eller "Matcha mot transaktion" under Dokument → Inkommande).`,
         )
       }
 
@@ -28285,7 +28285,7 @@ export const tools: McpTool[] = [
     outputSchema: paginatedSchema('operations', { type: 'object' }, {
       can_approve: {
         type: 'boolean',
-        description: 'Whether this key can approve or reject (pending_operations:approve). false: the user reviews in Accounted under Att göra > Agentförslag (/pending).',
+        description: 'Whether this key can approve or reject (pending_operations:approve). false: the user reviews in Accounted under Att göra > Rutin (/pending).',
       },
     }),
     annotations: ANNOTATIONS_READ_ONLY,
@@ -28818,7 +28818,7 @@ export const tools: McpTool[] = [
       const notYours = () =>
         codedRefusal(
           'FORBIDDEN',
-          `Operation ${operationId} was not staged by this connection, so it cannot withdraw it. Only the user can settle it, in the web app at /pending (Att göra > Agentförslag).`,
+          `Operation ${operationId} was not staged by this connection, so it cannot withdraw it. Only the user can settle it, in the web app at /pending (Att göra > Rutin).`,
         )
       // Ownership is the credential: a caller without one staged nothing here.
       if (actor?.type !== 'api_key' || !actor.id) throw notYours()

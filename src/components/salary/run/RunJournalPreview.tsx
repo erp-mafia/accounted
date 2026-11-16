@@ -74,12 +74,12 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
       kicker={preview.booked ? t('journal_booked_title') : t('journal_preview_title')}
       aside={
         onRecalculate ? (
-          <Button variant="outline" size="sm" onClick={onRecalculate} loading={recalculating} className="-my-1">
-            {!recalculating && <CalculatorIcon className="mr-2 h-4 w-4" />}
+          <Button variant="outline" onClick={onRecalculate} loading={recalculating} className="-my-1">
+            {!recalculating && <CalculatorIcon className="h-4 w-4" />}
             {t('action_recalculate')}
           </Button>
         ) : underlagHref ? (
-          <Button variant="outline" size="sm" asChild className="-my-1">
+          <Button variant="outline" asChild className="-my-1">
             <a href={underlagHref} target="_blank" rel="noopener noreferrer" title={t('journal_download_underlag_title')}>
               <DocumentTextIcon className="mr-2 h-4 w-4" />
               {t('journal_download_underlag')}

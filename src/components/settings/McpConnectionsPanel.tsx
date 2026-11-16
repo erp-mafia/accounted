@@ -10,6 +10,7 @@ import {
   SpinnerIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/info-tooltip'
@@ -164,7 +165,7 @@ function PermissionSummary({ scopes, source }: { scopes: readonly string[]; sour
           tabIndex={0}
           // The span truncates itself (not its column), so the column does
           // not clip the focus ring.
-          className="inline-block max-w-full cursor-help truncate rounded-sm align-top underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-block max-w-full cursor-help truncate rounded-sm align-top underline decoration-dotted decoration-foreground/25 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {summary}
         </span>
@@ -201,6 +202,7 @@ export function McpConnectionsPanel({
 }) {
   const t = useTranslations('settings_api_keys')
   const locale = useLocale()
+  const { canWrite, lockedTitle } = useViewerLock()
   const targetName = useConnectTargetName()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [target, setTarget] = useState<ConnectTarget | null>(null)
@@ -277,12 +279,12 @@ export function McpConnectionsPanel({
           key={c}
           type="button"
           onClick={() => openDialog(c)}
-          className="flex min-h-[60px] items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors duration-150 hover:bg-secondary/60"
+          className="flex min-h-[60px] items-center gap-3 rounded-lg p-3 text-left transition-colors duration-150 hover:bg-secondary/60 bg-control shadow-raised"
         >
           <ClientMark kind={c} size="lg" />
           <span className="min-w-0">
             <span className="block truncate text-[13px] font-medium">{targetName(c)}</span>
-            <span className="block truncate text-[12.5px] text-muted-foreground">{t(`tile_${c.replace('-', '_')}_sub`)}</span>
+            <span className="block truncate text-xs text-muted-foreground">{t(`tile_${c.replace('-', '_')}_sub`)}</span>
           </span>
         </button>
       ))}
@@ -301,11 +303,11 @@ export function McpConnectionsPanel({
     <>
       {!hasOwnConnection && (
         <SettingsGroup>
-          <div className="grid gap-6 rounded-lg border border-border p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-8">
+          <div className="grid gap-6 rounded-lg p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-8 bg-control shadow-raised">
             <div className="min-w-0">
               <div className="mb-3 flex items-center gap-3">
                 <ClientMark kind="claude" size="lg" />
-                <h3 className="font-display text-xl tracking-tight">{t(colleagueOnClaude ? 'hero_title_own' : 'hero_title')}</h3>
+                <h3 className="text-xl">{t(colleagueOnClaude ? 'hero_title_own' : 'hero_title')}</h3>
               </div>
               <p className="max-w-prose text-[13px] text-muted-foreground">
                 {plan === 'personal'
@@ -330,7 +332,7 @@ export function McpConnectionsPanel({
                   const set = plan === 'team' ? 'claude_team' : 'claude_signin'
                   return (
                     <li key={n} className="grid grid-cols-[20px_minmax(0,1fr)] items-baseline gap-3 text-[13px]">
-                      <span className="inline-grid h-5 w-5 place-items-center rounded-full border border-border text-[11px] tabular-nums text-muted-foreground">
+                      <span className="inline-grid h-5 w-5 place-items-center rounded-full border border-border text-xs tabular-nums text-muted-foreground">
                         {n}
                       </span>
                       <span>
@@ -405,19 +407,19 @@ export function McpConnectionsPanel({
         </SettingsGroup>
       )}
       {keys.length > 0 && (
-        <SettingsGroup label={t('connections_title')}>
+        <SettingsGroup wide label={t('connections_title')}>
           <ul className="pt-2">
             {keys.map((key) => {
               const kind = connectionKind(key)
               return (
-                <li key={key.id} className="flex items-center gap-3 border-b border-border px-1 py-2">
+                <li key={key.id} className="flex items-center gap-3 border-b-hairline px-1 py-2">
                   <ClientMark kind={kind} />
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
                     {/* A client's name is a word or two and must stay whole; a
                         hand-made key's name can be long and truncates. */}
                     <span className={cn('truncate', kind !== 'key' && 'shrink-0')}>{rowName(key)}</span>
                     {key.mode === 'test' && (
-                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">
+                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-xs font-normal">
                         {t('badge_test')}
                       </Badge>
                     )}
@@ -425,7 +427,7 @@ export function McpConnectionsPanel({
                       <Badge
                         variant="secondary"
                         title={key.owner_name ?? undefined}
-                        className="max-w-56 shrink truncate px-1.5 py-0 text-[11px] font-normal"
+                        className="max-w-56 shrink truncate px-1.5 py-0 text-xs font-normal"
                       >
                         {key.owner_name ? t('badge_colleague_named', { name: key.owner_name }) : t('badge_colleague')}
                       </Badge>
@@ -434,7 +436,7 @@ export function McpConnectionsPanel({
                         the person who sponsors it: marked so it is not read
                         as one of their own connections. */}
                     {key.service_account && (
-                      <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-[11px] font-normal">
+                      <Badge variant="secondary" className="max-w-48 shrink truncate px-1.5 py-0 text-xs font-normal">
                         {t('badge_service_account', { name: key.service_account.name })}
                       </Badge>
                     )}
@@ -456,12 +458,13 @@ export function McpConnectionsPanel({
                   {hasCompanyPicker && key.is_own && (
                     <Button
                       variant="ghost"
-                      size="sm"
                       className="hidden shrink-0 text-xs font-normal text-muted-foreground md:inline-flex"
+                      disabled={!canWrite}
+                      title={lockedTitle}
                       onClick={() => setEditingCompanies(key)}
                       aria-label={t('companies_edit', { name: rowName(key) })}
                     >
-                      <BuildingOfficeIcon className="mr-1.5 h-3.5 w-3.5" />
+                      <BuildingOfficeIcon className="h-3.5 w-3.5" />
                       {[
                         key.company_ids && key.company_ids.length > 0
                           ? t('companies_some', { selected: key.company_ids.length, total: companies.length })
@@ -479,8 +482,9 @@ export function McpConnectionsPanel({
                   </span>
                   <Button
                     variant="ghost"
-                    size="sm"
                     className="shrink-0 text-muted-foreground hover:text-destructive"
+                    disabled={!canWrite}
+                    title={lockedTitle}
                     onClick={() => disconnect(key)}
                     aria-label={t('disconnect_aria', { name: rowName(key) })}
                   >
@@ -499,7 +503,7 @@ export function McpConnectionsPanel({
           )}
         </SettingsGroup>
       )}
-      <SettingsGroup label={t(hasOwnConnection ? 'add_connection' : 'something_else')}>
+      <SettingsGroup wide label={t(hasOwnConnection ? 'add_connection' : 'something_else')}>
         {tiles(hasOwnConnection ? undefined : 'claude')}
       </SettingsGroup>
 

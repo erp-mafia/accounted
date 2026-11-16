@@ -3,28 +3,29 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
+import { PlusIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TD_CLASS, TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany } from '@/contexts/CompanyContext'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { parseAmountInput, parseDecimalInput } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { FINANCE_LEASE_DEFAULT_ACCOUNTS } from '@/lib/bokslut/leasing/schemas'
-import type { FiscalPeriod } from '@/types'
 
 interface LeaseListRow {
   id: string
@@ -116,6 +117,9 @@ function toBody(form: FormState): Record<string, unknown> | null {
  */
 export function FinanceLeaseRegister() {
   const t = useTranslations('finance_leases')
+  // The top bar names Bokslut before the page (the menu row these pages sit under).
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -124,10 +128,14 @@ export function FinanceLeaseRegister() {
   const saveSettings = useSaveSettings()
 
   const [loading, setLoading] = useState(true)
+  // Failed loads say so in the page with "Försök igen" (Stil v3 states), never a toast.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [scheduleError, setScheduleError] = useState<string | null>(null)
+  const [scheduleAttempt, setScheduleAttempt] = useState(0)
   const [chosen, setChosen] = useState(false)
   const [leases, setLeases] = useState<LeaseListRow[]>([])
-  const [period, setPeriod] = useState<FiscalPeriod | null>(null)
-  const [periodId, setPeriodId] = useState<string | null>(null)
+  // The fiscal year is app-wide context (the sidebar); the register shows one started year.
+  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
   const [selected, setSelected] = useState<LeaseListRow | null>(null)
   const [schedule, setSchedule] = useState<ScheduleRow[] | null>(null)
   const [confirmOptIn, setConfirmOptIn] = useState(false)
@@ -148,13 +156,19 @@ export function FinanceLeaseRegister() {
     try {
       const res = await fetch('/api/bookkeeping/finance-leases')
       const body = await res.json().catch(() => ({}))
-      if (!res.ok) return fail(t('load_failed'), body)
+      if (!res.ok) {
+        setLoadError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+        return
+      }
       setChosen(Boolean(body.data?.capitalisation_chosen))
       setLeases(body.data?.leases ?? [])
+      setLoadError(null)
+    } catch {
+      setLoadError(t('load_failed'))
     } finally {
       setLoading(false)
     }
-  }, [fail, t])
+  }, [locale, t])
 
   useEffect(() => {
     void load()
@@ -164,17 +178,25 @@ export function FinanceLeaseRegister() {
     if (!selected) return
     let cancelled = false
     setSchedule(null)
+    setScheduleError(null)
     void (async () => {
-      const res = await fetch(`/api/bookkeeping/finance-leases/${selected.id}`)
-      const body = await res.json().catch(() => ({}))
-      if (cancelled) return
-      if (!res.ok) return fail(t('load_failed'), body)
-      setSchedule(body.data?.schedule?.rows ?? [])
+      try {
+        const res = await fetch(`/api/bookkeeping/finance-leases/${selected.id}`)
+        const body = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (!res.ok) {
+          setScheduleError(getErrorMessage(body, { locale, fallback: t('load_failed') }))
+          return
+        }
+        setSchedule(body.data?.schedule?.rows ?? [])
+      } catch {
+        if (!cancelled) setScheduleError(t('load_failed'))
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [selected, fail, t])
+  }, [selected, scheduleAttempt, locale, t])
 
   async function optIn() {
     const json = await saveSettings({ finance_lease_capitalisation: true }, { failedTitle: t('opt_in_failed') })
@@ -230,44 +252,45 @@ export function FinanceLeaseRegister() {
   return (
     <div className="space-y-8">
       <PageHeader
+        parent={{ label: tNav('v2_closing'), href: '/bookkeeping/year-end' }}
         title={t('title')}
-        help={<p className="text-sm">{t('help')}</p>}
+        help={<HelpPopover>{t('help')}</HelpPopover>}
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             {chosen && canWrite && (
-              <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
+              <Button size="toolbar" variant="outline" onClick={() => setCreating(true)}>
+                <PlusIcon className="h-4 w-4" aria-hidden />
                 {t('add')}
               </Button>
             )}
             {chosen && canWrite && (
-              <Button size="sm" onClick={() => setConfirmBook(true)} disabled={!periodId || leases.length === 0}>
+              <Button size="toolbar" onClick={() => setConfirmBook(true)} disabled={!periodId || leases.length === 0}>
                 {t('book')}
               </Button>
             )}
-            <FyPicker
-              value={periodId}
-              onChange={(id, p) => {
-                setPeriodId(id)
-                setPeriod(p ?? null)
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-            />
           </div>
         }
       />
 
-      {!loading && !chosen && (
+      {loadError && leases.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      ) : !loading && !loadError && !chosen ? (
         <AttnLine action={isAdmin ? { label: t('opt_in_action'), onClick: () => setConfirmOptIn(true) } : undefined}>
           {t('relief_attn')}
         </AttnLine>
-      )}
+      ) : null}
 
       {loading ? (
-        <div className="space-y-2">
+        <LateReveal className="space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadError && leases.length === 0 ? (
+        <LoadError
+          title={t('load_failed')}
+          description={loadError === t('load_failed') ? undefined : loadError}
+          onRetry={() => void load()}
+        />
       ) : leases.length === 0 ? (
         <EmptyState
           title={t('empty_title')}
@@ -275,7 +298,7 @@ export function FinanceLeaseRegister() {
           {...(chosen && canWrite ? { actionLabel: t('add'), onAction: () => setCreating(true) } : {})}
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="stagger-enter w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -295,10 +318,10 @@ export function FinanceLeaseRegister() {
                   onClick={() => setSelected(lease)}
                 >
                   <td className={TD_CLASS} data-ph-mask="">{lease.name}</td>
-                  <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(lease.start_date)}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(Number(lease.payment))}</td>
+                  <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(lease.start_date)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(Number(lease.payment))}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{lease.number_of_payments}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(lease.initial_asset)}</td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(lease.initial_asset)}</td>
                   <td className={TD_CLASS}>
                     {lease.initial_entry_id ? (
                       <span className="text-xs text-muted-foreground">{t('start_booked')}</span>
@@ -316,17 +339,25 @@ export function FinanceLeaseRegister() {
       {selected && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-4">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground" data-ph-mask="">
+            <h2 className="text-sm font-medium text-muted-foreground" data-ph-mask="">
               {t('schedule_heading', { name: selected.name })}
             </h2>
             <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSelected(null)}>
               {t('schedule_close')}
             </button>
           </div>
-          {schedule === null ? (
-            <Skeleton className="h-24 w-full" />
+          {scheduleError ? (
+            <LoadError
+              title={t('load_failed')}
+              description={scheduleError === t('load_failed') ? undefined : scheduleError}
+              onRetry={() => setScheduleAttempt((n) => n + 1)}
+            />
+          ) : schedule === null ? (
+            <LateReveal>
+              <Skeleton className="h-24 w-full" />
+            </LateReveal>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
               <table className="stagger-enter w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -340,11 +371,11 @@ export function FinanceLeaseRegister() {
                 <tbody>
                   {schedule.map((row) => (
                     <tr key={row.index} className="hover:bg-secondary/35">
-                      <td className={cn(TD_CLASS, 'tabular-nums')}>{formatDate(row.date)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.payment)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.interest)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.amortisation)}</td>
-                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatCurrency(row.liability)}</td>
+                      <td className={cn(TD_CLASS, 'date-figures')}>{formatDate(row.date)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.payment)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.interest)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.amortisation)}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{formatRowAmount(row.liability)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -373,7 +404,7 @@ export function FinanceLeaseRegister() {
       />
 
       <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('add')}</DialogTitle>
           </DialogHeader>

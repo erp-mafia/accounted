@@ -8,9 +8,13 @@ import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS, LIST_BLEED_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { BrandMark } from '@/components/parties/BrandMark'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,11 +25,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { ruleOneClick, ruleOrigin, type RuleMode, type RuleOneClick, type RuleRow } from '@/lib/rules/model'
+import { ruleCategoryAccount, ruleOneClick, type RuleMode, type RuleOneClick, type RuleRow } from '@/lib/rules/model'
 import { DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
-import { ruleTitle } from './rule-text'
+import { accountLabel, counterpartyTitle, ruleTitle } from './rule-text'
 
 const LADDER: RuleMode[] = ['proposed', 'propose', 'auto', 'paused']
+type Filter = 'all' | RuleMode
+const COLUMNS = 6
 
 interface RulesPayload {
   rules: RuleRow[]
@@ -100,10 +106,9 @@ export function ModeChip({ mode }: { mode: RuleMode }) {
   const t = useTranslations('rules')
   return (
     <Badge
-      variant="outline"
+      variant={mode === 'proposed' ? 'warning' : 'outline'}
       className={cn(
         'font-normal',
-        mode === 'proposed' && 'text-warning',
         mode === 'auto' && 'text-success',
         mode === 'paused' && 'text-muted-foreground',
       )}
@@ -114,32 +119,39 @@ export function ModeChip({ mode }: { mode: RuleMode }) {
 }
 
 /**
- * Regler (UI v2 PR 5): every counterparty rule as one sentence, on the trust
- * ladder. The bar at the top is the explanation: a rule starts as a
- * suggestion, proposes once confirmed, and (with the autopilot tier) books
- * on its own after five clean hits. A correction shows in the Rättad column.
- * Ett klick (accounted#130) says whether a hit books from the row's Bokför
- * without a review, by the same decision the transactions page makes, and
- * its switch makes the rule always ask.
+ * Regler (UI v2 PR 5): every counterparty rule as one line, filtered by its
+ * step on the trust ladder: a rule starts as a suggestion, proposes once
+ * confirmed, and (with the autopilot tier) books on its own after five clean
+ * hits. The ladder is the toolbar's segmented control; a row carries a chip
+ * only when its rule waits for you or is paused (chips mark exceptions), and
+ * where it came from stays on the rule's own page. A correction shows in the
+ * Rättad column. Ett klick (accounted#130) says whether a hit books from the
+ * row's Bokför without a review, by the same decision the transactions page
+ * makes, and its switch makes the rule always ask.
  */
 export default function RulesList() {
   const t = useTranslations('rules')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { data: payload, error, isLoading, mutate } = useSWR<RulesPayload>('/api/rules', fetchRules)
   const data = payload?.rules
   const directBooking = payload?.directBooking ?? DIRECT_BOOKING_ON
   const [search, setSearch] = useState('')
-  const [step, setStep] = useState<RuleMode | null>(null)
+  const [filter, setFilter] = useState<Filter>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const rows = useMemo(() => {
     const all = data ?? []
     const q = search.trim().toLowerCase()
-    return all.filter((r) => (!step || r.mode === step) && (!q || r.counterparty_name.includes(q) || r.debit_account.includes(q) || r.credit_account.includes(q)))
-  }, [data, search, step])
+    return all.filter((r) => (filter === 'all' || r.mode === filter) && (!q || r.counterparty_name.includes(q) || r.debit_account.includes(q) || r.credit_account.includes(q)))
+  }, [data, search, filter])
 
   const countFor = (m: RuleMode) => (data ?? []).filter((r) => r.mode === m).length
+  // Bokför själv waits for the autopilot tier: the segment shows once a rule
+  // is on that step (or while it is the chosen filter), not as an empty promise.
+  const steps = LADDER.filter((m) => m !== 'auto' || countFor(m) > 0 || filter === m)
+  const hasRules = (data?.length ?? 0) > 0
 
   async function setMode(rule: RuleRow, mode: RuleMode) {
     setBusyId(rule.id)
@@ -176,129 +188,162 @@ export default function RulesList() {
     }
   }
 
+  // First time: one sentence where the list would be, no toolbar over nothing.
+  if (!isLoading && !error && !hasRules) {
+    return <EmptyState title={t('empty_title')} description={t('empty_description')} />
+  }
+
+  // The ladder's steps first, Alla last with the whole count (V7 list toolbars).
+  const filters = [
+    ...steps.map((m) => ({ value: m as Filter, label: t(`filter_${m}`), count: countFor(m) })),
+    { value: 'all' as Filter, label: t('filter_all'), count: data?.length ?? 0 },
+  ]
+
   return (
-    <div className="stagger-enter">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <ToolbarSearch placeholder={t('search')} value={search} onChange={(e) => setSearch(e.target.value)} />
-        <span className="ml-auto text-xs tabular-nums text-muted-foreground" data-ph-mask>
-          {t('count', { count: (data ?? []).length })}
-        </span>
+    <div className="stagger-enter space-y-4">
+      {/* A failed refresh keeps the rows under one line (Stil v3 states). */}
+      {error && data && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void mutate() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+
+      {/* One toolbar row: the ladder step, then the search at the right end (V7 list toolbars). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="max-w-full overflow-x-auto">
+          <SegmentedControl value={filter} onChange={setFilter} options={filters} aria-label={t('ladder_label')} />
+        </div>
+        <ToolbarSearch
+          placeholder={t('search')}
+          aria-label={t('search')}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
+        />
       </div>
 
-      <div className="mb-3 flex overflow-hidden rounded-lg border border-border" role="tablist" aria-label={t('ladder_label')}>
-        {LADDER.map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="tab"
-            aria-selected={step === m}
-            title={t(`ladder_${m}_help`)}
-            onClick={() => setStep(step === m ? null : m)}
-            className={cn(
-              'flex h-10 flex-1 items-center justify-center gap-2 border-r border-border px-2 text-[12.5px] transition-colors duration-150 last:border-r-0',
-              step === m ? 'bg-secondary text-foreground shadow-[inset_0_-2px_0_hsl(var(--foreground))]' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-            )}
-          >
-            <span className="truncate">{t(`mode_${m}`)}</span>
-            <span className="font-medium tabular-nums text-foreground" data-ph-mask>
-              {countFor(m) || '–'}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      <div className="-mx-4 overflow-x-auto px-4 md:-mx-6 md:px-6">
+      <div className={cn(LIST_BLEED_CLASS, 'overflow-x-auto')}>
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
-              <th className={cn(TH_CLASS, '!pl-0 w-full')}>{t('th_rule')}</th>
-              <th className={TH_CLASS}>{t('th_origin')}</th>
+              <th className={cn(TH_CLASS, 'w-full')}>{t('th_rule')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('th_hits')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('th_corrections')}</th>
-              <th className={TH_CLASS}>{t('th_mode')}</th>
               <th className={TH_CLASS}>{t('th_one_click')}</th>
               <th className={TH_CLASS}>{t('th_last')}</th>
-              <th className={cn(TH_CLASS, '!pr-0')} aria-hidden="true"></th>
+              <th className={cn(TH_CLASS, 'w-10')} aria-hidden="true"></th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
+              // animate-late: LateReveal's hold-back on the row itself, so a
+              // fast load never flashes the skeleton rows. Shaped like the rows.
               [1, 2, 3].map((i) => (
-                <tr key={i} aria-busy>
-                  <td colSpan={8} className={cn(TD_CLASS, '!pl-0')}>
+                <tr key={i} aria-busy className="animate-late">
+                  <td className={TD_CLASS}>
                     <Skeleton className="h-4 w-64" />
                   </td>
+                  <td className={TD_CLASS}>
+                    <Skeleton className="ml-auto h-4 w-6" />
+                  </td>
+                  <td className={TD_CLASS}>
+                    <Skeleton className="ml-auto h-4 w-6" />
+                  </td>
+                  <td className={TD_CLASS}>
+                    <Skeleton className="h-4 w-28" />
+                  </td>
+                  <td className={TD_CLASS}>
+                    <Skeleton className="h-4 w-20" />
+                  </td>
+                  <td className={TD_CLASS} />
                 </tr>
               ))
-            ) : error ? (
+            ) : error && !data ? (
               <tr>
-                <td colSpan={8} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
-                  {t('load_failed')}
+                <td colSpan={COLUMNS} className="px-2">
+                  <LoadError title={t('load_failed')} onRetry={() => void mutate()} />
                 </td>
               </tr>
             ) : rows.length === 0 ? (
+              // No hits for the search or the step: one muted line with the way back.
               <tr>
-                <td colSpan={8} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
-                  {t('empty')}
+                <td colSpan={COLUMNS} className={cn(TD_CLASS, 'text-muted-foreground')}>
+                  {t('no_matches')}{' '}
+                  <button
+                    type="button"
+                    className={QUIET_LINK_CLASS}
+                    onClick={() => {
+                      setSearch('')
+                      setFilter('all')
+                    }}
+                  >
+                    {tCommon('clear_search')}
+                  </button>
                 </td>
               </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.id} className="group transition-colors duration-150 hover:bg-secondary/35">
-                  <td className={cn(TD_CLASS, '!pl-0')}>
-                    <Link href={`/rules/${r.id}`} className="hover:underline underline-offset-2">
-                      {ruleTitle(r)}
-                    </Link>
+                  {/* py-2.5 keeps the 22px mark inside the 44px row. */}
+                  <td className={cn(TD_CLASS, 'max-w-0 min-w-[240px] py-2.5')}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <BrandMark name={counterpartyTitle(r.counterparty_name)} className="shrink-0" />
+                      <Link href={`/rules/${r.id}`} title={ruleTitle(r)} className="min-w-0 truncate underline-offset-4 hover:underline">
+                        <span className="text-foreground">{counterpartyTitle(r.counterparty_name)}</span>
+                        <span className="text-muted-foreground"> → {accountLabel(ruleCategoryAccount(r))}</span>
+                      </Link>
+                      {/* Chips mark exceptions: a suggestion waiting for you or
+                          a paused rule. A working rule carries none. */}
+                      {(r.mode === 'proposed' || r.mode === 'paused') && (
+                        <span className="shrink-0">
+                          <ModeChip mode={r.mode} />
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{t(`origin_${ruleOrigin(r.source)}`)}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{r.occurrence_count}</td>
                   <td className={cn(TD_CLASS, 'text-right tabular-nums', r.corrections === 0 && 'text-muted-foreground')}>
                     {r.corrections || '–'}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                    {/* Chips mark exceptions: a suggestion waiting for you or
-                        a paused rule. A working rule reads as muted text. */}
-                    {r.mode === 'proposed' || r.mode === 'paused' ? (
-                      <ModeChip mode={r.mode} />
-                    ) : (
-                      <span className="text-muted-foreground">{t(`mode_${r.mode}`)}</span>
-                    )}
+                    {/* A flex box, not a line box: the inline switch would add 4px to the row. */}
+                    <div className="flex">
+                      <OneClickControl
+                        rule={r}
+                        directBooking={directBooking}
+                        disabled={!canWrite || busyId === r.id}
+                        onChange={(alwaysReview) => void setAlwaysReview(r, alwaysReview)}
+                      />
+                    </div>
                   </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                    <OneClickControl
-                      rule={r}
-                      directBooking={directBooking}
-                      disabled={!canWrite || busyId === r.id}
-                      onChange={(alwaysReview) => void setAlwaysReview(r, alwaysReview)}
-                    />
-                  </td>
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground date-figures')}>
                     {r.last_seen_date ? formatDate(r.last_seen_date) : '–'}
                   </td>
-                  <td className={cn(TD_CLASS, '!pr-0 text-right')}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
-                          aria-label={t('more')}
-                          disabled={busyId === r.id}
-                        >
-                          <EllipsisHorizontalIcon className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem asChild>
-                          <Link href={`/rules/${r.id}`}>{t('open')}</Link>
-                        </DropdownMenuItem>
-                        {r.mode === 'paused' ? (
-                          <DropdownMenuItem onClick={() => void setMode(r, 'propose')}>{t('resume')}</DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem onClick={() => void setMode(r, 'paused')}>{t('pause')}</DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                  {/* py-2 and a flex box keep the 28px menu button inside the 44px row. */}
+                  <td className={cn(TD_CLASS, 'py-2')}>
+                    <div className="flex justify-end">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={cn('text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
+                            aria-label={t('more')}
+                            disabled={busyId === r.id}
+                          >
+                            <EllipsisHorizontalIcon className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem asChild>
+                            <Link href={`/rules/${r.id}`}>{t('open')}</Link>
+                          </DropdownMenuItem>
+                          {r.mode === 'paused' ? (
+                            <DropdownMenuItem disabled={!canWrite} onClick={() => void setMode(r, 'propose')}>{t('resume')}</DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem disabled={!canWrite} onClick={() => void setMode(r, 'paused')}>{t('pause')}</DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </td>
                 </tr>
               ))

@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
-import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockClosedIcon } from '@/components/icons'
+import { CheckIcon, ChevronDownIcon, LockClosedIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { PageHeaderParent } from '@/components/ui/page-header'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   DropdownMenu,
@@ -87,13 +88,8 @@ export function EditorTopBar({
     // padding; this editor is full-bleed, so there is nothing to pull over.
     <header className="page-header flex flex-wrap" style={{ margin: 0 }}>
       <nav aria-label={t('breadcrumb_aria')} className="flex min-w-0 items-center gap-1 text-[13px]">
-        <Link
-          href={breadcrumb.href}
-          className="whitespace-nowrap text-muted-foreground transition-colors duration-150 hover:text-foreground"
-        >
-          {breadcrumb.label}
-        </Link>
-        <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        {/* A chevron back on a phone, the list's name from md up. */}
+        <PageHeaderParent label={breadcrumb.label} href={breadcrumb.href} />
         <h1 className="page-header-title min-w-0">
           {documentTypes ? (
             <DropdownMenu>
@@ -101,7 +97,7 @@ export function EditorTopBar({
                 <button
                   type="button"
                   aria-label={t('document_type_aria', { title })}
-                  className="inline-flex h-8 items-center gap-1 rounded-full px-2 transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-8 items-center gap-1 rounded-md px-2 transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {title}
                   <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
@@ -138,11 +134,13 @@ export function EditorTopBar({
           {meta}
         </p>
       )}
-      <div className="ml-auto flex items-center gap-2">
+      {/* On a phone the pane switch folds into "more" beside a long primary
+          ("Markera som skickad och bokför"), so the bar stays one row. */}
+      <PageHeaderActions className="ml-auto flex flex-wrap items-center justify-end gap-2">
         {paneSwitch}
         <div className="inline-flex items-stretch">
           <Button
-            size="sm"
+            size="toolbar"
             className={menu ? 'rounded-r-none' : undefined}
             onClick={primary.onClick}
             onKeyDown={handlePrimaryKeyDown}
@@ -151,14 +149,14 @@ export function EditorTopBar({
             title={primary.title}
             aria-keyshortcuts="Meta+Enter Control+Enter"
           >
-            {primary.locked && <LockClosedIcon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />}
+            {primary.locked && <LockClosedIcon className="h-3.5 w-3.5" aria-hidden="true" />}
             {primary.label}
           </Button>
           {menu && (
             <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <Button
-                  size="sm"
+                  size="toolbar"
                   className="rounded-l-none border-l border-primary-foreground/20 px-2"
                   aria-label={t('more_actions_aria')}
                   disabled={primary.disabled}
@@ -178,7 +176,7 @@ export function EditorTopBar({
             </DropdownMenu>
           )}
         </div>
-      </div>
+      </PageHeaderActions>
     </header>
   )
 }
@@ -191,7 +189,7 @@ function MenuEntry({ entry }: { entry: TopBarMenuEntry }) {
       </span>
       <span className="flex min-w-0 flex-col">
         <span className="text-[13px] leading-5">{entry.label}</span>
-        {entry.reason && <span className="text-[11px] leading-4 text-muted-foreground">{entry.reason}</span>}
+        {entry.reason && <span className="text-xs leading-4 text-muted-foreground">{entry.reason}</span>}
       </span>
     </DropdownMenuItem>
   )

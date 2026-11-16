@@ -27,13 +27,13 @@ export function signingUrlOf(data: Record<string, unknown> | null | undefined): 
 export function SigningStep({ url, afterwards = false }: { url: string; afterwards?: boolean }) {
   const t = useTranslations('skv_signing')
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-secondary/25 px-3 py-2">
+    <div className="space-y-2 rounded-lg bg-secondary/25 px-3 py-2 bg-control shadow-raised">
       <p className="text-[13px] font-medium">{t('awaiting_title')}</p>
       <p className="text-xs leading-snug text-muted-foreground">
         {t('awaiting_description')}
         {afterwards ? ` ${t('already_signed_note')}` : ''}
       </p>
-      <Button size="sm" asChild className="gap-2">
+      <Button asChild className="gap-2">
         <a href={url} target="_blank" rel="noopener noreferrer">
           <ArrowTopRightOnSquareIcon className="h-4 w-4" />
           {t('sign_action')}

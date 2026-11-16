@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { ChevronDownIcon, PencilIcon, TrashIcon, UsersIcon } from '@/components/icons'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
@@ -31,6 +32,7 @@ function confidenceColor(c: number): string {
 export function CounterpartyTemplatesPanel() {
   const t = useTranslations('settings_counterparty_templates')
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
 
   const SOURCE_LABELS: Record<string, string> = {
     sie_import: t('source_sie_import'),
@@ -158,7 +160,7 @@ export function CounterpartyTemplatesPanel() {
           const isMultiLine = tt.line_pattern && tt.line_pattern.length > 0
 
           return (
-            <div key={tt.id} className="border-b border-border">
+            <div key={tt.id} className="border-b-hairline">
               {/* Clickable summary row: flat hairline, one line. */}
               <button
                 type="button"
@@ -176,7 +178,7 @@ export function CounterpartyTemplatesPanel() {
                     ) : (
                       <span className="font-mono">
                         {tt.debit_account}
-                        <span className="text-muted-foreground/50"> → </span>
+                        <span className="text-muted-foreground"> → </span>
                         {tt.credit_account}
                       </span>
                     )}
@@ -200,12 +202,12 @@ export function CounterpartyTemplatesPanel() {
                 <div className="space-y-3 px-1 pb-3">
                   {/* Account lines */}
                   <div>
-                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('booking_label')}</p>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">{t('booking_label')}</p>
                     {isMultiLine ? (
                       <div className="space-y-1">
                         {tt.line_pattern!.map((lp, i) => (
                           <div key={i} className="flex items-center gap-2 text-xs">
-                            <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
+                            <span className="w-14 shrink-0 text-xs text-muted-foreground">
                               {lp.side === 'debit' ? t('debit_label') : t('credit_label')}
                             </span>
                             <span className="font-mono">{formatAccountWithName(lp.account)}</span>
@@ -221,11 +223,11 @@ export function CounterpartyTemplatesPanel() {
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
+                          <span className="w-14 shrink-0 text-xs text-muted-foreground">{t('debit_label')}</span>
                           <span className="font-mono">{formatAccountWithName(tt.debit_account)}</span>
                         </div>
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="w-14 shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
+                          <span className="w-14 shrink-0 text-xs text-muted-foreground">{t('credit_label')}</span>
                           <span className="font-mono">{formatAccountWithName(tt.credit_account)}</span>
                         </div>
                       </div>
@@ -284,7 +286,6 @@ export function CounterpartyTemplatesPanel() {
                       />
                       <Button
                         type="submit"
-                        size="sm"
                         disabled={editName.trim().length < 2}
                         loading={savingId === tt.id}
                       >
@@ -293,7 +294,6 @@ export function CounterpartyTemplatesPanel() {
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
                         onClick={cancelRename}
                         disabled={savingId === tt.id}
                       >
@@ -304,21 +304,22 @@ export function CounterpartyTemplatesPanel() {
                   <div className="flex justify-end gap-2 pt-1">
                     <Button
                       variant="outline"
-                      size="sm"
                       onClick={() => startRename(tt)}
-                      disabled={deletingId === tt.id}
+                      disabled={!canWrite || deletingId === tt.id}
+                      title={lockedTitle}
                     >
-                      <PencilIcon className="mr-1.5 h-3 w-3" />
+                      <PencilIcon className="h-3 w-3" />
                       {t('rename_button')}
                     </Button>
                     <Button
                       variant="outline"
-                      size="sm"
                       onClick={() => handleDelete(tt.id)}
                       loading={deletingId === tt.id}
+                      disabled={!canWrite}
+                      title={lockedTitle}
                       className="text-destructive hover:text-destructive"
                     >
-                      {deletingId !== tt.id && <TrashIcon className="mr-1.5 h-3 w-3" />}
+                      {deletingId !== tt.id && <TrashIcon className="h-3 w-3" />}
                       {t('delete_button')}
                     </Button>
                   </div>

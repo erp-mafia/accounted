@@ -84,10 +84,10 @@ export function PaymentsStep({ state, busy, onVerifyNow, onOpenForm, onSendToSig
   const primaryAction = reopen ? onOpenForm : onVerifyNow
   return (
     <div className="space-y-4">
-      {syncLine && <p className="text-[12.5px] text-muted-foreground">{syncLine}</p>}
-      <div className="space-y-2 rounded-lg border border-border p-6">
+      {syncLine && <p className="text-xs text-muted-foreground">{syncLine}</p>}
+      <div className="space-y-2 rounded-lg p-6 bg-control shadow-raised">
         <p className="text-[13px] leading-relaxed">{t('payments_title')}</p>
-        <p role="status" className={verified ? 'text-[12.5px]' : 'text-[12.5px] text-muted-foreground'}>
+        <p role="status" className={verified ? 'text-xs' : 'text-xs text-muted-foreground'}>
           <VerificationStateText verification={verification} />
         </p>
       </div>
@@ -100,12 +100,12 @@ export function PaymentsStep({ state, busy, onVerifyNow, onOpenForm, onSendToSig
         {!verified && (
           <>
             {onCopyForSignatory && (
-              <Button variant="secondary" onClick={onCopyForSignatory} loading={busy === 'copy'} disabled={busy !== null}>
+              <Button variant="outline" onClick={onCopyForSignatory} loading={busy === 'copy'} disabled={busy !== null}>
                 {t('copy_link')}
               </Button>
             )}
             {onSendToSignatory && (
-              <Button variant="secondary" onClick={onSendToSignatory} loading={busy === 'mail'} disabled={busy !== null}>
+              <Button variant="outline" onClick={onSendToSignatory} loading={busy === 'mail'} disabled={busy !== null}>
                 {verification.state === 'awaiting_signatory' ? t('send_again') : t('send_to_signatory')}
               </Button>
             )}

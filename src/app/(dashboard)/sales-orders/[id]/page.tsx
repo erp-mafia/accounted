@@ -19,10 +19,14 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordHeader } from '@/components/ui/record-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import RegisterDeliveryDialog from '@/components/sales-orders/RegisterDeliveryDialog'
 import CreateInvoiceDialog from '@/components/sales-orders/CreateInvoiceDialog'
 import {
@@ -89,6 +93,12 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   const [isInvoiceOpen, setIsInvoiceOpen] = useState(false)
   // Invoices created from this order (GET /api/invoices?sales_order_id=).
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  // Failed reads say so where their content would be: the order in place of
+  // the page, the invoices in their section (description = why).
+  const [orderLoadFailed, setOrderLoadFailed] = useState(false)
+  // No order under this id: not a failure to retry.
+  const [orderNotFound, setOrderNotFound] = useState(false)
+  const [invoicesLoadError, setInvoicesLoadError] = useState<string | null>(null)
   // The company's öresavrundning, for an invoice without a choice of its own.
   const { settings: companySettings } = useCompanySettings()
 
@@ -99,9 +109,14 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   const fetchOrder = useCallback(async () => {
     try {
       const res = await fetch(`/api/sales-orders/${id}`)
+      if (res.status === 404) {
+        setOrderNotFound(true)
+        return
+      }
       if (!res.ok) throw new Error('load failed')
       const { data } = await res.json()
       setOrder(data as SalesOrder)
+      setOrderLoadFailed(false)
       const sourceId = (data as SalesOrder).source_invoice_id
       if (sourceId) {
         const sourceRes = await fetch(`/api/invoices/${sourceId}`).catch(() => null)
@@ -114,8 +129,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
         setSourceDoc(null)
       }
     } catch {
-      toast({ title: t('load_failed_title'), variant: 'destructive' })
-      router.push('/sales-orders')
+      setOrderLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -128,13 +142,10 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
       const json = await res.json().catch(() => null)
       if (!res.ok) throw Object.assign(new Error('load failed'), { body: json, status: res.status })
       setInvoices((json?.data ?? []) as Invoice[])
+      setInvoicesLoadError(null)
     } catch (err) {
       const e = err as { body?: unknown; status?: number }
-      toast({
-        title: t('invoices_load_failed_title'),
-        description: getErrorMessage(e.body ?? err, { locale: errorLocale, statusCode: e.status }),
-        variant: 'destructive',
-      })
+      setInvoicesLoadError(getErrorMessage(e.body ?? err, { locale: errorLocale, statusCode: e.status }))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
@@ -193,7 +204,25 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   }
 
   if (isLoading) return <DetailPageSkeleton />
-  if (!order) return null
+  if (!order) {
+    if (!orderLoadFailed && !orderNotFound) return null
+    return (
+      <div className="space-y-8">
+        <PageHeader title={tList('title')} />
+        {orderNotFound ? (
+          <NotFoundState title={t('not_found')} backHref="/sales-orders" backLabel={tCommon('back_to_list')} />
+        ) : (
+        <LoadError
+          title={t('load_failed_title')}
+          onRetry={() => {
+            setIsLoading(true)
+            void fetchOrder()
+          }}
+        />
+        )}
+      </div>
+    )
+  }
 
   const status = order.status
   const number = order.order_number ?? ''
@@ -209,33 +238,25 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   const lockTitle = !canWrite ? t('viewer_disabled_tooltip') : undefined
   const pending = pendingTransition ? TRANSITION_COPY[pendingTransition] : null
 
+  const statusChip = badgeVariant ? (
+    <Badge variant={badgeVariant}>{tList(STATUS_LABEL_KEY[status])}</Badge>
+  ) : (
+    <span className="text-sm text-muted-foreground">{tList(STATUS_LABEL_KEY[status])}</span>
+  )
+
   return (
     <div className="space-y-8 stagger-enter">
       {/* Header: the page-header hooks make it the panel's top bar
           (convention 2), like the invoice and customer detail pages: the
           sidebar says where we are, so there is no back link. */}
-      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="page-header-lead min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">
-              {number ? t('title', { number }) : t('title_unnumbered')}
-            </h1>
-            {badgeVariant ? (
-              <Badge variant={badgeVariant}>{tList(STATUS_LABEL_KEY[status])}</Badge>
-            ) : (
-              <span className="text-sm text-muted-foreground">{tList(STATUS_LABEL_KEY[status])}</span>
-            )}
-          </div>
-          {/* page-header-desc: hidden in the top bar, since customer and
-              order date are the first rows of Detaljer below. */}
-          <p className="page-header-desc mt-1 text-sm text-muted-foreground" data-ph-mask="">
-            {[order.customer?.name, formatDate(order.order_date)].filter(Boolean).join(' · ')}
-          </p>
-        </div>
-
-        <div className="page-header-action flex shrink-0 flex-wrap items-center justify-end gap-2">
+      <RecordHeader
+        parent={{ label: tList('title'), href: '/sales-orders' }}
+        title={number ? t('title', { number }) : t('title_unnumbered')}
+        mask
+        status={statusChip}
+        actions={<>
           {canEdit && (
-            <Button size="sm" variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
+            <Button size="toolbar" variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
               {canWrite ? (
                 <Link href={`/sales-orders/${order.id}/edit`}>
                   <PencilIcon className="mr-2 h-4 w-4" />
@@ -250,36 +271,36 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             </Button>
           )}
           {canDeliver && (
-            <Button size="sm"
+            <Button size="toolbar"
               variant={canInvoice ? 'outline' : 'default'}
               onClick={() => setIsDeliveryOpen(true)}
               disabled={!canWrite}
               title={lockTitle}
             >
-              {canWrite ? <TruckIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
+              {canWrite ? <TruckIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('action_register_delivery')}
             </Button>
           )}
           {canInvoice && (
-            <Button size="sm" onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <DocumentTextIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
+            <Button size="toolbar" onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <DocumentTextIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('action_create_invoice')}
             </Button>
           )}
           {canConfirm && (
-            <Button size="sm" onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <CheckIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
+            <Button size="toolbar" onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <CheckIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('action_confirm')}
             </Button>
           )}
           {canReopen && (
-            <Button size="sm" onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <ClipboardDocumentListIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
+            <Button size="toolbar" onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <ClipboardDocumentListIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
               {t('action_reopen')}
             </Button>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       <DetailSection kicker={t('section_details')}>
         <DefRow label={t('def_customer')}>
@@ -375,7 +396,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
                       {formatQty(item.remaining_qty ?? Math.max(0, item.quantity - (item.invoiced_qty ?? 0)))}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums md:table-cell')}>
-                      {formatCurrency(item.unit_price, order.currency)}
+                      {formatRowAmount(item.unit_price, order.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
                       {item.discount_percent > 0 ? `${formatQty(item.discount_percent)} %` : ''}
@@ -384,7 +405,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
                       {formatQty(item.vat_rate)} %
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>
-                      {formatCurrency(item.line_total, order.currency)}
+                      {formatRowAmount(item.line_total, order.currency)}
                     </td>
                   </tr>
                 ),
@@ -402,15 +423,30 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             <span className="text-muted-foreground">{t('vat')}</span>
             <span className="tabular-nums">{formatCurrency(order.vat_amount, order.currency)}</span>
           </div>
-          <div className="flex justify-between border-t border-border pt-2">
+          <div className="flex justify-between border-t-hairline pt-2">
             <span>{t('total')}</span>
             <span className="font-display text-xl tabular-nums">{formatCurrency(order.total, order.currency)}</span>
           </div>
         </div>
       </DetailSection>
 
+      {invoicesLoadError && invoices.length === 0 && (
+        <DetailSection kicker={t('section_invoices')}>
+          <LoadError
+            title={t('invoices_load_failed_title')}
+            description={invoicesLoadError}
+            onRetry={() => void fetchInvoices()}
+          />
+        </DetailSection>
+      )}
+
       {invoices.length > 0 && (
         <DetailSection kicker={t('section_invoices')}>
+          {invoicesLoadError && (
+            <AttnLine className="mb-2" action={{ label: tCommon('retry'), onClick: () => void fetchInvoices() }}>
+              {tCommon('refresh_failed')}
+            </AttnLine>
+          )}
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -450,7 +486,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
                       )}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap pr-0 text-right tabular-nums')}>
-                      {formatCurrency(displayedTotal, invoice.currency)}
+                      {formatRowAmount(displayedTotal, invoice.currency)}
                     </td>
                   </tr>
                 )
@@ -465,7 +501,6 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
           {canCancel && (
             <Button
               variant="ghost"
-              size="sm"
               onClick={() => setPendingTransition('cancel')}
               className="text-muted-foreground hover:text-destructive"
             >
@@ -475,7 +510,6 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
           {canDelete && (
             <Button
               variant="ghost"
-              size="sm"
               onClick={handleDelete}
               className="text-muted-foreground hover:text-destructive"
             >

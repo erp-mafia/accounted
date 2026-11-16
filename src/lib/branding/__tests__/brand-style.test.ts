@@ -71,8 +71,8 @@ describe('buildBrandVarsCss', () => {
 
   it('scopes light sidebar text tokens to the frame sidebar', () => {
     const css = buildBrandVarsCss({ brandColor: ACCESSIBLE_BLUE, chromeColor: null })
-    expect(css).toContain('html[data-brand] .bg-frame > aside {')
-    const sidebarBlock = css!.split('.bg-frame > aside')[1]
+    expect(css).toContain('html[data-brand] nav[data-shell-rail] {')
+    const sidebarBlock = css!.split('nav[data-shell-rail]')[1]
     expect(sidebarBlock).toContain('--foreground: 0 0% 98%;')
     expect(sidebarBlock).toContain('--muted-foreground: 0 0% 75%;')
     expect(sidebarBlock).toContain('--primary: 0 0% 98%;')

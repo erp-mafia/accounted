@@ -188,7 +188,7 @@ export function FiscalYearResetDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('fy_reset_dialog_title', { name: periodName })}</DialogTitle>
           <DialogDescription>{t(retainedHistory ? 'fy_reset_retained_description' : 'fy_reset_dialog_description')}</DialogDescription>
@@ -200,13 +200,13 @@ export function FiscalYearResetDialog({
             {t('fy_reset_checking')}
           </div>
         ) : loadError ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg p-4 text-sm text-destructive">
             {loadError}
           </div>
         ) : eligibility ? (
           <div className="space-y-5">
             {eligibility.blockers.length > 0 ? (
-              <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <div className="bg-destructive/8 space-y-2 rounded-lg p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
                   <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('fy_reset_blocked_title')}

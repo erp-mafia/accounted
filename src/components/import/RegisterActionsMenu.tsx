@@ -6,7 +6,7 @@ import {
   ArrowUpTrayIcon,
   EllipsisHorizontalIcon,
   LockClosedIcon,
-  TableCellsIcon,
+  ArrowDownTrayIcon,
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,7 +36,7 @@ export function RegisterActionsMenu({ entity }: { entity: RegisterImportEntity }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')} title={tCommon('more_options')}>
+        <Button variant="ghost" size="icon" aria-label={tCommon('more_options')} title={tCommon('more_options')}>
           <EllipsisHorizontalIcon className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -56,11 +56,11 @@ export function RegisterActionsMenu({ entity }: { entity: RegisterImportEntity }
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => window.open(exportHref, '_blank')}>
-          <TableCellsIcon className="mr-2 h-4 w-4" />
+          <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
           {t('register_export_xlsx')}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => window.open(`${exportHref}?format=csv`, '_blank')}>
-          <TableCellsIcon className="mr-2 h-4 w-4" />
+          <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
           {t('register_export_csv')}
         </DropdownMenuItem>
       </DropdownMenuContent>
