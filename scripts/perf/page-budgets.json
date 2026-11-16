@@ -3,53 +3,53 @@
     "First-load JavaScript per page, brotli kB, checked by `node scripts/perf/page-js.mjs --check` in the build job of every merge request pipeline.",
     "The pages are the ten most visited ones (scripts/perf/README.md, 'Page budgets'), with /login as the floor every signed-in page sits on.",
     "The numbers are those of the CI build, which compiles core with no extensions; a production build ships more and is measured the same way with --next-dir.",
-    "jsBrotliKb is the budget: measuredKb plus 3 %, rounded up to 5 kB. Room for ordinary growth, not for a new library. measuredKb is the size on 2026-11-12, kept so the next change to a budget shows what it started from.",
+    "jsBrotliKb is the budget: measuredKb plus 3 %, rounded up to 5 kB. Room for ordinary growth, not for a new library. measuredKb is the size the budget was last set from (2026-11-16, once the PostHog SDK left the first load, !1525), kept so the next change to a budget shows what it started from.",
     "A change that makes a page legitimately heavier raises its budget in the same merge request, with the before and after numbers in the description."
   ],
   "pages": {
     "/": {
-      "jsBrotliKb": 670,
-      "measuredKb": 650
+      "jsBrotliKb": 620,
+      "measuredKb": 599
     },
     "/transactions": {
-      "jsBrotliKb": 765,
-      "measuredKb": 739
+      "jsBrotliKb": 710,
+      "measuredKb": 687
     },
     "/bookkeeping": {
-      "jsBrotliKb": 690,
-      "measuredKb": 666
+      "jsBrotliKb": 640,
+      "measuredKb": 618
     },
     "/pending": {
-      "jsBrotliKb": 695,
-      "measuredKb": 672
-    },
-    "/inkorg": {
-      "jsBrotliKb": 840,
-      "measuredKb": 812
-    },
-    "/import": {
-      "jsBrotliKb": 665,
-      "measuredKb": 643
-    },
-    "/reports/[slug]": {
-      "jsBrotliKb": 650,
-      "measuredKb": 628
-    },
-    "/invoices": {
-      "jsBrotliKb": 675,
-      "measuredKb": 654
-    },
-    "/invoices/[id]": {
-      "jsBrotliKb": 780,
-      "measuredKb": 753
-    },
-    "/supplier-invoices": {
       "jsBrotliKb": 645,
       "measuredKb": 625
     },
+    "/inkorg": {
+      "jsBrotliKb": 790,
+      "measuredKb": 763
+    },
+    "/import": {
+      "jsBrotliKb": 590,
+      "measuredKb": 571
+    },
+    "/reports/[slug]": {
+      "jsBrotliKb": 595,
+      "measuredKb": 575
+    },
+    "/invoices": {
+      "jsBrotliKb": 620,
+      "measuredKb": 599
+    },
+    "/invoices/[id]": {
+      "jsBrotliKb": 720,
+      "measuredKb": 696
+    },
+    "/supplier-invoices": {
+      "jsBrotliKb": 570,
+      "measuredKb": 550
+    },
     "/login": {
-      "jsBrotliKb": 495,
-      "measuredKb": 479
+      "jsBrotliKb": 445,
+      "measuredKb": 428
     }
   }
 }

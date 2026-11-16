@@ -68,9 +68,8 @@ import { replayMaskText } from './replay-masking'
  *    in the background; everything that talks to PostHog goes through
  *    analyticsReady() or loadedAnalytics() below, so an event captured
  *    while the SDK loads waits behind posthog.init instead of being lost.
- *    A person who never consents never downloads it, once no other module
- *    imports it (the one-definition rule above lists the one that still
- *    does).
+ *    A person who never consents never downloads it: the one-definition
+ *    rule above keeps every other module from importing it.
  */
 
 /**

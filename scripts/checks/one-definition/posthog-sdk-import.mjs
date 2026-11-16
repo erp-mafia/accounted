@@ -15,8 +15,5 @@ export default {
     /\b(?:import|require)\(\s*['"]posthog-js(?:\/[^'"]*)?['"]\s*\)/,
   ],
   sanctioned: ['lib/analytics/client.ts'],
-  allowed: {
-    'components/community/DiscordInviteCard.tsx':
-      "Jakob's Discord invite card, which his open !1515 changes, so it is left to him. Until it captures through captureAnalyticsEvent it keeps the SDK in the signed-in pages' first load.",
-  },
+  allowed: {},
 }
