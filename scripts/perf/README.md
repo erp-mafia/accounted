@@ -148,12 +148,21 @@ Three causes covered most of it:
 | Detail pages requested per list load (Vercel invocations; 10 to 12 Nov against 13 Nov) | `/bookkeeping/[id]` 3.95, `/invoices/[id]` 1.24, `/supplier-invoices/[id]` 0.88 | 0.79, 0.38, 0.19 |
 | JavaScript per page | 842 to 939 kB brotli | unchanged (within 1 kB) |
 
-The list RPC takes about 150 ms more than its new body did when run as a plain query with the values written in (190 ms, 2026-11-12). Why the function form costs that has not been measured yet; it is the next thing to look at for `/bookkeeping`.
+The list RPC took about 150 ms more than its new body did when run as a plain query with the values written in (190 ms, 2026-11-12): the plan a function reuses for every company looked for corrections once per row. !1507 below finds them in one pass.
+
+### After, live (2026-11-15)
+
+| Change | Before | After |
+|---|---|---|
+| `/bookkeeping`: the list RPC finds corrections in one pass (!1507) | 415 ms in a read-only production test with the reused plan forced; nightly benchmark under load p50 330 ms | 258 ms in the same test; benchmark under load p50 249 ms (2026-11-15) and 299 ms (2026-11-16), idle unchanged. The deployed function has not been re-timed in production yet |
+| `/supplier-invoices`: the list draws its first 100 rows, more on request (!1509) | every row drawn at once: 8 500 for the company with the most supplier invoices | 100 rows drawn. The read still fetches every row with every column (13 MB for that company): the list works out which invoices wait for attest from those columns, so narrowing them is left |
+| `/login` first-load JavaScript, gzip as served (!1517) | 590 kB in 26 files, the PostHog SDK 74 kB (227 kB raw) of it | 518 kB in 25 files; the SDK loads once analytics starts. Signed-in pages keep it in their first load until the Discord invite card stops importing `posthog-js` directly |
 
 ### The checks
 
 - **JavaScript per page**: `node scripts/perf/page-js.mjs --check` in the `build` job of every merge request pipeline fails when a page ships more than its budget in `scripts/perf/page-budgets.json`, or has none. It counts every script the page's document references before any interaction; chunks behind `next/dynamic` are not counted, which is how a page gets back under its budget.
 - **The read each page waits on**: the `page.*` cases in `bench/cases.ts`, timed nightly with the report benchmark below against the 150 000-verifikat company and held to `bench/budgets.json`. A page whose first read changes shape changes its case in the same merge request.
+- **The PostHog SDK out of the first load**: the `posthog-sdk-import` rule in `scripts/checks/one-definition/` (`npm run check:guards`) fails a static import of `posthog-js` anywhere but `lib/analytics/client.ts`, which loads it once analytics starts.
 
 Not checked: the number of requests a page makes (no browser runs in CI), and anything after the first view.
 
