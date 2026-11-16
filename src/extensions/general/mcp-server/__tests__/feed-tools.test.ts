@@ -195,6 +195,43 @@ describe('gnubok_backfill_feed (crm#1385)', () => {
   })
 })
 
+// crm#1931: an agent with a WooCommerce feed looked for its orders among the
+// kundorder and in the archive, found none and reported them missing. Every
+// place that says where a shop's rows land now names the tool that reads them.
+describe('where a shop feed lands names the tool that reads it (crm#1931)', () => {
+  it('the backfill description, the only listed tool that mentions the shops, points at the order list', () => {
+    expect(backfill.description).toContain('gnubok_list_webshop_orders')
+    expect(tools.some((t) => t.name === 'gnubok_list_webshop_orders')).toBe(true)
+  })
+
+  it.each(['shopify', 'woocommerce', 'zettle'])('a %s backfill answers with the order list, not the kundorder list', async (provider) => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = (await backfill.execute({ provider, from: '2026-10-18' }, 'company-1', 'user-1', supabase as never)) as {
+      instructions: string
+    }
+    expect(result.instructions).toMatch(/Rows land on the Orders page, unbooked: read them with gnubok_list_webshop_orders/)
+    expect(result.instructions).toMatch(/not gnubok_list_sales_orders/)
+    expect(result.instructions).not.toMatch(/gnubok_list_uncategorized_transactions/)
+  })
+
+  it('the connection status says where the rows of each connected feed are read, and of no other', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // stripe
+    enqueue({ data: [] }) // shopify
+    enqueue({
+      data: [{ id: 'conn-2', status: 'active', connected_at: '2026-10-01T08:00:00.000Z', error_message: null, transaction_sync_enabled: true, last_order_synced_at: '2026-11-16T03:00:00.000Z' }],
+    }) // woocommerce
+    enqueue({ data: [] }) // zettle
+    const result = (await list.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      connections: Array<Record<string, unknown>>
+      instructions: string
+    }
+    expect(result.connections.map((c) => c.provider)).toEqual(['woocommerce'])
+    expect(result.instructions).toMatch(/woocommerce rows land on the Orders page, unbooked: read them with gnubok_list_webshop_orders/)
+    expect(result.instructions).not.toMatch(/stripe rows|shopify rows|zettle rows/)
+  })
+})
+
 describe('gnubok_list_feed_connections', () => {
   it("reads each provider's connections with its own cursor as last_synced_at", async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()

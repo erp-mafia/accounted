@@ -3067,6 +3067,8 @@
     "journey_fy_ef_ongoing": "Nej, pågående",
     "journey_fy_ef_new": "Ja, nystartad",
     "journey_suggested": "föreslaget",
+    "journey_fy_first_line": "Första räkenskapsåret får vara kortare eller förlängt, högst 18 månader.",
+    "journey_fy_first_line_link": "Välj start och slut",
     "journey_fymonth_title": "När slutar räkenskapsåret?",
     "journey_fymonth_sub": "Peka för att förhandsgranska.",
     "journey_fymonth_info": "De flesta har kalenderår som slutar i december. Brutet räkenskapsår slutar en annan månad och används mest i koncerner.",

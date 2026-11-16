@@ -1,12 +1,14 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   initJourney,
+  journeyBack,
   journeyReducer,
   stationOfStep,
   type JourneyAction,
   type JourneyState,
 } from '../reducer'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 
 function lookup(overrides: Partial<CompanyLookupResult> = {}): CompanyLookupResult {
   return {
@@ -410,6 +412,59 @@ describe('journeyReducer: fiscal-year branches', () => {
     expect(s.settings.fiscal_year_start_month).toBe(7)
   })
 
+  it('an extended first year: the dates picked are the period that gets created', () => {
+    const s = run(
+      manualAbAtFy(),
+      { type: 'FY_FIRST_SELECTED' },
+      { type: 'FY_START_PICKED', date: '2026-09-10' },
+      { type: 'FY_END_PICKED', date: '2027-12-31' },
+    )
+    expect(computeFiscalPeriod(s.settings)).toEqual({
+      error: null,
+      startStr: '2026-09-10',
+      endStr: '2027-12-31',
+      periodName: 'Första räkenskapsåret 2026/2027',
+    })
+  })
+
+  it('the first-year dates are one step from the end-month picker, and Back returns to it', () => {
+    // "Annat räkenskapsår" is where someone looking for an extended year
+    // lands; the picker there only makes twelve-month years.
+    const atMonth = run(manualAbAtFy(), { type: 'FY_OTHER_SELECTED' })
+    expect(atMonth.step).toBe('fymonth')
+    const atStart = journeyReducer(atMonth, { type: 'FY_FIRST_SELECTED' })
+    expect(atStart.step).toBe('fystart')
+    expect(journeyReducer(atStart, { type: 'BACK' }).step).toBe('fymonth')
+    const s = run(
+      atStart,
+      { type: 'FY_START_PICKED', date: '2026-02-10' },
+      { type: 'FY_END_PICKED', date: '2027-06-30' },
+    )
+    expect(s.settings).toMatchObject({
+      is_first_fiscal_year: true,
+      first_year_start: '2026-02-10',
+      first_year_end: '2027-06-30',
+      fiscal_year_start_month: 7,
+    })
+    expect(s.step).toBe('momsyn')
+  })
+
+  it('a first year picked after a calendar-year answer replaces it, and the other way round', () => {
+    const calendar = run(manualAbAtFy(), { type: 'FY_CALENDAR_CONFIRMED' })
+    expect(calendar.settings.is_first_fiscal_year).toBe(false)
+    const first = run(
+      journeyReducer(calendar, { type: 'BACK' }),
+      { type: 'FY_FIRST_SELECTED' },
+      { type: 'FY_START_PICKED', date: '2026-09-10' },
+      { type: 'FY_END_PICKED', date: '2027-12-31' },
+    )
+    expect(first.settings).toMatchObject({ is_first_fiscal_year: true, first_year_end: '2027-12-31' })
+    const again = run(journeyReducer(first, { type: 'STATION_JUMP', station: 1 }), { type: 'FY_CALENDAR_CONFIRMED' })
+    expect(again.settings).toMatchObject({ is_first_fiscal_year: false, fiscal_year_start_month: 1 })
+    expect(again.settings.first_year_start).toBeUndefined()
+    expect(again.settings.first_year_end).toBeUndefined()
+  })
+
   it('brutet år: end month picks the following start month', () => {
     const s = run(manualAbAtFy(), { type: 'FY_OTHER_SELECTED' }, { type: 'FY_END_MONTH_PICKED', endMonth: 6 })
     expect(s.settings.fiscal_year_start_month).toBe(7)
@@ -575,8 +630,8 @@ describe('journeyReducer: server errors', () => {
 })
 
 describe('journeyReducer: done screen', () => {
-  it('the done screen is the last step: nothing but Back leaves it', () => {
-    const s = run(
+  function atDone(): JourneyState {
+    return run(
       initJourney({ mode: 'first' }),
       { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
@@ -585,8 +640,73 @@ describe('journeyReducer: done screen', () => {
       { type: 'METHOD_PICKED', method: 'accrual' },
       { type: 'SUBMIT_SUCCEEDED' },
     )
+  }
+
+  it('the done screen is the last step: only its own button leaves it', () => {
+    const s = atDone()
     expect(s.step).toBe('done')
     expect(stationOfStep(s.step)).toBe(4)
+  })
+
+  it('has no Tillbaka: the company exists, and back there used to open the app, which is the next act', () => {
+    const s = atDone()
+    expect(s.history.length).toBeGreaterThan(0)
+    expect(journeyBack(s, '/')).toEqual({ kind: 'none' })
+    expect(journeyBack(s, null)).toEqual({ kind: 'none' })
+  })
+})
+
+describe('journeyBack: what Tillbaka does on each question', () => {
+  it('steps back inside the journey on every question that has one before it', () => {
+    let s = manualAbAtFy()
+    const visited: string[] = []
+    while (s.history.length > 0) {
+      visited.push(s.step)
+      // With or without a page to leave for: a question behind always wins.
+      expect(journeyBack(s, '/select-company'), s.step).toEqual({ kind: 'step' })
+      expect(journeyBack(s, null), s.step).toEqual({ kind: 'step' })
+      const before = s
+      s = journeyReducer(s, { type: 'BACK' })
+      // Back lands on an earlier question and answers nothing on the way.
+      expect(stationOfStep(s.step)).toBeLessThanOrEqual(stationOfStep(before.step))
+      expect(s.history.length).toBe(before.history.length - 1)
+    }
+    expect(visited).toEqual(['fy', 'fskatt', 'address', 'name', 'form', 'notfound'])
+    expect(s.step).toBe('orgnr')
+  })
+
+  it('leaves the first question for a page that renders, or is not shown', () => {
+    const first = initJourney()
+    expect(journeyBack(first, '/select-company')).toEqual({ kind: 'exit', href: '/select-company' })
+    expect(journeyBack(first, null)).toEqual({ kind: 'none' })
+  })
+
+  it('drops a date pick that arrives after Tillbaka left the start question', () => {
+    // The picker sends the date a moment after the tap; pressed in between,
+    // Tillbaka was overtaken and the journey moved on to the end date.
+    const atStart = run(manualAbAtFy(), { type: 'FY_FIRST_SELECTED' })
+    expect(atStart.step).toBe('fystart')
+    const back = journeyReducer(atStart, { type: 'BACK' })
+    expect(back.step).toBe('fy')
+    const late = journeyReducer(back, { type: 'FY_START_PICKED', date: '2026-03-14' })
+    expect(late).toBe(back)
+    expect(late.settings.first_year_start).toBeUndefined()
+  })
+
+  it('never answers the question it leaves: the skipped address stays unasked after Back', () => {
+    const skipped = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '559999-9999' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+      { type: 'ENTITY_PICKED', entityType: 'aktiebolag' },
+      { type: 'NAME_SUBMITTED', name: 'Testbolaget AB' },
+      { type: 'ADDRESS_SUBMITTED' },
+    )
+    expect(skipped).toMatchObject({ step: 'fskatt', addressAsked: true })
+    const back = journeyReducer(skipped, { type: 'BACK' })
+    expect(back).toMatchObject({ step: 'address', addressAsked: false })
+    expect(journeyReducer(back, { type: 'BACK' })).toMatchObject({ step: 'name', addressAsked: false })
   })
 })
 

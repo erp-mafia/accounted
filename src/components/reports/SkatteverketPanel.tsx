@@ -502,11 +502,14 @@ function SkatteverketPanelInner({
             text: getErrorMessage(result, { fallback: 'Skatteverket hittade valideringsfel i deklarationen.' }),
           })
         } else if (result.stage === 'lock' && result.draft_saved) {
+          // The server's sentence says what Skatteverket answered to the
+          // lock; how to retry the lock alone is this panel's own.
           setNotice({
             kind: 'error',
             text:
-              'Utkastet är sparat hos Skatteverket men kunde inte låsas för signering. ' +
-              'Försök igen med "Lås och signera" under Fler åtgärder.',
+              getErrorMessage(result, {
+                fallback: 'Utkastet är sparat hos Skatteverket men kunde inte låsas för signering.',
+              }) + ' Nytt försök görs med "Lås och signera" under Fler åtgärder.',
           })
         } else {
           setNotice({

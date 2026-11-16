@@ -86,10 +86,16 @@ import { storeTokens } from '../lib/token-store'
 import { runPostConnectRefresh } from '../lib/post-connect-refresh'
 import type { OAuthFlow, OAuthFlowHandoff } from '@/lib/auth/oauth-flows'
 import { testRoutes } from '@/tests/helpers'
+import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 
 const mockExchange = vi.mocked(exchangeCodeForTokens)
 const mockStoreTokens = vi.mocked(storeTokens)
 const mockRefresh = vi.mocked(runPostConnectRefresh)
+
+// The callback's own sentences, as the person reads them.
+const DENIED = 'Inloggningen hos Skatteverket avbröts eller godkändes inte. Anslut igen och slutför med BankID.'
+const CONNECT_FAILED =
+  'Ett tekniskt fel uppstod när anslutningen till Skatteverket skulle slutföras. Försök ansluta igen med BankID.'
 
 const STATE = 'state-1'
 const HANDOFF = 'handoff-1'
@@ -260,7 +266,9 @@ describe('skatteverket OAuth callback', () => {
 
       expect(response.status).toBe(302)
       expect(new URL(response.headers.get('location') as string).origin).toBe(BRAND)
-      expect(mockMintHandoff).toHaveBeenCalledWith(expect.anything(), flowOn(BRAND), { providerError: 'Avbrutet' })
+      // What rides the handoff is the callback's own sentence for the code,
+      // never Skatteverket's description.
+      expect(mockMintHandoff).toHaveBeenCalledWith(expect.anything(), flowOn(BRAND), { providerError: DENIED })
       expect(mockExchange).not.toHaveBeenCalled()
     })
 
@@ -360,12 +368,24 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('shows the provider denial on the initiating origin', async () => {
-      handoffIs(handoffOn(BRAND, { providerCode: null, providerError: 'Avbrutet' }))
+      handoffIs(handoffOn(BRAND, { providerCode: null, providerError: DENIED }))
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
-      const html = await expectErrorPage(response, 'Avbrutet')
+      const html = await expectErrorPage(response, DENIED)
       expect(html).toContain(JSON.stringify(BRAND))
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('prints its own sentence, not the text, when a handoff carries anything else', async () => {
+      // A row written before the callback mapped the code, or by anything
+      // that is not the callback: its text is not trusted to be for a person.
+      handoffIs(handoffOn(BRAND, { providerCode: null, providerError: 'invalid_request: redirect_uri mismatch' }))
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      const html = await expectErrorPage(response, 'Skatteverket kunde inte slutföra inloggningen')
+      expect(html).not.toContain('redirect_uri')
       expect(mockExchange).not.toHaveBeenCalled()
     })
 
@@ -440,15 +460,63 @@ describe('skatteverket OAuth callback', () => {
       expect(mockStoreTokens).not.toHaveBeenCalled()
     })
 
-    it('answers the error page on the initiating origin when the token exchange fails', async () => {
+    it('answers the error page on the initiating origin when the token exchange fails, without the thrown text', async () => {
       handoffIs(handoffOn(BRAND))
       mockExchange.mockRejectedValueOnce(new Error('exchange boom'))
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
-      const html = await expectErrorPage(response, 'exchange boom')
-      expect(html).toContain(JSON.stringify(`${BRAND}/settings/tax?skv_error=exchange%20boom`))
+      const html = await expectErrorPage(response, CONNECT_FAILED)
+      expect(html).toContain(JSON.stringify(`${BRAND}/settings/tax?skv_error=${encodeURIComponent(CONNECT_FAILED)}`))
+      expect(html).not.toContain('exchange boom')
       expect(mockRefresh).not.toHaveBeenCalled()
+    })
+
+    // crm#1944: the token store failed on an edge error page, and the page
+    // showed the thrown text with the database host and the edge's request id.
+    it('keeps an upstream error page out of the page when the tokens cannot be stored, and logs it', async () => {
+      handoffIs(handoffOn(BRAND))
+      const thrown =
+        'Failed to clear existing tokens: Edge Error 1104 Script not found | db-host.example.co | Ray ID: abc123 at 2026-01-01 00:00:00 UTC'
+      mockStoreTokens.mockRejectedValueOnce(new Error(thrown))
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      const html = await expectErrorPage(response, CONNECT_FAILED)
+      for (const leaked of ['Failed to clear', 'Edge Error', 'db-host.example.co', 'Ray ID']) {
+        expect(html).not.toContain(leaked)
+      }
+      // The opener and the no-opener fallback get the same sentence.
+      expect(html).toContain(JSON.stringify(CONNECT_FAILED))
+      expect(html).toContain(encodeURIComponent(CONNECT_FAILED))
+      const logged = vi
+        .mocked(console.error)
+        .mock.calls.flat()
+        .map((arg) => (typeof arg === 'string' ? arg : arg instanceof Error ? arg.message : JSON.stringify(arg)))
+        .join('\n')
+      expect(logged).toContain('token exchange failed')
+      expect(logged).toContain('Failed to clear existing tokens')
+      expect(mockRefresh).not.toHaveBeenCalled()
+    })
+
+    it('keeps a thrown sentence that was written in Swedish for the person', async () => {
+      handoffIs(handoffOn(BRAND))
+      const authored = 'connector_state saknas: anslutningsflödet startades inte via connectorn. Starta om anslutningen.'
+      mockExchange.mockRejectedValueOnce(new Error(authored))
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      await expectErrorPage(response, authored)
+    })
+
+    it('says the time ran out when Skatteverket did not answer the exchange', async () => {
+      handoffIs(handoffOn(BRAND))
+      mockExchange.mockRejectedValueOnce(new TimeoutError('Skatteverket token exchange timed out after 8000ms'))
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      const html = await expectErrorPage(response, 'Tidsgränsen mot Skatteverket överskreds')
+      expect(html).not.toContain('8000ms')
     })
 
     it('logs a failed exchange through the redacting logger, scoped to the company, without a personnummer the SKV body echoes', async () => {
@@ -513,16 +581,34 @@ describe('skatteverket OAuth callback', () => {
       expect(html).toContain('skatteverket-oauth-success')
     })
 
-    it('shows the provider denial directly', async () => {
+    it('shows the provider denial directly, in its own words', async () => {
       stateIs(flowOn(APP))
 
       const response = await callbackRoute().handler(
-        callbackRequest(APP, `error=access_denied&error_description=Avbrutet&state=${STATE}`),
+        callbackRequest(APP, `error=access_denied&error_description=User%20cancelled%20the%20flow&state=${STATE}`),
       )
 
-      await expectErrorPage(response, 'Avbrutet')
+      const html = await expectErrorPage(response, DENIED)
+      expect(html).not.toContain('User cancelled')
       expect(mockMintHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['server_error', 'Skatteverkets inloggning svarar inte just nu'],
+      ['temporarily_unavailable', 'Skatteverkets inloggning svarar inte just nu'],
+      ['invalid_scope', 'Skatteverket kunde inte slutföra inloggningen'],
+    ])('answers %s with a sentence that says what to do next', async (code, sentence) => {
+      stateIs(flowOn(APP))
+
+      const response = await callbackRoute().handler(
+        callbackRequest(APP, `error=${code}&error_description=Upstream%20text%20for%20developers&state=${STATE}`),
+      )
+
+      const html = await expectErrorPage(response, sentence)
+      expect(html).toMatch(/ansluta igen/)
+      expect(html).not.toContain('Upstream text')
+      expect(html).not.toContain(code)
     })
 
     it('finishes behind a proxy that rewrites Host and drops x-forwarded-proto', async () => {

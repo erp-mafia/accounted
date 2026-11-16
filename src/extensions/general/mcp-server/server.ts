@@ -313,11 +313,13 @@ import {
   SEARCH_ONLY_WITHDRAW_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
   STALE_BRIDGE_NOTE,
+  STALE_COMPANY_ID_NOTE,
   STALE_TOOLS_LIST_NOTE,
   isDefaultCatalogTool,
   isViewOnlyTool,
   staleToolsListAdvice,
   toolCallableVia,
+  uploadCompanyNote,
   type ToolCallableVia,
 } from './tool-reach'
 import { annotationsForEffect, isReadOnlyTool, publicToolAnnotations, type McpToolEffect } from './tool-effects'
@@ -415,6 +417,7 @@ import {
   getReachableCompanyCount,
   isCompanyDependentTool,
   isMultiCompanyOnlyTool,
+  isNotFoundCode,
   isOperationScopedTool,
   isSimpleCompanyMode,
   isOptionalCompanyTool,
@@ -427,6 +430,7 @@ import {
   resolveMcpCompanyContext,
   resolveMcpCompanyScope,
   resolveOperationCompanyId,
+  withOtherCompanyCandidates,
   type CompanyEcho,
   type McpCompanyScope,
 } from './company-routing'
@@ -761,6 +765,7 @@ import { skvRequest, SkatteverketAuthError, isApigwClientRefusal } from '@/exten
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
+import { readVatRefusal } from '@/extensions/general/skatteverket/lib/vat-refusal'
 import { fetchVatDeclarationStatus } from '@/extensions/general/skatteverket/lib/declaration-status'
 import { resolveUserReadAuth } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import type { SkvVatDeclarationState } from '@/lib/skatteverket/declaration-status'
@@ -2839,6 +2844,16 @@ function mapSkatteverketError(err: unknown): Error {
     return out
   }
   return err instanceof Error ? err : new Error(String(err))
+}
+
+/**
+ * A /kontrollera call Skatteverket refused, as a refusal the agent can read:
+ * what Skatteverket answered (lib/vat-refusal.ts, the reader every
+ * momsdeklaration call shares) under SKATTEVERKET_API_ERROR. A bare Error
+ * here reached the agent as UNKNOWN_ERROR with the body as a JSON string.
+ */
+async function skvKontrolleraRefusal(res: Response): Promise<Error> {
+  return codedRefusal('SKATTEVERKET_API_ERROR', (await readVatRefusal(res, 'validate')).message)
 }
 
 /**
@@ -5896,6 +5911,10 @@ export const tools: McpTool[] = [
         total_matched: totalMatched,
         detail,
         ...(anyListedHit ? { tools_list_note: STALE_TOOLS_LIST_NOTE } : {}),
+        // A caller that reaches several companies (not one the server knows
+        // nothing about yet): its copy of a listed tool may predate the
+        // second company and so show no company_id (crm#1862).
+        ...(anyListedHit && !simpleCompanyMode && !viewer.anonymous ? { company_id_note: STALE_COMPANY_ID_NOTE } : {}),
         ...(anyBridgedHit ? { bridge_note: STALE_BRIDGE_NOTE } : {}),
       }
     },
@@ -10922,7 +10941,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_sales_orders',
     keywords: ['kundorder', 'order', 'ordrar', 'orderbekräftelse', 'leverans', 'delfaktura'],
     title: 'List Sales Orders',
-    description: 'List kundorder (sales orders) for the active company, newest first, with delivery and invoicing progress per order. Optional status and customer filters. Use gnubok_get_sales_order for the lines.',
+    description: 'List kundorder (sales orders made in Accounted), newest first, with delivery and invoicing progress. Lines: gnubok_get_sales_order. Webshop orders (Shopify, WooCommerce, Zettle): gnubok_list_webshop_orders.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10930,7 +10949,7 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: SALES_ORDER_STATUSES, description: 'Filter by order status' },
         customer_id: { type: 'string', description: 'Filter by customer UUID' },
         limit: { type: 'number', description: 'Max results (default 50, max 100)' },
-        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
+        offset: { type: 'integer', minimum: 0, description: 'Results to skip (default 0)' },
       },
     },
     // Item keys listed in prose instead of declared: the typed summary schema
@@ -17624,7 +17643,10 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_document_upload',
     keywords: ['ladda upp', 'underlag', 'kvitto', 'dokument'],
     title: 'Create Document Upload',
-    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (see max_bytes) to upload_url, then call gnubok_complete_document_upload with the upload_id.',
+    // The last sentence is for an agent whose sandbox reaches the MCP host
+    // only: no proxy helps a client that may make no outbound request at
+    // all, and such an agent found the inline tool by trial (crm#1919).
+    description: 'Model-free document upload: PUT the raw file bytes (see max_bytes) to upload_url, then call gnubok_complete_document_upload with the upload_id. If your sandbox cannot reach upload_url, use gnubok_upload_document instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17633,7 +17655,7 @@ export const tools: McpTool[] = [
           type: 'string',
           minLength: 1,
           maxLength: 255,
-          description: 'File name with extension, for example "faktura.pdf"',
+          description: 'File name with extension',
         },
         mime_type: {
           type: 'string',
@@ -17679,6 +17701,10 @@ export const tools: McpTool[] = [
         upload_url: uploadUrl,
         expires_at: reservation.expiresAt,
         ...documentUploadLimits(reservation.signedUrl, uploadUrl),
+        // Injected by the dispatcher for a key that reaches several
+        // companies (crm#1862). Undeclared in outputSchema, like the size
+        // fields above.
+        ...(args.__multiCompany === true ? { company_note: uploadCompanyNote(companyId) } : {}),
       }
     },
   },
@@ -17805,7 +17831,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        file_name: { type: 'string', description: 'File name with extension (e.g. "faktura.pdf")' },
+        file_name: { type: 'string', description: 'File name with extension' },
         file_content_base64: { type: 'string', description: 'Base64-encoded file content' },
         mime_type: { type: 'string', description: 'MIME type (optional, inferred from extension)' },
       },
@@ -21028,10 +21054,7 @@ export const tools: McpTool[] = [
           { endpoint: 'kontrollera', agRegistreradId: redovisare, redovisningsperiod },
           momsuppgift,
         )
-        if (!res.ok) {
-          const text = await res.text().catch(() => '')
-          throw new Error(`Skatteverket svarade med ${res.status}: ${text}`)
-        }
+        if (!res.ok) throw await skvKontrolleraRefusal(res)
         const kontrollresultat = await res.json()
         const skvErrors = countSkvKontrollErrors(kontrollresultat)
         const arithmeticOk = skvErrors === 0
@@ -21109,10 +21132,7 @@ export const tools: McpTool[] = [
             { endpoint: 'kontrollera', agRegistreradId: prep.redovisare, redovisningsperiod: prep.redovisningsperiod },
             prep.momsuppgift,
           )
-          if (!res.ok) {
-            const text = await res.text().catch(() => '')
-            throw new Error(`Skatteverket svarade med ${res.status}: ${text}`)
-          }
+          if (!res.ok) throw await skvKontrolleraRefusal(res)
           return { ...prep, kontrollresultat: await res.json() }
         } catch (err) {
           throw await mapFilingSkvError(supabase, companyId, userId, err)
@@ -31434,7 +31454,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         // caller did reach, and the viewer gate must stay a pure refusal.
         // A company_id that is not a UUID at all is a wrong company_id too.
         const candidates =
-          structured.error.code === 'NOT_FOUND' || isMalformedCompanyIdError(err)
+          isNotFoundCode(structured.error.code) || isMalformedCompanyIdError(err)
             ? await listAccessibleCompanies(
                 supabase,
                 userId,
@@ -31484,6 +31504,20 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
       // this point unbound, and none of them dereferences the id as a tenant:
       // the empty string is a placeholder for their signature, never a scope.
       const tenantId: string = effectiveCompanyId ?? ''
+
+      // A "not found" from the tool itself, on a key that reaches several
+      // companies, names the company it looked in and the others (crm#1953):
+      // one answer for the synchronous call and the task below. Not for an
+      // approval or rejection that named no company: the dispatcher already
+      // looked the operation up across companies, so no other one holds it.
+      const withOtherCompanies = (refusal: ReturnType<typeof toToolError>) =>
+        withOtherCompanyCandidates(refusal, {
+          supabase,
+          userId,
+          company: isOperationScopedTool(toolName) && companySelection !== 'explicit' ? null : companyEcho,
+          allowedCompanyIds,
+          isSimpleCompanyMode: resolveSimpleCompanyMode,
+        })
 
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
@@ -31724,7 +31758,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
             // returned. `failed` stays reserved for infrastructure errors.
             shadow?.failed(err)
             const structured = toToolError(err, { toolName })
-            const publicStructured = projectMcpPayload(structured, toolNamespace)
+            const publicStructured = projectMcpPayload(await withOtherCompanies(structured), toolNamespace)
             await resolveMcpTask(supabase, task.id, {
               status: 'completed',
               result: {
@@ -31797,6 +31831,12 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
           if (await resolveSimpleCompanyMode()) {
             (toolArgs as Record<string, unknown>).__simpleCompanyMode = true
           }
+        }
+        // An upload is aimed at a company before any bytes are sent: a key
+        // that reaches several is told which one and how to pick another
+        // (crm#1862). Nothing to say to a key that reaches one.
+        if (toolName === 'gnubok_create_document_upload' && !(await resolveSimpleCompanyMode())) {
+          (toolArgs as Record<string, unknown>).__multiCompany = true
         }
         // Search reads tools/list's view of the company's packages too, so a
         // hit is never called listed when the list leaves it out. The briefing
@@ -31892,7 +31932,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
         shadow?.failed(err)
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
-        const publicStructured = projectMcpPayload(structured, toolNamespace)
+        const publicStructured = projectMcpPayload(await withOtherCompanies(structured), toolNamespace)
         emitToolCall({
           tool: toolName,
           requiredScope: requiredScope ?? null,

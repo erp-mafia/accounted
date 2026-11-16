@@ -3067,6 +3067,8 @@
     "journey_fy_ef_ongoing": "No, ongoing",
     "journey_fy_ef_new": "Yes, newly started",
     "journey_suggested": "suggested",
+    "journey_fy_first_line": "The first fiscal year may be shorter or extended, at most 18 months.",
+    "journey_fy_first_line_link": "Choose its start and end",
     "journey_fymonth_title": "When does the fiscal year end?",
     "journey_fymonth_sub": "Hover to preview.",
     "journey_fymonth_info": "Most have a calendar year ending in December. A broken fiscal year ends in another month and is mostly used in groups.",

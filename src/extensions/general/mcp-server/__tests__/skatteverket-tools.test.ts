@@ -219,6 +219,57 @@ describe('gnubok_vat_declaration_validate', () => {
   })
 })
 
+// crm#1866: a /kontrollera Skatteverket refused was thrown as a bare Error
+// holding the status and the body's JSON, which reached the agent as
+// UNKNOWN_ERROR ("Något gick fel. Försök igen.").
+describe('VAT filing tools: a /kontrollera call Skatteverket refuses', () => {
+  const refusedWithoutReason = () => ({
+    ok: false,
+    status: 400,
+    text: async () => JSON.stringify({ kod: 400, meddelandeTillAnvandare: null, meddelandeTillUtvecklare: null }),
+  })
+
+  beforeEach(() => {
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202609', momsuppgift: {}, declaration: COMPLETE_VAT_DECLARATION })
+  })
+
+  it.each([
+    ['gnubok_vat_declaration_validate', () => validate],
+    ['gnubok_vat_declaration_submit', () => vatSubmit],
+  ])('%s answers SKATTEVERKET_API_ERROR with what Skatteverket said', async (toolName, tool) => {
+    mockSkvRequest.mockResolvedValue(refusedWithoutReason())
+    const { supabase } = createQueuedMockSupabase()
+
+    const thrown = await tool()
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Error & { code?: string })
+
+    expect(thrown?.code).toBe('SKATTEVERKET_API_ERROR')
+    const envelope = toToolError(thrown!, { toolName }).error
+    expect(envelope.code).toBe('SKATTEVERKET_API_ERROR')
+    expect(envelope.message_en).toContain('Skatteverket tog inte emot deklarationen för kontroll och angav ingen orsak (svarskod 400).')
+    expect(envelope.message_en).not.toContain('{')
+    // Nothing was staged or written: only the one read went out.
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the box of a field the gateway refuses', async () => {
+    mockSkvRequest.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ message: '/momsuppgift/summaMoms expected type: Number, found: String' }),
+    })
+    const { supabase } = createQueuedMockSupabase()
+
+    const thrown = await validate
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Error)
+
+    expect(thrown?.message).toContain('Skatteverkets svar: "/momsuppgift/summaMoms expected type: Number, found: String".')
+    expect(thrown?.message).toContain('Det gäller ruta 49 (Moms att betala eller få tillbaka).')
+  })
+})
+
 describe('VAT filing tools on the caller\'s own session (crm#1263)', () => {
   // The case: member A connected with BankID minutes earlier, so the briefing
   // said active; member B's agent (OAuth key owned by B) called validate and

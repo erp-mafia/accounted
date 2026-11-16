@@ -158,6 +158,37 @@ describe('gnubok_search_tools', () => {
     expect(draft).not.toContain('gnubok_credit_invoice')
   })
 
+  // crm#1931: an agent with a WooCommerce feed never found the tools that
+  // read synced shop orders, tried the kundorder list and the archive instead
+  // and reported the orders missing. Its own words now lead to them.
+  it.each([
+    'woocommerce order',
+    'webbshop',
+    'nätbutik',
+    'e-commerce',
+    'butiksorder',
+    'ordernummer',
+    'order number',
+    'orderdetaljer',
+    'order details',
+    'orderunderlag',
+  ])('"%s" finds a tool that reads synced webshop orders among the first five', async (query) => {
+    const result = await call({ query, detail: 'name', limit: 5 })
+    const names = result.tools.map((t) => t.name)
+    expect(
+      names.includes('gnubok_list_webshop_orders') || names.includes('gnubok_get_webshop_order'),
+      `${query}: ${names.join(', ')}`,
+    ).toBe(true)
+  })
+
+  it('the kundorder list says where synced webshop orders are instead, and both tools it names exist', () => {
+    const salesOrders = tools.find((t) => t.name === 'gnubok_list_sales_orders')!
+    expect(salesOrders.description).toContain('Webshop orders (Shopify, WooCommerce, Zettle): gnubok_list_webshop_orders')
+    for (const name of ['gnubok_list_webshop_orders', 'gnubok_get_sales_order']) {
+      expect(tools.some((t) => t.name === name), name).toBe(true)
+    }
+  })
+
   it('total_matched reflects pre-limit candidates', async () => {
     const limited = await call({ query: '', limit: 3 })
     expect(limited.tools.length).toBe(3)

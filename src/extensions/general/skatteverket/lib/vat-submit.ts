@@ -18,7 +18,9 @@
  * `completeness` with nothing sent.
  *
  * SkatteverketAuthError propagates to the caller: the route maps it through
- * handleSkvError, the commit service through mapServiceError.
+ * handleSkvError, the commit service through mapServiceError. Any other
+ * refused call is read by readVatRefusal (lib/vat-refusal.ts): `error` is
+ * what Skatteverket answered as a sentence, `skv` the same answer in fields.
  *
  * Audit: the transport writes one row per call under the labels
  * 'declaration/validate', 'declaration/draft' and 'declaration/lock'. The
@@ -33,6 +35,7 @@ import { toCompletenessFindings, type VatCompletenessFinding, vatFilingVerdict }
 import type { VatPeriodType } from '@/types'
 import { skvRequest } from './api-client'
 import { buildMomsuppgift } from './declaration-prep'
+import { readVatRefusal, type VatRefusalDetails } from './vat-refusal'
 import type { SkatteverketKontroll, SkatteverketKontrollResultat, SkatteverketUtkastResponse } from '../types'
 
 export interface VatSubmitChainParams {
@@ -68,6 +71,12 @@ export type VatSubmitChainResult =
       kontrollresultat: SkatteverketKontrollResultat | null
       draftSaved: boolean
       completenessChecks?: VatCompletenessFinding[]
+      /**
+       * Skatteverket's own answer when it refused the call (readVatRefusal):
+       * its status, kod and messages in fields, beside the sentence in
+       * `error`. Absent when the chain stopped for a reason of our own.
+       */
+      skv?: VatRefusalDetails
     }
 
 /**
@@ -122,10 +131,10 @@ export async function submitVatDeclarationChain(
       momsuppgift,
     )
     if (!kontrollera.ok) {
-      const text = await kontrollera.text().catch(() => '')
+      const refusal = await readVatRefusal(kontrollera, 'validate')
       return {
-        ok: false, stage: 'validation', httpStatus: kontrollera.status,
-        error: `Skatteverket svarade med ${kontrollera.status}: ${text}`,
+        ok: false, stage: 'validation', httpStatus: refusal.status,
+        error: refusal.message, skv: refusal.details,
         kontrollresultat: null, draftSaved: false,
       }
     }
@@ -149,10 +158,10 @@ export async function submitVatDeclarationChain(
     momsuppgift,
   )
   if (!utkast.ok) {
-    const text = await utkast.text().catch(() => '')
+    const refusal = await readVatRefusal(utkast, 'draft')
     return {
-      ok: false, stage: 'draft', httpStatus: utkast.status,
-      error: `Skatteverket svarade med ${utkast.status}: ${text}`,
+      ok: false, stage: 'draft', httpStatus: refusal.status,
+      error: refusal.message, skv: refusal.details,
       kontrollresultat: null, draftSaved: false,
     }
   }
@@ -175,10 +184,12 @@ export async function submitVatDeclarationChain(
     { endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod },
   )
   if (!las.ok) {
-    const text = await las.text().catch(() => '')
+    // The saved draft's own ERROR findings are named with the refusal when
+    // the lock's answer carries none of its own.
+    const refusal = await readVatRefusal(las, 'lock', { kontrollresultat: utkastData.kontrollResultat })
     return {
-      ok: false, stage: 'lock', httpStatus: las.status,
-      error: `Skatteverket svarade med ${las.status}: ${text}`,
+      ok: false, stage: 'lock', httpStatus: refusal.status,
+      error: `Utkastet är sparat hos Skatteverket. ${refusal.message}`, skv: refusal.details,
       kontrollresultat: utkastData.kontrollResultat ?? null, draftSaved: true,
     }
   }

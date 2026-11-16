@@ -17,7 +17,7 @@
  *      lands: next to tools_list hits and in the bridge refusals that send it
  *      to a direct call.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { ALL_SCOPES } from '@/lib/auth/api-keys'
 
@@ -35,7 +35,12 @@ vi.mock('@/lib/company/context', () => ({
   getUserCompanies: (...args: unknown[]) => mocks.getUserCompanies(...args),
 }))
 vi.mock('@/lib/clients/fetch-client-overview', () => ({ getByraMembership: vi.fn().mockResolvedValue(null) }))
-vi.mock('@/lib/auth/rate-limit-http', () => ({ checkRateLimit: vi.fn().mockResolvedValue({ ok: true }) }))
+// getRedis: no shared store, so the unattended marks (unattended.ts) fall back
+// to this process's memory, where none is set.
+vi.mock('@/lib/auth/rate-limit-http', () => ({
+  checkRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+  getRedis: () => null,
+}))
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
@@ -126,7 +131,7 @@ async function callTool(name: string, args: Record<string, unknown>) {
 
 async function search(query: string, limit = 5) {
   const { body } = await callTool('gnubok_search_tools', { query, limit })
-  return body as { tools: Hit[]; tools_list_note?: string; bridge_note?: string }
+  return body as { tools: Hit[]; tools_list_note?: string; company_id_note?: string; bridge_note?: string }
 }
 
 beforeEach(() => {
@@ -220,6 +225,64 @@ describe('a client holding an older tools/list is told what unblocks it', () => 
       expect(text, bridge).toContain('directly by name')
       expect(text, bridge).toContain('older copy of tools/list')
     }
+  })
+})
+
+// crm#1862, crm#1953: tools/list carries company_id only while the key
+// reaches several companies. A connector added while the user had one
+// company keeps that list; after a second company arrived its agent saw
+// company_id on a search hit and not on the tool it could call, read the
+// listed tool as taking none, and aimed a document upload at the default
+// company. What the agent reads at runtime now says the tool takes it and
+// what gives the client a list that shows it.
+describe('a client whose older tools/list has no company_id is told what unblocks it', () => {
+  const upload = tools.find((t) => t.name === 'gnubok_create_document_upload')!
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a search with a listed hit says so to a caller that reaches several companies', async () => {
+    useCaller(CALLERS[0])
+    const result = await search('gnubok_create_document_upload', 1)
+    expect(result.tools[0]).toMatchObject({ name: 'gnubok_create_document_upload', callable_via: 'tools_list' })
+    expect(result.company_id_note).toMatch(/every company-scoped tool takes company_id/)
+    expect(result.company_id_note).toMatch(/fetched while the key reached one company/)
+    expect(result.company_id_note).toMatch(/start a new chat/)
+  })
+
+  it('no such note for a key that reaches one company: there is nothing to choose between', async () => {
+    useCaller(CALLERS[1])
+    const result = await search('gnubok_create_document_upload', 1)
+    expect(result.tools[0].callable_via).toBe('tools_list')
+    expect(result).not.toHaveProperty('company_id_note')
+  })
+
+  it('no such note before the caller has connected: the server does not know what it reaches', async () => {
+    useCaller(CALLERS[3])
+    const result = await search('gnubok_list_skills', 1)
+    expect(result.tools[0]).toMatchObject({ name: 'gnubok_list_skills', callable_via: 'tools_list' })
+    expect(result).not.toHaveProperty('company_id_note')
+  })
+
+  it('a bridge pointed at a listed write says a copy without company_id is an older list too', async () => {
+    useCaller(CALLERS[0])
+    const { body, isError } = await callTool('gnubok_stage_tool', {
+      tool: 'gnubok_update_invoice',
+      arguments: { invoice_id: COMPANY_ID, company_id: OTHER_COMPANY_ID },
+    })
+    expect(isError).toBe(true)
+    expect(JSON.stringify(body)).toContain('shows gnubok_update_invoice without company_id is such an older list too')
+  })
+
+  it('the upload reservation is marked for a caller that reaches several companies, and only for it', async () => {
+    const execute = vi.spyOn(upload, 'execute').mockResolvedValue({ upload_id: 'u', upload_url: 'https://x', expires_at: 'e' })
+
+    useCaller(CALLERS[0])
+    await callTool('gnubok_create_document_upload', { file_name: 'kvitto.pdf' })
+    expect(execute.mock.calls[0][0]).toMatchObject({ file_name: 'kvitto.pdf', __multiCompany: true })
+
+    resetReachableCompanyCountCache()
+    useCaller(CALLERS[1])
+    await callTool('gnubok_create_document_upload', { file_name: 'kvitto.pdf' })
+    expect(execute.mock.calls[1][0]).not.toHaveProperty('__multiCompany')
   })
 })
 

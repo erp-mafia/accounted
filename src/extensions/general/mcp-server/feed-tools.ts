@@ -52,12 +52,22 @@ const FEEDS: Record<FeedProvider, AnyFeedSpec> = {
   zettle: zettleFeed,
 }
 
+/**
+ * Where the shops' and the till's rows land, with the tool that reads them.
+ * Named because an agent that knew only "the Orders page" looked for synced
+ * WooCommerce orders among the kundorder (gnubok_list_sales_orders) and in
+ * the archive, found none in either and reported the orders missing
+ * (crm#1931).
+ */
+const ORDERS_PAGE =
+  'on the Orders page, unbooked: read them with gnubok_list_webshop_orders (through gnubok_call_tool if your client does not show it), not gnubok_list_sales_orders'
+
 /** Where the rows of each feed land, for the answer's next step. */
 const LANDS_IN: Record<FeedProvider, string> = {
   stripe: 'unbooked in the transactions inbox (gnubok_list_uncategorized_transactions)',
-  shopify: 'on the Orders page, unbooked',
-  woocommerce: 'on the Orders page, unbooked',
-  zettle: 'on the Orders page, unbooked',
+  shopify: ORDERS_PAGE,
+  woocommerce: ORDERS_PAGE,
+  zettle: ORDERS_PAGE,
 }
 
 const BACKFILL_REFUSAL_EN: Record<FeedBackfillRefusal, string> = {
@@ -162,12 +172,16 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
             })
           }
         }
+        // Where each connected feed's rows are read: a status that says
+        // "synced" without it sends the agent looking in the wrong list.
+        const connected = providers.filter((provider) => connections.some((c) => c.provider === provider))
         return {
           connections,
           instructions:
             connections.length === 0
               ? 'No Stripe, Shopify, WooCommerce or Zettle connection. The user connects one in Accounted under Import.'
-              : 'A feed imports from connected_at on. To fetch rows from before that, or a day the feed missed, call gnubok_backfill_feed({ provider, from }); last_synced_at is how far it has synced.',
+              : 'A feed imports from connected_at on. To fetch rows from before that, or a day the feed missed, call gnubok_backfill_feed({ provider, from }); last_synced_at is how far it has synced. ' +
+                connected.map((provider) => `${provider} rows land ${LANDS_IN[provider]}.`).join(' '),
         }
       },
     },
@@ -177,7 +191,7 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
       keywords: ['hämta äldre transaktioner', 'hämta äldre ordrar', 'hämta äldre köp', 'backfill', 'synka stripe', 'stripe', 'shopify', 'woocommerce', 'zettle'],
       title: 'Backfill Feed',
       description:
-        'Refetch a Stripe, Shopify, WooCommerce or Zettle feed from a day; rows land unbooked. Skips days the books already hold (imported ledger, manual 1686 voucher) unless include_booked.',
+        'Refetch a Stripe, Shopify, WooCommerce or Zettle feed from a day; rows land unbooked (shop orders: gnubok_list_webshop_orders). Skips days the books already hold unless include_booked.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,

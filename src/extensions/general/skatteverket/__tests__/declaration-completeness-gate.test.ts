@@ -121,6 +121,24 @@ describe.each(['/declaration/draft', '/declaration/submit'])('POST %s: server-si
     expect(mockSkvRequest).toHaveBeenCalled()
   })
 
+  // crm#1866: the route answered "Skatteverket svarade med 400: {json}".
+  it('answers what Skatteverket said when it refuses, as a sentence and in fields', async () => {
+    mockBuildMomsuppgift.mockResolvedValue(prep(COMPLETE_VAT_DECLARATION))
+    mockSkvRequest.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ kod: 400, meddelandeTillAnvandare: null, meddelandeTillUtvecklare: null }),
+    })
+
+    const response = await route(path).handler(postJson(path, BODY), makeContext())
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error).toMatch(/^Skatteverket tog inte emot .+ och angav ingen orsak \(svarskod 400\)\. Försök igen om en stund\./)
+    expect(body.error).not.toContain('{')
+    expect(body.skv).toMatchObject({ skv_status: 400, skv_kod: 400 })
+  })
+
   it('scans the räkenskapsår the request names', async () => {
     mockBuildMomsuppgift.mockResolvedValue(prep(INCOMPLETE_VAT_DECLARATION))
 

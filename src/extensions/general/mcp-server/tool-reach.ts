@@ -139,5 +139,32 @@ export const STALE_BRIDGE_NOTE =
  * third of the sessions refused this way in 30 days never reached the tool.
  */
 export function staleToolsListAdvice(toolName: string): string {
-  return `If your client does not show ${toolName}, load it through your client's tool search first when it defers tools; if not, the client kept an older copy of tools/list: ${RECONNECT_ADVICE}.`
+  return `If your client does not show ${toolName}, load it through your client's tool search first when it defers tools; if not, the client kept an older copy of tools/list: ${RECONNECT_ADVICE}. A copy that shows ${toolName} without company_id is such an older list too: the tool takes company_id.`
+}
+
+/**
+ * The same gap for one parameter (crm#1862, crm#1953). tools/list carries
+ * company_id on every company-scoped tool only while the key reaches several
+ * companies; a key that reaches one gets the list without it (simple company
+ * mode). A connector added while the user had one company keeps that list,
+ * so after a second company arrived its agent saw company_id on a search hit
+ * and not on the tool it could call, read that as "the listed tool does not
+ * take company_id", and aimed an upload at the default company. The server
+ * takes company_id on every company-scoped tool whatever copy the client
+ * holds; what the agent needs is the way to a client that can send it.
+ */
+const STALE_COMPANY_ID_FIX =
+  `A client that shows a tool without company_id kept the tools/list it fetched while the key reached one company: ${RECONNECT_ADVICE}.`
+
+/** Said once per search response with a tools_list hit, to a caller that reaches several companies. */
+export const STALE_COMPANY_ID_NOTE =
+  `On a key that reaches several companies every company-scoped tool takes company_id (omit it for the default company). ${STALE_COMPANY_ID_FIX}`
+
+/**
+ * What gnubok_create_document_upload says to a caller that reaches several
+ * companies: which company the upload belongs to and how to aim it at
+ * another, while it is only a reservation and nothing is archived yet.
+ */
+export function uploadCompanyNote(companyId: string): string {
+  return `This upload belongs to company ${companyId}. For another company this key reaches, create the upload again with its company_id and send the same company_id to gnubok_complete_document_upload. ${STALE_COMPANY_ID_FIX}`
 }

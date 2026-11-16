@@ -16,8 +16,13 @@ import {
   type ResolvedCompanyScope,
 } from '@/lib/portfolio/scope'
 import type { CompanyRole } from '@/types'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { createLogger } from '@/lib/logger'
 import { COMPANY_PIN_QUERY_PARAM } from './tool-namespace'
 import { handleAwareInputSchema } from './handle-args'
+import { RECONNECT_ADVICE } from './tool-reach'
+
+const log = createLogger('mcp-company-routing')
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -362,6 +367,90 @@ export async function listAccessibleCompanies(
     }))
   } catch {
     return []
+  }
+}
+
+/**
+ * Is this refusal a "not found"? Every registry code a door answers 404 for:
+ * NOT_FOUND and the domain codes (BATCH_TX_NOT_FOUND, INVOICE_NOT_FOUND,
+ * DOCUMENT_UPLOAD_NOT_FOUND, ...). The registry decides, so a code added
+ * later is covered without being listed here.
+ */
+export function isNotFoundCode(code: string): boolean {
+  return getErrorEntry(code)?.httpStatus === 404
+}
+
+/** How many other companies a "not found" names; gnubok_list_companies has them all. */
+export const OTHER_COMPANY_CANDIDATES_MAX = 10
+
+/**
+ * What a "not found" from a tool says next to its candidates. The last
+ * sentence is for a client whose tool list predates the key's second
+ * company: a single-company list carries no company_id (simple company
+ * mode), some connectors fetch the list once, and such an agent read its own
+ * copy as "this tool has no company_id" (crm#1953).
+ */
+export const OTHER_COMPANY_NOTE =
+  'Not found in the company this call ran for (company). candidates are other companies this key reaches ' +
+  '(gnubok_list_companies lists all): if the record belongs to one of them, repeat the call with its company_id. ' +
+  `Every company-scoped tool takes company_id; if your copy of the tool does not show it, your client kept an older tools/list: ${RECONNECT_ADVICE}.`
+
+/**
+ * A "not found" from a tool itself, on a key that reaches several companies:
+ * the answer names the company the call ran for and the others the key
+ * reaches (crm#1953).
+ *
+ * A wrong company_id was already answered with candidates, but that is the
+ * company resolution refusing. Once the company resolves (the default, when
+ * none was named), the tool looks its record up inside that company, and a
+ * record that lives in another reachable company came back as a bare "not
+ * found" with nothing saying company_id was the fix. One answer for every
+ * such refusal, whichever tool raised it and whether the call ran
+ * synchronously or as a task.
+ *
+ * Unchanged when there is nothing to add: a tool that takes no company, a
+ * refusal that is not a "not found", a key that reaches one company or a
+ * pinned connection (simple company mode), no other company in reach. Best
+ * effort like listAccessibleCompanies: a failed lookup leaves the refusal as
+ * it was, never an error on top of the error being reported.
+ */
+export async function withOtherCompanyCandidates<T extends { error: { code: string } }>(
+  refusal: T,
+  call: {
+    supabase: SupabaseClient
+    userId: string
+    /** The company the tool ran for; null for a tool that takes none. */
+    company: CompanyEcho | null
+    /** The key's company allowlist, as for a wrong company_id's candidates. */
+    allowedCompanyIds?: CompanyAllowlist
+    /** The dispatcher's memoised answer; a pinned connection is simple. */
+    isSimpleCompanyMode: () => Promise<boolean>
+  }
+): Promise<
+  | T
+  | (T & { company: CompanyEcho; candidates: Array<{ company_id: string; name: string }>; candidates_note: string })
+> {
+  const { company } = call
+  if (!company || !isNotFoundCode(refusal.error.code)) return refusal
+  try {
+    if (await call.isSimpleCompanyMode()) return refusal
+    const ranFor = company.company_id.toLowerCase()
+    const others = (await listAccessibleCompanies(call.supabase, call.userId, call.allowedCompanyIds)).filter(
+      (candidate) => candidate.company_id.toLowerCase() !== ranFor
+    )
+    if (others.length === 0) return refusal
+    return {
+      company,
+      ...refusal,
+      candidates: others.slice(0, OTHER_COMPANY_CANDIDATES_MAX),
+      candidates_note: OTHER_COMPANY_NOTE,
+    }
+  } catch (error) {
+    log.warn('other-company candidates not added: the refusal goes out as it was', {
+      code: refusal.error.code,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return refusal
   }
 }
 

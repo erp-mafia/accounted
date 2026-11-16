@@ -195,7 +195,13 @@ export const webshopOrdersList = defineOperation({
     title: 'List Webshop Orders (Shopify, WooCommerce)',
     description:
       'Synced webshop order and refund rows (Shopify, WooCommerce, Zettle): amounts, VAT per rate, country (Shopify: destination), payment method and booking status. Filter by booked/unbooked, platform, date and country.',
-    keywords: ['webshop', 'webbutik', 'e-handel', 'order', 'ordrar', 'shopify', 'woocommerce', 'oss', 'leveransland'],
+    // The words an agent searched for synced shop orders and found nothing
+    // (crm#1931) are here too: keywords are matched, never listed.
+    keywords: [
+      'webshop', 'webbutik', 'webbshop', 'nätbutik', 'e-handel', 'e-commerce', 'ecommerce', 'online store',
+      'order', 'ordrar', 'butiksorder', 'ordernummer', 'order number', 'synkade ordrar',
+      'shopify', 'woocommerce', 'zettle', 'oss', 'leveransland',
+    ],
   },
   run: async (ctx, input) => {
     const outcome = await (await service()).listWebshopOrders(ctx, input)
@@ -271,7 +277,10 @@ export const webshopOrdersGet = defineOperation({
     title: 'Get Webshop Order',
     description:
       'One webshop order: line items, VAT per rate, country (Shopify: destination), and the booking the Orders page would prefill (date, period, balanced lines on Swedish accounts) with warnings, e.g. a country outside Sweden.',
-    keywords: ['webshop', 'order', 'orderrader', 'shopify', 'woocommerce', 'kontering order', 'oss', 'voec', 'leveransland'],
+    keywords: [
+      'webshop', 'webbshop', 'order', 'orderrader', 'orderdetaljer', 'order details', 'orderunderlag', 'ordernummer',
+      'shopify', 'woocommerce', 'kontering order', 'oss', 'voec', 'leveransland',
+    ],
   },
   run: async (ctx, input) => {
     const outcome = await (await service()).getWebshopOrder(ctx, input)
