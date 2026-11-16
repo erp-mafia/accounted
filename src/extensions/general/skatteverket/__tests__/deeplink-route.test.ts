@@ -1,9 +1,10 @@
 /**
  * POST /system-connection/deeplink: gating (capability, role, system-auth
  * mode), org-number derivation server-side, the register check that answers
- * "already appointed" instead of a link, the opt-in row it records, and the
- * OmbudApiError -> 502 mapping. POST /system-connection/verify: the same
- * org-number claim gate before any probe.
+ * "already appointed" instead of a link, the opt-in row it records, the
+ * OmbudApiError -> 502 mapping, and Ombudshantering being down -> 503 with a
+ * message that says so. POST /system-connection/verify: the same org-number
+ * claim gate before any probe.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -252,6 +253,45 @@ describe('POST /system-connection/deeplink', () => {
     expect(res.status).toBe(502)
     expect(await res.json()).toMatchObject({ code: 'OBR_HTTP_ERROR' })
     expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('Ombudshantering down (503): 503, and the person reads that Skatteverket\'s service is unavailable and to try again in a while', async () => {
+    // The answer prod got on 2026-11-14, which the page showed as "Något gick fel. Försök igen."
+    mockCreateDeepLink.mockRejectedValue(
+      new OmbudApiError('Ombudshantering svarade 503 (djuplank/utseombud): {\n  "message": "Service Unavailable"\n}', 'OBR_HTTP_ERROR', 503),
+    )
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.error.code).toBe('SKATTEVERKET_OMBUD_UNAVAILABLE')
+    expect(getErrorMessage(body, { locale: 'sv' })).toBe(
+      'Skatteverkets ombudstjänst är inte tillgänglig just nu. Försök igen om en stund.',
+    )
+    expect(getErrorMessage(body, { locale: 'en' })).toBe(
+      "Skatteverket's ombud service is unavailable right now. Try again in a while.",
+    )
+    expect(JSON.stringify(body)).not.toContain('Service Unavailable')
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a 502', new OmbudApiError('Ombudshantering svarade 502 (djuplank/utseombud)', 'OBR_HTTP_ERROR', 502)],
+    ['a 504', new OmbudApiError('Ombudshantering svarade 504 (djuplank/utseombud)', 'OBR_HTTP_ERROR', 504)],
+    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
+    ['no connection at all', new TypeError('fetch failed')],
+  ])('%s reads the same', async (_case, failure) => {
+    mockCreateDeepLink.mockRejectedValue(failure)
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(503)
+    expect((await res.json()).error.code).toBe('SKATTEVERKET_OMBUD_UNAVAILABLE')
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('a 500 is not read as the service being down: the 502 with its code, as before', async () => {
+    mockCreateDeepLink.mockRejectedValue(new OmbudApiError('Ombudshantering svarade 500 (djuplank/utseombud)', 'OBR_HTTP_ERROR', 500))
+    const res = await findRoute().handler(request(), makeContext())
+    expect(res.status).toBe(502)
+    expect(await res.json()).toMatchObject({ code: 'OBR_HTTP_ERROR' })
   })
 })
 
