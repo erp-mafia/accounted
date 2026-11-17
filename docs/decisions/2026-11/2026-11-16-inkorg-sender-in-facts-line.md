@@ -1,0 +1,1 @@
+[2026-11-16] The opened Inkorg item names the sender of the mail it came in, in its facts line (från {adress}): the address, also when the mail carried a display name, and only for the inbox address and a connected mailbox, since on other doors email_from holds a supplier or partner name.
