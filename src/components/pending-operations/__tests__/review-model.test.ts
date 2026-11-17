@@ -18,12 +18,15 @@ import {
   stepAfterLeaving,
   stepPosition,
   underlagOf,
+  underlagState,
   vatDeclarationSummary,
   voucherFacts,
   type FactRow,
+  type RowUnderlagRead,
 } from '../review-model'
 
 const DOC = '11111111-1111-4111-8111-111111111111'
+const TX = '44444444-4444-4444-8444-444444444444'
 
 function op(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -162,10 +165,57 @@ describe('underlagOf', () => {
 
   it('a categorisation points at its bank row, whose own underlag the review looks up', () => {
     const underlag = underlagOf(
-      op({ operation_type: 'categorize_transaction', params: { transaction_id: DOC }, preview_data: { date: '2026-11-10', amount: 500, lines: VOUCHER_LINES } }),
+      op({ operation_type: 'categorize_transaction', params: { transaction_id: TX }, preview_data: { date: '2026-11-10', amount: 500, lines: VOUCHER_LINES } }),
     )
     // The preview states the amount unsigned and no bank text: no row is drawn from it.
-    expect(underlag).toEqual({ document: null, bankRow: null, transactionId: DOC, missing: false })
+    expect(underlag).toEqual({ document: null, bankRow: null, transactionId: TX, rowUnderlagExpected: true, missing: false })
+  })
+
+  it('a payment matched to an invoice points at its bank row too (crm#1977)', () => {
+    const underlag = underlagOf(
+      op({
+        operation_type: 'match_transaction_invoice',
+        params: { transaction_id: TX, invoice_id: DOC },
+        preview_data: { transaction_date: '2026-11-10', transaction_description: 'BG 5050-1055', transaction_amount: 12500, invoice_number: '1042' },
+      }),
+    )
+    expect(underlag).toEqual({
+      document: null,
+      bankRow: { date: '2026-11-10', text: 'BG 5050-1055', amount: 12500, currency: 'SEK' },
+      transactionId: TX,
+      // The invoice is what the payment is booked from: a row without a file is no gap.
+      rowUnderlagExpected: false,
+      missing: false,
+    })
+  })
+
+  it.each([
+    'settle_rot_rut_payout',
+    'uncategorize_transaction',
+    'ignore_transaction',
+    'link_transaction_journal_entry',
+    'match_batch_allocate',
+    'match_expense_payout',
+    'detach_document_from_transaction',
+    'some_future_type',
+  ])('every type that names one bank row has the row looked up: %s', (operation_type) => {
+    expect(underlagOf(op({ operation_type, params: { transaction_id: TX } }))).toMatchObject({
+      document: null,
+      transactionId: TX,
+      rowUnderlagExpected: false,
+    })
+  })
+
+  it('reads no bank row where the proposal carries its own file, or names no bank row', () => {
+    // The file of a pairing is the proposal's own.
+    expect(
+      underlagOf(op({ operation_type: 'attach_document_to_transaction', params: { transaction_id: TX, document_id: DOC } }))?.transactionId,
+    ).toBeNull()
+    // A skattekonto row is no bank row.
+    expect(underlagOf(op({ operation_type: 'book_skattekonto_row', params: { transaction_id: TX } }))).toBeNull()
+    // A batch names many rows; the slot shows one file.
+    expect(underlagOf(op({ operation_type: 'bulk_book_transactions', params: { tx_ids: [TX] } }))).toBeNull()
+    expect(underlagOf(op({ operation_type: 'ignore_transaction', params: { transaction_id: 'not-an-id' } }))).toBeNull()
   })
 
   it('says underlag saknas only when the staging tool did', () => {
@@ -176,6 +226,69 @@ describe('underlagOf', () => {
 
   it('is null for a proposal with no underlag to speak of', () => {
     expect(underlagOf(op({ operation_type: 'create_customer', preview_data: { name: 'A' } }))).toBeNull()
+  })
+})
+
+describe('underlagState: the one thing the underlag slot shows', () => {
+  const FILE = { kind: 'document' as const, documentId: DOC, fileName: 'kvitto.pdf', mime: 'application/pdf' }
+  const read = (over: Partial<RowUnderlagRead> = {}): RowUnderlagRead => ({ loading: false, failed: false, document: null, ...over })
+  const match = underlagOf(
+    op({
+      operation_type: 'match_transaction_invoice',
+      params: { transaction_id: TX },
+      preview_data: { transaction_date: '2026-11-10', transaction_amount: 12500 },
+    }),
+  )!
+  const categorisation = underlagOf(op({ operation_type: 'categorize_transaction', params: { transaction_id: TX } }))!
+  /** The heading heads these states and nothing else. */
+  const headed = (kind: string) => kind === 'loading' || kind === 'failed' || kind === 'missing'
+
+  it('shows the file on the bank row of a matched payment (crm#1977)', () => {
+    expect(underlagState(match, read({ document: FILE }), false)).toEqual({ kind: 'document', document: FILE })
+  })
+
+  it('shows nothing, and no heading, over the bank row of a matched payment without a file', () => {
+    const state = underlagState(match, read(), false)
+    expect(state).toEqual({ kind: 'none' })
+    expect(headed(state.kind)).toBe(false)
+  })
+
+  it('holds no room in the drawer while a read that may find nothing is out, and does where the slot keeps its place', () => {
+    expect(underlagState(match, read({ loading: true }), false)).toEqual({ kind: 'none' })
+    expect(underlagState(match, read({ loading: true }), true)).toEqual({ kind: 'loading' })
+  })
+
+  it('says so when the bank row could not be read', () => {
+    expect(underlagState(match, read({ failed: true }), false)).toEqual({ kind: 'failed' })
+  })
+
+  it('a categorisation: the skeleton while reading, the file when the row has one, underlag saknas when it has none', () => {
+    expect(underlagState(categorisation, read({ loading: true }), false)).toEqual({ kind: 'loading' })
+    expect(underlagState(categorisation, read({ document: FILE }), false)).toEqual({ kind: 'document', document: FILE })
+    expect(underlagState(categorisation, read(), false)).toEqual({ kind: 'missing' })
+    expect(underlagState(categorisation, read({ failed: true }), false)).toEqual({ kind: 'failed' })
+  })
+
+  it('the proposal\'s own file needs no read; a verifikat staged without one says underlag saknas', () => {
+    const own = underlagOf(op({ params: { document_id: DOC } }))!
+    expect(underlagState(own, read(), false)).toMatchObject({ kind: 'document', document: { documentId: DOC } })
+    const none = underlagOf(op({ preview_data: { lines: VOUCHER_LINES, compliance_warning: 'No document attached.' } }))!
+    expect(underlagState(none, read(), false)).toEqual({ kind: 'missing' })
+  })
+
+  it('a file on the row wins over a warning staged before the row had one', () => {
+    const warned = { ...categorisation, missing: true }
+    expect(underlagState(warned, read({ document: FILE }), false)).toEqual({ kind: 'document', document: FILE })
+    expect(underlagState(warned, read(), false)).toEqual({ kind: 'missing' })
+  })
+
+  it('every state but the three it heads comes without the heading', () => {
+    const states = [
+      underlagState(match, read(), false),
+      underlagState(match, read({ loading: true }), false),
+      underlagState(match, read({ document: FILE }), true),
+    ]
+    expect(states.map((state) => headed(state.kind))).toEqual([false, false, false])
   })
 })
 
