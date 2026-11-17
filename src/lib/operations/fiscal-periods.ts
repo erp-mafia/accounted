@@ -86,13 +86,14 @@ export const fiscalPeriodsCreate = defineOperation({
   docs: {
     summary: 'Create a fiscal year (räkenskapsår).',
     description:
-      'Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§); for an enskild firma it ends on 31 December and only the earliest year may start after 1 January. It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.',
+      'Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§); for an enskild firma it ends on 31 December and only the earliest year may start after 1 January. It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap of at most 18 months, it also ends the day before the next year starts; a longer gap is filled one year at a time from its oldest end; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.',
     useWhen:
       'The company needs the next räkenskapsår to book in (e.g. January arrives), or an earlier year must exist before its SIE file or opening balances can be imported.',
     doNotUseFor:
       'Closing the prior year (run the year-end), or changing an existing year (PATCH /fiscal-periods/{id}).',
     pitfalls: [
       'A start that does not continue the preceding year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS with details.expected_start (or details.expected_end): retry with that date.',
+      'A gap of more than 18 months between two years takes several creates, since one year over all of it answers 400 FISCAL_PERIOD_TOO_LONG: create a 12-month year starting on details.expected_start, then the next, until the last one ends on details.gap_end. The year that closes the gap becomes the previous year of the one after it.',
       'Overlapping an existing year answers 409 FISCAL_PERIOD_OVERLAP.',
       'An enskild firma uses the calendar year: any other year answers 400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR, with details.rule end_31_december or start_1_january.',
       'There is no delete: a wrong year can be re-dated with PATCH only while nothing is posted in it.',

@@ -17,9 +17,11 @@
  *   - a year is at most 18 months, ends on a month end, and starts on the 1st
  *     unless it is the company's earliest year (BFL 3 kap. 1 and 3 §§);
  *   - years are contiguous: a new year chains onto its predecessor (starts
- *     the day after it ends) and, when it fills a gap, ends the day before
- *     its successor; a year prepended before the earliest ends the day before
- *     it; years never overlap (409, also the DB exclusion constraint);
+ *     the day after it ends) and, when it fills a gap one legal year can
+ *     close, ends the day before its successor; a gap longer than a year may
+ *     be is filled one year at a time from its oldest end (crm#1982); a year
+ *     prepended before the earliest ends the day before it; years never
+ *     overlap (409, also the DB exclusion constraint);
  *   - a closed or locked year is never edited (the name may change on an
  *     open one at any time), except that the earliest year's start may be
  *     corrected within its month after the bokslut (crm#1140); dates move
@@ -38,6 +40,7 @@
 import { addDaysIso } from '@/lib/dates/iso'
 import {
   checkPeriodDuration,
+  exceedsFiscalYearCap,
   isFirstFiscalPeriod,
   parseDateParts,
   type PeriodDurationIssue,
@@ -112,6 +115,54 @@ function overlapFailure(overlapping: { id: string; name: string }): Failure {
   }
 }
 
+/** A hole between two recorded years that is longer than a räkenskapsår may be. */
+interface WideGap {
+  /** Its first day: where the next fill year starts. */
+  start: string
+  /** Its last day: the day before the following year starts. */
+  end: string
+  followingPeriodId: string
+}
+
+/**
+ * The hole after `predecessor` when no single legal year can close it (BFL
+ * 3 kap., exceedsFiscalYearCap), else null. Such a hole arises when an SIE
+ * import adds an old year to a company that already has a later one (it
+ * leaves the gap unlinked on purpose), and is filled one year at a time from
+ * its oldest end, as the bank door fills it (missingFiscalYears).
+ */
+function wideGapAfter(
+  sortedPeriods: ReadonlyArray<{ id: string; period_start: string; period_end: string }>,
+  predecessor: { period_end: string } | null,
+): WideGap | null {
+  if (!predecessor) return null
+  const following = sortedPeriods.find((p) => p.period_start > predecessor.period_end)
+  if (!following) return null
+  const start = addDaysIso(predecessor.period_end, 1)
+  const end = addDaysIso(following.period_start, -1)
+  return exceedsFiscalYearCap(start, end) ? { start, end, followingPeriodId: following.id } : null
+}
+
+/**
+ * A refusal inside a wide gap, with the way forward: the date the next fill
+ * year starts on, and that the gap takes one legal year at a time.
+ */
+function withStepwiseFill(failure: Failure, gap: WideGap): Failure {
+  const wayForward =
+    'Luckan fram till nästa räkenskapsår är längre än 18 månader och fylls ett räkenskapsår i taget: ' +
+    `skapa först ett år som börjar ${gap.start} (normalt 12 månader), sedan nästa, tills det sista slutar ${gap.end}.`
+  return {
+    ...failure,
+    details: {
+      ...failure.details,
+      expected_start: gap.start,
+      gap_end: gap.end,
+      following_period_id: gap.followingPeriodId,
+    },
+    messageSv: [failure.messageSv, wayForward].filter(Boolean).join(' '),
+  }
+}
+
 /** The request every door validates (CreateFiscalPeriodSchema). */
 export type CreateFiscalPeriodInput = z.output<typeof CreateFiscalPeriodSchema>
 
@@ -147,12 +198,6 @@ export async function createFiscalPeriod(
   const isFirstPeriod = isFirstFiscalPeriod(input.period_start, sortedPeriods.map((p) => p.period_start))
   const entityType = await resolveCompanyEntityType(supabase, companyId)
 
-  const durationIssue = checkPeriodDuration(input.period_start, input.period_end, {
-    isFirstPeriod,
-    calendarYearOnly: fiscalYearLockedToCalendar(entityType),
-  })
-  if (durationIssue) return durationFailure(durationIssue, input.period_start, input.period_end)
-
   // The new period's immediate neighbours. Fiscal periods never overlap (the
   // no_overlapping_fiscal_periods DB exclusion constraint), so ordering by
   // period_start is also ordering by period_end.
@@ -160,17 +205,33 @@ export async function createFiscalPeriod(
   //   successor   = closest existing period starting after the new one ends
   const predecessor = [...sortedPeriods].reverse().find((p) => p.period_end < input.period_start) ?? null
   const successor = sortedPeriods.find((p) => p.period_start > input.period_end) ?? null
+  // The hole after the predecessor, when it is longer than one year may be.
+  const wideGap = wideGapAfter(sortedPeriods, predecessor)
+  // Whether the new period ends the day before its successor starts, so the
+  // successor follows it directly.
+  const successorExpectedEnd = successor ? addDaysIso(successor.period_start, -1) : null
+  const reachesSuccessor = successorExpectedEnd !== null && input.period_end === successorExpectedEnd
+
+  const durationIssue = checkPeriodDuration(input.period_start, input.period_end, {
+    isFirstPeriod,
+    calendarYearOnly: fiscalYearLockedToCalendar(entityType),
+  })
+  if (durationIssue) {
+    const failure = durationFailure(durationIssue, input.period_start, input.period_end)
+    // One year asked to close a gap longer than a year may be: the cap holds,
+    // and the refusal says how the gap is filled instead.
+    return durationIssue.rule === 'exceeds_18_months' && wideGap ? withStepwiseFill(failure, wideGap) : failure
+  }
 
   // Prior räkenskapsår still fully open at the moment the next one is
   // appended. Advisory only (see the isAppend block below).
   let openPriorPeriods: OpenPriorPeriod[] = []
-  let isPrepend = false
 
   if (sortedPeriods.length > 0) {
     const earliest = sortedPeriods[0]
     const latest = sortedPeriods[sortedPeriods.length - 1]
 
-    isPrepend = input.period_end < earliest.period_start
+    const isPrepend = input.period_end < earliest.period_start
     const isAppend = input.period_start > latest.period_end
 
     if (isPrepend) {
@@ -192,31 +253,35 @@ export async function createFiscalPeriod(
       if (predecessor) {
         const expectedStart = addDaysIso(predecessor.period_end, 1)
         if (input.period_start !== expectedStart) {
-          return {
+          const failure: Failure = {
             ok: false,
             code: 'FISCAL_PERIOD_NOT_CONTIGUOUS',
             details: { expected_start: expectedStart, preceding_period_id: predecessor.id },
             messageSv: `Räkenskapsåret måste börja ${expectedStart}, dagen efter att föregående räkenskapsår slutar.`,
           }
+          return wideGap ? withStepwiseFill(failure, wideGap) : failure
         }
       }
       // No predecessor here means the new period reaches back over the earliest
       // existing period (an overlap): the overlap check below answers 409.
 
       // Gap fill: the new period must also end the day before its SUCCESSOR,
-      // so it fills the hole completely. Without this a too-short period would
-      // leave a fresh sub-gap yet still get the successor's previous_period_id
-      // relinked onto it (below), silently breaking the BFNAR 2013:2
-      // continuity chain. A too-long one is caught as an overlap (409).
-      if (successor) {
-        const expectedEnd = addDaysIso(successor.period_start, -1)
-        if (input.period_end !== expectedEnd) {
-          return {
-            ok: false,
-            code: 'FISCAL_PERIOD_NOT_CONTIGUOUS',
-            details: { expected_end: expectedEnd, following_period_id: successor.id },
-            messageSv: `Räkenskapsåret måste sluta ${expectedEnd}, dagen innan nästa räkenskapsår börjar.`,
-          }
+      // so it fills the hole completely: a too-short period would leave a
+      // fresh sub-gap where one year was enough. A too-long one is caught as
+      // an overlap (409).
+      //
+      // Not so in a hole longer than a year may be (crm#1982): there "reach
+      // the successor" and "at most 18 months" exclude each other, so no
+      // create could ever succeed. The cap is the law and stays; the year
+      // chains onto its predecessor and the rest of the hole waits for the
+      // next create, as on the bank door (missingFiscalYears). The successor
+      // is relinked only by the year that reaches it (periodToRelink below).
+      if (successor && successorExpectedEnd && !reachesSuccessor && !wideGap) {
+        return {
+          ok: false,
+          code: 'FISCAL_PERIOD_NOT_CONTIGUOUS',
+          details: { expected_end: successorExpectedEnd, following_period_id: successor.id },
+          messageSv: `Räkenskapsåret måste sluta ${successorExpectedEnd}, dagen innan nästa räkenskapsår börjar.`,
         }
       }
 
@@ -281,9 +346,12 @@ export async function createFiscalPeriod(
   // can walk the BFNAR 2013:2 continuity chain. Prepend leaves this null and
   // instead relinks the old earliest period to follow the new one (below).
   const previousPeriodId = predecessor ? predecessor.id : null
-  // The period that follows the new one: the old earliest (prepend) or the
-  // successor (gap fill). Append has none.
-  const periodToRelink = sortedPeriods.length === 0 ? null : isPrepend ? sortedPeriods[0] : successor
+  // The period that follows the new one directly: the old earliest (prepend)
+  // or the successor a gap fill reaches. Append has none, and neither has a
+  // fill year that leaves the rest of a wide gap open: previous_period_id
+  // means the year ending the day before (resolvePreviousFiscalPeriod), so
+  // the successor keeps its link until the year that reaches it is created.
+  const periodToRelink = reachesSuccessor ? successor : null
 
   // Non-blocking advisory: the new year exists and is bookable right now, but
   // its ingående balanser are pending because the prior year's bokslut has

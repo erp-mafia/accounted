@@ -4076,7 +4076,10 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     thrown_message_sv: true,
     message_sv: 'Ett räkenskapsår får vara högst 18 månader (BFL 3 kap.).',
     message_en: 'A fiscal year may be at most 18 months (BFL 3 kap.).',
-    remediation: { description: 'details.months holds the length requested.' },
+    remediation: {
+      description:
+        'details.months holds the length requested. One year cannot close a gap between two recorded years that is longer than 18 months: create a year of normal length (12 months) starting on details.expected_start, then the next one, until the last one ends on details.gap_end. The message names both dates.',
+    },
   },
   FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR: {
     httpStatus: 400,
@@ -4094,7 +4097,7 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
       'Fiscal years must follow each other without a gap: a year starts the day after the previous one ends.',
     remediation: {
       description:
-        'A new year starts the day after the preceding year ends and ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits.',
+        'A new year starts the day after the preceding year ends, and one that fills a gap of at most 18 months also ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits; the message names it. A gap longer than 18 months is filled one year at a time from its oldest end: create a year of normal length (12 months) starting on details.expected_start, then the next one, until the last one ends on details.gap_end.',
     },
   },
   FISCAL_PERIOD_OVERLAP: {
