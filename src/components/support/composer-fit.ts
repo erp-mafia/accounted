@@ -1,6 +1,6 @@
 'use client'
 
-import { useSyncExternalStore } from 'react'
+import { useSyncExternalStore, type CSSProperties } from 'react'
 
 /**
  * Sizing for the support dialog's message box (PH 216).
@@ -9,17 +9,19 @@ import { useSyncExternalStore } from 'react'
  * about four lines of a message, the rest scrolled inside it behind an
  * overlay scrollbar Safari does not show, and no handle to drag it bigger.
  * Someone writing ten lines could not read back what they wrote. On an iPad
- * the on-screen keyboard also covered the lower half of a dialog centered in
- * the layout viewport: 100dvh does not shrink for the keyboard, only the
- * visual viewport does.
+ * the on-screen keyboard also covered the lower half of the dialog: 100dvh
+ * does not shrink for the keyboard, only the visual viewport does.
  *
- * Now the box grows with its text as far as the visible viewport allows with
- * the rest of the dialog still on screen, then scrolls inside, and the dialog
- * is centered in, and capped to, the visual viewport.
+ * Now the box grows with its text as far as the dialog's own max height
+ * allows, then scrolls inside, and the dialog is told the visual viewport, so
+ * it sits and ends inside what is actually visible.
+ *
+ * Nothing here knows where a dialog sits or how tall it may be: the shared
+ * DialogContent owns that (components/ui/dialog.tsx). This module once kept
+ * its own copy of that placement (the middle of the viewport, a 32px margin);
+ * when dialogs became top anchored the copy put the dialog's top edge at the
+ * middle of the screen and its lower half below it (crm#1973).
  */
-
-/** Space kept between the dialog and the viewport edges, as DialogContent's max-h-[calc(100dvh-2rem)]. */
-export const DIALOG_VIEWPORT_MARGIN_PX = 32
 
 export interface ViewportBox {
   height: number
@@ -31,21 +33,20 @@ export interface TextareaHeightInput {
   content: number
   /** Everything else in the dialog: header, footer, paddings, other rows. */
   chrome: number
-  /** Visible viewport height (the visual viewport while a keyboard is up). */
-  viewport: number
+  /** The tallest the dialog may be right now: its own max height. */
+  dialogMax: number
   /** The box's own min height, which it never goes under. */
   min: number
 }
 
 /**
  * The box shows all of its text while that fits beside the rest of the dialog
- * in the visible viewport, and stops growing there (its text scrolls inside).
- * A viewport too short for even the min height keeps the min: the dialog then
- * scrolls as a whole, which beats a box too small to type in.
+ * under the dialog's max height, and stops growing there (its text scrolls
+ * inside). A dialog too short for even the min height keeps the min: the
+ * dialog then scrolls as a whole, which beats a box too small to type in.
  */
-export function textareaHeight({ content, chrome, viewport, min }: TextareaHeightInput): number {
-  const room = viewport - DIALOG_VIEWPORT_MARGIN_PX - chrome
-  const cap = Math.max(min, room)
+export function textareaHeight({ content, chrome, dialogMax, min }: TextareaHeightInput): number {
+  const cap = Math.max(min, dialogMax - chrome)
   return Math.min(Math.max(content, min), cap)
 }
 
@@ -68,12 +69,12 @@ export interface FitPanel {
  * scrollbar only shows once the text is taller than the box: at an exact fit a
  * rounding pixel would otherwise draw an empty one.
  */
-export function fitTextarea(el: FittableTextarea, panel: FitPanel | null, viewport: number): number {
+export function fitTextarea(el: FittableTextarea, panel: FitPanel | null, dialogMax: number): number {
   el.style.height = 'auto'
   const min = el.offsetHeight
   const content = el.scrollHeight + (el.offsetHeight - el.clientHeight)
   const chrome = panel ? Math.max(0, panel.scrollHeight - min) : 0
-  const height = textareaHeight({ content, chrome, viewport, min })
+  const height = textareaHeight({ content, chrome, dialogMax, min })
   el.style.height = `${height}px`
   el.style.overflowY = content > height ? 'auto' : 'hidden'
   return height
@@ -117,11 +118,30 @@ export function useVisualViewport(active: boolean): ViewportBox | null {
   )
 }
 
-/** Dialog placement inside the visual viewport: centered in it and capped to it. */
-export function dialogViewportStyle(box: ViewportBox | null): { top: number; maxHeight: number } | undefined {
+/**
+ * The tallest the dialog may be right now, read from the dialog itself: its
+ * max height is the shared DialogContent's to decide, and it already follows
+ * the visual viewport (dialogViewportStyle). `fallback` answers before the
+ * panel is mounted or when it has no max height.
+ */
+export function dialogMaxHeight(panel: Element | null, fallback: number): number {
+  if (!panel) return fallback
+  const max = parseFloat(getComputedStyle(panel).maxHeight)
+  return Number.isFinite(max) ? max : fallback
+}
+
+/**
+ * The visual viewport, handed to the shared DialogContent as the two custom
+ * properties its own placement reads (components/ui/dialog.tsx): the dialog
+ * keeps its normal top anchor, measured from the top of what is visible, and
+ * its max height counts from the visible height. No `top` and no `maxHeight`
+ * of our own. With nothing offset or shrunk the result equals the dialog's
+ * default placement.
+ */
+export function dialogViewportStyle(box: ViewportBox | null): CSSProperties | undefined {
   if (!box) return undefined
   return {
-    top: box.offsetTop + box.height / 2,
-    maxHeight: Math.max(0, box.height - DIALOG_VIEWPORT_MARGIN_PX),
-  }
+    '--dialog-viewport-top': `${box.offsetTop}px`,
+    '--dialog-viewport-height': `${box.height}px`,
+  } as CSSProperties
 }

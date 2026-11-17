@@ -84,7 +84,14 @@ const DialogContent = React.forwardRef<
         // float shadow, 20px insets; it enters and leaves on the same path
         // (8px rise, .98 scale, fade). No boxes inside: content groups with
         // spacing, 12px labels and hairlines like the flat pages.
-        "fixed left-[calc((100vw-var(--agent-sheet-w,0px))/2)] top-4 sm:top-[72px] z-50 grid grid-cols-[minmax(0,1fr)] w-[calc(100vw-1rem)] translate-x-[-50%] gap-5 rounded-xl bg-popover px-5 pb-5 pt-5 text-popover-foreground shadow-float max-h-[calc(100dvh-2rem)] sm:max-h-[calc(100dvh-112px)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:slide-out-to-bottom-2 data-[state=open]:duration-300 data-[state=open]:ease-emphasized",
+        // top and max-h read two optional custom properties,
+        // --dialog-viewport-top and --dialog-viewport-height. Unset (every
+        // dialog but the support one) they fall back to 0px and 100dvh, which
+        // is the plain anchor. A dialog someone types in behind an on-screen
+        // keyboard sets them to the visual viewport (dialogViewportStyle in
+        // components/support/composer-fit.ts) and so keeps this anchor inside
+        // what is visible, instead of carrying a placement of its own.
+        "fixed left-[calc((100vw-var(--agent-sheet-w,0px))/2)] top-[calc(var(--dialog-viewport-top,0px)+1rem)] sm:top-[calc(var(--dialog-viewport-top,0px)+72px)] z-50 grid grid-cols-[minmax(0,1fr)] w-[calc(100vw-1rem)] translate-x-[-50%] gap-5 rounded-xl bg-popover px-5 pb-5 pt-5 text-popover-foreground shadow-float max-h-[calc(var(--dialog-viewport-height,100dvh)-2rem)] sm:max-h-[calc(var(--dialog-viewport-height,100dvh)-112px)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:slide-out-to-bottom-2 data-[state=open]:duration-300 data-[state=open]:ease-emphasized",
         DIALOG_WIDTH[size],
         className
       )}

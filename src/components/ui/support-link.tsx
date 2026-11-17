@@ -55,7 +55,7 @@ import {
   type TicketSummary,
   whenConversationsReady,
 } from '@/lib/support/conversations'
-import { dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
+import { dialogMaxHeight, dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
 import { stockholmYearMonth } from '@/lib/dates/iso'
 
 interface SupportLinkProps {
@@ -229,13 +229,13 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   }, [thread])
 
   // The message box grows with its text, so a long message reads in full
-  // while it is written, up to what the visible viewport leaves beside the
+  // while it is written, up to what the dialog's max height leaves beside the
   // rest of the dialog; past that it scrolls inside (PH 216). Re-fitted on
   // everything that changes its text, its width or the room around it.
   useLayoutEffect(() => {
     const el = textareaRef.current
     if (!el) return
-    fitTextarea(el, panelRef.current, viewport?.height ?? window.innerHeight)
+    fitTextarea(el, panelRef.current, dialogMaxHeight(panelRef.current, viewport?.height ?? window.innerHeight))
   }, [message, view, viewport, attachments.length, thread, composeBack])
 
   if (companyCtx?.isSandbox) return null
@@ -636,9 +636,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
-      {/* Centered in, and capped to, the visual viewport: an on-screen
-          keyboard shrinks only that one, so a dialog placed by the layout
-          viewport sits half behind the keyboard on a tablet (PH 216). */}
+      {/* Told the visual viewport: an on-screen keyboard shrinks only that
+          one, so a dialog measured from the layout viewport sits half behind
+          the keyboard on a tablet (PH 216). Where it sits and how tall it may
+          be stays the shared dialog's own rule. */}
       <DialogContent size="confirm"
  ref={panelRef}
  

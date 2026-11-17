@@ -33,8 +33,10 @@ import {
   reviewReason,
   stagedPostingLines,
   underlagOf,
+  underlagState,
   type HistoryEvent,
   type StepPosition,
+  type UnderlagState,
 } from './review-model'
 import { rejectionCategoryLabel } from './vocabulary'
 
@@ -71,11 +73,10 @@ export function ReviewRisk({ op, quiet = false }: { op: PendingOperation; quiet?
 /* ---------------------------------------------------------------- underlag */
 
 /**
- * The underlag of the bank row a categorisation acts on: the document pinned
- * to the row or matched to it from the inbox (GET
- * /api/transactions/[id]/underlag, the read the booking review uses). Tagged
- * with the row it was read for, so a slow answer for the previous proposal
- * never shows under the next one.
+ * The underlag of the bank row a proposal names: the document pinned to the
+ * row or matched to it from the inbox (GET /api/transactions/[id]/underlag,
+ * the read the booking review uses). Tagged with the row it was read for, so
+ * a slow answer for the previous proposal never shows under the next one.
  */
 function useTransactionUnderlag(transactionId: string | null) {
   const [fetched, setFetched] = useState<{ id: string; document: ProposalDocumentRef | null; failed: boolean } | null>(null)
@@ -113,9 +114,10 @@ function useTransactionUnderlag(transactionId: string | null) {
 }
 
 /**
- * The underlag slot: the real file shown as the file, the bank row the
- * proposal acts on, or the plain state that there is none. Renders nothing
- * for a proposal with no underlag to speak of (a new customer).
+ * The underlag slot: the real file shown as the file (the proposal's own, or
+ * the one on the bank row it names), the bank row the proposal acts on, or
+ * the plain state that there is none. Renders nothing for a proposal with no
+ * underlag to speak of (a new customer).
  */
 export function ReviewUnderlag({
   op,
@@ -131,38 +133,47 @@ export function ReviewUnderlag({
   const tHem = useTranslations('hem')
   const underlag = underlagOf(op)
   const ofRow = useTransactionUnderlag(underlag?.transactionId ?? null)
-  if (!underlag) {
+  const state: UnderlagState = underlag ? underlagState(underlag, ofRow, slot) : { kind: 'none' }
+  const bankRow = underlag?.bankRow ?? null
+  const heading = <h3 className={SLOT_LABEL_CLASS}>{t('preview_link_document_heading')}</h3>
+  if (state.kind === 'none' && !bankRow) {
     if (!slot) return null
     return (
       <section className="min-w-0" aria-label={t('preview_link_document_heading')}>
-        <h3 className={SLOT_LABEL_CLASS}>{t('preview_link_document_heading')}</h3>
+        {heading}
         <p className="border-y-hairline py-2 text-[13px] text-muted-foreground">{t('review_no_underlag')}</p>
       </section>
     )
   }
-  const { bankRow } = underlag
-  const document = underlag.document ?? ofRow.document
-  // The staging tool said so (a verifikat), or the bank row has none.
-  const missing = underlag.missing || (underlag.transactionId != null && !ofRow.loading && !ofRow.failed && !document)
   return (
     <section className="min-w-0 space-y-3" aria-label={t('preview_link_document_heading')}>
-      <div>
-        {/* The file's own header names it; the label heads the other states. */}
-        {!document && <h3 className={SLOT_LABEL_CLASS}>{t('preview_link_document_heading')}</h3>}
-        {document && <ProposalDocument docRef={document} detail viewerClassName={viewerClassName} />}
-        {ofRow.loading && (
-          <LateReveal>
-            <Skeleton className={cn('w-full rounded-lg', slot ? viewerClassName : 'h-36')} />
-          </LateReveal>
-        )}
-        {ofRow.failed && <p className="text-[13px] text-muted-foreground">{tHem('step_underlag_failed')}</p>}
-        {missing && (
+      {/* The heading only ever heads a state. The file's own header names the
+          file, and over a bank row alone it read as an underlag that had
+          failed to show (crm#1977). */}
+      {state.kind === 'document' && <ProposalDocument docRef={state.document} detail viewerClassName={viewerClassName} />}
+      {state.kind === 'loading' && (
+        // The heading waits with the skeleton: a read that answers in time
+        // shows neither.
+        <LateReveal>
+          {heading}
+          <Skeleton className={cn('w-full rounded-lg', slot ? viewerClassName : 'h-36')} />
+        </LateReveal>
+      )}
+      {state.kind === 'failed' && (
+        <div>
+          {heading}
+          <p className="text-[13px] text-muted-foreground">{tHem('step_underlag_failed')}</p>
+        </div>
+      )}
+      {state.kind === 'missing' && (
+        <div>
+          {heading}
           <div className="flex min-h-36 flex-col items-center justify-center gap-2 rounded-lg bg-muted px-4 py-6 text-center">
             <DocumentTextIcon className="h-5 w-5 text-muted-foreground" aria-hidden />
             <p className="text-[13px] text-strong">{tHem('why_upload')}</p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       {bankRow && (
         <div className="flex min-h-11 items-center gap-4 border-y-hairline py-2 text-[13px]">
           <div className="min-w-0 flex-1">

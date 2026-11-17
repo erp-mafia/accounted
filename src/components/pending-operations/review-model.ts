@@ -330,12 +330,19 @@ export interface ReviewUnderlag {
   /** The bank row the proposal acts on, where its preview describes the row. */
   bankRow: ReviewBankRow | null
   /**
-   * A categorisation's bank row: the row's own underlag (the receipt pinned
-   * or matched to it) is the proposal's, and is read where the review opens.
-   * Its preview states the amount unsigned and no bank text, so the row
-   * itself is not drawn from it.
+   * The bank row the proposal names, when it carries no file of its own: the
+   * row's underlag (the receipt pinned or matched to it) is the proposal's,
+   * and is read where the review opens. Every type that names one bank row,
+   * not a list of types: only a categorisation looked it up, so a payment
+   * matched to an invoice never showed the file on its bank row (crm#1977).
    */
   transactionId: string | null
+  /**
+   * The proposal books the row from the row alone (a categorisation): a row
+   * without underlag is then a gap the review states. For the rest the row's
+   * file is shown when it has one, and nothing is said when it has none.
+   */
+  rowUnderlagExpected: boolean
   /** The staging tool said the verifikat has no underlag (BFL 5 kap 6 §). */
   missing: boolean
 }
@@ -343,7 +350,11 @@ export interface ReviewUnderlag {
 /** The previews that draw their document beside what it is linked to; the review moves it to the underlag slot. */
 const OWN_DOCUMENT_TYPES = new Set(['attach_document_to_transaction', 'link_document_to_voucher'])
 
-/** Proposals that act on one bank row, and the preview fields that describe it. */
+/**
+ * Proposals whose preview describes the bank row they act on, and the fields
+ * that do. A categorisation is not here: its preview states the amount
+ * unsigned and no bank text, so the row is not drawn from it.
+ */
 const BANK_ROW_FIELDS: Record<string, { date: string; text: string; amount: string; currency: string }> = {
   attach_document_to_transaction: {
     date: 'transaction_date',
@@ -358,6 +369,12 @@ const BANK_ROW_FIELDS: Record<string, { date: string; text: string; amount: stri
     currency: 'transaction_currency',
   },
 }
+
+/** Their transaction_id names a skattekonto row, which is no bank row and has no underlag to read. */
+const NOT_A_BANK_ROW = new Set(['book_skattekonto_row'])
+
+/** They book a bank row from the row alone: a row without underlag is a gap the review states. */
+const ROW_UNDERLAG_EXPECTED = new Set(['categorize_transaction'])
 
 /** Null when the proposal has no underlag to speak of (a new customer): the section is then left out. */
 export function underlagOf(
@@ -385,9 +402,47 @@ export function underlagOf(
         }
       : null
   const transactionId =
-    !document && op.operation_type === 'categorize_transaction' && isUuid(params.transaction_id) ? params.transaction_id : null
+    !document && !NOT_A_BANK_ROW.has(op.operation_type) && isUuid(params.transaction_id) ? params.transaction_id : null
+  const rowUnderlagExpected = transactionId != null && ROW_UNDERLAG_EXPECTED.has(op.operation_type)
   const missing = !document && complianceWarningOf(op)?.kind === 'missing_underlag'
-  return document || bankRow || missing || transactionId ? { document, bankRow, transactionId, missing } : null
+  return document || bankRow || missing || transactionId ? { document, bankRow, transactionId, rowUnderlagExpected, missing } : null
+}
+
+/** What the review read for the bank row's own underlag. */
+export interface RowUnderlagRead {
+  loading: boolean
+  failed: boolean
+  document: ProposalDocumentRef | null
+}
+
+export type UnderlagState =
+  | { kind: 'document'; document: ProposalDocumentRef }
+  | { kind: 'loading' | 'failed' | 'missing' | 'none' }
+
+/**
+ * The one thing the underlag slot shows above the bank row: the file, that it
+ * is being read, that it could not be read, that there is none where there
+ * should be one, or nothing. The "Underlag" heading heads the three states in
+ * the middle and nothing else: the file names itself, and with 'none' the
+ * heading used to stand alone over the bank row of a matched payment, as if
+ * its underlag had failed to show (crm#1977).
+ *
+ * A file wins over what the staging tool said when it staged: the row may
+ * have got its receipt since.
+ *
+ * `keepsPlace`: the slot holds its room whatever it shows (the full page). In
+ * the drawer a read that may well find nothing, any row but a
+ * categorisation's, shows no skeleton: it would open a gap that closes again
+ * on most proposals.
+ */
+export function underlagState(underlag: ReviewUnderlag, row: RowUnderlagRead, keepsPlace: boolean): UnderlagState {
+  const document = underlag.document ?? row.document
+  if (document) return { kind: 'document', document }
+  if (underlag.transactionId != null) {
+    if (row.loading) return { kind: underlag.rowUnderlagExpected || keepsPlace ? 'loading' : 'none' }
+    if (row.failed) return { kind: 'failed' }
+  }
+  return { kind: underlag.missing || underlag.rowUnderlagExpected ? 'missing' : 'none' }
 }
 
 /* ------------------------------------------------------------------ reason */

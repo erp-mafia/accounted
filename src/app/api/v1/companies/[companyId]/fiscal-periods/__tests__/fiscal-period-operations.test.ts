@@ -281,6 +281,72 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods', () => {
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
     expect(client.rpc).not.toHaveBeenCalled()
   })
+
+  // crm#1982: a hole of 36 months between an imported old year and the
+  // current one. No single year closes it, so it is filled from its oldest end.
+  describe('a gap longer than one räkenskapsår', () => {
+    const OLD_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const OLD = { id: OLD_ID, period_start: '2022-10-01', period_end: '2023-09-30', is_closed: true }
+    const CURRENT = { id: PRIOR_ID, period_start: '2026-10-01', period_end: '2027-09-30', is_closed: false }
+
+    it('a dry run (the MCP staging preview) accepts the first fill year and relinks nothing yet', async () => {
+      const client = makeClient({
+        company_members: MEMBER,
+        fiscal_periods: [
+          { data: [OLD, CURRENT], error: null },
+          { data: [], error: null }, // overlap
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(`${BASE}?dry_run=true`, {
+          method: 'POST',
+          body: '{"name":"Räkenskapsår 2023/2024","period_start":"2023-10-01","period_end":"2024-09-30"}',
+        }),
+        companyParams,
+      )
+      expect(res.status).toBe(200)
+      const json = await res.json()
+      expect(json.data.preview).toMatchObject({ previous_period_id: OLD_ID, relinks_period_id: null })
+      expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+    })
+
+    it('400 FISCAL_PERIOD_NOT_CONTIGUOUS for a year in the middle says where the fill starts and that it takes one year at a time', async () => {
+      const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: [OLD, CURRENT], error: null } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2024-10-01","period_end":"2025-09-30"}' }),
+        companyParams,
+      )
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+      expect(json.error.details).toMatchObject({
+        expected_start: '2023-10-01',
+        gap_end: '2026-09-30',
+        following_period_id: PRIOR_ID,
+      })
+      expect(json.error.details.reason).toContain('skapa först ett år som börjar 2023-10-01')
+      expect(json.error.recovery_hint).toContain('one year at a time')
+      expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+    })
+
+    it('400 FISCAL_PERIOD_TOO_LONG for one year over the whole gap carries the same way forward', async () => {
+      const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: [OLD, CURRENT], error: null } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2023-10-01","period_end":"2026-09-30"}' }),
+        companyParams,
+      )
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+      expect(json.error.details).toMatchObject({ months: 36, expected_start: '2023-10-01', gap_end: '2026-09-30' })
+      expect(json.error.details.reason).toContain('fylls ett räkenskapsår i taget')
+      expect(json.error.recovery_hint).toContain('details.expected_start')
+      expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+    })
+  })
 })
 
 describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {

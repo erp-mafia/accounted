@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { PendingOperation } from '@/types'
 import { proposalDocumentRef } from '../proposal-document'
 
 vi.mock('next-intl', () => ({
@@ -13,7 +14,10 @@ vi.mock('next-intl', () => ({
   useLocale: () => 'sv',
 }))
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => {}, replace: () => {}, refresh: () => {} }) }))
+
 const { OperationPreview } = await import('../OperationPreview')
+const { ReviewUnderlag } = await import('../ProposalReview')
 
 const DOC = '11111111-1111-4111-8111-111111111111'
 const INBOX = '22222222-2222-4222-8222-222222222222'
@@ -116,5 +120,37 @@ describe('OperationPreview', () => {
     )
     expect(html).toContain(`href="/api/documents/${DOC}/inline"`)
     expect(html).toContain('faktura.pdf')
+  })
+})
+
+describe('ReviewUnderlag: the heading never stands alone (crm#1977)', () => {
+  const TX = '44444444-4444-4444-8444-444444444444'
+  // A static render: the bank row's underlag is still being read.
+  const render = (op: Record<string, unknown>, slot = false) =>
+    renderToStaticMarkup(createElement(ReviewUnderlag, { op: { status: 'pending', ...op } as unknown as PendingOperation, viewerClassName: 'h-10', slot }))
+
+  it('a matched payment shows its bank row with no heading over it', () => {
+    const html = render({
+      operation_type: 'match_transaction_invoice',
+      params: { transaction_id: TX },
+      preview_data: { transaction_date: '2026-11-10', transaction_description: 'BG 5050-1055', transaction_amount: 12500 },
+    })
+    expect(html).toContain('BG 5050-1055')
+    expect(html).toContain('review_bank_row')
+    expect(html).not.toContain('<h3')
+  })
+
+  it('a proposal that only names a bank row renders nothing until the row has a file to show', () => {
+    expect(render({ operation_type: 'ignore_transaction', params: { transaction_id: TX }, preview_data: {} })).toBe('')
+  })
+
+  it('a categorisation keeps its heading together with the skeleton it heads', () => {
+    const html = render({ operation_type: 'categorize_transaction', params: { transaction_id: TX }, preview_data: {} })
+    expect(html).toMatch(/<div aria-busy="true"[^>]*><h3[^>]*>preview_link_document_heading<\/h3><div[^>]*skeleton-shimmer/)
+  })
+
+  it('the full page says so where a proposal has no underlag, under the heading', () => {
+    const html = render({ operation_type: 'create_customer', params: {}, preview_data: { name: 'A' } }, true)
+    expect(html).toMatch(/<h3[^>]*>preview_link_document_heading<\/h3><p[^>]*>review_no_underlag<\/p>/)
   })
 })

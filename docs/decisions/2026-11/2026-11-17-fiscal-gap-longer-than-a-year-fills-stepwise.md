@@ -1,0 +1,1 @@
+[2026-11-17] A gap between two fiscal years that is longer than 18 months is filled one legal year at a time from its oldest end, on the create door as on the bank door (crm#1982): there "reach the next year" and the 18 month cap exclude each other, and the cap is law, so the reach rule yields.
