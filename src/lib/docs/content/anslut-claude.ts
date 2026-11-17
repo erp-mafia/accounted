@@ -1,5 +1,5 @@
 /**
- * Swedish translation of CONNECT_CLAUDE_MD (lib/docs/content/connect-claude.ts).
+ * Swedish translation of CONNECT_CLAUDE_MD (src/lib/docs/content/connect-claude.ts).
  *
  * The docs site has no locale routing, so the two languages live at two URLs
  * and cross-link to each other. Keep them in sync: an edit to one is only half
@@ -17,7 +17,7 @@ Accounted har en [MCP](https://modelcontextprotocol.io)-server som exponerar hel
 https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted
 \`\`\`
 
-Det finns tre vägar in, beroende på vilken klient du använder. Alla tre når samma verktyg och samma godkännandemodell: läsverktyg svarar direkt, medan skrivverktyg (kontera, markera betald, skapa verifikat, bokslut) **lägger upp en pending operation** som du bekräftar i chatten eller i webbgränssnittet under **/pending** innan något bokförs.
+Det finns tre vägar in, beroende på vilken klient du använder. Alla tre når samma verktyg och samma godkännandemodell: läsverktyg svarar direkt, medan skrivverktyg (kontera, markera betald, skapa verifikat, bokslut) **lägger upp en pending operation** som du godkänner under **Att göra › Rutin** (**/pending**) i appen, eller i chatten om du bockade i **Godkänn** när du anslöt, innan något bokförs.
 
 ## Väg A: claude.ai eller Claude Desktop (ett klick)
 
@@ -29,14 +29,14 @@ Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och 
 
 **Claude Team eller Enterprise?** Där lägger bara organisationens ägare till kopplingar, och länken ovan fungerar inte för övriga medlemmar. Har ägaren redan lagt till Accounted: öppna Customize → Connectors i Claude, välj Accounted och klicka **Connect**. Varje person loggar in med sitt eget Accounted-konto, så flera i samma bolag kan vara anslutna samtidigt.
 
-**Alla behörigheter förvalda, varje skrivning stannar ändå.** Godkännandesidan ger hela behörighetslistan med ett klick. Fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning (lista fakturor, läsa rapporter, räkna moms): så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet. Oavsett behörigheter lägger skrivverktygen (skapa faktura, kontera, bokföra verifikat, köra bokslut) bara upp en pending operation som du bekräftar innan något bokförs, och åtkomsten går att återkalla under Inställningar → API & MCP.
+**Allt utom Godkänn förvalt, varje bokföringsskrivning stannar ändå.** Godkännandesidan har alla behörigheter utom **Godkänn** förvalda, så ett klick ger Claude läs- och skrivrätt medan det sista godkännandet ligger kvar hos dig. Fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning (lista fakturor, läsa rapporter, räkna moms): så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet. Bocka bara i **Godkänn** om Claude ska få godkänna sina egna förslag i chatten. Oavsett behörigheter lägger skrivverktygen (skapa faktura, kontera, bokföra verifikat, köra bokslut) bara upp en pending operation som du godkänner innan något bokförs, och åtkomsten går att återkalla under Agenter › Koppla en agent (\`/settings/api\`).
 
 #### Vad som händer efter klicket
 
 Resten av inställningarna görs på Claudes sida, i den här ordningen:
 
 1. **Connector-dialogen.** claude.ai öppnar **Add custom connector** med namn och adress ifyllda. Kontrollera adressen och gå vidare: dialogen känner av att servern kräver inloggning (**Always required**) och att Claude kan registrera sig själv automatiskt. Behåll de valen och klicka **Add**. Claude Desktop visar samma dialog under Inställningar → Connectors.
-2. **Inloggningen öppnas.** claude.ai ber dig ansluta och öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan. Den visar bolaget som just nu är aktivt i appen (byt bolag i appen först om du har flera) med alla behörigheter förvalda; fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning. Godkänn, så visas anslutningen som ansluten med Accounteds verktyg listade.
+2. **Inloggningen öppnas.** claude.ai ber dig ansluta och öppnar Accounteds inloggning (BankID eller e-post + 2FA) följd av godkännandesidan. Den visar ditt bolag med alla behörigheter utom **Godkänn** förvalda. Har du flera bolag listas alla, det som är aktivt i appen först, och du väljer **Läsa och skriva**, **Bara läsa** eller **Ingen åtkomst** för vart och ett; fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning. Godkänn, så visas anslutningen som ansluten med Accounteds verktyg listade.
 3. **Ställ din första fråga.** Till exempel *"Vilket bolag är jag ansluten till?"*. Härifrån går varje fråga mot det bolaget, och skrivningar stannar under **/pending** tills du bekräftar.
 
 Inloggad, men Claude säger fortfarande att servern inte går att nå? Fråga igen i samma chatt först. Hjälper inte det: öppna Inställningar → Connectors, ta bort anslutningen och lägg till den igen via länken ovan, med autentisering kvar på **Always required**.
@@ -53,7 +53,7 @@ Behåll alla tre parametrarna. \`tool_namespace=accounted\` väljer verktygsnamn
 
 ## Väg B: Claude Code (plugin)
 
-Bäst i terminalen. Pluginet installerar både anslutningen och åtta färdiga arbetsflöden som följer den svenska bokföringsrytmen.
+Bäst i terminalen. Pluginet installerar både anslutningen och åtta färdiga arbetsflöden som följer den svenska bokföringsrytmen, plus två kommandon (\`/accounted:setup\` och \`/accounted:use\`).
 
 \`\`\`text
 /plugin marketplace add erp-mafia/accounted
@@ -64,6 +64,7 @@ Kör sedan \`/mcp\` och logga in med Accounted (samma OAuth-ruta som i väg A). 
 
 | Kommando | Vad det gör |
 |---|---|
+| \`/accounted:setup\` | Första gången: ansluter (skapar kontot vid behov) och sätter upp bolaget i samtalet |
 | \`/accounted:start\` | Ansluter, orienterar och visar vad som behöver göras |
 | \`/accounted:bookkeep\` | Betar av obokförda banktransaktioner och kvitton |
 | \`/accounted:check\` | Läsande hälsokoll med prioriterad åtgärdslista |
@@ -97,7 +98,7 @@ claude mcp add --transport http accounted \\
 
 Bäst när du hellre använder en långlivad API-nyckel än OAuth-flödet, eller när du skriptar.
 
-1. Skapa en API-nyckel i Accounted under **Inställningar → API & MCP**. En \`gnubok_sk_test_*\`-nyckel läser ditt riktiga bolag men tvingar varje skrivning till dry-run, så den är säker medan du utvärderar; byt till en skarp nyckel (\`gnubok_sk_*\`, utan \`test_\`) när skrivningar ska bokföras.
+1. Skapa en API-nyckel i Accounted under **Agenter › Koppla en agent** (\`/settings/api\`, gruppen Utvecklare). En \`gnubok_sk_test_*\`-nyckel läser ditt riktiga bolag men skriver aldrig: en skrivning som går att provköra tvingas till dry-run, och en som inte går att provköra (till exempel \`accounted_categorize_transaction\`) nekas, så den är säker medan du utvärderar; byt till en skarp nyckel (\`gnubok_sk_*\`, utan \`test_\`) när skrivningar ska bokföras.
 2. Lägg till bryggan i din \`claude_desktop_config.json\`:
    \`\`\`json
    {
@@ -118,7 +119,7 @@ Bäst när du hellre använder en långlivad API-nyckel än OAuth-flödet, eller
 
 Nyckelns rättigheter styr exakt vilka verktyg som går att kalla: en nyckel utan skrivrättigheter kan läsa rapporter och reskontror men inte lägga upp en bokföring.
 
-Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt kreditformat, inte namnet på integrationen. Befintliga \`gnubok-mcp\`-konfigurationer fortsätter att fungera oförändrade.
+Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt nyckelformat, inte namnet på integrationen. Befintliga \`gnubok-mcp\`-konfigurationer fortsätter att fungera oförändrade.
 
 ## Flera företag, en anslutning
 
@@ -137,20 +138,20 @@ Alla tre är rena läsningar och säkra att köra mot ditt riktiga bolag (med en
 1. **"Visa mina okonterade banktransaktioner och föreslå konteringar."**
    Claude kallar \`accounted_list_uncategorized_transactions\` och sedan \`accounted_suggest_categories\` och går igenom förslagen med dig. Godkänner du ett förslag läggs en \`accounted_categorize_transaction\` upp som pending operation. Ingenting bokförs förrän du bekräftar.
 2. **"Vilka fakturor är förfallna?"**
-   Claude kallar \`accounted_get_ar_ledger\` (kundreskontra) och listar utestående kundfakturor med åldersfördelning.
+   Claude läser \`accounted_get_ar_ledger\` (kundreskontra) via \`accounted_call_tool\`, eftersom reskontran ligger utanför den vanliga verktygslistan, och listar utestående kundfakturor med åldersfördelning.
 3. **"Räkna fram momsen för det här kvartalet och säg om jag kan stänga."**
-   Claude kallar \`accounted_get_vat_report\` för momsdeklarationens rutor och sedan \`accounted_vat_close_check\` som letar efter stopp (okonterade rader, ej godkända leverantörsfakturor, saknade kvitton på utgifter över 4 000 kr, vilket är verktygets tröskel för väsentliga belopp; BFL kräver underlag för varje affärshändelse oavsett belopp) och rapporterar \`ready_to_close\`.
+   Claude kallar \`accounted_get_vat_report\` för momsdeklarationens rutor och sedan \`accounted_vat_close_check\` som letar efter stopp (okonterade rader, ej godkända leverantörsfakturor, saknade kvitton på utgifter på 4 000 kr eller mer, vilket är verktygets tröskel för väsentliga belopp; BFL kräver underlag för varje affärshändelse oavsett belopp) och rapporterar \`ready_to_close\`.
 
 ## Tiominuterstestet
 
 En snabb genomgång som visar att anslutningen fungerar innan du släpper in den på skarp data. Kör stegen i ordning. Varje steg säger vad du gör och vad du ska se.
 
-1. **Anslut.** Väg A med **Endast läs** valt på godkännandesidan, väg B, eller väg C med en \`gnubok_sk_test_*\`-nyckel. → Claude listar Accounteds verktyg (rubriker som *List Uncategorized Transactions* och *VAT Declaration (Momsdeklaration)*).
+1. **Anslut.** Väg A eller väg B med de förvalda behörigheterna. (En läsande anslutning eller en \`gnubok_sk_test_*\`-nyckel räcker för steg 2 till 5 men kan inte lägga upp skrivningen i steg 6.) → Claude listar Accounteds verktyg (rubriker som *List Uncategorized Transactions* och *VAT Declaration (Momsdeklaration)*).
 2. **Kontrollera bolaget.** Fråga *"Vilket bolag är jag ansluten till?"* → Claude namnger bolaget som nyckeln eller samtycket gäller.
 3. **Kör fråga 1** (okonterade och konteringsförslag). → En lista med okonterade rader plus förslag. Ingen bokföring sker.
 4. **Kör fråga 2** (förfallna fakturor). → Minst en förfallen kundfaktura med åldersfördelning.
 5. **Kör fråga 3** (moms och kan jag stänga). → Momsdeklarationens rutor plus en **icke-tom lista med stopp** från \`accounted_vat_close_check\` (okonterade transaktioner, en ej godkänd leverantörsfaktura och en större utgift utan kvitto).
-6. **Testa en skrivning.** Be Claude kontera en transaktion. → Claude lägger upp en pending operation och ber dig bekräfta. Bokföringen sker **inte** förrän du godkänner i chatten eller på **/pending**.
+6. **Testa en skrivning.** Be Claude kontera en transaktion. → Claude lägger upp en pending operation och talar om var den väntar. Bokföringen sker **inte** förrän du godkänner på **/pending** (eller i chatten, om anslutningen har **Godkänn**).
 
 Stämmer varje steg är anslutningen rätt kopplad och godkännandemodellen på plats.
 

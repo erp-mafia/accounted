@@ -38,7 +38,7 @@ registerEndpoint({
   path: '/api/v1/webhook-deliveries/:id/retry',
   summary: 'Retry a webhook delivery.',
   description:
-    'Re-enqueues a dead (or delivered) delivery as a fresh pending row. The new delivery references the same webhook + payload; the dispatcher picks it up at the next per-minute cron tick. The original row is preserved in the audit log.',
+    'Re-enqueues a dead (or delivered) delivery as a fresh pending row. The new delivery references the same webhook + payload; the dispatcher is kicked at once, and the per-minute cron picks it up if that attempt is missed. The original row is preserved in the audit log.',
   useWhen:
     'After a receiver outage you want to replay deliveries that died, or after fixing a receiver-side bug you want to redeliver a successful one.',
   doNotUseFor:

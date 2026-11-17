@@ -132,6 +132,13 @@ export const expenseClaimsGet = defineOperation({
     path: '/api/v1/companies/:companyId/expense-claims/:id',
     pathParams: { id: 'expense_claim_id' },
   },
+  mcp: {
+    name: 'gnubok_get_expense_claim',
+    title: 'Get Expense Claim',
+    description:
+      'Read one expense claim (utlägg) by expense_claim_id: who is owed, the SEK amount and VAT, the cost and liability accounts, its status, the verifikat that booked it and, once paid, the payout batch.',
+    keywords: ['utlägg', 'ett utlägg', 'visa utlägg', 'utläggsstatus'],
+  },
   run: (ctx, { expense_claim_id }) => getExpenseClaim(ctx, expense_claim_id),
 })
 

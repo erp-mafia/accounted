@@ -439,6 +439,13 @@ export const supplierInvoicesAttestationsList = defineOperation({
     path: '/api/v1/companies/:companyId/supplier-invoices/:id/attestations',
     pathParams: { id: 'supplier_invoice_id' },
   },
+  mcp: {
+    name: 'gnubok_get_supplier_invoice_attestations',
+    title: 'Get Supplier Invoice Attestations',
+    description:
+      'Where the attest of one supplier invoice stands: whether the policy requires it, who approved in the current round, who is left, how many approvals it still needs, the latest rejection and every decision. Use when an invoice is left out of payment with attest_required.',
+    keywords: ['attest', 'attestera', 'vem har attesterat', 'attestläge', 'väntar på attest', 'nekad attest'],
+  },
   run: async (ctx, input) => getSupplierInvoiceAttestState(ctx, input.supplier_invoice_id, { writer: ctx.supabase }),
 })
 

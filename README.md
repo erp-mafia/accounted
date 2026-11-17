@@ -32,8 +32,9 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Skattekonto** -- Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
 - **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
 - **SIE import/export** -- Standard Swedish accounting interchange format
-- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok and Gemini over OAuth 2.1
+- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
 - **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md)
+- **Command line** -- `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
 - **Extension system** -- Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
 
 ## Self-Hosting
@@ -75,7 +76,7 @@ The Kivra and Billo integrations are Accounted's own code, built on the provider
 | Path | Purpose |
 | --- | --- |
 | [`src/`](src/README.md) | Application routes, components, accounting services, translations, and extensions |
-| [`packages/`](packages/) | MCP bridges, connector contract, and Claude Code plugin |
+| [`packages/`](packages/) | MCP bridges, the `accounted` command-line client, connector contract, and Claude Code plugin |
 | [`supabase/`](supabase/) | Database configuration and migration history |
 | [`tests/`](tests/) | Shared fixtures, database suites, and cross-cutting tests; unit tests also live beside their code |
 | [`scripts/`](scripts/README.md), [`docker/`](docker/) | Development tools and self-hosting internals |

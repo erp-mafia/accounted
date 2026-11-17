@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure. Under K3: the deferred tax inputs of a year, the 18.7 model for own development, and the transition to K3 (kap. 35: start, relief and note facts, commit).
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, the company's deadlines (list them, tick one off), reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure. Under K3: the deferred tax inputs of a year, the 18.7 model for own development, and the transition to K3 (kap. 35: start, relief and note facts, commit).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1505,6 +1505,164 @@ Example response `200`:
     "params": {
       "fiscal_period_id": "a8f1…"
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/deadlines`
+
+**List the company's deadlines, the open ones by default.**
+`scope:reports:read · risk:low · idempotent`
+
+The deadlines under Deadlines in the app, earliest due date first: tax and filing deadlines generated from the tax settings and the ones added by hand. status open (the default) is what is left to do; completed and all include what is ticked off. A deadline the company removed from its list is never returned. overdue is computed from the due date and only for an open deadline.
+
+**Use when:** Seeing what is due, or finding the deadline_id to tick off after the work is done.
+**Do not use for:** Which moms periods are on record as filed (GET /reports/vat-declaration/filings, gnubok_list_vat_filings) or what Skatteverket has on file (GET /skatteverket/vat-declarations, gnubok_vat_declaration_status).
+
+**Pitfalls:**
+- has_more true means more deadlines match than limit returned: narrow with due_from and due_to.
+- A completed deadline says the company ticked it off or a filing was recorded, not that Skatteverket received anything.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"open" \| "completed" \| "all"` | no | open: not ticked off (default). |
+| `due_from` | query | `string` | no | Earliest due date, YYYY-MM-DD. |
+| `due_to` | query | `string` | no | Latest due date, YYYY-MM-DD. |
+| `limit` | query | `number` | no |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    deadlines: { deadline_id: string, title: string, due_date: string, due_time: string | null, deadline_type: string, tax_deadline_type: string | null, tax_period: string | null, priority: string, source: string, is_completed: boolean, completed_at: string | null, overdue: boolean, days_until_due: number, notes: string | null }[],
+    has_more: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadlines": [
+      {
+        "deadline_id": "11111111-1111-4111-8111-111111111111",
+        "title": "Årsredovisning till Bolagsverket",
+        "due_date": "2026-07-31",
+        "due_time": null,
+        "deadline_type": "report",
+        "tax_deadline_type": null,
+        "tax_period": null,
+        "priority": "important",
+        "source": "user",
+        "is_completed": false,
+        "completed_at": null,
+        "overdue": false,
+        "days_until_due": 12,
+        "notes": null
+      }
+    ],
+    "has_more": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/deadlines/{id}/complete`
+
+**Tick a deadline off, or put it back on the list.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.
+
+**Use when:** The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.
+**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or gnubok_mark_vat_period_filed; AGI: gnubok_mark_agi_period_filed), which completes the deadline with the filing date.
+
+**Pitfalls:**
+- DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, gnubok_list_deadlines), including one the company removed.
+- DEADLINE_CONFIRMED_BY_SKATTEVERKET when is_completed false targets a deadline whose filing Skatteverket confirmed through the connection.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ is_completed: boolean }
+```
+
+Example request:
+```json
+{
+  "deadline_id": "11111111-1111-4111-8111-111111111111",
+  "is_completed": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    deadline: { deadline_id: string, title: string, due_date: string, due_time: string | null, deadline_type: string, tax_deadline_type: string | null, tax_period: string | null, priority: string, source: string, is_completed: boolean, completed_at: string | null, overdue: boolean, days_until_due: number, notes: string | null },
+    changed: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadline": {
+      "deadline_id": "11111111-1111-4111-8111-111111111111",
+      "title": "Årsredovisning till Bolagsverket",
+      "due_date": "2026-07-31",
+      "due_time": null,
+      "deadline_type": "report",
+      "tax_deadline_type": null,
+      "tax_period": null,
+      "priority": "important",
+      "source": "user",
+      "is_completed": true,
+      "completed_at": "2026-07-19T08:30:00.000Z",
+      "overdue": false,
+      "days_until_due": 12,
+      "notes": null
+    },
+    "changed": true
   },
   "meta": {
     "request_id": "req_…",

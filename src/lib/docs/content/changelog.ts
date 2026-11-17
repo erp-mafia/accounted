@@ -35,6 +35,14 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Dry-run: refused where it cannot preview (2026-11)
+
+- **Behaviour change: \`dry_run=true\` on a write without dry-run support answers \`400 VALIDATION_ERROR\`** (2026-11-16), with \`details.field\` \`dry_run\`, and runs nothing. Before, 28 of the 31 writes without \`x-dry-run-supported\` ignored the flag (or the \`X-Dry-Run\` header) and ran for real while the caller believed it previewed: period lock, close, year-end, opening balances and currency revaluation, match-invoice and match-supplier-invoice, generate-agi, SIE and bank imports, approving, rejecting or withdrawing a pending operation, the webhook delete, test, verify and rotate-secret verbs, a webhook delivery retry and the service-account writes. Document upload, inbox delivery and bank sync already refused it. Writes with \`x-dry-run-supported: true\` preview as before, and a request without the flag is unchanged. A test key is still answered \`403 TEST_KEY_WRITE_BLOCKED\` on these endpoints.
+
+### Deadlines (2026-11)
+
+- **New: \`GET /deadlines\` and \`POST /deadlines/{id}/complete\`** (2026-11-16). The company's deadlines (the tax and filing deadlines generated from its tax settings and the ones added by hand) are listed over REST, open ones by default, each with \`deadline_id\`, \`due_date\`, \`overdue\` and \`days_until_due\` (scope \`reports:read\`). The second endpoint ticks one off, or puts it back with \`is_completed: false\` (scope \`bookkeeping:write\`; dry-runnable, and stageable with \`?stage=true\`). Only the tick changes: nothing is booked or filed. A moms period filed outside Accounted is still recorded with \`POST /reports/vat-declaration/filings\`, which completes its deadline with the filing date. Both were MCP tools only before. Additive.
+
 ### Typed handles (2026-10)
 
 - **New: \`handle\` next to the id** (2026-10-16). The resources a response returns carry a typed handle beside their id, \`<prefix>_<the UUID as 32 lowercase hex>\` (\`je\` journal entry, \`inv\` customer invoice, \`sinv\` supplier invoice, \`txn\` bank transaction, \`doc\` document, \`pop\` pending operation, and more: see Ids and typed handles on the [API overview](/docs/api)). It is the same id spelled with its type. Covered: the journal entry, invoice, supplier invoice, transaction, document, pending operation (the \`?stage=true\` 202 included), customer, supplier, company, fiscal period, employee, salary run, webhook, asset, article, dimension, inbox item, expense claim, cash account, payment order, supplier payment batch and async operation endpoints that return those resources; the spec shows \`handle\` with its pattern wherever it is added. Existing fields and their values are unchanged. Additive; the API version date is unchanged.

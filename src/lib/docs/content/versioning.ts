@@ -76,7 +76,7 @@ Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key
 
 ### Required vs supported
 
-Most write endpoints **require** an Idempotency-Key: not only the obvious creates (companies, invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
+Most write endpoints **require** an Idempotency-Key: not only the obvious creates (invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. \`POST /companies\` honours the key but does not require it: send one, or a retry creates a second company. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
 
 Other endpoints **support** but don't require it. Sending one is always safe.
 
@@ -97,6 +97,8 @@ In an agent loop, generate the key once at the *start* of an attempt and reuse i
 ## Dry-run
 
 Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. A dry-run always returns **HTTP 200** with the \`X-Dry-Run: true\` response header, never the resource's normal success status (201, 204). The body wraps a preview, not the resource itself:
+
+A write without \`x-dry-run-supported\` refuses the flag with \`400 VALIDATION_ERROR\` (\`details.field\` is \`dry_run\`) and runs nothing, so a request sent as a preview never commits. Period lock, close and year-end, bank and SIE imports, match-invoice, generate-agi, document upload, the approval of a pending operation and the webhook test, verify and rotate-secret verbs have no dry run; each reference page says so.
 
 - All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface: dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
 - \`data.preview\` holds the would-be record (same shape as the success response).
@@ -160,7 +162,7 @@ A token is a fingerprint, not a credential: it never passes for another operatio
 
 ## Strict-mode write semantics
 
-A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't": either both happened or neither did.
+A v1 write is validated in full before anything is posted; a refusal returns a structured error code and writes nothing. Where a later step can fail after a verifikat is posted, the endpoint says what stands: \`POST /invoices/{id}/send\` answers \`502 INVOICE_SEND_ISSUED_NOT_DELIVERED\` with the invoice issued and booked (a posted verifikat is never undone; deliver the invoice another way and do not call \`/send\` again), and a \`POST /salary-runs/{id}/book\` that stops partway keeps the vouchers already posted and adopts them on retry.
 
 When a multi-step write fails:
 
@@ -171,9 +173,9 @@ Storno reversals are themselves immutable journal entries: the original audit tr
 
 ---
 
-## Inline audit on every write
+## Posting reference on the response
 
-Every successful write response carries an \`audit\` block in \`meta\`:
+A write that posts a verifikat returns its reference in \`data\` (\`journal_entry_id\`, and \`voucher_number\` where the endpoint has it). \`POST /salary-runs/{id}/book\` and \`/correct\` also carry an \`audit\` block in \`meta\`:
 
 \`\`\`json
 {
@@ -182,10 +184,9 @@ Every successful write response carries an \`audit\` block in \`meta\`:
     "request_id": "req_...",
     "api_version": "${API_V1_VERSION}",
     "audit": {
-      "voucher_number": "A-2026-042",
-      "voucher_url": "https://app.accounted.se/bookkeeping/...",
-      "audit_trail_url": "https://app.accounted.se/audit/req_...",
-      "immutable_at": "2026-05-15T12:00:00Z"
+      "voucher_number": "L2026-0023",
+      "voucher_url": "/api/v1/companies/{companyId}/journal-entries/{journal_entry_id}",
+      "immutable_at": "2026-05-26T09:15:00Z"
     }
   }
 }

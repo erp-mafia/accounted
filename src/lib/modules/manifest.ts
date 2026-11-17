@@ -577,7 +577,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     libFolders: ['tax', 'deadlines'],
     // deadlines.list and deadlines.complete (lib/operations/deadlines.ts).
     operationPrefixes: ['deadlines'],
-    v1Segments: [],
+    v1Segments: ['deadlines'],
     jurisdictions: SE,
   },
   {

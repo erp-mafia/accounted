@@ -6,7 +6,7 @@ This is the operational companion to the [Webhooks concept page](/docs/api/webho
 
 ## What you'll need
 
-- A test API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events).
+- A **live** API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events, \`invoices:write\` for the mark-paid call in step 6). A test key (\`gnubok_sk_test_*\`) only previews: every write that supports a dry run is forced into one, and a write without dry-run support answers \`403 TEST_KEY_WRITE_BLOCKED\`, so it cannot run this flow.
 - A receiver URL that Accounted can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\`: Accounted refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
 - HTTPS only: \`http://\` URLs are rejected at registration.
 
@@ -16,7 +16,7 @@ The response includes the HMAC signing secret **exactly once**. Capture it immed
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -77,11 +77,11 @@ A pass answers \`200\` with \`"verification_status": "verified"\`. A failure ans
 
 ## 4. Send a test event
 
-The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it on the next per-minute cron tick.
+The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it immediately; the per-minute cron is the retry path.
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/test" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response:
@@ -93,7 +93,7 @@ Response:
 }
 \`\`\`
 
-Wait up to 60s, then check the receiver logs. The delivery should arrive with:
+It normally arrives within a second or two; check the receiver logs. The delivery should arrive with:
 
 \`\`\`
 POST /gnubok HTTP/1.1
@@ -112,7 +112,7 @@ If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response carries the captured response status and body (truncated to 4 KB), which is invaluable when debugging a 4xx from the receiver:
@@ -141,13 +141,13 @@ Now mark a real invoice paid (or use any of the [event-emitting endpoints](/docs
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{ "payment_date": "2026-05-22" }'
 \`\`\`
 
-The next dispatcher tick (within 60s) delivers an \`invoice.paid\` event to your receiver carrying the full invoice payload + payment details.
+The dispatcher delivers an \`invoice.paid\` event right away (a failed attempt is retried on the per-minute cron) to your receiver carrying the full invoice payload + payment details.
 
 ## Idempotency on the receiver side
 
@@ -177,7 +177,7 @@ When a delivery exhausts its retries it's marked \`dead\`. After fixing the rece
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers see a new \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
@@ -193,7 +193,7 @@ After:
 
 \`\`\`bash
 curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Content-Type: application/json" \\
   -d '{ "active": true }'
 \`\`\`

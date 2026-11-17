@@ -443,6 +443,13 @@ export const arsredovisningListSignatories = defineOperation({
   output: z.object({ signatures: z.array(SignatureOut) }),
   errorCodes: ['PERIOD_NOT_FOUND'],
   http: { method: 'GET', path: `${BASE}/signatures`, pathParams: { id: 'fiscal_period_id' } },
+  mcp: {
+    name: 'gnubok_list_arsredovisning_signatories',
+    title: 'List Årsredovisning Signatories',
+    description:
+      'The årsredovisning signer roster for a fiscal period: each slot with role, name, status, signing date and method. Call before gnubok_add_arsredovisning_signature (avoid duplicates) and to see who has not signed. Declined slots are listed too.',
+    keywords: ['underskrifter årsredovisning', 'vem ska skriva under', 'undertecknare', 'styrelsens underskrifter', 'signaturer årsredovisning'],
+  },
   run: async (ctx, { fiscal_period_id }) =>
     mapped(await (await workflow()).listArsredovisningSignatories(ctx, fiscal_period_id), (rows) => ({
       signatures: rows.map(signatureOut),

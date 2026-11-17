@@ -37,7 +37,7 @@ registerEndpoint({
   ],
   example: {
     response: {
-      data: { is_continuous: true, discrepancies: [] },
+      data: { valid: true, period_name: 'FY 2025', previous_period_name: 'FY 2024', discrepancies: [], checked_accounts: 42 },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },

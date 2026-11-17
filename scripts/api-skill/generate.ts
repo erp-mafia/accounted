@@ -72,6 +72,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'accrual-schedules',
       'accounts',
       'compliance',
+      'deadlines',
       'dimensions',
       'skatteverket',
       'skattekonto',
@@ -87,6 +88,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual ' +
       'schedules (periodiseringar: re-plan the months not yet posted), the BAS ' +
       'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +
+      'the company\'s deadlines (list them, tick one off), ' +
       'reading filed VAT declarations (and beslut) from Skatteverket, the register of prior ' +
       'years\' tax losses (underskott, IL 40 kap.) per fiscal year, and the company\'s ' +
       'commitments: agreements with their expected payments, ställda säkerheter and ' +

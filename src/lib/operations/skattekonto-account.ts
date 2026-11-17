@@ -79,6 +79,13 @@ export const settingsGetSkattekontoAccount = defineOperation({
   output: SkattekontoAccountState,
   errorCodes: ['NOT_FOUND'],
   http: { method: 'GET', path: PATH },
+  mcp: {
+    name: 'gnubok_get_tax_account_ledger_setting',
+    title: 'Get Tax Account Ledger Setting',
+    description:
+      'Which ledger account the skattekonto runs on (1630, or 2012 for an enskild firma that chose it): the account in use, the stored choice, what the legal form may choose, what the books suggest and the balance on each. Call before booking skattekonto rows or a tax payment by hand.',
+    keywords: ['1630 eller 2012', 'vilket konto skattekontot bokförs på', 'skattekontots bokföringskonto', 'konto för skattekontot'],
+  },
   run: async (ctx) => getSkattekontoAccountState(ctx),
 })
 

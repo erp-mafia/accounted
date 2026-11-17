@@ -429,6 +429,13 @@ export const paymentOrdersGet = defineOperation({
     path: '/api/v1/companies/:companyId/payment-orders/:id',
     pathParams: { id: 'payment_order_id' },
   },
+  mcp: {
+    name: 'gnubok_get_payment_order',
+    title: 'Get Payment Order',
+    description:
+      'Read one bank payment by payment_order_id: payee as the order carries it (with its check), reference, status, the bank\'s own status and error code, timestamps and the supplier invoice it pays. Several at once: gnubok_list_payment_orders.',
+    keywords: ['bankbetalning', 'en betalning', 'betalstatus', 'betalningsuppdrag', 'var är betalningen'],
+  },
   run: async (ctx, { payment_order_id }) => {
     const { data, error } = await ctx.supabase
       .from('payment_orders')
@@ -1068,6 +1075,13 @@ export const paymentsAvailability = defineOperation({
     signer_known: z.boolean(),
   }),
   http: { method: 'GET', path: '/api/v1/companies/:companyId/payment-orders/availability' },
+  mcp: {
+    name: 'gnubok_get_payments_availability',
+    title: 'Get Bank Payments Availability',
+    description:
+      'Whether the company can pay through its bank from Accounted (available, or the reason it cannot) and its bank accounts with payable true or a reason each. Call before gnubok_prepare_payments to pick a payable cash_account_id. IBANs are masked.',
+    keywords: ['kan vi betala via banken', 'bankbetalning tillgänglig', 'betalbara konton', 'betalkonto', 'betalningar via banken'],
+  },
   run: async (ctx) => {
     const availability = await getPaymentsAvailability(ctx)
     return {
@@ -1160,6 +1174,13 @@ export const paymentsUsage = defineOperation({
     extra_accounts: z.number().int(),
   }),
   http: { method: 'GET', path: '/api/v1/companies/:companyId/payment-orders/usage' },
+  mcp: {
+    name: 'gnubok_get_payments_usage',
+    title: 'Get Bank Payments Usage',
+    description:
+      'Bank payments sent and accounts used in a month (default: this month) against what the month includes and its cap, with remaining_payments. Call before a batch of bank payments. Payment files are neither counted nor capped.',
+    keywords: ['betalningar denna månad', 'betalningstak', 'antal bankbetalningar', 'ingår i abonnemanget', 'betalpaket'],
+  },
   run: async (ctx, input) => ({ ok: true, data: await getBankPaymentsUsage(ctx.supabase, ctx.companyId, input.period) }),
 })
 
@@ -1206,6 +1227,13 @@ export const paymentsVerification = defineOperation({
   output: Verification,
   errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_ORG_NUMBER_MISSING', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/payment-orders/verification' },
+  mcp: {
+    name: 'gnubok_get_payments_verification',
+    title: 'Get Bank Payments Verification',
+    description:
+      'The company\'s verification (know your customer) at the payment provider: status, valid_until and state (not_started, form_open, awaiting_signatory, link_expired, valid, expiring, expired). Payments are refused until it is valid; a person starts or renews it in Accounted.',
+    keywords: ['kundkännedom', 'kyc', 'verifiering betalningar', 'bolagsverifiering', 'förnya verifiering'],
+  },
   run: async (ctx) => getCompanyPaymentVerification(ctx),
 })
 

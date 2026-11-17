@@ -82,13 +82,13 @@ curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees" \\
     "salary_type": "monthly", "monthly_salary": 35000, "employment_degree": 100,
     "workdays_per_week": 5,
     "tax_table_number": 33, "tax_column": 1, "f_skatt_status": "a_skatt",
-    "vacation_rule": "sammalone", "vacation_days_per_year": 25, "semestertillagg_rate": 0.0043,
+    "vacation_rule": "sammaloneregeln", "vacation_days_per_year": 25, "semestertillagg_rate": 0.0043,
     "clearing_number": "5000", "bank_account_number": "1234567890",
     "email": "anna@example.se"
   }'
 \`\`\`
 
-Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`valid_from\` and \`valid_to\`), an extra tax deduction the employee asked for (\`extra_tax_amount\` in kronor per run, or \`extra_tax_percentage\` as a total, one of them), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
+Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`jamkning_valid_from\` and \`jamkning_valid_to\`), an extra tax deduction the employee asked for (\`extra_tax_amount\` in kronor per run, or \`extra_tax_percentage\` as a total, one of them), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
 
 ## 4. Cutover balances (only when you take over mid-year)
 

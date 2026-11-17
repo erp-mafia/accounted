@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 471 endpoints.
+  pagination, scopes), and all 473 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 471 operations. Paths are shown without
+API version `2026-05-12`, 473 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -282,7 +282,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (75)
+### Periods and registers (77)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -303,6 +303,8 @@ POST /companies/{companyId}/agreements : Register an agreement by hand: what it 
 PATCH /companies/{companyId}/agreements/{id} : Change a manual agreement; its expected payments and its dates follow [scope:companies:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/agreements/{id}/end : End a manual agreement: no more expected payments after the day it ended, its dates leave Viktiga datum [scope:companies:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/compliance/check : Run a structured compliance pre-flight check [scope:compliance:read risk:low idempotent]
+GET /companies/{companyId}/deadlines : List the company's deadlines, the open ones by default [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/deadlines/{id}/complete : Tick a deadline off, or put it back on the list [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/dimensions : List dimensions (kostnadsställe/projekt) with their values [scope:dimensions:read risk:low idempotent]
 POST /companies/{companyId}/dimensions : Create a custom dimension (e.g. Avdelning, Kund, Fordon) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 PATCH /companies/{companyId}/dimensions/{id} : Rename, archive or reorder a dimension [scope:bookkeeping:write risk:low idempotent dry-run reversible]

@@ -1,0 +1,1 @@
+[2026-11-16] v1 refuses dry_run=true on a write without dry-run support (400 VALIDATION_ERROR, field dry_run) in withApiV1: 28 writes (year-end, lock, close, approve) ignored the flag and ran for real; docs-only was the alternative, but a preview must never commit.

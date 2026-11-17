@@ -33,7 +33,7 @@ The skills are deliberately thin: the deep procedural and regulatory content (mo
 
 ## How writes work
 
-Every write tool in Accounted stages a **pending operation** with a preview instead of booking directly. Claude shows you the preview; only `accounted_approve_pending_operation`, after your explicit approval, books it. Period locks and Swedish accounting law (immutable vouchers, balanced entries, sequential voucher numbers) are enforced by the product itself.
+Every write that touches the books stages a **pending operation** with a preview instead of booking directly. A few writes outside the ledger (uploading a document, saving a memory, creating the company after your confirm) run at once. Claude shows you the preview; nothing is booked until you approve it, under Att göra › Rutin in Accounted or, on a connection where you ticked Approve, in chat through `accounted_approve_pending_operation`. Period locks and Swedish accounting law (immutable vouchers, balanced entries, sequential voucher numbers) are enforced by the product itself.
 
 ## Several companies, one connection
 

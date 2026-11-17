@@ -58,7 +58,8 @@ export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
 
       <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-12 py-10">
         <aside className="hidden md:block">
-          <div className="sticky top-24 space-y-8">
+          {/* The sidebar is taller than a screen: it scrolls on its own, so every link stays reachable on a short page. */}
+          <div className="sticky top-24 max-h-[calc(100dvh-7rem)] overflow-y-auto space-y-8 pb-6">
             {DOCS_NAV.map((section) => (
               <div key={section.label}>
                 <h3 className="text-xs text-muted-foreground mb-2 px-3">

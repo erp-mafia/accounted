@@ -148,17 +148,9 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'documents.upload',
   async (request, ctx) => {
-    // The archive write is the side effect; there is nothing to simulate.
-    // Test keys never get here (the wrapper refuses them on an endpoint that
-    // cannot dry-run). A live key asking for one used to have its file
-    // archived for real (WORM: it cannot be taken back) while it believed it
-    // previewed; it is told so instead.
-    if (ctx.dryRun) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'dry_run', message: 'dry_run is not supported: the archive write is the side effect.' },
-      })
-    }
+    // The archive write is the side effect (WORM: it cannot be taken back);
+    // there is nothing to simulate: withApiV1 refuses a dry run (and a test
+    // key) on this endpoint before this line (dryRunSupported: false).
 
     let formData: FormData
     try {

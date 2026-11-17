@@ -5,7 +5,9 @@
  * in two languages: the docs site has no locale routing, so each language is
  * its own page.
  *
- * Run with `npx tsx scripts/export-docs-to-website.mts`. Re-run whenever
+ * Run with `npx tsx scripts/export-docs-to-website.mts`, or with
+ * `DOCS_WEBSITE_DIR=<website worktree>` in front to write somewhere other
+ * than the default checkout. Re-run whenever
  * structured-errors, the v1 endpoint registry, connect-claude, or cli
  * materially changes.
  */
@@ -56,7 +58,10 @@ if (!buildErrorReferenceMd || !buildResourcePages || !buildReferenceOverviewMd) 
   process.exit(1)
 }
 
-const WEBSITE = resolve('/Users/jakobwennberg/gnubok-website')
+// DOCS_WEBSITE_DIR points the export at another checkout: the website repo's
+// main checkout is often on someone's branch with work in progress, so a
+// re-export goes to a fresh worktree from origin/main.
+const WEBSITE = resolve(process.env.DOCS_WEBSITE_DIR ?? '/Users/jakobwennberg/gnubok-website')
 
 /**
  * The website is served from www.accounted.se while the API (and everything

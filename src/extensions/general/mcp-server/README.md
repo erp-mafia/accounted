@@ -8,7 +8,7 @@ Enforced by tests in `__tests__/`: these are not style preferences, they're guar
 
 1. **`additionalProperties: false`** on every `inputSchema`. Guarded by `strict-schemas.test.ts`. Forces clear rejections on hallucinated fields instead of silent ignores.
 2. **Descriptions ≤ 280 chars.** Guarded by `output-schema.test.ts`. No `Args:` / `Returns:` / `Examples:` prose: those belong in JSON Schema. Use agent-native hints ("Use to…", "Call X first", "HIGH risk").
-3. **Staged-operation envelope** for write tools: `outputSchema: STAGED_OPERATION_SCHEMA` (`server.ts`). Fields: `staged, risk_level, actor, message, preview, period_status?, next?`. The `staged: true` boolean is the explicit completion signal; agents must not infer completion from prose. Do NOT introduce a parallel `{ success, shouldContinue, output }` envelope.
+3. **Staged-operation envelope** for write tools: `outputSchema: STAGED_OPERATION_SCHEMA` (`server.ts`). Fields: `staged, operation_id?, risk_level, actor, dry_run?, idempotency_replay?, message, approve?, preview, period_status?, next?` (`approve` is absent for a key without `pending_operations:approve`). The `staged: true` boolean is the explicit completion signal; agents must not infer completion from prose. Do NOT introduce a parallel `{ success, shouldContinue, output }` envelope.
 4. **`period_status` threading**: any tool that ties to a fiscal-period-bound date (categorize, mark paid, create voucher, correct/reverse entry, approve supplier invoice) passes `dateForPeriodCheck` to `stage()`. Response then includes `period_status: { period_id, status: open|locked|closed, lock_date }` so widgets and agents disable writes without round-trips.
 5. **Scope mapping**: every new tool needs an entry in `src/lib/auth/scope-catalog.ts` `TOOL_SCOPE_MAP`. Missing entries default to deny.
 6. **Tests for new write tools**: add staging-gate coverage to `__tests__/voucher-tools.test.ts` (or a sibling) plus executor coverage to `src/lib/pending-operations/__tests__/voucher-executors.test.ts` if the tool stages a new `operation_type`.
@@ -27,10 +27,10 @@ For internal Anthropic API usage (the SDK is called from `src/lib/ai/provider.ts
 
 - `server.ts`: the tools array + JSON-RPC dispatcher
 - `tool-result.ts`: `NextActionHint` type and `toToolError()` response helper
-- `resources/`: read-only `Accounted://` URIs, registered in `resources/index.ts`: `company/current`, `period/active`, `recent-activity`, `capabilities`, `attention`, `chart-of-accounts`, `settings/vat-treatments`, `booking-templates`, `ledger/context`, `reconciliation/summary`
-- `widgets/`: inline HTML widgets (receipt-matcher, vat-review, pending-operations)
+- `resources/`: read-only `Accounted://` URIs, registered in `resources/index.ts`: `company/current`, `period/active`, `recent-activity`, `capabilities`, `attention`, `chart-of-accounts`, `settings/vat-treatments`, `booking-templates`, `ledger/context`, `reconciliation/summary`, `arkiv/map`, `arkiv/missing`, `arkiv/graph`; any of them for another company as `Accounted://company/{company_id}/{resource}`
+- `widgets/`: inline HTML widgets (receipt-matcher, vat-review, pending-operations, connect-card, sie-drop)
 - `prompts/`: slash-command-style prompts
-- `skills/`: domain-knowledge skill bodies served via `gnubok_load_skill`
+- `skills/`: the resolver behind `gnubok_load_skill` (`findSkill`); workflow bodies live in `src/lib/agent-skills/workflows/`, atoms in the `agent_atom_registry`
 - `public-tools.ts`: lazy authentication (issue #1814). `ANONYMOUS_METHODS` (initialize, ping, tools/prompts/resources listing) and the three `PUBLIC_TOOLS` (`gnubok_search_tools`, `gnubok_list_skills`, `gnubok_load_skill`) answer without credentials, rate-limited per truncated IP; every other `tools/call` gets a transport-level 401 + `WWW-Authenticate` from `handleMcpRequest` in `server.ts`, which is the challenge clients turn into their Connect prompt
 - `tasks.ts`: MCP Tasks extension (`io.modelcontextprotocol/tasks`): durable handles for long-running tool calls, rows in `mcp_tasks` (service-role writes only)
 - `origin-guard.ts`: Origin-header validation on the Streamable HTTP endpoint (DNS-rebinding defence required by the MCP spec)

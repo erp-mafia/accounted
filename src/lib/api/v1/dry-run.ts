@@ -3,7 +3,10 @@
  *
  * Architectural contract (per the v1 plan):
  *
- *   1. Every POST / PATCH / DELETE accepts `?dry_run=true` or `X-Dry-Run: true`.
+ *   1. A POST / PATCH / DELETE registered with `dryRunSupported: true` accepts
+ *      `?dry_run=true` or `X-Dry-Run: true`. On any other write withApiV1
+ *      refuses the flag (400 VALIDATION_ERROR, field dry_run) before the
+ *      handler runs: a request sent as a preview never commits.
  *   2. A dry-run response returns 200 OK with `{ data: { dry_run: true, preview, ... } }`
  *      and the `X-Dry-Run: true` response header: NEVER the resource's
  *      normal success status (201, 204, etc.). A caller that sees `200`
