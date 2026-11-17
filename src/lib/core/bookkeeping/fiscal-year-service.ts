@@ -581,18 +581,18 @@ export async function updateFiscalPeriod(
       return overlapFailure(overlapping[0] as { id: string; name: string })
     }
 
-    // Re-dating keeps the years contiguous (BFNAR 2013:2 continuity): the
-    // year must still start the day after its predecessor ends and end the
-    // day before its successor starts, so previous_period_id stays true
-    // without a relink. In practice only the first and the latest year can
-    // move, and a gap can never open behind an API caller's back.
+    // Re-dating keeps the year contiguous with the years around its new
+    // dates (BFNAR 2013:2 continuity): it must start the day after its
+    // predecessor ends and end the day before its successor starts. The
+    // links are made to say the same once the dates have moved
+    // (relinkAroundRedatedYear).
     const { data: neighbours } = await supabase
       .from('fiscal_periods')
-      .select('id, period_start, period_end')
+      .select('id, period_start, period_end, previous_period_id')
       .eq('company_id', companyId)
       .neq('id', fiscalPeriodId)
       .order('period_start', { ascending: true })
-    const others = (neighbours ?? []) as Array<{ id: string; period_start: string; period_end: string }>
+    const others = (neighbours ?? []) as ChainNeighbour[]
     const predecessor = [...others].reverse().find((p) => p.period_end < newStart) ?? null
     const successor = others.find((p) => p.period_start > newEnd) ?? null
     if (predecessor && newStart !== addDaysIso(predecessor.period_end, 1)) {
@@ -638,7 +638,14 @@ export async function updateFiscalPeriod(
       if (input.period_end) changes.period_end = input.period_end
       return { ok: true, dryRun: true, preview: { fiscal_period_id: fiscalPeriodId, changes } }
     }
-    return { ok: true, data: result.period as FiscalPeriod }
+    const link = await relinkAroundRedatedYear(
+      ctx,
+      { id: fiscalPeriodId, previous_period_id: (period.previous_period_id as string | null | undefined) ?? null },
+      others,
+      predecessor,
+      successor,
+    )
+    return { ok: true, data: { ...(result.period as FiscalPeriod), previous_period_id: link } }
   }
 
   // Name only (dates sent unchanged are not a change).
@@ -659,6 +666,66 @@ export async function updateFiscalPeriod(
   if (updateError || !updated) return writeFailure(updateError, log)
 
   return { ok: true, data: updated as FiscalPeriod }
+}
+
+/** Another year of the company, as the re-date reads it. */
+interface ChainNeighbour {
+  id: string
+  period_start: string
+  period_end: string
+  previous_period_id: string | null
+}
+
+/**
+ * Make the continuity links say what the dates say around a year that was
+ * just re-dated. redate_fiscal_period moves the dates only, and the checks
+ * before it leave the year starting the day after `predecessor` ends and
+ * ending the day before `successor` starts, so:
+ *   - the year's own link is its predecessor, none for the earliest year: a
+ *     year that had no link because a hole lay before it kept none after it
+ *     was moved down next to the older year (crm#1982);
+ *   - the successor's link is the moved year;
+ *   - any other year still pointing at the moved year no longer starts the
+ *     day after it ends (an empty year moved out from between two others):
+ *     a link only ever names the year ending the day before
+ *     (resolvePreviousFiscalPeriod), so that one is cleared.
+ * Only links that are wrong are written. Best effort, like the relink after
+ * a create: the dates have moved, a failed link is logged, and every reader
+ * falls back to the dates when a link is missing. Answers the link the moved
+ * year ended up with.
+ */
+async function relinkAroundRedatedYear(
+  ctx: OperationContext,
+  moved: { id: string; previous_period_id: string | null },
+  others: readonly ChainNeighbour[],
+  predecessor: ChainNeighbour | null,
+  successor: ChainNeighbour | null,
+): Promise<string | null> {
+  const { supabase, companyId, log } = ctx
+  const setLink = async (periodId: string, previousPeriodId: string | null): Promise<boolean> => {
+    const { error } = await supabase
+      .from('fiscal_periods')
+      .update({ previous_period_id: previousPeriodId })
+      .eq('id', periodId)
+      .eq('company_id', companyId)
+    if (error) {
+      log.error('failed to relink continuity chain after a re-date', error, {
+        movedPeriodId: moved.id,
+        relinkPeriodId: periodId,
+      })
+    }
+    return !error
+  }
+
+  let link = moved.previous_period_id
+  const ownLink = predecessor?.id ?? null
+  if (link !== ownLink && (await setLink(moved.id, ownLink))) link = ownLink
+  for (const other of others) {
+    const followsMoved = other.id === successor?.id
+    if (followsMoved && other.previous_period_id !== moved.id) await setLink(other.id, moved.id)
+    if (!followsMoved && other.previous_period_id === moved.id) await setLink(other.id, null)
+  }
+  return link
 }
 
 /** A failed fiscal_periods write as a code, for the update and the re-date. */
