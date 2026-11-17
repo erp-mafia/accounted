@@ -2867,19 +2867,27 @@ function skvActionFailureResponse(failure: SkvActionFailure): NextResponse {
   )
 }
 
-/** A gateway or unavailable answer: the service is down, not refusing this request. */
-const OMBUD_DOWN_STATUSES = new Set([502, 503, 504])
+/**
+ * A gateway or unavailable answer: the service is down, not refusing this
+ * request. A 500 is left out: one that comes back every time is not cured by
+ * waiting.
+ */
+const SERVICE_DOWN_STATUSES = new Set([502, 503, 504])
+
+/** No answer at all: the call's timeout ran out, or no connection (undici's "fetch failed"). */
+function skvUnreachable(err: unknown): boolean {
+  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
+}
 
 /**
  * Ombudshantering itself unreachable: a 502/503/504 from it, no answer within
- * the data call's timeout, or no connection at all (undici's "fetch failed").
- * A 500 is left out: one that comes back every time is not cured by waiting.
+ * the data call's timeout, or no connection at all.
  */
 function ombudServiceDown(err: unknown): boolean {
   if (err instanceof OmbudApiError) {
-    return err.code === 'OBR_HTTP_ERROR' && err.status !== undefined && OMBUD_DOWN_STATUSES.has(err.status)
+    return err.code === 'OBR_HTTP_ERROR' && err.status !== undefined && SERVICE_DOWN_STATUSES.has(err.status)
   }
-  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
+  return skvUnreachable(err)
 }
 
 /**
@@ -2937,8 +2945,10 @@ function handleSkvError(err: unknown): NextResponse {
 // (app/api/extensions/ext/[...path]/route.ts), so each service checks the flag
 // itself and returns a recoverable EXTENSION_DISABLED result (the op stays
 // reviewable). SkatteverketAuthError (no connection / scope / quota) is
-// likewise recoverable. SKV business rejections are non-recoverable → the op
-// is consumed and the user regenerates + re-stages.
+// likewise recoverable, and so is Skatteverket's service being down for a
+// momsdeklaration (its 502/503/504, or no answer at all). SKV business
+// rejections are non-recoverable → the op is consumed and the user
+// regenerates + re-stages.
 
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,
@@ -3095,6 +3105,15 @@ async function commitSubmitVatDeclaration(
         ...(result.skv ?? {}),
         ...(result.kontrollresultat ? { kontrollresultat: result.kontrollresultat } : {}),
       }
+      // Skatteverket's service down (its own 502, 503 or 504), which says
+      // nothing about the declaration: the operation waits and the same
+      // approval can be given again. Every other refusal consumes it.
+      if (result.skv && SERVICE_DOWN_STATUSES.has(result.skv.skv_status)) {
+        return {
+          ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: result.httpStatus,
+          recoverable: true, error: result.error, details,
+        }
+      }
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,
         recoverable: false, error: result.error, details,
@@ -3108,6 +3127,18 @@ async function commitSubmitVatDeclaration(
       kontrollresultat: result.kontrollresultat,
     }
   } catch (err) {
+    // No answer from Skatteverket at all: as little a verdict on the
+    // declaration as a 503, so the operation waits here too.
+    if (skvUnreachable(err)) {
+      log.warn('skatteverket did not answer the momsdeklaration submit', {
+        companyId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return {
+        ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504,
+        recoverable: true, error: skvUnexpectedFailureMessage(err),
+      }
+    }
     return mapServiceError(err)
   }
 }
