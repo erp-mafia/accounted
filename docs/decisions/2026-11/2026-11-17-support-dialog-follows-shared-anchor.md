@@ -1,0 +1,1 @@
+[2026-11-17] The support dialog keeps no placement of its own: it hands the visual viewport to the shared DialogContent as two custom properties and sits top anchored like every dialog (crm#1973). Its centred copy from 2026-10-26 put the lower half off screen once dialogs became top anchored.
