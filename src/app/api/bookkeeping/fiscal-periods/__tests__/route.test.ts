@@ -754,6 +754,21 @@ describe('POST /api/bookkeeping/fiscal-periods: a gap longer than one räkenskap
     previous_period_id: string | null
   }
 
+  /** The query chains createFiscalPeriod makes on fiscal_periods. */
+  type PeriodQuery = {
+    select: () => PeriodQuery
+    insert: (values: Partial<StoredPeriod>) => PeriodQuery
+    update: (values: Partial<StoredPeriod>) => PeriodQuery
+    eq: (column: string, value: unknown) => PeriodQuery
+    is: (column: string, value: unknown) => PeriodQuery
+    lte: (column: string, value: string) => PeriodQuery
+    gte: (column: string, value: string) => PeriodQuery
+    order: () => PeriodQuery
+    limit: () => PeriodQuery
+    single: () => Promise<{ data: StoredPeriod | null; error: null }>
+    then: (resolve: (answer: unknown) => void) => void
+  }
+
   const emptyParams = { params: Promise.resolve({}) }
 
   const period = (
@@ -792,36 +807,36 @@ describe('POST /api/bookkeeping/fiscal-periods: a gap longer than one räkenskap
         }
         return { data: [...matched].sort((a, b) => a.period_start.localeCompare(b.period_start)), error: null }
       }
-      const query = {
+      const query: PeriodQuery = {
         select: () => query,
-        insert: (values: Partial<StoredPeriod>) => {
+        insert: (values) => {
           write = { kind: 'insert', values }
           return query
         },
-        update: (values: Partial<StoredPeriod>) => {
+        update: (values) => {
           write = { kind: 'update', values }
           return query
         },
-        eq: (column: string, value: unknown) => {
+        eq: (column, value) => {
           if (column !== 'company_id') filters.push((row) => field(row, column) === value)
           return query
         },
-        is: (column: string, value: unknown) => {
+        is: (column, value) => {
           filters.push((row) => field(row, column) === value)
           return query
         },
-        lte: (column: string, value: string) => {
+        lte: (column, value) => {
           filters.push((row) => String(field(row, column)) <= value)
           return query
         },
-        gte: (column: string, value: string) => {
+        gte: (column, value) => {
           filters.push((row) => String(field(row, column)) >= value)
           return query
         },
         order: () => query,
         limit: () => query,
         single: async () => ({ data: run().data?.[0] ?? null, error: null }),
-        then: (resolve: (answer: unknown) => void) => resolve(run()),
+        then: (resolve) => resolve(run()),
       }
       return query
     }
