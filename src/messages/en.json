@@ -18714,6 +18714,7 @@
     "row_linked": "Linked to a purchase",
     "row_unknown": "Unknown document",
     "row_doc_number": "{kind} {number}",
+    "meta_from": "from\u00a0{sender}",
     "status_waiting": "Waiting for you",
     "status_booked_with": "Already booked · {voucher}",
     "status_booked_with_no_voucher": "Already booked",

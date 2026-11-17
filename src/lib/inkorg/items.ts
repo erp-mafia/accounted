@@ -8,6 +8,7 @@
  */
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { INTAKE_SOURCE_IDS, intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
+import { MAIL_SOURCES, parseMailbox } from '@/lib/intake/arrival-display'
 import { isInboxItemUnbooked, itemStage } from '@/lib/documents/inbox-item-state'
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
@@ -136,6 +137,20 @@ export function doorOf(item: InkorgItem): IntakeSourceId {
       channel_context: (item.channel_context ?? null) as { intake_source?: unknown; channel?: unknown } | null,
     }) ?? 'upload'
   )
+}
+
+/**
+ * The sender of the mail the item came in, for the opened item's facts line:
+ * the address, the sender's name only when the header carried no address.
+ * A mail forwarded as an attachment reads as the inbound route files it: by
+ * the forwarded mail's own sender, not by who forwarded it (the arrival keeps
+ * that). Null for every other door: there email_from holds a supplier's or a
+ * partner's name (Peppol, a partner delivery), never a mail sender.
+ */
+export function mailSenderOf(item: InkorgItem): string | null {
+  if (!MAIL_SOURCES.has(doorOf(item))) return null
+  const { name, address } = parseMailbox(item.channel_context?.mail_from?.trim() || item.email_from)
+  return address ?? name
 }
 
 // ---------------------------------------------------------------------------

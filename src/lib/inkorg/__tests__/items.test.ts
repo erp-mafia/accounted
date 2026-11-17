@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isInboxItemTaken, isInboxItemUnbooked, isOpenInboxItem, itemStage, whereInboxItemFree, whereInboxItemOpen, withDocumentHold } from '@/lib/documents/inbox-item-state'
-import { DEFAULT_VIEW, companionOf, doorOf, doorsInUse, itemHeadline, isCompanionReceipt, needCount, needsYou, orderByArrival, parseViewKey, queueFor, recentlyRoutedAway, ROUTED_AWAY_NOTICE_MS, stillInInbox, viewKey } from '../items'
+import { DEFAULT_VIEW, companionOf, doorOf, doorsInUse, itemHeadline, isCompanionReceipt, mailSenderOf, needCount, needsYou, orderByArrival, parseViewKey, queueFor, recentlyRoutedAway, ROUTED_AWAY_NOTICE_MS, stillInInbox, viewKey } from '../items'
 import { makeItem, reading } from './fixtures'
 
 describe('itemStage: where an item stands, by the workspace precedence', () => {
@@ -70,6 +70,43 @@ describe('doorOf', () => {
 
   it('an unknown source reads as an upload, never as nothing', () => {
     expect(doorOf(makeItem({ source: 'something-new' }))).toBe('upload')
+  })
+})
+
+describe('mailSenderOf: the sender of the mail the item came in', () => {
+  it('gives the address, also when the mail carried a display name', () => {
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: 'Leverantör AB <faktura@lev.example>' }))).toBe('faktura@lev.example')
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: '"Anna Ek" <anna@firma.example>' }))).toBe('anna@firma.example')
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: 'anna@firma.example' }))).toBe('anna@firma.example')
+  })
+
+  it('reads a connected mailbox from the mail it was found in, else from the item', () => {
+    expect(
+      mailSenderOf(makeItem({ source: 'mail_hunt', channel_context: { channel: 'mail_hunt', mail_from: 'Telia <faktura@telia.example>' }, email_from: null })),
+    ).toBe('faktura@telia.example')
+    expect(
+      mailSenderOf(makeItem({ source: 'mail_hunt', channel_context: { channel: 'mail_hunt', mail_from: ' ' }, email_from: 'faktura@telia.example' })),
+    ).toBe('faktura@telia.example')
+  })
+
+  it('follows the stamped door when the source column cannot say', () => {
+    expect(
+      mailSenderOf(makeItem({ source: 'upload', channel_context: { intake_source: 'intake_email' }, email_from: 'anna@firma.example' })),
+    ).toBe('anna@firma.example')
+  })
+
+  it('falls back to the name when the header carried no address, and to nothing when there is no sender', () => {
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: 'Anna Ek' }))).toBe('Anna Ek')
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: null }))).toBeNull()
+    expect(mailSenderOf(makeItem({ source: 'email', email_from: '  ' }))).toBeNull()
+  })
+
+  it('says nothing for a door that is not a mail: there email_from is a supplier or partner name', () => {
+    expect(mailSenderOf(makeItem({ source: 'peppol', email_from: 'Leverantör AB' }))).toBeNull()
+    expect(
+      mailSenderOf(makeItem({ source: 'upload', channel_context: { intake_source: 'partner_api' }, email_from: 'partner@byra.example' })),
+    ).toBeNull()
+    expect(mailSenderOf(makeItem({ source: 'upload', email_from: 'anna@firma.example' }))).toBeNull()
   })
 })
 

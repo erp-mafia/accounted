@@ -18714,6 +18714,7 @@
     "row_linked": "Kopplad till köp",
     "row_unknown": "Okänt dokument",
     "row_doc_number": "{kind} {number}",
+    "meta_from": "från\u00a0{sender}",
     "status_waiting": "Väntar på dig",
     "status_booked_with": "Redan bokförd · {voucher}",
     "status_booked_with_no_voucher": "Redan bokförd",
