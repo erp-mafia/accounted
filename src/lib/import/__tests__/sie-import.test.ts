@@ -565,6 +565,7 @@ describe('ensureFiscalPeriod validation', () => {
       { data: [], error: null }, // journal_entries: none
       { data: [{ period_start: '2026-01-01' }], error: null }, // no year starts before it
       AKTIEBOLAG,
+      { data: null, error: null }, // clear the links pointing at it
       { data: null, error: null }, // delete result
       { data: null, error: null }, // no predecessor in the continuity chain
       { data: { id: 'replaced-id' }, error: null }, // insert result

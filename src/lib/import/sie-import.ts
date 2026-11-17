@@ -54,6 +54,9 @@ import { checkPeriodDuration, isFirstFiscalPeriod } from '@/lib/bookkeeping/vali
 import { fiscalYearLockedToCalendar, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { userFacing } from '@/lib/errors/user-facing'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('sie-import')
 
 /**
  * Format a date to ISO date string (YYYY-MM-DD)
@@ -492,16 +495,44 @@ export async function ensureFiscalPeriod(
   // are ON DELETE CASCADE (all empty for a seeded period); sie_imports is
   // ON DELETE SET NULL; journal_entries is ON DELETE RESTRICT but we already
   // verified zero rows above.
+  //
+  // previous_period_id references fiscal_periods itself with no ON DELETE
+  // action, so a year linked to the empty one (creating a year by hand in front
+  // of another links it) blocks the delete: clear those links first, as
+  // delete_empty_fiscal_period does. The relink below restores an adjacent one.
+  // A link left cleared by a later failure is harmless: every reader falls back
+  // to the year ending the day before (pickPreviousFiscalPeriod, findNextPeriod).
   if (periodToReplaceId) {
+    const { error: unlinkError } = await supabase
+      .from('fiscal_periods')
+      .update({ previous_period_id: null })
+      .eq('company_id', companyId)
+      .eq('previous_period_id', periodToReplaceId)
+    if (unlinkError) throw unlinkError
+
     const { error: deleteError } = await supabase
       .from('fiscal_periods')
       .delete()
       .eq('id', periodToReplaceId)
       .eq('company_id', companyId)
-
-    if (deleteError) {
-      throw new Error(`Kunde inte ersätta automatiskt skapat räkenskapsår: ${deleteError.message}`)
+    // 23503 = foreign_key_violation: another table holds rows for the year.
+    // The user can give it the file's dates (the import then reuses it) or move
+    // it off them. Any other failure goes to the error envelope as raised.
+    if (deleteError?.code === '23503') {
+      log.warn('the empty fiscal year an SIE import overlaps is still referenced', deleteError, {
+        companyId,
+        periodId: periodToReplaceId,
+      })
+      throw userFacing(
+        new Error(
+          `Räkenskapsåret som överlappar SIE-filens räkenskapsår (${startDate} till ${endDate}) är tomt men kan inte ersättas, ` +
+            `eftersom andra uppgifter är kopplade till det. Ändra dess datum under Inställningar > Bokföring > Räkenskapsår ` +
+            `till ${startDate} till ${endDate}, så används det för importen, eller så att det inte längre överlappar. ` +
+            `Importera sedan filen på nytt.`,
+        ),
+      )
     }
+    if (deleteError) throw deleteError
   }
 
   // Create new fiscal period
@@ -539,8 +570,20 @@ export async function ensureFiscalPeriod(
     .select()
     .single()
 
+  // 23P01 = exclusion_violation: another year overlaps the file's year, one the
+  // precheck did not weigh (it judges the latest overlapping year) or one
+  // created since. A new import judges the years as they are now.
+  if (error?.code === '23P01') {
+    log.warn('the fiscal year of an SIE file overlaps another year', error, { companyId })
+    throw userFacing(
+      new Error(
+        `SIE-filens räkenskapsår (${startDate} till ${endDate}) överlappar ett annat räkenskapsår i Accounted och kunde inte läggas upp. ` +
+          `Importera filen på nytt, så prövas den mot räkenskapsåren som de ser ut nu.`,
+      ),
+    )
+  }
   if (error || !newPeriod) {
-    throw new Error(`Failed to create fiscal period: ${error?.message}`)
+    throw error ?? new Error('Failed to create fiscal period: no row returned')
   }
 
   // Relink the immediate successor (e.g. when an earlier year is imported after
