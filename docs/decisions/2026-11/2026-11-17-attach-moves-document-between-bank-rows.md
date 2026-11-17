@@ -1,0 +1,1 @@
+[2026-11-17] Attaching a document to a bank row takes it off any other unbooked row (pin and inbox match); a booked row keeps its document and the attach is refused: the old row's booking put a moved document on the wrong verifikat (crm#1950). Ends the shared-pin warning.

@@ -63,11 +63,29 @@ describe('loadDocumentClaims', () => {
 describe('sharedDocumentWarning', () => {
   const pendingFirst = { document_id: 'doc-1', operation_id: '9d329d0d-061f', transaction_id: '331ace55-cc90', journal_entry_id: null }
 
-  it('warns when the same invoice is proposed for the twin charge', () => {
+  // crm#1950: a document sits on one bank row at a time, so two attaches of
+  // it never both hold: the later approval moves it. The warning used to
+  // invite approving both for an invoice paid in parts, and both rows then
+  // kept the document until one booking took it.
+  it('warns when the same invoice is proposed for the twin charge: the later approval gets it', () => {
     const note = sharedDocumentWarning([pendingFirst], { transaction_id: '9158cf8d-11de' })
     expect(note).toContain('förslag 9d329d0d')
     expect(note).toContain('banktransaktion 331ace55')
+    expect(note).toContain('en banktransaktion i taget')
+    expect(note).toContain('godkänns sist')
+    expect(note).not.toMatch(/Godkänn båda/)
+    // An invoice paid in parts: a copy on the second verifikat, never two rows sharing one document.
     expect(note).toContain('betalats i flera delar')
+    expect(note).toContain('exakt kopia')
+  })
+
+  it('says the document moves here when another bank transaction already holds it', () => {
+    const attached = { document_id: 'doc-1', operation_id: null, transaction_id: 'abcdef12-3456', journal_entry_id: null }
+    const note = sharedDocumentWarning([attached], { transaction_id: '9158cf8d-11de' })
+    expect(note).toContain('banktransaktion abcdef12')
+    expect(note).toContain('flyttas underlaget hit och den andra transaktionen blir utan')
+    expect(note).not.toContain('godkänns sist')
+    expect(note).not.toMatch(/Godkänn båda/)
   })
 
   // crm#1158: once a verifikat is on either side, only one verifikat can ever

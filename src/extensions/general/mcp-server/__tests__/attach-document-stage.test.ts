@@ -54,19 +54,30 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+const READING = {
+  data: {
+    extracted_data: {
+      supplier: { name: 'Clas Ohlson AB' },
+      invoice: { currency: 'SEK', invoiceDate: '2026-04-12' },
+      totals: { total: 499 },
+    },
+  },
+}
+
+type Chain = Array<{ method: string; args: unknown[] }>
+/** The read that asks which other rows the document's inbox item is matched to. */
+const asksMatchedElsewhere = (chain: Chain) =>
+  chain.some((c) => c.method === 'select' && c.args[0] === 'matched_transaction_id')
+
+/** invoice_inbox_items by what is asked: the rows the item is matched to (none unless given), else its reading. */
+const inboxItems = (matchedElsewhere: string[] = []) => (chain: Chain) =>
+  asksMatchedElsewhere(chain) ? { data: matchedElsewhere.map((id) => ({ matched_transaction_id: id })) } : READING
+
 function db(overrides: Record<string, unknown> = {}) {
   return createTableMockSupabase({
     transactions: [{ data: TX_ROW }, { data: [] }], // the transaction; then nobody else holds the document
     document_attachments: { data: DOC_ROW },
-    invoice_inbox_items: {
-      data: {
-        extracted_data: {
-          supplier: { name: 'Clas Ohlson AB' },
-          invoice: { currency: 'SEK', invoiceDate: '2026-04-12' },
-          totals: { total: 499 },
-        },
-      },
-    },
+    invoice_inbox_items: inboxItems(),
     pending_operations: [{ data: [] }, { data: { id: 'op-attach-1' } }], // no waiting link proposal; then the insert
     ...(overrides as Record<string, never>),
   })
@@ -134,6 +145,8 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     // The period status is read for the transaction date.
     expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2026-04-12'])
     expect(result.next).toMatchObject({ tool: 'gnubok_categorize_transaction', args: { transaction_id: TX } })
+    // Nobody else holds the document: nothing is said about a move.
+    expect(result.next?.description).toMatch(/^Once approved, the receipt is linked to the transaction\. /)
   })
 
   it('stages with the title the approver reads and the bare input as params', async () => {
@@ -178,10 +191,12 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     const { supabase, findCalls } = db({
       transactions: [{ data: { ...TX_ROW, document_id: PREVIOUS } }, { data: [] }],
       document_attachments: [{ data: { journal_entry_id: null, file_name: 'faktura-1.pdf' } }, { data: DOC_ROW }],
-      invoice_inbox_items: (chain: Array<{ method: string; args: unknown[] }>) =>
-        chain.some((c) => c.method === 'eq' && c.args[0] === 'matched_transaction_id')
-          ? { data: [{ id: 'item-previous' }] }
-          : { data: { extracted_data: { supplier: { name: 'Clas Ohlson AB' }, totals: { total: 499 } } } },
+      invoice_inbox_items: (chain: Chain) =>
+        asksMatchedElsewhere(chain)
+          ? { data: [] }
+          : chain.some((c) => c.method === 'eq' && c.args[0] === 'matched_transaction_id')
+            ? { data: [{ id: 'item-previous' }] }
+            : { data: { extracted_data: { supplier: { name: 'Clas Ohlson AB' }, totals: { total: 499 } } } },
     })
     const result = (await tool.execute(
       { transaction_id: TX, document_id: DOC, dry_run: true },
@@ -331,19 +346,82 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     })
   })
 
-  it('carries the shared-document warning when another transaction already holds the document', async () => {
+  // crm#1950: the document sits on one bank row at a time. Attached to
+  // another row it kept the first one too, whose booking then took it as
+  // underlag; the warning invited approving both.
+  it('says the document moves here when another unbooked transaction holds it, and names that transaction', async () => {
+    const OTHER = 'c0c0c0c0-0000-4000-8000-000000000003'
+    const { supabase, findCalls } = db({
+      transactions: [{ data: TX_ROW }, { data: [{ id: OTHER, document_id: DOC }] }],
+      invoice_inbox_items: inboxItems([OTHER]),
+      bank_row_anchors: { data: [] }, // no verifikat books that transaction
+    })
+    const result = (await tool.execute(
+      { transaction_id: TX, document_id: DOC },
+      'company-1', 'user-1', supabase as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    const warning = result.preview.compliance_warning as string
+    expect(warning).toMatch(/^Samma underlag är redan kopplat/)
+    expect(warning).toContain('banktransaktion c0c0c0c0')
+    expect(warning).toContain('flyttas underlaget hit')
+    expect(warning).not.toMatch(/Godkänn båda/)
+    // An invoice paid in parts gets a copy on the second verifikat instead.
+    expect(warning).toContain('betalats i flera delar')
+    expect(warning).toContain('exakt kopia')
+    expect(result.message).toMatch(/WARNING: Samma underlag/)
+    // The agent and the approver both read which transaction lets go.
+    expect(result.preview.moves_from_transaction_ids).toEqual([OTHER])
+    // tools/list is frozen, so the answer says it, not the listed description.
+    expect(result.next?.description).toMatch(/^Once approved, the document moves here: the transactions in preview\.moves_from_transaction_ids /)
+    expect(result.next).toMatchObject({ tool: 'gnubok_categorize_transaction', args: { transaction_id: TX } })
+    expect(tool.description).not.toMatch(/moves/)
+    expect(findCalls('pending_operations', 'insert')[0]?.[0]).toMatchObject({
+      preview_data: expect.objectContaining({ moves_from_transaction_ids: [OTHER] }),
+    })
+  })
+
+  it('says the later approval gets the document when it is only proposed for another transaction', async () => {
     const { supabase } = db({
-      transactions: [{ data: TX_ROW }, { data: [{ id: 'c0c0c0c0-0000-4000-8000-000000000003', document_id: DOC }] }],
+      pending_operations: [
+        { data: [{ id: 'd0d0d0d0-0000-4000-8000-000000000004', params: { document_id: DOC, transaction_id: 'e0e0e0e0-0000-4000-8000-000000000005' } }] },
+        { data: { id: 'op-attach-1' } },
+      ],
     })
     const result = (await tool.execute(
       { transaction_id: TX, document_id: DOC, dry_run: true },
       'company-1', 'user-1', supabase as never,
     )) as Staged
 
-    expect(result.preview.compliance_warning).toMatch(/^Samma underlag är redan kopplat/)
-    // Two bank rows may share an invoice paid in parts: both attaches commit.
-    expect(result.preview.compliance_warning).toContain('betalats i flera delar')
-    expect(result.message).toMatch(/WARNING: Samma underlag/)
+    const warning = result.preview.compliance_warning as string
+    expect(warning).toContain('förslag d0d0d0d0 (banktransaktion e0e0e0e0)')
+    expect(warning).toContain('godkänns sist')
+    expect(warning).not.toContain('flyttas underlaget hit')
+    // Nothing holds it yet, so nothing is listed as leaving.
+    expect(result.preview.moves_from_transaction_ids).toBeUndefined()
+  })
+
+  it('refuses at staging a document that a booked transaction holds, naming it and its verifikat', async () => {
+    const OTHER = 'c0c0c0c0-0000-4000-8000-000000000003'
+    const ITS_ENTRY = 'b0b0b0b0-0000-4000-8000-000000000002'
+    const { supabase } = db({
+      transactions: [{ data: TX_ROW }, { data: [{ id: OTHER }] }],
+      bank_row_anchors: { data: [{ transaction_id: OTHER, journal_entry_id: ITS_ENTRY }] },
+      transaction_voucher_links: { data: [] },
+    })
+    const refusal = await tool
+      .execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never)
+      .then(() => null, (e: unknown) => e)
+
+    expect(refusal).toMatchObject({
+      code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+      details: { document_id: DOC, journal_entry_id: ITS_ENTRY, held_by_transaction_id: OTHER, transaction_journal_entry_id: null },
+    })
+    const envelope = toToolError(refusal).error
+    expect(envelope.details).toMatchObject({ held_by_transaction_id: OTHER })
+    expect(envelope.remediation?.description).toContain('details.held_by_transaction_id')
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 
   it('does not invite approving both when a waiting proposal links the document to a verifikat (crm#1158)', async () => {

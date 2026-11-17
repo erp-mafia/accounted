@@ -21,6 +21,14 @@
  *     and names another seller, or its money goes the other way) is refused,
  *     DOC_ROW_MISMATCH, unless the caller states a mismatchReason (crm#1479,
  *     crm#1779);
+ *   - a document sits on one bank row at a time, as in the app, where a
+ *     matched document is released from its row before it is paired again:
+ *     attaching one that another row holds (that row's pin, or the row its
+ *     inbox item is matched to) moves it here, and the other row lets go of
+ *     both, so its booking never anchors a document that was moved away
+ *     (crm#1950). A row a verifikat books never loses its document this way:
+ *     the attach is refused like a document on another verifikat. Nor does a
+ *     document leave its row for a verifikat in a closed or locked period;
  *   - on a booked transaction the link propagates to
  *     document_attachments.journal_entry_id at once (BFL 5 kap 6 §: the
  *     verifikat must reference its underlag), and a failed propagation is an
@@ -37,7 +45,8 @@
  *
  * A dry run reads and checks; it writes nothing. Its preview also carries
  * both sides of the pairing (date, amount, counterparty; file, vendor,
- * amount) and any other claim on the document, for whoever approves it.
+ * amount), the rows the document would leave and any waiting proposal for
+ * it, for whoever approves it.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -45,6 +54,7 @@ import { errorCauseTag } from '@/lib/errors/db-error'
 import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import {
   completeInboxItemsForBookedTransaction,
+  lockedJournalEntryIds,
   resolveVoucherLinkedEntryIds,
 } from '@/lib/transactions/inbox-underlag'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -69,6 +79,8 @@ export interface AttachDocumentResult {
   document_id: string
   previous_document_id: string | null
   journal_entry_id: string | null
+  /** The bank rows the document sat on and left: it sits on one at a time. */
+  moved_from_transaction_ids: string[]
 }
 
 export interface DetachDocumentResult {
@@ -133,10 +145,117 @@ export function otherVerifikatDetails(
   }
 }
 
+/** A bank row other than the target that holds the document. */
+interface OtherHolder {
+  transactionId: string
+  /** The row's own pin (transactions.document_id); otherwise only an inbox item matched to it. */
+  pinned: boolean
+  /** The live verifikat that books the row, however it is anchored; null while unbooked. */
+  journalEntryId: string | null
+}
+
+/**
+ * The other bank rows that hold a document no verifikat holds yet: the rows
+ * it is pinned on, and the rows its unbooked inbox item is matched to. Either
+ * link carries the document onto the row's verifikat when the row is booked
+ * (propagateUnderlagForBookedTransaction), so both count. Whether a row is
+ * booked is public.bank_row_anchors' answer. A failed read is an error, never
+ * "nobody": a row is released on what was read.
+ */
+async function otherRowsHolding(
+  supabase: OperationContext['supabase'],
+  companyId: string,
+  transactionId: string,
+  documentId: string,
+): Promise<OtherHolder[] | Error> {
+  const [pins, items] = await Promise.all([
+    supabase
+      .from('transactions')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('document_id', documentId)
+      .neq('id', transactionId),
+    supabase
+      .from('invoice_inbox_items')
+      .select('matched_transaction_id')
+      .eq('company_id', companyId)
+      .eq('document_id', documentId)
+      .not('matched_transaction_id', 'is', null)
+      .neq('matched_transaction_id', transactionId)
+      .is('created_journal_entry_id', null)
+      .is('created_supplier_invoice_id', null),
+  ])
+  if (pins.error) return new Error(pins.error.message)
+  if (items.error) return new Error(items.error.message)
+  const pinned = new Set(((pins.data ?? []) as Array<{ id: string }>).map((row) => row.id))
+  const matched = ((items.data ?? []) as Array<{ matched_transaction_id: string }>).map((item) => item.matched_transaction_id)
+  const ids = [...new Set([...pinned, ...matched])]
+  if (ids.length === 0) return []
+
+  const { data: anchors, error: anchorError } = await supabase
+    .from('bank_row_anchors')
+    .select('transaction_id, journal_entry_id')
+    .eq('company_id', companyId)
+    .in('transaction_id', ids)
+  if (anchorError) return new Error(anchorError.message)
+  const bookedOn = new Map(
+    ((anchors ?? []) as Array<{ transaction_id: string; journal_entry_id: string }>).map((a) => [a.transaction_id, a.journal_entry_id]),
+  )
+  return ids.map((id) => ({ transactionId: id, pinned: pinned.has(id), journalEntryId: bookedOn.get(id) ?? null }))
+}
+
+/**
+ * Take the document off the unbooked rows that hold it, before it is pinned
+ * elsewhere: their pins are cleared and the inbox item matched to them is
+ * released, as the Inkorg's "koppla bort" does for one item. Nothing here is
+ * best-effort: a link left behind is what lets the old row's booking anchor
+ * the document on the wrong verifikat (crm#1950). The pins go first: the
+ * transactions trigger refuses when a booking made the document a verifikat's
+ * underlag since the read, and then nothing has changed and the caller asks
+ * again, which answers with that verifikat. Returns the refusal, or null when
+ * the rows have let go.
+ */
+async function releaseFromOtherRows(
+  ctx: OperationContext,
+  documentId: string,
+  holders: OtherHolder[],
+): Promise<Failure | null> {
+  const { supabase, companyId, log } = ctx
+  const pinnedOn = holders.filter((holder) => holder.pinned).map((holder) => holder.transactionId)
+  if (pinnedOn.length > 0) {
+    const { error: unpinError } = await supabase
+      .from('transactions')
+      .update({ document_id: null })
+      .eq('company_id', companyId)
+      .eq('document_id', documentId)
+      .in('id', pinnedOn)
+    if (unpinError) {
+      if (isImmutabilityError(unpinError)) return { ok: false, code: 'DOC_DETACH_CONCURRENT' }
+      log.error('attach document: clearing the pin on the row the document leaves failed', { cause: errorCauseTag(unpinError) })
+      return failed(unpinError)
+    }
+  }
+
+  const { error: releaseError } = await supabase
+    .from('invoice_inbox_items')
+    .update({ matched_transaction_id: null })
+    .eq('company_id', companyId)
+    .eq('document_id', documentId)
+    .in('matched_transaction_id', holders.map((holder) => holder.transactionId))
+    .is('created_journal_entry_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (releaseError) {
+    log.error('attach document: releasing the inbox item from the row the document leaves failed', { cause: errorCauseTag(releaseError) })
+    return { ok: false, code: 'DOC_DETACH_INBOX_UNLINK_FAILED' }
+  }
+  return null
+}
+
 /**
  * Pin document_id to the transaction. Idempotent: attaching the document
  * already pinned is a no-op success; attaching another replaces the pin
  * (logged as a rättelse) unless the current one is räkenskapsinformation.
+ * A document another unbooked row holds moves here.
  */
 export async function attachDocumentToTransaction(
   ctx: OperationContext,
@@ -235,9 +354,37 @@ export async function attachDocumentToTransaction(
     if (refusal) return { ok: false, ...refusal }
   }
 
+  // The document sits on one bank row at a time (crm#1950): the rows that
+  // hold it now let go when it is pinned here. A document already on this
+  // row's verifikat moves nowhere (the transactions trigger keeps every pin
+  // on it). A row a verifikat books is never emptied this way: its document
+  // is that verifikat's underlag even when the link itself never landed (a
+  // locked period), so the answer is the one for a document on another
+  // verifikat, with the row named.
+  const holders: OtherHolder[] | Error = docJournalEntryId
+    ? []
+    : await otherRowsHolding(supabase, companyId, transactionId, documentId)
+  if (holders instanceof Error) return failed(holders)
+  const bookedHolder = holders.find((holder) => holder.journalEntryId != null)
+  if (bookedHolder?.journalEntryId) {
+    const rowEntryId =
+      (tx.journal_entry_id as string | null) ??
+      (await resolveVoucherLinkedEntryIds(supabase, companyId, [transactionId])).get(transactionId) ??
+      null
+    return {
+      ok: false,
+      code: 'DOC_ATTACH_OTHER_VERIFIKAT',
+      details: {
+        ...otherVerifikatDetails(documentId, bookedHolder.journalEntryId, rowEntryId),
+        held_by_transaction_id: bookedHolder.transactionId,
+      },
+    }
+  }
+  const movedFrom = holders.map((holder) => holder.transactionId)
+
   if (options.dryRun) {
     // What the document says (the hints the pairing was chosen on), and who
-    // else already holds it: one document normally backs one purchase.
+    // else already holds it: one document backs one purchase.
     const replacesPin = previousDocumentId != null && previousDocumentId !== documentId && besidePinOn == null
     const [{ data: inbox }, claims, previousStays] = await Promise.all([
       supabase
@@ -285,14 +432,42 @@ export async function attachDocumentToTransaction(
         adds_to_verifikat: besidePinOn != null,
         transaction_booked: tx.journal_entry_id != null,
         journal_entry_id: (tx.journal_entry_id as string | null) ?? null,
-        shared_document_warning: sharedDocumentWarning(claims.get(documentId) ?? [], { transaction_id: transactionId }),
+        // The unbooked rows the document leaves when this is approved.
+        moves_from_transaction_ids: movedFrom,
+        // Those rows, and the proposals still waiting for the same document.
+        shared_document_warning: sharedDocumentWarning(
+          [
+            ...(claims.get(documentId) ?? []).filter((claim) => claim.operation_id !== null),
+            ...movedFrom.map((id) => ({ document_id: documentId, operation_id: null, transaction_id: id, journal_entry_id: null })),
+          ],
+          { transaction_id: transactionId },
+        ),
         // The caller's reason for a document that may look like another purchase's.
         ...(options.checkFit && options.mismatchReason ? { mismatch_reason: options.mismatchReason } : {}),
       },
     }
   }
 
-  if (besidePinOn) return attachBesidePin(ctx, transactionId, documentId, docJournalEntryId, besidePinOn)
+  // The rows the document leaves let go before it is pinned or linked here:
+  // once it is a verifikat's underlag no pin on it can be cleared.
+  if (holders.length > 0) {
+    // A verifikat in a closed or locked period takes no new underlag, so the
+    // period is asked before the document leaves its row: moved first, it
+    // would sit on a row whose verifikat can never reference it.
+    const joinsEntryId = besidePinOn ?? (tx.journal_entry_id as string | null) ?? null
+    if (joinsEntryId && (await lockedJournalEntryIds(supabase, companyId, [joinsEntryId])).has(joinsEntryId)) {
+      return { ok: false, code: 'PERIOD_LOCKED', details: { journal_entry_id: joinsEntryId } }
+    }
+    const refusal = await releaseFromOtherRows(ctx, documentId, holders)
+    if (refusal) return refusal
+    log.info('attach document: the document left the rows that held it', {
+      document_id: documentId,
+      transaction_id: transactionId,
+      moved_from_transaction_ids: movedFrom,
+    })
+  }
+
+  if (besidePinOn) return attachBesidePin(ctx, transactionId, documentId, docJournalEntryId, besidePinOn, movedFrom)
 
   // Race-free read of journal_entry_id: UPDATE ... RETURNING, so the value we
   // propagate against reflects any concurrent categorize that committed
@@ -385,6 +560,7 @@ export async function attachDocumentToTransaction(
       document_id: documentId,
       previous_document_id: previousDocumentId,
       journal_entry_id: effectiveJournalEntryId,
+      moved_from_transaction_ids: movedFrom,
     },
   }
 }
@@ -428,6 +604,7 @@ async function attachBesidePin(
   documentId: string,
   docJournalEntryId: string | null,
   journalEntryId: string,
+  movedFrom: string[],
 ): Promise<OperationOutcome<AttachDocumentResult>> {
   const { supabase, companyId, log } = ctx
   if (docJournalEntryId !== journalEntryId) {
@@ -464,6 +641,7 @@ async function attachBesidePin(
       // Nothing was replaced: the pin stays beside the added document.
       previous_document_id: null,
       journal_entry_id: journalEntryId,
+      moved_from_transaction_ids: movedFrom,
     },
   }
 }

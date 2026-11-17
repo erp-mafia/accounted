@@ -1494,6 +1494,12 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     params: { transaction_id: TX, document_id: DOC },
   }
 
+  // Before the pin: which other bank rows hold the document (none here).
+  const enqueueNoOtherHolder = (enqueue: (result: { data: unknown; error: unknown }) => void) => {
+    enqueue({ data: [], error: null }) // transactions pinned to the document
+    enqueue({ data: [], error: null }) // inbox items of the document matched elsewhere
+  }
+
   it('auto-rejects 404 when transaction is not in the company', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -1532,6 +1538,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({
       data: null,
       error: {
@@ -1556,6 +1563,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
@@ -1570,11 +1578,69 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     expect(result.status).toBe('committed')
   })
 
+  // crm#1950: an approved attach of a document that still sat on another row
+  // left both rows holding it, and the old row's booking took it as underlag.
+  it('moves the document off the unbooked row that held it, and says which in the result', async () => {
+    const OTHER = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueue({ data: [{ id: OTHER }], error: null }) // pinned on another row
+    enqueue({ data: [{ matched_transaction_id: OTHER }], error: null }) // its inbox item matched there
+    enqueue({ data: [], error: null }) // bank_row_anchors: that row is unbooked
+    enqueue({ data: null, error: null }) // the other row's pin is cleared
+    enqueue({ data: null, error: null }) // its inbox item is released
+    enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
+    enqueue({ data: null, error: null }) // invoice_inbox_items link
+    enqueue({ data: [], error: null }) // voucher-link resolution
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ moved_from_transaction_ids: [OTHER] })
+    expect(findCalls('transactions', 'update')).toEqual([[{ document_id: null }], [{ document_id: DOC }]])
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([
+      [{ matched_transaction_id: null }],
+      [{ matched_transaction_id: TX }],
+    ])
+  })
+
+  it('auto-rejects 409 when a booked row holds the document: nothing is taken off a posted verifikat', async () => {
+    const OTHER = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueue({ data: [{ id: OTHER }], error: null }) // pinned on another row
+    enqueue({ data: [], error: null }) // inbox items
+    enqueue({ data: [{ transaction_id: OTHER, journal_entry_id: 'je-other' }], error: null }) // a verifikat books it
+    enqueue({ data: [], error: null }) // this row's own verifikat: none
+    enqueue({ data: null, error: null }) // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('DOC_ATTACH_OTHER_VERIFIKAT')
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
   it('propagates to journal entry when tx was categorized between staging and commit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
@@ -1600,6 +1666,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning (still null)
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: [{ transaction_id: TX, journal_entry_id: 'je-9' }], error: null }) // voucher links
@@ -1630,6 +1697,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link: errors
     enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
@@ -1655,6 +1723,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -1722,6 +1791,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: DOC, journal_entry_id: null }, error: null }) // doc fetch
+    enqueueNoOtherHolder(enqueue)
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // tx UPDATE returning: booked meanwhile
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({
