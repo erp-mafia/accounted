@@ -3727,16 +3727,17 @@ Example response `200`:
 **Pin a document (receipt, invoice) to a bank transaction as its underlag.**
 `scope:transactions:write · risk:medium · idempotent · dry-run · reversible`
 
-Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat's underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. Attaching another document replaces the pin and is logged as a rättelse; on a booked transaction whose pin is already its verifikat's underlag, the pin stays and the document is added to that verifikat as one more underlag. Idempotent. Dry-runnable.
+Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat's underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. A document sits on one transaction at a time: one that another unbooked transaction holds (its pin, or its inbox item matched there) moves here, and that transaction lets go of it (moved_from_transaction_ids). Attaching another document replaces the pin and is logged as a rättelse; on a booked transaction whose pin is already its verifikat's underlag, the pin stays and the document is added to that verifikat as one more underlag. Idempotent. Dry-runnable.
 
 **Use when:** A receipt or invoice in the archive belongs to a bank transaction (same date, amount, counterparty).
 **Do not use for:** Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).
 
 **Pitfalls:**
 - A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).
-- A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT; details name that verifikat (journal_entry_id) and the one the transaction is booked on (transaction_journal_entry_id, null while unbooked). When one document backs both, link a copy to the transaction's verifikat: POST /documents/{id}/link with copy: true.
+- A document already underlag of ANOTHER verifikat, or held by another transaction that is booked (details.held_by_transaction_id), returns 409 DOC_ATTACH_OTHER_VERIFIKAT: it is never taken off a booked transaction. Details name that verifikat (journal_entry_id) and the one the transaction is booked on (transaction_journal_entry_id, null while unbooked). When one document backs both, link a copy to the transaction's verifikat: POST /documents/{id}/link with copy: true.
+- A dry run lists the transactions the document would leave in moves_from_transaction_ids. One invoice paid in several parts does not stay on two unbooked transactions: book them, then link a copy to the second verifikat.
 - A pinned document linked to a verifikat other than the transaction's own booking is never replaced: 409 DOC_ATTACH_REPLACES_POSTED. On the transaction's own verifikat the new document is added beside it (preview adds_to_verifikat; answer previous_document_id null).
-- On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED.
+- On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED, as does a document that would have moved from another transaction (it stays where it is).
 - Check date, amount and counterparty on both sides first: once the transaction is booked the link is immutable.
 
 | Parameter | In | Type | Required | Notes |
@@ -3765,7 +3766,8 @@ Response `200`:
     transaction_id: string,
     document_id: string,
     previous_document_id: string | null,
-    journal_entry_id: string | null
+    journal_entry_id: string | null,
+    moved_from_transaction_ids: string[]
   },
   meta: {
     request_id: string,
@@ -3786,7 +3788,8 @@ Example response `200`:
     "transaction_id": "1f2e…",
     "document_id": "4f1c…",
     "previous_document_id": null,
-    "journal_entry_id": null
+    "journal_entry_id": null,
+    "moved_from_transaction_ids": []
   },
   "meta": {
     "request_id": "req_…",

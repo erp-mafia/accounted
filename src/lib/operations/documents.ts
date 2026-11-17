@@ -387,6 +387,9 @@ const AttachOut = z.object({
     .uuid()
     .nullable()
     .describe('The verifikat the document now belongs to when the transaction is already booked.'),
+  moved_from_transaction_ids: z
+    .array(z.string().uuid())
+    .describe('The unbooked transactions the document sat on and left: it sits on one transaction at a time. Empty when it moved from none.'),
 })
 
 export const transactionsAttachDocument = defineOperation({
@@ -398,21 +401,28 @@ export const transactionsAttachDocument = defineOperation({
   docs: {
     summary: 'Pin a document (receipt, invoice) to a bank transaction as its underlag.',
     description:
-      'Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat\'s underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. Attaching another document replaces the pin and is logged as a rättelse; on a booked transaction whose pin is already its verifikat\'s underlag, the pin stays and the document is added to that verifikat as one more underlag. Idempotent. Dry-runnable.',
+      'Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat\'s underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. A document sits on one transaction at a time: one that another unbooked transaction holds (its pin, or its inbox item matched there) moves here, and that transaction lets go of it (moved_from_transaction_ids). Attaching another document replaces the pin and is logged as a rättelse; on a booked transaction whose pin is already its verifikat\'s underlag, the pin stays and the document is added to that verifikat as one more underlag. Idempotent. Dry-runnable.',
     useWhen: 'A receipt or invoice in the archive belongs to a bank transaction (same date, amount, counterparty).',
     doNotUseFor:
       'Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).',
     pitfalls: [
       'A document that asks for more than the transaction paid AND names another seller, or that names its seller and whose money goes the other way (a purchase on money in, a refund or credit note on money out), returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).',
-      'A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT; details name that verifikat (journal_entry_id) and the one the transaction is booked on (transaction_journal_entry_id, null while unbooked). When one document backs both, link a copy to the transaction\'s verifikat: POST /documents/{id}/link with copy: true.',
+      'A document already underlag of ANOTHER verifikat, or held by another transaction that is booked (details.held_by_transaction_id), returns 409 DOC_ATTACH_OTHER_VERIFIKAT: it is never taken off a booked transaction. Details name that verifikat (journal_entry_id) and the one the transaction is booked on (transaction_journal_entry_id, null while unbooked). When one document backs both, link a copy to the transaction\'s verifikat: POST /documents/{id}/link with copy: true.',
+      'A dry run lists the transactions the document would leave in moves_from_transaction_ids. One invoice paid in several parts does not stay on two unbooked transactions: book them, then link a copy to the second verifikat.',
       'A pinned document linked to a verifikat other than the transaction\'s own booking is never replaced: 409 DOC_ATTACH_REPLACES_POSTED. On the transaction\'s own verifikat the new document is added beside it (preview adds_to_verifikat; answer previous_document_id null).',
-      'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED.',
+      'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED. Adding beside a pin in a locked period writes nothing: PERIOD_LOCKED, as does a document that would have moved from another transaction (it stays where it is).',
       'Check date, amount and counterparty on both sides first: once the transaction is booked the link is immutable.',
     ],
     example: {
       request: { document_id: '4f1c…' },
       response: {
-        data: { transaction_id: '1f2e…', document_id: '4f1c…', previous_document_id: null, journal_entry_id: null },
+        data: {
+          transaction_id: '1f2e…',
+          document_id: '4f1c…',
+          previous_document_id: null,
+          journal_entry_id: null,
+          moved_from_transaction_ids: [],
+        },
         meta: META,
       },
     },
@@ -432,6 +442,10 @@ export const transactionsAttachDocument = defineOperation({
     'DOC_ATTACH_PERIOD_LOCKED',
     'PERIOD_LOCKED',
     'DOC_ATTACH_PROPAGATION_FAILED',
+    // The move off another transaction: a booking took the document at the
+    // same moment, or its inbox item could not be released. Nothing is pinned.
+    'DOC_DETACH_CONCURRENT',
+    'DOC_DETACH_INBOX_UNLINK_FAILED',
   ],
   http: {
     method: 'POST',
@@ -441,6 +455,9 @@ export const transactionsAttachDocument = defineOperation({
   mcp: {
     name: 'gnubok_attach_document_to_transaction',
     title: 'Attach Document to Transaction',
+    // tools/list is frozen (payload-size.bench.test.ts): that a document
+    // moves off the transaction that held it is said in the answer (the
+    // staged preview and its next step), never here (crm#1950).
     description:
       'Stage attaching a document to a bank transaction. Check that date, amount and counterparty match the document first.',
     // mismatch_reason is listed: DOC_ROW_MISMATCH's remediation asks for it,
@@ -470,6 +487,10 @@ export const transactionsAttachDocument = defineOperation({
         document_invoice_date: preview.document_invoice_date,
         // Why the caller says a document that looks like another purchase's belongs here.
         ...(preview.mismatch_reason ? { mismatch_reason: preview.mismatch_reason } : {}),
+        // The unbooked transactions the document leaves when this is approved (crm#1950).
+        ...(Array.isArray(preview.moves_from_transaction_ids) && preview.moves_from_transaction_ids.length > 0
+          ? { moves_from_transaction_ids: preview.moves_from_transaction_ids }
+          : {}),
         // A pinned document whose inbox item is matched to the row stays
         // underlag: the new one is added beside it, nothing is overwritten.
         will_overwrite_existing: preview.replaces_document === true && preview.previous_document_stays !== true,
@@ -495,8 +516,13 @@ export const transactionsAttachDocument = defineOperation({
         complianceNote:
           typeof preview.shared_document_warning === 'string' ? preview.shared_document_warning : undefined,
         next: {
-          description:
-            'Once approved, the receipt is linked to the transaction. If the transaction is still uncategorized, follow up with gnubok_categorize_transaction.',
+          // A document sits on one transaction at a time: the agent is told
+          // which ones lose it before the approval, in its own language.
+          description: `${
+            Array.isArray(preview.moves_from_transaction_ids) && preview.moves_from_transaction_ids.length > 0
+              ? 'Once approved, the document moves here: the transactions in preview.moves_from_transaction_ids held it and are left without it.'
+              : 'Once approved, the receipt is linked to the transaction.'
+          } If the transaction is still uncategorized, follow up with gnubok_categorize_transaction.`,
           tool: 'gnubok_categorize_transaction',
           args: { transaction_id: input.transaction_id },
         },

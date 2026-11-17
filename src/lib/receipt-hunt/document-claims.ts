@@ -3,11 +3,12 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Who already holds a document: a link waiting for approval, or a bank
- * transaction it is attached to. One document normally backs one purchase,
- * but an invoice paid in two instalments legitimately backs two bank rows,
- * so a claim on a bank transaction is something to show, not something to
- * refuse. A waiting link to another verifikat is different: see
- * conflictingVoucherClaims.
+ * transaction it is attached to. One document backs one purchase and sits on
+ * one bank row at a time: attaching it to another unbooked row moves it
+ * there (lib/transactions/document-attach.ts, crm#1950), so a claim on a
+ * bank transaction is something to show, not something to refuse. An invoice
+ * paid in two instalments gets a copy on the second verifikat. A waiting
+ * link to another verifikat is different: see conflictingVoucherClaims.
  */
 export interface DocumentClaim {
   document_id: string
@@ -106,9 +107,11 @@ export function conflictingVoucherClaims(claims: DocumentClaim[], journalEntryId
  * holds, or null. `target` is the link being staged, so it never warns
  * about itself (a retry of the same link is the idempotency path's job).
  *
- * Bank transactions alone may share an invoice paid in several parts, and
- * both links commit. Once a verifikat is on either side, only one verifikat
- * can ever hold the document, so the warning never invites approving both.
+ * Between bank transactions the document moves: the attach approved last
+ * holds it and the other row is left without, so the warning says so and
+ * never invites approving both (an invoice paid in several parts gets a copy
+ * on the second verifikat). Once a verifikat is on either side, only one
+ * verifikat can ever hold the document.
  */
 export function sharedDocumentWarning(claims: DocumentClaim[], target: { transaction_id?: string; journal_entry_id?: string }): string | null {
   const others = claims.filter((c) =>
@@ -122,5 +125,9 @@ export function sharedDocumentWarning(claims: DocumentClaim[], target: { transac
   if (verifikatInvolved) {
     return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag kan bara kopplas till en verifikation, så bara en av verifikationerna kan få det. Ett kontoutdrag som täcker flera transaktioner, eller en rättelse som vilar på originalets faktura, får en egen kopia per verifikation: koppla en exakt kopia till den andra verifikationen, annars avvisa det som är fel.`
   }
-  return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag hör normalt till ett köp. Godkänn båda bara om det är en faktura som betalats i flera delar, annars avvisa det som är fel.`
+  // On another row already: this approval moves it. Only proposed there: the later approval does.
+  const outcome = others.some((c) => c.operation_id === null)
+    ? 'godkänns det här flyttas underlaget hit och den andra transaktionen blir utan'
+    : 'godkänns båda hamnar underlaget på den transaktion som godkänns sist'
+  return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag hör till ett köp och sitter på en banktransaktion i taget: ${outcome}. Avvisa det som är fel. En faktura som betalats i flera delar: bokför transaktionerna var för sig och koppla en exakt kopia av underlaget till den andra verifikationen.`
 }
