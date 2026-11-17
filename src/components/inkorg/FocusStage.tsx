@@ -18,7 +18,7 @@ import { inboxKindLabelKey, isOwnIssuedInvoice } from '@/lib/documents/inbox-kin
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { bookedOnAccount, focusDecision, type DecisionQuestion, type InkorgStartable } from '@/lib/inkorg/decision'
-import { doorOf, itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
+import { doorOf, itemHeadline, mailSenderOf, type InkorgItem } from '@/lib/inkorg/items'
 import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -210,11 +210,15 @@ export function FocusStage({
   const whyEntryId = item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? item.document_journal_entry_id ?? null
   // Each part stays whole when the line wraps: a date never breaks inside.
   const kindLabelKey = inboxKindLabelKey(headline.kind, item.extracted_data)
-  const metaParts = [
-    kindLabelKey ? tWork(kindLabelKey) : null,
-    doorName(doorOf(item)),
-    shortDateTime(item.created_at, locale),
-  ].filter((part): part is string => Boolean(part))
+  // The mail's sender sits beside the door it came through. An address can outgrow a narrow column, so it alone may break inside.
+  const mailSender = mailSenderOf(item)
+  const metaFacts: { text: string | null; sender?: boolean }[] = [
+    { text: kindLabelKey ? tWork(kindLabelKey) : null },
+    { text: doorName(doorOf(item)) },
+    { text: mailSender ? t('meta_from', { sender: mailSender }) : null, sender: true },
+    { text: shortDateTime(item.created_at, locale) },
+  ]
+  const metaParts = metaFacts.filter((part): part is { text: string; sender?: boolean } => Boolean(part.text))
 
   // The company's own invoice bought nothing: no category is asked for.
   const category =
@@ -302,9 +306,13 @@ export function FocusStage({
               </h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 {metaParts.map((part, i) => (
-                  <span key={i} className="whitespace-nowrap">
+                  <span
+                    key={i}
+                    data-ph-mask={part.sender ? '' : undefined}
+                    className={part.sender ? '[overflow-wrap:anywhere]' : 'whitespace-nowrap'}
+                  >
                     {i > 0 && ' · '}
-                    {part}
+                    {part.text}
                   </span>
                 ))}
               </p>

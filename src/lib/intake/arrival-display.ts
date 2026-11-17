@@ -69,8 +69,8 @@ const MAIL_PROVIDER_LABEL: Record<string, string> = {
   microsoft: 'Outlook',
 }
 
-/** Doors that deliver a mail: their arrival can show an envelope and text. */
-const MAIL_SOURCES = new Set<string>(['intake_email', 'mailbox'])
+/** Doors that deliver a mail: their arrival can show an envelope and text, and their item has a mail sender. */
+export const MAIL_SOURCES: ReadonlySet<string> = new Set<string>(['intake_email', 'mailbox'])
 
 function str(value: unknown): string | null {
   if (typeof value !== 'string') return null
