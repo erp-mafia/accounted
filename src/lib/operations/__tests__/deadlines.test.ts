@@ -50,11 +50,15 @@ beforeEach(() => {
 })
 
 describe('deadlines.complete: contract', () => {
-  it('is a low-risk bookkeeping:write that stages over MCP as complete_deadline, behind search', () => {
+  it('is a low-risk bookkeeping:write that stages over MCP as complete_deadline, behind search, with a v1 door', () => {
     expect(deadlinesComplete.kind).toBe('write')
     expect(deadlinesComplete.scope).toBe('bookkeeping:write')
     expect(deadlinesComplete.risk).toBe('low')
-    expect(deadlinesComplete.http).toBeUndefined()
+    expect(deadlinesComplete.http).toEqual({
+      method: 'POST',
+      path: '/api/v1/companies/:companyId/deadlines/:id/complete',
+      pathParams: { id: 'deadline_id' },
+    })
     expect(deadlinesComplete.mcp?.name).toBe('gnubok_complete_deadline')
     expect(deadlinesComplete.mcp?.visibility ?? 'search').toBe('search')
     expect(deadlinesComplete.mcp?.stage?.pendingType).toBe('complete_deadline')

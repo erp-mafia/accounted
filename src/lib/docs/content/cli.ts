@@ -30,7 +30,7 @@ Requires Node.js 20 or later. \`npx accounted\` also works without installing, b
 accounted login
 \`\`\`
 
-The browser opens the Accounted sign-in; the address is printed in the terminal too, in case no browser opens. Sign in with BankID or e-mail, and the consent page follows. It is the same page the Claude and ChatGPT connectors show: every permission is pre-selected, and you can untick rows under **Behörigheter** or choose **Endast läs** for read-only access. With several companies you also choose, per company, **Läsa och skriva**, **Bara läsa** or **Ingen åtkomst**. Approve, and the terminal says \`Signed in\`.
+The browser opens the Accounted sign-in; the address is printed in the terminal too, in case no browser opens. Sign in with BankID or e-mail, and the consent page follows. It is the same page the Claude and ChatGPT connectors show: every permission except **Godkänn** (approve) is pre-selected, and you can untick rows under **Behörigheter**, choose **Endast läs** for read-only access, or tick **Godkänn** to let the CLI approve what it stages. With several companies you also choose, per company, **Läsa och skriva**, **Bara läsa** or **Ingen åtkomst**. Approve, and the terminal says \`Signed in\`.
 
 **Sign in yourself, in your own terminal.** An agent should never sign in for you. In Claude Code you can type \`! accounted login\` at the prompt when the browser runs on the same computer.
 
@@ -40,7 +40,7 @@ The sign-in is saved in \`~/.config/accounted/credentials.json\` (under \`$XDG_C
 
 - \`accounted status\` shows the server, the sign-in and the companies it reaches. It exits with 3 when you are not signed in.
 - \`accounted logout\` removes the sign-in from this computer only. The key keeps working until you disconnect it in Agents › Connect an agent; logout prints the key prefix to look for there.
-- \`accounted login --force\` replaces the sign-in, for example to grant other permissions. Disconnect the old key in Settings afterwards.
+- \`accounted login --force\` replaces the sign-in, for example to grant other permissions. Disconnect the old key under Agents › Connect an agent afterwards.
 
 ## Find and run tools
 
@@ -74,6 +74,8 @@ Staged for approval: operation 9a44..., risk medium. Nothing is booked yet.
 When the user approves it, run: accounted call approve_pending_operation '{"operation_id":"9a44...","company_id":"..."}'
 Or approve it in the browser: https://app.accounted.se/pending
 \`\`\`
+
+The \`When the user approves it, run:\` line is printed only when the sign-in has the **Godkänn** permission. Without it the CLI prints the first and the last line, and you approve under **/pending**.
 
 Read the preview, then approve with that command or under **/pending** in the app. An agent must show you the preview and ask you before it runs the approve command.
 
@@ -149,7 +151,7 @@ accounted call create_customer '@customer.json'
 - **Exit 3, "Not signed in".** Run \`accounted login\` in your own terminal.
 - **An agent in a sandbox gets exit 3.** A sandboxed agent can neither save a sign-in nor renew one ("Cannot save the sign-in", "cannot be written here"). Run \`accounted login\`, or \`accounted status\` (which renews a sign-in that needs it), in your own terminal, then let the agent continue.
 - **"Already signed in".** Run \`accounted login --force\` to replace the sign-in, or \`accounted logout\` first.
-- **"The sign-in has ended".** The connection was disconnected in Settings or is no longer valid. Run \`accounted login\` again.
+- **"The sign-in has ended".** The connection was disconnected under Agents › Connect an agent or is no longer valid. Run \`accounted login\` again.
 - **Exit 4, "Rate limited".** Wait the number of seconds shown, then continue.
 - **"The server redirected to ...".** Pass that address with \`--url\`.
 - **Behind a proxy.** \`HTTPS_PROXY\` and other proxy settings are not supported in version 0.1: the CLI connects directly to the server.

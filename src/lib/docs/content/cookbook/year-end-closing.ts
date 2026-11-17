@@ -6,7 +6,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 
 ## What you'll need
 
-- A test API key with \`bookkeeping:write\`, \`bookkeeping:read\`, \`reports:read\`, \`compliance:read\`, \`documents:write\`, and \`operations:read\` scopes.
+- A **live** API key with \`bookkeeping:write\`, \`reports:read\`, \`compliance:read\`, \`documents:write\`, and \`operations:read\` scopes. A test key (\`gnubok_sk_test_*\`) can run the read-only pre-flight steps, but the year-end run has no dry run and answers a test key with \`403 TEST_KEY_WRITE_BLOCKED\`.
 - All transactions for the year posted (no drafts).
 - All VAT declarations for the year filed (12 monthly, 4 quarterly, or 1 annual: see the [VAT cookbook](/docs/api/cookbook/file-vat-declaration)).
 - All AGI declarations for the year filed. (Employment income reported through monthly AGI is **not** re-reported on an annual kontrolluppgift — KU remains only for the specific payment types AGI doesn't cover, e.g. certain ränta/utdelning; it is not a blanket year-end step.)
@@ -18,7 +18,7 @@ Before you run year-end, verify the period's continuity. BFL 5 kap (with the SIE
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/continuity-check?period_id=$PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response (a passing check returns \`valid: true\` with an empty \`discrepancies\` array):
@@ -55,14 +55,14 @@ BFNAR 2013:2 kap 6-7 §§ requires explanations for missing voucher numbers. Run
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 The check returns a \`findings\` array; each unexplained gap is a \`blocker\` (code \`VOUCHER_GAP_UNEXPLAINED\`). For every gap, file an explanation via \`POST /voucher-gap-explanations\` before the year is closed. Skatteverket can ask for these years later under the 7-year retention rule.
 
 ## 3. Pre-flight: missing documents on posted entries
 
-For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The v1 \`compliance/check\` endpoint does **not** gate on documents — its only supported types are \`year_end_readiness\` and \`voucher_gaps\` — so surface missing underlag through the MCP tools instead:
+For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The v1 \`compliance/check\` endpoint does **not** gate on documents — its supported types are \`year_end_readiness\`, \`voucher_gaps\` and \`vat_close\`, and only the last looks at receipts, for one momsperiod and high-value purchases — so surface missing underlag through the MCP tools instead:
 
 \`\`\`
 accounted_list_verifikat_without_documents
@@ -73,13 +73,13 @@ Attach an already-uploaded document to its verifikation via \`POST /documents/{i
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/documents/$DOCUMENT_ID/link" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{ "journal_entry_id": "a8f1c2d3-..." }'
 \`\`\`
 
-The first link to a verifikation is allowed even after the period is locked (it completes the audit trail rather than modifying the entry). Re-linking a document that is already attached to a *posted* entry is refused with \`CONFLICT\` (\`document_already_linked_to_posted_entry\`) per BFL 5 kap 5 §.
+Link the underlag before the year is locked: a verifikat in a locked or closed period answers \`PERIOD_LOCKED\`. A document already linked to another verifikat answers \`409 DOC_LINK_ALREADY_LINKED\` (with \`details.current_journal_entry_id\`); send \`copy: true\` to archive a copy on this verifikat too.
 
 ## 4. Locking is handled by year-end (do NOT pre-lock)
 
@@ -89,7 +89,7 @@ The standalone \`POST /fiscal-periods/{id}/lock\` endpoint (synchronous, returns
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -101,7 +101,7 @@ Unlock a locked period with \`POST /fiscal-periods/{id}/unlock\`. A closed perio
 
 1. Re-validates readiness (no drafts, no unexplained voucher gaps, trial balance balanced). Preview it first with \`GET /compliance/check?type=year_end_readiness&fiscal_period_id=$PERIOD_ID\`.
 2. Runs currency revaluation, posting FX gains/losses to \`3960\`/\`7960\` **before** the closing entry so they get swept into the result, and turns it back (återföring, \`source_type=currency_revaluation\`) on the first day of the next period: payments and later revaluations are measured from the original booking rate, so the next year books only the difference that arises in it.
-3. Posts one closing entry (\`source_type=year_end\`, series A, "Årsbokslut …"): it zeros every result account in BAS class 3-8 and books the net result **directly** onto \`2099\` "Årets resultat" (aktiebolag) — or \`2010\` "Eget kapital" for enskild firma. There is no \`8910\` intermediate step.
+3. Posts one closing entry (\`source_type=year_end\`, in the company's voucher series for bokslut: I in the standard set, A for a company that never applied it, "Årsbokslut …"): it zeros every result account in BAS class 3-8 and books the net result **directly** onto \`2099\` "Årets resultat" (aktiebolag) — or \`2010\` "Eget kapital" for enskild firma. There is no \`8910\` intermediate step.
 4. Locks, then closes the period (irreversible per BFL 5 kap 8 §).
 5. Generates the opening-balance verifikat in the next period: every BAS class 1-2 account's UB becomes its IB, as a single balanced entry.
 6. Re-validates IB/UB continuity (rolling back on failure), then — for aktiebolag — omför föregående års resultat from \`2099\` to \`2098\` in the new period as a separate verifikat.
@@ -112,7 +112,7 @@ This is an async operation. It takes no body:
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/year-end" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
@@ -159,10 +159,10 @@ After year-end runs, the new period (\`next_period_id\` from the operation resul
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/trial-balance?period_id=$NEXT_PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-The \`opening_balance\` column on every 1xxx/2xxx row should equal the \`closing_balance\` on the same row for the closed year. \`3xxx-8xxx\` accounts have zero opening balance: the year-end procedure cleared them into \`2099\`.
+\`opening_debit - opening_credit\` on every 1xxx/2xxx row should equal \`closing_debit - closing_credit\` on the same row for the closed year. \`3xxx-8xxx\` accounts have zero opening balance: the year-end procedure cleared them into \`2099\`.
 
 You normally never touch \`POST /fiscal-periods/{id}/opening-balances\`: year-end already generates the IB, and this endpoint returns \`CONFLICT\` (\`opening_balance_already_posted\`) once an IB entry exists in the target period. It exists only to generate the IB in isolation: its body is \`{ "next_period_id": "<uuid>" }\` and it computes balances from the closed period's UB (no explicit values are accepted). To correct a wrong IB, use \`POST /fiscal-periods/{id}/opening-balances/correct\` (open, unlocked year without a bokslut on top): it books the corrected IB and stornos the old one, never editing the posted verifikat.
 
@@ -174,27 +174,27 @@ Step 5 already locked **and** closed the period — \`executeYearEndClosing\` ru
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
-It returns \`CONFLICT\` (\`already_closed\`) if the period is already closed, \`PERIOD_NOT_LOCKED\` if it was never locked, and \`CONFLICT\` (\`year_end_not_executed\`) if no closing entry exists yet.
+It returns \`PERIOD_ALREADY_CLOSED\` if the period is already closed, \`PERIOD_NOT_LOCKED\` if it was never locked, and \`YEAR_END_NOT_RUN\` if no closing entry exists yet.
 
 ## 8. Assemble the årsredovisning (aktiebolag only)
 
-For an AB, the annual report (årsredovisning) is filed with Bolagsverket within 7 months of the fiscal-year end. A single \`/reports/annual-report\` endpoint is **not yet exposed in v1**: assemble the K2/K3 source figures from the report endpoints that do exist, then typeset and submit via Bolagsverket Mina Sidor.
+For an AB, the annual report (årsredovisning) is filed with Bolagsverket within 7 months of the fiscal-year end. The årsredovisning is served per fiscal period under \`/fiscal-periods/{id}/arsredovisning\`: edit the förvaltningsberättelse and note texts (\`POST .../narrative\`), read it as PDF (\`GET .../pdf\`) or as K2 iXBRL (\`GET .../ixbrl\`), freeze a version (\`POST .../versions\`) and send it to the board for BankID signing (\`POST .../versions/{versionId}/signing-request\`). Filing at Bolagsverket is done by a person. The source figures are also available from the report endpoints:
 
 \`\`\`bash
 # Resultaträkning
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/income-statement?period_id=$PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 
 # Balansräkning
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/balance-sheet?period_id=$PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-The resultaträkning and balansräkning come from those two reports; the noter and förvaltningsberättelse are assembled from the GL on your side. The signing flow (every styrelseledamot must sign) is outside the API surface.
+The resultaträkning and balansräkning come from those two reports; the noter and förvaltningsberättelse are the texts of the årsredovisning above. Every styrelseledamot signs in person with BankID through the signing request: no endpoint signs.
 
 ## 9. Generate INK2 / NE for the tax declaration
 
@@ -202,17 +202,16 @@ The tax declaration (INK2 for AB, NE-bilaga for enskild firma) is due in March/M
 
 \`\`\`bash
 # Aktiebolag: INK2
-curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ink2?year=2025" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ink2?period_id=$PERIOD_ID" \\
+  -H "Authorization: Bearer gnubok_sk_..."
 
 # Enskild firma: NE-bilaga
-curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?year=2025" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/ne-bilaga?period_id=$PERIOD_ID" \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-These produce **two files**: \`INFO.SRU\` (metadata header) plus \`BLANKETTER.SRU\` (the declaration body), uploaded together as a single submission to Skatteverket. **The SRU format is plain text encoded in ISO 8859-1 (NOT XML)**: a tagged record-line shape per Skatteverket's SRU specification. A single-file upload is rejected by Skatteverket's validation. This is a separate artefact from Bolagsverket's digital årsredovisning filing, which uses **iXBRL** (an XML-based standard). SRU goes to Skatteverket for INK2/INK2R/INK2S declarations; iXBRL goes to Bolagsverket for the public annual report. Don't conflate them.
+These return the declaration fields as JSON. The files for Skatteverket come zipped from \`GET /reports/ink2/sru?period_id=...\` and \`GET /reports/ne-bilaga/sru?period_id=...\`: **two files**, \`INFO.SRU\` (metadata header) plus \`BLANKETTER.SRU\` (the declaration body), uploaded together under those names as a single submission to Skatteverket. **The SRU format is plain text encoded in ISO 8859-1 (NOT XML)**: a tagged record-line shape per Skatteverket's SRU specification. A single-file upload is rejected by Skatteverket's validation. This is a separate artefact from Bolagsverket's digital årsredovisning filing, which uses **iXBRL** (an XML-based standard). SRU goes to Skatteverket for INK2/INK2R/INK2S declarations; iXBRL goes to Bolagsverket for the public annual report. Don't conflate them.
 
-> **Note:** \`/reports/ink2\` and \`/reports/ne-bilaga\` are not part of the v1 report surface yet: see the API changelog for current availability. Until they ship, generate the inputs via \`/reports/trial-balance?period_id=<uuid>\` and feed your tax-software of choice.
 
 ## Brutet räkenskapsår (off-calendar year)
 
@@ -223,7 +222,7 @@ The one exception: the VAT declaration cadence is monthly/kvartalsvis/årlig reg
 ## Common pitfalls
 
 - **Don't year-end before the last month's moms is declared.** The year-end procedure expects every moms-account balance to reconcile. A pending declaration leaves dangling balances on 2611-2641.
-- **Periodiseringsfond is your entry, not the engine's.** \`/year-end\` does not accept a set-aside amount and does not post the reserve; it only revalues currency, posts the closing entry (class 3-8 → \`2099\`), and generates the IB. If you set aside a periodiseringsfond, book it yourself as an obeskattad reserv (\`21xx\`, against \`8811\`) **before** running year-end. For sizing it: per IL 30 kap 5 § and 30 kap 6 a §, an AB can set aside max 25% of the **taxable profit AFTER schablonintäkt has been added back and BEFORE the periodiseringsfond deduction itself**. The schablonintäkt is **(SLR + 1%) × outstanding prior-year periodiseringsfonder balance**, where SLR is Skatteverket's statslåneränta as published on 30 November of the preceding income year: for 2026 SLR is 2.55%, so the rate is **3.55%**. Under BFL/BFNAR 2016:10 (materiellt samband for AB), the periodiseringsfond is BOOKED as an obeskattad reserv, not just declared on INK2.
+- **Periodiseringsfond is your entry, not the engine's.** \`/year-end\` does not accept a set-aside amount and does not post the reserve; it only revalues currency, posts the closing entry (class 3-8 → \`2099\`), and generates the IB. If you set aside a periodiseringsfond, book it yourself as an obeskattad reserv (\`21xx\`, against \`8811\`) **before** running year-end. For sizing it: per IL 30 kap 5 § and 30 kap 6 a §, an AB can set aside max 25% of the **taxable profit AFTER schablonintäkt has been added back and BEFORE the periodiseringsfond deduction itself**. The schablonintäkt is **SLR × the periodiseringsfonder at the start of the tax year**, where SLR is the statslåneränta of 30 November the year before, at least 0.5%: **2.55%** for 2026. Under BFL/BFNAR 2016:10 (materiellt samband for AB), the periodiseringsfond is BOOKED as an obeskattad reserv, not just declared on INK2.
 - **Don't unlock a period after the AB's annual report is filed.** The signed annual report is a public document at Bolagsverket; unlocking and changing the books afterwards creates a discrepancy with the filed report (which is itself an audit finding). Book the correction as a new verifikation in the current open year instead (\`POST /journal-entries\`): a storno (\`POST /journal-entries/{id}/reverse\`) is numbered and dated in the original's fiscal year, so it is refused in a locked or closed year. (v1 has \`POST /fiscal-periods/{id}/unlock\`, but the same rule applies.)
 - **Year-end is async.** Don't block your request loop on it: poll \`GET /operations/{id}\` with reasonable backoff (every 5-10s). If you prefer webhooks, subscribe to \`period.year_closed\` — that is the event the engine emits on completion. (\`operation.completed\`, shown in the operation envelope, is the polling contract, not a separately deliverable subscription event.)
 

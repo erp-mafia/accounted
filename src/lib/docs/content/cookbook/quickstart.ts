@@ -4,7 +4,7 @@ export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
 ## What you'll need
 
-- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first: it points at the same company as a live key, but the wrapper forces every write into dry-run. Because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow. So: **use a live key for the walkthrough.** There is no separate sandbox company or host; to test without touching your bookkeeping, create a second, empty company in the dashboard and never connect a bank or Skatteverket to it.
+- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) with the \`companies:read\`, \`customers:write\` and \`invoices:write\` scopes, from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first: it points at the same company as a live key, but the wrapper forces every write that supports a dry run into one and refuses the rest (\`403 TEST_KEY_WRITE_BLOCKED\`). Because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow. So: **use a live key for the walkthrough.** There is no separate sandbox company or host; to test without touching your bookkeeping, create a second, empty company in the dashboard and never connect a bank or Skatteverket to it.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
@@ -29,7 +29,7 @@ Save the \`id\` as \`COMPANY_ID\` for the next steps.
 
 ## 2. Create a customer (dry-run first)
 
-Most writes support \`?dry_run=true\`: the response shows the would-be record without committing. (Bank/SIE imports are the exception: they run for real or not at all.) Use it in agent test loops to validate inputs before paying the side-effect cost.
+Most writes support \`?dry_run=true\`: the response shows the would-be record without committing. (Not all: imports, period lock, close and year-end, match-invoice, generate-agi and document upload have no dry run and refuse the flag with \`400 VALIDATION_ERROR\`.) Use it in agent test loops to validate inputs before paying the side-effect cost.
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/customers?dry_run=true" \\
@@ -110,7 +110,7 @@ A fresh draft has \`invoice_number: null\`: the F-series löpnummer is allocated
 
 ## 4. Send it
 
-\`POST /invoices/{id}/send\` runs a sequential pipeline: preflight PDF render (validates rendering before a number is burned) → allocate the F-series number atomically → final PDF render → email the customer via Resend (PDF attached, copy to the company). Any hard failure up to and including the email rolls nothing forward. Once the email is delivered the pipeline hits a **point of no return**: the status flip to \`sent\`, the journal entry (accrual + real invoices), PDF archival as underlag, and the \`invoice.sent\` event are best-effort, and any of their failures surface as \`warnings\` on the response rather than unwinding the send. It is not a single atomic transaction.
+\`POST /invoices/{id}/send\` runs a sequential pipeline: preflight PDF render (validates rendering before a number is burned) → allocate the F-series number atomically → final PDF render → issue the invoice: status \`sent\` and the journal entry (accrual + real invoices), before the email and fail closed (a refused verifikat returns the engine's error, the invoice stays a draft and nothing is sent) → email the customer (Resend or SMTP, PDF attached, copy to the company) → archive the PDF as underlag → the \`invoice.sent\` event. An email failure after the verifikat is posted answers \`502 INVOICE_SEND_ISSUED_NOT_DELIVERED\`: the invoice stays issued and booked (a posted verifikat is never undone), so deliver it another way and do not call \`/send\` again. After delivery, the PDF link to the journal entry and the event are best-effort, and their failures surface as \`warnings\` on the response. It is not a single atomic transaction.
 
 \`\`\`bash
 # Generate the key ONCE and reuse it on every retry of this same send, so a
@@ -139,7 +139,7 @@ Response carries the allocated invoice number and the id of the posted journal e
 }
 \`\`\`
 
-If any post-email step degraded, \`data.warnings\` is present (e.g. \`JOURNAL_ENTRY_NOT_POSTED\`); the invoice is marked \`sent\` regardless.
+If a step after delivery degraded, \`data.warnings\` is present (e.g. \`PDF_JOURNAL_LINK_FAILED\`); the invoice is sent and booked regardless.
 
 ## 5. Mark it paid
 
@@ -161,7 +161,7 @@ This flow creates a customer, drafts a single-line invoice, posts the verifikati
 
 The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 
-The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt): omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when \`company_settings.has_f_skatt\` is true. **The integrator is responsible for keeping \`has_f_skatt\` in sync with the company's live Skatteverket registration status.** Keep it in sync from the settings page in the dashboard (there is no v1 settings endpoint today): a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
+The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a Swedish momsregistrerad seller that holds F-skatt registration. The buyer uses this note to determine whether they must withhold preliminary tax (A-skatt): omitting it can shift liability onto the buyer and triggers a FATAL Peppol BIS 3.0 validation failure (SE-R-005) on B2G invoices. The requirement applies equally to PDF/paper and Peppol/e-invoice formats; B2G is just where the validation is automated. The PDF includes it automatically when the company's \`f_skatt\` setting is true. **The integrator is responsible for keeping \`f_skatt\` in sync with the company's live Skatteverket registration status.** Keep it in sync with \`PATCH /settings/tax-profile\` (\`{ "f_skatt": true }\`, scope \`companies:write\`) or the settings page in the dashboard: a flag that's false while the company is actually F-skatt-registered produces non-compliant invoices, not merely a missing optional note.
 
 The summary fields in the JSON response (\`subtotal\`, \`vat_amount\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
 

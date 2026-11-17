@@ -2,21 +2,21 @@ export const COOKBOOK_VAT_DECLARATION_MD = `# Cookbook: compute and review a VAT
 
 > Compute the Swedish momsdeklaration rutor 05-62 from your posted general-ledger entries and prepare the numbers for manual submission to Skatteverket.
 
-This is the operational companion to the [Reports reference](/docs/api/reference/reports). v1 does NOT submit the declaration to Skatteverket directly: that path exists via the BankID-gated Skatteverket extension, not the public REST API. v1 produces the numbers and the receipt-quality JSON for manual submission via Skatteverket Mina Sidor.
+This is the operational companion to the [Reports reference](/docs/api/reference/reports). v1 does NOT submit the declaration to Skatteverket directly: that path exists via the BankID-gated Skatteverket extension, not the public REST API. v1 produces the numbers as JSON and as an eSKD file (\`GET /reports/vat-declaration/eskd\`) that a person uploads at Skatteverket under "Deklarera via fil", and records the filing afterwards.
 
 ## What you'll need
 
-- A test API key with \`reports:read\` scope.
+- A **live** API key with \`reports:read\`, \`compliance:read\`, and \`bookkeeping:write\` for the gap explanations, the lock and recording the filing. (The reads alone work with a test key; the lock does not: it has no dry run.)
 - All transactions for the period categorised and posted (see [ingest-bank-transactions cookbook](/docs/api/cookbook/ingest-bank-transactions)).
-- The company's \`moms_redovisning\` cycle configured: monthly (kvartalsvis is supported for small companies with omsättning ≤ 1M SEK; the API doesn't dictate cadence, your bookkeeping does).
+- The company's \`moms_period\` set (\`monthly\`, \`quarterly\` or \`yearly\`; \`PATCH /settings/tax-profile\`). Skatteverket's default follows the yearly beskattningsunderlag: at most 1 MSEK yearly, above 1 MSEK up to 40 MSEK quarterly, above 40 MSEK monthly, and a company may choose a shorter period. The API does not decide the cadence: set what Skatteverket has registered.
 
 ## 1. Compute the declaration
 
-\`GET /reports/vat-declaration\` returns all the rutor plus supporting counts and a per-source breakdown. The period is selected with three **required** params — \`period_type\` (monthly|quarterly|yearly), \`year\`, and \`period\` (monthly 1-12, quarterly 1-4, yearly 1) — plus an optional \`accounting_method\` (accrual|cash, default accrual):
+\`GET /reports/vat-declaration\` returns all the rutor plus supporting counts and a per-source breakdown. The period is selected with three **required** params — \`period_type\` (monthly|quarterly|yearly), \`year\`, and \`period\` (monthly 1-12, quarterly 1-4, yearly 1) — (\`accounting_method\` is still accepted but has no effect: the declaration is a projection of the ledger):
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/reports/vat-declaration?period_type=monthly&year=2026&period=4" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response (abbreviated):
@@ -108,10 +108,10 @@ BFNAR 2013:2 kap 6-7 §§ requires every voucher gap to have a documented explan
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/compliance/check?type=voucher_gaps&fiscal_period_id=$FISCAL_PERIOD_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-The check takes the period's UUID as \`fiscal_period_id\` (not a \`YYYY-MM\` string); get it from \`GET /fiscal-periods\`. Supported \`type\` values are \`voucher_gaps\` and \`year_end_readiness\`. If gaps exist, file an explanation via \`POST /voucher-gap-explanations\` BEFORE submitting the declaration: gaps without explanations are a compliance audit finding.
+The check takes the period's UUID as \`fiscal_period_id\` (not a \`YYYY-MM\` string); get it from \`GET /fiscal-periods\`. Supported \`type\` values are \`voucher_gaps\`, \`year_end_readiness\` and \`vat_close\` (with \`period_type\`, \`year\` and \`period\`: the close check for one momsperiod, including uncategorised transactions and missing high-value receipts). If gaps exist, file an explanation via \`POST /voucher-gap-explanations\` BEFORE submitting the declaration: gaps without explanations are a compliance audit finding.
 
 ## 5. Pre-flight: locked period
 
@@ -119,17 +119,17 @@ The declaration is computed from posted entries in the period. If the period is 
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/lock" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
-Locking is reversible until you close the period, but the unlock endpoint is not exposed in v1: reverse a lock from the dashboard. Closing the period is irreversible per BFL 5 kap 8 §; only close after the declaration is submitted AND any audit-period grace window has passed.
+Locking is reversible until you close the period: \`POST /fiscal-periods/{id}/unlock\` lifts it. Closing the period is irreversible per BFL 5 kap 8 §; only close after the declaration is submitted AND any audit-period grace window has passed.
 
 ## 6. Manual submission to Skatteverket
 
-v1 does not submit the declaration. The receipt-quality JSON above is what you transcribe into Skatteverket Mina Sidor (or feed into your own Skatteverket-integration tooling, gated by BankID: handled by the optional \`skatteverket\` extension, not the public REST API).
+v1 does not submit the declaration. Download the eSKD file with \`GET /reports/vat-declaration/eskd\` (same period parameters) and upload it at Skatteverket under "Deklarera via fil", or transcribe the rutor above. Filing through the BankID-gated Skatteverket connection is done in Accounted or by an agent over MCP, not over REST.
 
-For audit-trail completeness, capture the submission confirmation number from Skatteverket. v1 does not expose a field for a Skatteverket submission reference on the fiscal period, so record it in your own system of record (or your integration's audit log) alongside the period it belongs to.
+Then record the filing: \`POST /reports/vat-declaration/filings\` with the period, \`filed_on\` and Skatteverket's kvittensnummer as \`reference\` (scope \`bookkeeping:write\`). That marks the period as filed in Accounted and completes its deadline.
 
 ## EU and reverse-charge handling
 

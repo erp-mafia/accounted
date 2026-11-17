@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { DocsLayout } from '@/components/docs/DocsLayout'
 import { DocsMarkdown } from '@/lib/docs/markdown'
-import { DOCS_NAV } from '@/lib/docs/nav'
+import { DOCS_NAV, FEATURED_REFERENCE_LINKS } from '@/lib/docs/nav'
 import { LANDING_MD } from '@/lib/docs/content/landing'
 import Link from 'next/link'
 
@@ -15,7 +15,7 @@ export default function DocsApiLandingPage() {
   // Stripe-style cards. The markdown body provides the prose context;
   // the cards below give visual scannability.
   const cookbooks = DOCS_NAV.find((s) => s.label === 'Cookbooks')?.links ?? []
-  const reference = DOCS_NAV.find((s) => s.label === 'API reference')?.links?.slice(0, 8) ?? []
+  const reference = FEATURED_REFERENCE_LINKS
 
   return (
     <DocsLayout currentPath="/docs/api">

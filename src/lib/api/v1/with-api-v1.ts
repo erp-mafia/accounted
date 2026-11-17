@@ -1124,6 +1124,25 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         forceDryRun = true
       }
 
+      // A live key that asks for a dry run on a write that cannot simulate is
+      // refused, never ignored, like stage=true and Preview-Token above: the
+      // handler never reads the flag, so the write ran for real while its
+      // caller believed it previewed (a year-end, a period lock, an approval).
+      // Three handlers refused it themselves (documents, inbox items, bank
+      // sync); the rule lives here so a new write cannot be left out. Same
+      // answer as theirs. An unregistered route keeps its own behaviour.
+      if (isMutation && endpoint && !endpoint.dryRunSupported && isDryRun(request, url)) {
+        userLog.warn('dry run requested on an endpoint that cannot simulate', { path, method: request.method })
+        return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: {
+            field: 'dry_run',
+            message:
+              'dry_run is not supported on this endpoint: nothing was run. Only writes marked x-dry-run-supported in the OpenAPI spec preview; send the request without dry_run to run it.',
+          },
+        })
+      }
+
       if (options.requireIdempotencyKey && isMutation && !idempotencyKey) {
         userLog.warn('missing idempotency key on mutating request')
         return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {

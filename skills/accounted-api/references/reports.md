@@ -2036,8 +2036,11 @@ Example response `200`:
 ```json
 {
   "data": {
-    "is_continuous": true,
-    "discrepancies": []
+    "valid": true,
+    "period_name": "FY 2025",
+    "previous_period_name": "FY 2024",
+    "discrepancies": [],
+    "checked_accounts": 42
   },
   "meta": {
     "request_id": "req_…",

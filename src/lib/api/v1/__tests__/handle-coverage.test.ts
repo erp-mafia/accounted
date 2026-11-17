@@ -154,6 +154,7 @@ describe('path parameter typing', () => {
       'corporate-meetings/:id': null,
       'connections/:connectionId': null,
       'customers/:id': 'customer',
+      'deadlines/:id': null,
       'days/:dayId': null,
       'dividends/:id': null,
       'dimensions/:id': 'dimension',

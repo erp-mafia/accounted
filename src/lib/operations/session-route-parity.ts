@@ -73,7 +73,8 @@ const ATTEST_LIST_LINK = 'token route of the batched attest mail\'s list link (/
 const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<token>): the firmatecknare signs the payments in person with BankID, authenticated by the link, no machine door signs'
 const SIGNING_CEREMONY = 'BankID signing of a document: the signer signs in person, by the link (/signera/<token>) or as the member named; agents and API clients request, chase and read, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
-const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
+const EXT_SYNC = 'webshop/payment integration sync is cron-driven; "Synka nu" has no door of its own (gnubok_backfill_feed refetches from a named day, which moves the cursor)'
+const EXT_SYNC_SWITCH = 'switch the nightly sync of a webshop/payment integration on or off; no door'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
 const CONSENT = 'a person accepts the terms or gives or withdraws consent in person (terms, analytics, the company\'s data choices); an agent or API key never decides what may be done with the data'
 const STOCK_COUNT_SIGNATURE = 'the inventeringslista is signed på heder och samvete (LIV 2 §) by a person, by hand or with their own BankID; agents prepare and book it, no machine door signs'
@@ -180,7 +181,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/settings/counterparty-templates': gap('P3', 'rename a learned counterparty template (read via gnubok_get_counterparty_templates)'),
   'DELETE /api/settings/counterparty-templates': gap('P3'),
   'PUT /api/settings/skattekonto-account': covered([`PATCH ${V}/settings/skattekonto-account`], 'no MCP tool yet: a staged write needs its own pending type (issue #50)'),
-  'POST /api/settings/skattekonto-account/transfer-draft': gap('P2', 'draft the transfer verifikat after a skattekonto account change; gnubok_create_voucher can book the same lines'),
+  'POST /api/settings/skattekonto-account/transfer-draft': covered([`POST ${V}/journal-entries`, 'gnubok_create_voucher'], 'the route drafts one two-line verifikat; a door books the same two lines as a generic voucher, with the amount from the account change answer (left_on_previous)'),
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
   'POST /api/settings/peppol/access': covered([`POST ${V}/peppol/access-request`, 'gnubok_request_peppol_access']),
@@ -215,7 +216,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Journal entries (verifikat) ────────────────────────────────────
   'POST /api/bookkeeping/journal-entries': covered([`POST ${V}/journal-entries`, 'gnubok_create_voucher', `POST ${V}/vat/settlement`, 'gnubok_book_vat_settlement']),
   'PATCH /api/bookkeeping/journal-entries/:id': covered([`PATCH ${V}/journal-entries/:id`]),
-  'DELETE /api/bookkeeping/journal-entries/:id': covered([`DELETE ${V}/journal-entries/:id`]),
+  'DELETE /api/bookkeeping/journal-entries/:id': covered([`DELETE ${V}/journal-entries/:id`, 'gnubok_cancel_draft_entry']),
   'POST /api/bookkeeping/journal-entries/:id/commit': covered([`POST ${V}/journal-entries/:id/commit`]),
   'POST /api/bookkeeping/journal-entries/:id/correct': covered([`POST ${V}/journal-entries/:id/correct`, 'gnubok_correct_entry']),
   'POST /api/bookkeeping/journal-entries/:id/reverse': covered([`POST ${V}/journal-entries/:id/reverse`, 'gnubok_reverse_journal_entry']),
@@ -226,10 +227,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/accruals/:id/cancel': covered([`POST ${V}/accrual-schedules/:id/cancel`, 'gnubok_cancel_accrual_schedule']),
   'POST /api/bookkeeping/journal-entries/:id/recordate': covered([`POST ${V}/journal-entries/:id/redate`, 'gnubok_redate_entry']),
   'PATCH /api/bookkeeping/journal-entries/:id/notes': covered([`PATCH ${V}/journal-entries/:id/notes`, 'gnubok_set_voucher_note']),
-  'POST /api/bookkeeping/journal-entries/:id/no-document-required': covered([`POST ${V}/journal-entries/:id/no-document-required`]),
+  'POST /api/bookkeeping/journal-entries/:id/no-document-required': covered([`POST ${V}/journal-entries/:id/no-document-required`, 'gnubok_mark_no_document_required'], 'the tool takes journal_entry_ids: one verifikat is a batch of one'),
   'DELETE /api/bookkeeping/journal-entries/:id/no-document-required': covered([`DELETE ${V}/journal-entries/:id/no-document-required`]),
   'POST /api/bookkeeping/no-doc-required/batch': covered([`POST ${V}/journal-entries/no-document-required`, 'gnubok_mark_no_document_required']),
-  'POST /api/bookkeeping/no-doc-required/bulk-missing': gap('P3', 'filter-wide "inget underlag krävs"'),
+  'POST /api/bookkeeping/no-doc-required/bulk-missing': covered([`POST ${V}/journal-entries/no-document-required`, 'gnubok_mark_no_document_required'], 'the same mark (markEntriesNoDocRequired) by journal_entry_ids, up to 500 a call, from gnubok_list_verifikat_without_documents; choosing by filter on the server is the dashboard only'),
   'POST /api/bookkeeping/journal-entry-lines/:lineId/retag': covered([`POST ${V}/dimensions/retag`, 'gnubok_tag_journal_lines']),
   'POST /api/bookkeeping/voucher-gaps': covered([`POST ${V}/voucher-gap-explanations`, 'gnubok_explain_voucher_gap']),
   // Pågående arbeten (K3 kapitel 23), behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED: dashboard first.
@@ -242,8 +243,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Accruals (periodiseringar) ─────────────────────────────────────
   'POST /api/bookkeeping/fiscal-periods/:id/accruals': covered(
-    ['gnubok_propose_accruals', 'gnubok_create_voucher'],
-    'proposal is read-only; posting goes through a generic voucher',
+    ['gnubok_propose_accruals', 'gnubok_create_voucher', `POST ${V}/journal-entries`],
+    'proposal is read-only and an MCP tool only; posting goes through a generic voucher on either door',
   ),
   'POST /api/bookkeeping/accruals/:id/dissolve': gap('P3', 'dissolve an accrual schedule early'),
   'POST /api/bookkeeping/accruals/post-due': gap('P3', 'manual trigger of the daily accrual run (list via gnubok_list_accrual_schedules)'),
@@ -269,7 +270,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/close-external': covered([`POST ${V}/fiscal-periods/:id/close-external`, 'gnubok_close_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': covered([`POST ${V}/fiscal-periods/:id/reopen-external`, 'gnubok_reopen_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
-  'POST /api/bookkeeping/currency-revaluation/monthly': gap('P3', 'month-end currency revaluation with its next-day storno (#523); v1 and MCP revalue the balansdag only'),
+  'POST /api/bookkeeping/currency-revaluation/monthly': gap('P2', 'month-end currency revaluation with its next-day storno (#523), a monthly close step where the company has switched it on; v1 and MCP revalue the balansdag only'),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen': uiOnly('owner-only reopen of a year closed with a bokslut, on the owner\'s typed statement that the årsredovisning was not signed, adopted or filed'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': covered(
@@ -279,8 +280,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/depreciation': covered(['gnubok_post_annual_depreciation']),
   'PUT /api/bookkeeping/fiscal-periods/:id/depreciation': gap('P3', 'save skattemässig (tax) depreciation choice'),
   'POST /api/bookkeeping/fiscal-periods/:id/bokslutsdispositioner': covered(
-    ['gnubok_propose_dispositioner', 'gnubok_create_voucher'],
-    'proposal is read-only; posting goes through a generic voucher',
+    ['gnubok_propose_dispositioner', 'gnubok_create_voucher', `POST ${V}/journal-entries`],
+    'proposal is read-only and an MCP tool only; posting goes through a generic voucher on either door',
   ),
   'PUT /api/bookkeeping/fiscal-periods/:id/bokslutsdispositioner': gap('P3', 'save dispositioner adjustments'),
   'POST /api/bookkeeping/k3-transition': covered([`POST ${V}/k3-transition`, 'gnubok_start_k3_transition']),
@@ -388,11 +389,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/transactions/:id': covered([`PATCH ${V}/transactions/:id`]),
   'DELETE /api/transactions/:id': covered([`DELETE ${V}/transactions/:id`]),
   'PATCH /api/transactions/:id/cash-account': covered([`PATCH ${V}/transactions/:id`], 'the account_number field'),
-  'POST /api/transactions/:id/book': covered(['gnubok_bulk_book_transactions'], 'book one transaction with explicit lines as a batch of one'),
+  'POST /api/transactions/:id/book': covered([`POST ${V}/transactions/bulk-book`, 'gnubok_bulk_book_transactions'], 'book one transaction with explicit lines as a batch of one'),
   'POST /api/transactions/:id/categorize': covered([`POST ${V}/transactions/:id/categorize`, 'gnubok_categorize_transaction']),
   'POST /api/transactions/:id/uncategorize': covered([`POST ${V}/transactions/:id/uncategorize`, 'gnubok_uncategorize_transaction']),
   'POST /api/transactions/:id/ignore': covered([`POST ${V}/transactions/:id/ignore`, 'gnubok_ignore_transaction']),
-  'DELETE /api/transactions/:id/ignore': covered([`DELETE ${V}/transactions/:id/ignore`]),
+  'DELETE /api/transactions/:id/ignore': covered([`DELETE ${V}/transactions/:id/ignore`, 'gnubok_ignore_transaction'], 'the tool restores with restore: true'),
   'POST /api/transactions/:id/attach-document': covered([`POST ${V}/transactions/:id/attach-document`, 'gnubok_attach_document_to_transaction']),
   'DELETE /api/transactions/:id/attach-document': covered([`POST ${V}/transactions/:id/detach-document`, 'gnubok_detach_document_from_transaction']),
   'POST /api/transactions/:id/link-journal-entry': covered([`POST ${V}/transactions/:id/link-journal-entry`, 'gnubok_link_transaction_to_journal_entry']),
@@ -415,8 +416,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Reconciliation ─────────────────────────────────────────────────
   'POST /api/reconciliation/bank/run': covered([`POST ${V}/reconciliation/bank/run`]),
-  'POST /api/reconciliation/bank/link': covered(['gnubok_link_transaction_to_journal_entry', 'gnubok_reconcile_match']),
-  'POST /api/reconciliation/bank/confirm-suggestions': covered(['gnubok_reconcile_match'], 'use_proposals; bulk reject has no API'),
+  'POST /api/reconciliation/bank/link': covered([`POST ${V}/transactions/:id/link-journal-entry`, `POST ${V}/reconciliation/accounts/:accountKey/links`, 'gnubok_link_transaction_to_journal_entry', 'gnubok_reconcile_match']),
+  'POST /api/reconciliation/bank/confirm-suggestions': covered([`POST ${V}/reconciliation/accounts/:accountKey/links`, 'gnubok_reconcile_match'], 'use_proposals; bulk reject has no API'),
   'POST /api/reconciliation/bank/mark-opening-balance': gap('P3', 're-tag a voucher as opening balance'),
   'POST /api/reconciliation/accounts/:accountKey/links': covered([`POST ${V}/reconciliation/accounts/:accountKey/links`, 'gnubok_reconcile_match']),
   'DELETE /api/reconciliation/accounts/:accountKey/links/:linkId': covered([`DELETE ${V}/reconciliation/accounts/:accountKey/links/:linkId`, 'gnubok_reconcile_unmatch']),
@@ -429,7 +430,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Documents and archive ──────────────────────────────────────────
   'POST /api/documents': covered([`POST ${V}/documents`, 'gnubok_upload_document']),
-  'POST /api/documents/uploads': covered(['gnubok_create_document_upload']),
+  'POST /api/documents/uploads': covered([`POST ${V}/documents`, 'gnubok_create_document_upload'], 'v1 uploads in one multipart call, without the reserved URL'),
   'DELETE /api/documents/:id': covered([`DELETE ${V}/documents/:id`, 'gnubok_delete_document']),
   'POST /api/documents/:id/link': covered([`POST ${V}/documents/:id/link`, 'gnubok_link_document_to_voucher']),
   'POST /api/documents/:id/detach': gap('P3', 'detach a duplicate underlag from a posted verifikat'),
@@ -460,15 +461,15 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/skattekonto-file/parse': uiOnly(PREVIEW),
   'POST /api/import/skattekonto-file/execute': covered([`POST ${V}/imports/skattekonto-file`], 'v1 takes the whole file; no MCP tool (would stage file bytes)'),
   'POST /api/import/customers/parse': uiOnly(PREVIEW),
-  'POST /api/import/customers/execute': covered([`POST ${V}/customers/bulk-create`]),
+  'POST /api/import/customers/execute': covered([`POST ${V}/customers/bulk-create`, 'gnubok_create_customer'], 'the tool takes one customer per call'),
   'POST /api/import/suppliers/parse': uiOnly(PREVIEW),
-  'POST /api/import/suppliers/execute': covered([`POST ${V}/suppliers/bulk-create`]),
+  'POST /api/import/suppliers/execute': covered([`POST ${V}/suppliers/bulk-create`, 'gnubok_create_supplier'], 'the tool takes one supplier per call'),
   'POST /api/import/articles/parse': uiOnly(PREVIEW),
   'POST /api/import/articles/match': uiOnly(PREVIEW),
   'POST /api/import/articles/execute': covered(['gnubok_create_article'], 'one article per call, no bulk'),
   'DELETE /api/import/registers/:id/undo': gap('P3', 'undo a dashboard customer/supplier/article import; v1 bulk-create records no run to undo'),
   'POST /api/import/documents/preview': uiOnly(PREVIEW),
-  'POST /api/import/documents/attach': covered(['gnubok_upload_document', 'gnubok_link_documents_to_vouchers']),
+  'POST /api/import/documents/attach': covered([`POST ${V}/documents`, `POST ${V}/documents/:id/link`, 'gnubok_upload_document', 'gnubok_link_documents_to_vouchers']),
   'POST /api/import/opening-balance/parse': uiOnly(PREVIEW),
   'POST /api/import/opening-balance/execute': covered([`POST ${V}/fiscal-periods/:id/opening-balances/manual`, 'gnubok_set_opening_balances_manual'], 'the spreadsheet parse stays UI-only; the API takes lines'),
   'POST /api/import/opening-balance/correct': covered([`POST ${V}/fiscal-periods/:id/opening-balances/correct`, 'gnubok_correct_opening_balances']),
@@ -503,7 +504,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices': covered([`POST ${V}/invoices`, 'gnubok_create_invoice']),
   'PATCH /api/invoices/:id': covered([`PATCH ${V}/invoices/:id`, 'gnubok_update_invoice']),
   'DELETE /api/invoices/:id': covered([`DELETE ${V}/invoices/:id`, 'gnubok_delete_draft_invoice']),
-  'POST /api/invoices/:id/finalize': gap('P3', 'number an unnumbered UI draft; API-created invoices are numbered on create'),
+  'POST /api/invoices/:id/finalize': gap('P3', 'number a draft without sending it; over v1 and MCP the number is allocated when the invoice is sent or marked sent'),
   'POST /api/invoices/:id/book': covered([`POST ${V}/invoices/:id/book`, 'gnubok_book_invoice']),
   'POST /api/invoices/bulk-book': covered([`POST ${V}/invoices/bulk-book`, 'gnubok_bulk_book_invoices']),
   'POST /api/invoices/:id/send': covered([`POST ${V}/invoices/:id/send`, 'gnubok_send_invoice']),
@@ -578,7 +579,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/:id/resend': gap('P3', 'email an already emailed invoice again as a copy (crm#1339)'),
-  'POST /api/invoices/self-billed': gap('P3', 'register a received självfaktura'),
+  'POST /api/invoices/self-billed': covered([`POST ${V}/invoices`], 'is_self_billed: true runs the same service (createSelfBilledSaleInvoice); gnubok_create_invoice has no such argument'),
   'POST /api/invoices/preview-pdf': uiOnly(PREVIEW),
   'POST /api/invoices/preview-email': uiOnly(PREVIEW),
   'POST /api/invoices/recurring': covered(['gnubok_create_recurring_schedule']),
@@ -681,7 +682,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections': uiOnly(BANK_CONSENT),
   'POST /api/bank/open-payments/connections/:id/poll': uiOnly(BANK_CONSENT),
   'POST /api/bank/open-payments/connections/:id/restart': uiOnly(BANK_CONSENT),
-  'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'map connected bank accounts to ledger accounts, as for Enable Banking (Svea: also signs the second consent, which stays a person\'s act)'),
+  'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'choose which accounts sync after the consent and start the first import, as for Enable Banking; their ledger accounts have a door (POST /cash-accounts/change-ledgers, gnubok_change_bank_ledgers). Svea: also signs the second consent, which stays a person\'s act'),
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
   'PATCH /api/bank/connections/:id/ledgers': covered([`POST ${V}/cash-accounts/change-ledgers`, 'gnubok_change_bank_ledgers'], 'named by cash_account_id instead of the connection account uid (crm#1663)'),
@@ -706,7 +707,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/mileage/trips/:id': gap('P3'),
   'DELETE /api/mileage/trips/:id': gap('P3'),
   'POST /api/mileage/book': covered(['gnubok_book_mileage_period']),
-  'POST /api/mileage/salary-push': gap('P3', 'push milersättning to a salary run'),
+  'POST /api/mileage/salary-push': gap('P2', 'push milersättning to a salary run and claim the trips (monthly payroll). An agent can only type the amount as a payslip line (gnubok_add_payslip_line), which leaves the trips unclaimed, so gnubok_book_mileage_period can book them a second time'),
   'POST /api/webshop-orders/:id/book': covered([`POST ${V}/webshop-orders/:orderId/book`, 'gnubok_book_webshop_order']),
   'POST /api/webshop-orders/:id/create-invoice': gap('P3'),
   'POST /api/webshop-orders/:id/mark-booked': gap('P3'),
@@ -735,8 +736,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/reports/cash-forecast/rows/:id/cancel': covered([`POST ${V}/cash-forecast-rows/cancel`, 'gnubok_cancel_cash_forecast_row']),
 
   // ── VAT, tax, ROT/RUT ──────────────────────────────────────────────
-  'POST /api/reports/vat-declaration/filings': covered([`POST ${V}/reports/vat-declaration/filings`]),
-  'DELETE /api/reports/vat-declaration/filings': covered([`DELETE ${V}/reports/vat-declaration/filings`]),
+  'POST /api/reports/vat-declaration/filings': covered([`POST ${V}/reports/vat-declaration/filings`, 'gnubok_mark_vat_period_filed']),
+  'DELETE /api/reports/vat-declaration/filings': covered([`DELETE ${V}/reports/vat-declaration/filings`, 'gnubok_unmark_vat_period_filed']),
   'POST /api/reports/vat-declaration/rc-basis-gaps/fix': gap('P3', 'add the missing reverse-charge basbelopp pair'),
   'POST /api/reports/vat-declaration/check-reviews': covered(['gnubok_mark_vat_check_reviewed'], 'staged; a person approves the agent\'s review'),
   'DELETE /api/reports/vat-declaration/check-reviews': uiOnly('taking back a VAT warning review is the reviewer\'s own act in the momsdeklaration view'),
@@ -754,10 +755,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/deadlines': gap('P3', 'custom deadline'),
   'PUT /api/deadlines/:id': gap('P3'),
   'DELETE /api/deadlines/:id': gap('P3'),
-  'POST /api/deadlines/:id/complete': covered(['gnubok_complete_deadline', 'gnubok_mark_vat_period_filed', 'gnubok_mark_agi_period_filed'], 'any deadline by its id, either way (crm#1848); the moms and AGI deadlines also by period, with the filing date'),
+  'POST /api/deadlines/:id/complete': covered([`POST ${V}/deadlines/:id/complete`, `POST ${V}/reports/vat-declaration/filings`, 'gnubok_complete_deadline', 'gnubok_mark_vat_period_filed', 'gnubok_mark_agi_period_filed'], 'any deadline by its id, either way (crm#1848); the moms and AGI deadlines also by period, with the filing date'),
   'POST /api/rot-rut/payout-file': covered(['gnubok_generate_rot_rut_file']),
   'POST /api/rot-rut/beslut/import': covered(['gnubok_import_rot_rut_beslut']),
-  'PATCH /api/rot-rut/payout-requests/:id': gap('P3', 'begäran lifecycle (cancel/rejected)'),
+  'PATCH /api/rot-rut/payout-requests/:id': gap('P3', 'begäran lifecycle by hand: submitted, paid, partially paid (with the decided total), rejected, cancelled; only the decision file has a door (gnubok_import_rot_rut_beslut)'),
   'POST /api/rot-rut/payout-requests/:id/link-voucher': covered(['gnubok_link_rot_rut_payout_voucher']),
   'POST /api/rot-rut/payout-requests/:id/settle': covered(['gnubok_settle_rot_rut_payout']),
   'POST /api/rot-rut/payout-requests/:id/reclaim': gap('P3', 'book a refused share back onto the customer'),
@@ -924,7 +925,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/enable-banking/connect': covered(['gnubok_connect_bank'], 'returns the browser consent link; BankID consent itself is browser-only'),
   'POST /api/extensions/ext/enable-banking/attach': uiOnly('reuse another company\'s bank consent session, then pick accounts in the browser'),
   'POST /api/extensions/ext/enable-banking/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank']),
-  'PATCH /api/extensions/ext/enable-banking/accounts': gap('P3', 'map connected bank accounts to ledger accounts'),
+  'PATCH /api/extensions/ext/enable-banking/accounts': gap('P3', 'choose which connected bank accounts sync; their ledger accounts have a door since crm#1663 (POST /cash-accounts/change-ledgers, gnubok_change_bank_ledgers)'),
   'DELETE /api/extensions/ext/enable-banking/disconnect': gap('P3'),
 
   // email
@@ -983,7 +984,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/skatteverket/agi/submit': covered(['gnubok_agi_submit']),
   'POST /api/extensions/ext/skatteverket/agi/send-for-signing': covered(['gnubok_agi_submit']),
   'POST /api/extensions/ext/skatteverket/agi/lasUpp': gap('P3', 'unlock an AGI awaiting signature'),
-  'POST /api/extensions/ext/skatteverket/agi/granskningsunderlag': gap('P3', 'fetch Skatteverket\'s granskningsunderlag'),
+  'POST /api/extensions/ext/skatteverket/agi/granskningsunderlag': covered(['gnubok_agi_submit'], 'step 2 of the chain (the signing link, with the period locked): the tool\'s approval runs both steps (submitAgiChain), never step 2 alone'),
   'POST /api/extensions/ext/skatteverket/skattekonto/sync': covered([`POST ${V}/skattekonto/sync`]),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch': covered(['gnubok_book_skattekonto_rows']),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/bokfor': covered(['gnubok_book_skattekonto_row']),
@@ -998,7 +999,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   ),
 
   // invoice-inbox (Underlag)
-  'POST /api/extensions/ext/invoice-inbox/upload': covered(['gnubok_upload_document']),
+  'POST /api/extensions/ext/invoice-inbox/upload': covered([`POST ${V}/inbox-items`, 'gnubok_upload_document']),
   'POST /api/extensions/ext/invoice-inbox/upload/create': covered(['gnubok_create_document_upload']),
   'POST /api/extensions/ext/invoice-inbox/upload/complete': covered(['gnubok_complete_document_upload']),
   'PATCH /api/extensions/ext/invoice-inbox/items/:id/fields': covered([`PATCH ${V}/inbox-items/:id`, 'gnubok_set_inbox_extracted_data']),
@@ -1048,7 +1049,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/extensions/ext/stripe/disconnect': gap('P3'),
   'POST /api/extensions/ext/stripe/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/stripe/backfill': covered(['gnubok_backfill_feed']),
-  'POST /api/extensions/ext/stripe/transaction-sync': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/stripe/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
 
   // whatsapp-inbox
   'POST /api/extensions/ext/whatsapp-inbox/webhook': machine(WEBHOOK),
@@ -1063,21 +1064,21 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/extensions/ext/woocommerce/disconnect': gap('P3'),
   'POST /api/extensions/ext/woocommerce/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/woocommerce/backfill': covered(['gnubok_backfill_feed']),
-  'POST /api/extensions/ext/woocommerce/transaction-sync': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/woocommerce/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
 
   // shopify
   'POST /api/extensions/ext/shopify/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/shopify/disconnect': gap('P3'),
   'POST /api/extensions/ext/shopify/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/shopify/backfill': covered(['gnubok_backfill_feed']),
-  'POST /api/extensions/ext/shopify/transaction-sync': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/shopify/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
 
   // zettle
   'POST /api/extensions/ext/zettle/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/zettle/disconnect': gap('P3'),
   'POST /api/extensions/ext/zettle/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/zettle/backfill': covered(['gnubok_backfill_feed']),
-  'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
 }
 
 /**
@@ -1148,4 +1149,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * the staged gnubok_mark_not_momsredovisning and
  * gnubok_withdraw_not_momsredovisning.
  */
-export const GAP_CEILING = 168
+export const GAP_CEILING = 164

@@ -120,19 +120,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
     const capBlocked = await requireCapability(ctx.supabase, ctx.companyId!, CAPABILITY.bank_sync)
     if (capBlocked) return capBlocked
 
-    // The bank round-trip IS the side effect, so there is nothing to simulate.
-    // Test keys never reach this line (the wrapper blocks them on endpoints
-    // that cannot dry-run); a live key passing ?dry_run=true is told why.
-    if (ctx.dryRun) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'dry_run',
-          message: 'dry_run is not supported: the bank call is the side effect.',
-          cooldown_ms: SYNC_COOLDOWN_MS,
-        },
-      })
-    }
+    // The bank round-trip IS the side effect, so there is nothing to simulate:
+    // withApiV1 refuses a dry run (and a test key) on this endpoint before
+    // this line (dryRunSupported: false).
 
     // The enable-banking extension is opt-in (extensions.config.json) and the
     // registry is the runtime source of truth: absent registration means the

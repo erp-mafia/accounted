@@ -495,7 +495,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   vatMomsredovisningMarksWithdraw,
   // agi-filings (MCP only: the dashboard completes a deadline by id)
   agiFilingsMark,
-  // deadlines (MCP only: the dashboard ticks a deadline through the same service)
+  // deadlines (v1 and MCP: the dashboard ticks a deadline through the same service)
   deadlinesList,
   deadlinesComplete,
   // arsredovisning
@@ -545,7 +545,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   // The payment signing link: a person without a login signs approved bank payments with BankID; agents request it, staged.
   ...PAYMENT_SIGNING_LINK_OPERATIONS,
   ...SIGNING_REQUEST_OPERATIONS,
-  // The attest policy for supplier invoices: read it (also as an MCP tool), save it (v1 only: owners and admins), and one invoice's attest trail.
+  // The attest policy for supplier invoices: read it, save it (v1 only: owners and admins), and one invoice's attest trail; both reads are MCP tools too.
   ...SUPPLIER_INVOICE_ATTEST_OPERATIONS,
   // Packages: read their status (winding down included) and stage a switch on or off; approval by an owner or admin.
   ...PACKAGE_OPERATIONS,

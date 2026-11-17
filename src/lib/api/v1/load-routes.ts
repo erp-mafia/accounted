@@ -459,6 +459,10 @@ import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/book/route'
 import '@/app/api/v1/companies/[companyId]/expense-claims/route'
 import '@/app/api/v1/companies/[companyId]/expense-claims/[id]/route'
 import '@/app/api/v1/companies/[companyId]/expense-claims/payouts/route'
+
+// Deadlines: the list, and the tick that completes one or puts it back (lib/operations/deadlines.ts).
+import '@/app/api/v1/companies/[companyId]/deadlines/route'
+import '@/app/api/v1/companies/[companyId]/deadlines/[id]/complete/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/match-expense-payout/route'
 // Operation registry, wave 1: setup capabilities.
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/route'

@@ -10,7 +10,7 @@ Accounted ships an [MCP](https://modelcontextprotocol.io) server that exposes th
 https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted
 \`\`\`
 
-There are three ways to connect, depending on your client. All three reach the same tools and the same approval model: read tools answer immediately, write tools (categorise, mark paid, create voucher, year-end) **stage a pending operation** that you confirm in chat or in the **/pending** web UI before anything is booked.
+There are three ways to connect, depending on your client. All three reach the same tools and the same approval model: read tools answer immediately, write tools (categorise, mark paid, create voucher, year-end) **stage a pending operation** that you approve under **To do › Routine** (**/pending**) in the app, or in chat if you ticked **Godkänn** when you connected, before anything is booked.
 
 ## Path A: claude.ai or Claude Desktop (one click)
 
@@ -22,14 +22,14 @@ The link opens claude.ai with the connector name and URL already filled in. You 
 
 **Claude Team or Enterprise?** There, only the organization's owners add connectors, and the link above does not work for other members. If an owner has already added Accounted: open Customize → Connectors in Claude, pick Accounted and click **Connect**. Every person signs in with their own Accounted account, so several people in the same company can be connected at once.
 
-**All permissions pre-selected, every write still staged.** The consent page grants the full scope set with one click. Expand **Behörigheter** and choose **Endast läs** to connect read-only (list invoices, read reports, compute VAT): a reviewer can do that while you keep a write-enabled connection for daily work. Whatever the scopes, write tools (create invoice, categorise, book vouchers, run year-end) only stage a pending operation that you confirm before anything is booked, and the grant can be revoked under Settings → API & MCP.
+**Everything except Approve pre-selected, every bookkeeping write still staged.** The consent page pre-selects every permission except **Godkänn** (approve), so one click gives Claude read and write access while the final approval stays with you. Expand **Behörigheter** and choose **Endast läs** to connect read-only (list invoices, read reports, compute VAT): a reviewer can do that while you keep a write-enabled connection for daily work. Tick **Godkänn** only if Claude should approve its own proposals in chat. Whatever the scopes, write tools (create invoice, categorise, book vouchers, run year-end) only stage a pending operation that you approve before anything is booked, and the grant can be revoked under Agents › Connect an agent (\`/settings/api\`).
 
 #### What happens after you click
 
 The rest of the setup happens on Claude's side, in this order:
 
 1. **The connector dialog.** claude.ai opens **Add custom connector** with the name and URL filled in. Check the URL and continue: the dialog detects that the server requires a sign-in (**Always required**) and that Claude can register itself automatically. Keep those and click **Add**. Claude Desktop shows the same dialog under Settings → Connectors.
-2. **The sign-in opens.** claude.ai asks you to connect and opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent page. It shows the company that is currently active in the app (switch company in the app first if you have several) with every permission pre-selected; expand **Behörigheter** and choose **Endast läs** for a read-only connection. Approve, and the connector shows as connected with the Accounted tools listed.
+2. **The sign-in opens.** claude.ai asks you to connect and opens the Accounted sign-in (BankID or e-mail + 2FA), followed by the consent page. It shows your company with every permission except **Godkänn** pre-selected. With several companies it lists all of them, the one active in the app first, and you choose **Läsa och skriva**, **Bara läsa** or **Ingen åtkomst** for each; expand **Behörigheter** and choose **Endast läs** for a read-only connection. Approve, and the connector shows as connected with the Accounted tools listed.
 3. **Ask your first question.** For example *"Which company am I connected to?"*. From here every question runs against that company; writes stage at **/pending** until you confirm.
 
 Signed in, but Claude still says it cannot reach the server? Ask again in the same chat first. If that does not help, open Settings → Connectors, remove the connector, and add it again from the link above, with authentication left on **Always required**.
@@ -46,7 +46,7 @@ Keep all three parameters. \`tool_namespace=accounted\` selects the tool names t
 
 ## Path B: Claude Code (plugin)
 
-Best in the terminal. The plugin installs the connection *and* eight workflow commands that follow the Swedish bookkeeping rhythm.
+Best in the terminal. The plugin installs the connection *and* eight workflow skills that follow the Swedish bookkeeping rhythm, plus two commands (\`/accounted:setup\` and \`/accounted:use\`).
 
 \`\`\`text
 /plugin marketplace add erp-mafia/accounted
@@ -57,6 +57,7 @@ Then run \`/mcp\` and sign in with Accounted (the same OAuth consent screen as P
 
 | Command | What it does |
 |---|---|
+| \`/accounted:setup\` | First run: connect (create the account if needed) and set up the company from the conversation |
 | \`/accounted:start\` | Connect, orient, and surface what needs attention |
 | \`/accounted:bookkeep\` | Clear unbooked bank transactions and receipts |
 | \`/accounted:check\` | Read-only health check with a prioritized fix list |
@@ -90,7 +91,7 @@ claude mcp add --transport http accounted \\
 
 Best for Claude Desktop on a machine where you'd rather use a long-lived API key than the OAuth flow, or for scripting.
 
-1. Mint an API key in the Accounted dashboard under **Settings → API & MCP** (\`/settings/api\`). A \`gnubok_sk_test_*\` key reads your real company but forces every write into dry-run, so it is safe while you evaluate; switch to a live key (\`gnubok_sk_*\`, no \`test_\` infix) when you want writes to commit.
+1. Mint an API key in Accounted under **Agents › Connect an agent** (\`/settings/api\`, the Developers group). A \`gnubok_sk_test_*\` key reads your real company but never writes: a write that supports a dry run is forced into one, and a write that cannot be simulated (for example \`accounted_categorize_transaction\`) is refused, so it is safe while you evaluate; switch to a live key (\`gnubok_sk_*\`, no \`test_\` infix) when you want writes to commit.
 2. Add the stdio bridge to your \`claude_desktop_config.json\`:
    \`\`\`json
    {
@@ -132,7 +133,7 @@ All three are read-only and safe to run against your real company (with a \`gnub
 1. **"Show my uncategorized bank transactions and suggest categories."**
    Claude calls \`accounted_list_uncategorized_transactions\` then \`accounted_suggest_categories\` and walks you through the proposals. Approving one stages an \`accounted_categorize_transaction\` pending operation: nothing is booked until you confirm.
 2. **"Which invoices are overdue?"**
-   Claude calls \`accounted_get_ar_ledger\` (kundreskontra) and lists outstanding customer invoices with aging.
+   Claude reads \`accounted_get_ar_ledger\` (kundreskontra) through \`accounted_call_tool\`, since the ledger is outside the default tool list, and lists outstanding customer invoices with aging.
 3. **"Compute my VAT report for this quarter and tell me if I can close it."**
    Claude calls \`accounted_get_vat_report\` for the momsdeklaration rutor, then \`accounted_vat_close_check\` to scan for blockers (uncategorised rows, unapproved supplier invoices, missing receipts on expenses ≥ 4 000 kr: the tool's high-value heuristic; BFL requires underlag for every affärshändelse regardless of amount) and reports \`ready_to_close\`.
 
@@ -140,12 +141,12 @@ All three are read-only and safe to run against your real company (with a \`gnub
 
 A quick end-to-end pass to confirm the connection works before you trust it with real data. Run the steps in order; each lists what you do and what you should see.
 
-1. **Connect.** Use Path A (choose **Endast läs** on the consent page), Path B, or Path C with a \`gnubok_sk_test_*\` key. → Claude lists the Accounted tools (titles like *List Uncategorized Transactions*, *VAT Declaration (Momsdeklaration)*).
+1. **Connect.** Use Path A or Path B with the default permissions. (A read-only connection or a \`gnubok_sk_test_*\` key covers steps 2 to 5 but cannot stage the write in step 6.) → Claude lists the Accounted tools (titles like *List Uncategorized Transactions*, *VAT Declaration (Momsdeklaration)*).
 2. **Confirm the company.** Ask *"Which company am I connected to?"* → Claude names the company the key or consent was issued for.
 3. **Run prompt 1** (*uncategorized + suggest categories*). → A list of uncategorised rows plus category suggestions; no booking happens.
 4. **Run prompt 2** (*overdue invoices*). → At least one overdue customer invoice with aging.
 5. **Run prompt 3** (*VAT report + can I close*). → Momsdeklaration rutor returned; \`accounted_vat_close_check\` reports a **non-empty blocker list** (uncategorised transactions, an unapproved leverantörsfaktura, and a high-value business expense without a receipt).
-6. **Stage a write.** Ask Claude to categorise one transaction. → Claude stages a pending operation and asks you to confirm: the booking does **not** post until you approve in chat or at **/pending**.
+6. **Stage a write.** Ask Claude to categorise one transaction. → Claude stages a pending operation and tells you where it waits: the booking does **not** post until you approve at **/pending** (or in chat, on a connection with **Godkänn** ticked).
 
 If every step matches, the connector is wired correctly and the approval model is enforced.
 

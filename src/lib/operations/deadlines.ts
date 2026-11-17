@@ -10,8 +10,9 @@
  * on every door. A deadline is a reminder: no verifikat, period or filing is
  * touched, and nothing is sent anywhere.
  *
- * MCP only: no v1 endpoint yet (the dashboard's deadline routes have none
- * either, see session-route-parity.ts).
+ * Both doors: the MCP tools (the tick stages for approval) and v1
+ * (GET /deadlines, POST /deadlines/{id}/complete). Adding, editing and
+ * removing a deadline is still the dashboard only (session-route-parity.ts).
  */
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
@@ -72,7 +73,7 @@ export const deadlinesList = defineOperation({
       'The deadlines under Deadlines in the app, earliest due date first: tax and filing deadlines generated from the tax settings and the ones added by hand. status open (the default) is what is left to do; completed and all include what is ticked off. A deadline the company removed from its list is never returned. overdue is computed from the due date and only for an open deadline.',
     useWhen: 'Seeing what is due, or finding the deadline_id to tick off after the work is done.',
     doNotUseFor:
-      'Which moms periods are on record as filed (gnubok_list_vat_filings) or what Skatteverket has on file (gnubok_vat_declaration_status).',
+      'Which moms periods are on record as filed (GET /reports/vat-declaration/filings, gnubok_list_vat_filings) or what Skatteverket has on file (GET /skatteverket/vat-declarations, gnubok_vat_declaration_status).',
     pitfalls: [
       'has_more true means more deadlines match than limit returned: narrow with due_from and due_to.',
       'A completed deadline says the company ticked it off or a filing was recorded, not that Skatteverket received anything.',
@@ -84,10 +85,12 @@ export const deadlinesList = defineOperation({
       status: z.enum(['open', 'completed', 'all']).default('open').describe('open: not ticked off (default).'),
       due_from: saneIsoDateSchema.optional().describe('Earliest due date, YYYY-MM-DD.'),
       due_to: saneIsoDateSchema.optional().describe('Latest due date, YYYY-MM-DD.'),
-      limit: z.number().int().min(1).max(DEADLINE_LIST_MAX_LIMIT).default(DEADLINE_LIST_DEFAULT_LIMIT),
+      // Coerced: over v1 the limit arrives in the query string.
+      limit: z.coerce.number().int().min(1).max(DEADLINE_LIST_MAX_LIMIT).default(DEADLINE_LIST_DEFAULT_LIMIT),
     })
     .strict(),
   output: z.object({ deadlines: z.array(DeadlineSchema), has_more: z.boolean() }),
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/deadlines' },
   mcp: {
     name: 'gnubok_list_deadlines',
     title: 'List Deadlines',
@@ -111,9 +114,9 @@ export const deadlinesComplete = defineOperation({
       'Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.',
     useWhen: 'The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.',
     doNotUseFor:
-      'A moms or AGI filing made outside Accounted: record the filing instead (gnubok_mark_vat_period_filed, gnubok_mark_agi_period_filed), which completes the deadline with the filing date.',
+      'A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or gnubok_mark_vat_period_filed; AGI: gnubok_mark_agi_period_filed), which completes the deadline with the filing date.',
     pitfalls: [
-      'DEADLINE_NOT_FOUND for an id that is not one of the company\'s listed deadlines (gnubok_list_deadlines), including one the company removed.',
+      'DEADLINE_NOT_FOUND for an id that is not one of the company\'s listed deadlines (GET /deadlines, gnubok_list_deadlines), including one the company removed.',
       'DEADLINE_CONFIRMED_BY_SKATTEVERKET when is_completed false targets a deadline whose filing Skatteverket confirmed through the connection.',
     ],
     example: {
@@ -129,7 +132,7 @@ export const deadlinesComplete = defineOperation({
   },
   input: z
     .object({
-      deadline_id: z.string().uuid().describe('From gnubok_list_deadlines.'),
+      deadline_id: z.string().uuid().describe('From the deadline list (GET /deadlines, gnubok_list_deadlines).'),
       is_completed: z.boolean().describe('true ticks the deadline off; false puts it back on the open list.'),
     })
     .strict(),
@@ -138,6 +141,11 @@ export const deadlinesComplete = defineOperation({
     changed: z.boolean().describe('False when the deadline already had the requested state.'),
   }),
   errorCodes: ['DEADLINE_NOT_FOUND', 'DEADLINE_CONFIRMED_BY_SKATTEVERKET'],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/deadlines/:id/complete',
+    pathParams: { id: 'deadline_id' },
+  },
   mcp: {
     name: 'gnubok_complete_deadline',
     title: 'Complete Deadline',

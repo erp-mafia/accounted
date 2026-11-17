@@ -273,6 +273,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_connect_skatteverket:            'companies:read',
   gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
+  gnubok_get_tax_account_ledger_setting:  'companies:read',
   gnubok_update_company_settings:         'companies:write',
   // Packages (Lön, Kundfakturor, ...): their status, and the staged switch an owner or admin approves.
   gnubok_list_packages:                   'companies:read',
@@ -408,6 +409,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_arsredovisning_compliance: 'bookkeeping:write',
   gnubok_create_arsredovisning_version: 'bookkeeping:write',
   gnubok_add_arsredovisning_signature: 'bookkeeping:write',
+  gnubok_list_arsredovisning_signatories: 'reports:read',
   gnubok_validate_arsredovisning_ixbrl: 'reports:read',
   gnubok_set_opening_balances_manual: 'bookkeeping:write',
   gnubok_correct_opening_balances: 'bookkeeping:write',
@@ -536,6 +538,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_supplier_payment_batch: 'suppliers:write',
   gnubok_cancel_supplier_payment_batch: 'suppliers:write',
   gnubok_list_payment_orders: 'suppliers:read',
+  gnubok_get_payment_order: 'suppliers:read',
+  gnubok_get_payments_availability: 'suppliers:read',
+  gnubok_get_payments_usage: 'suppliers:read',
+  gnubok_get_payments_verification: 'suppliers:read',
   gnubok_prepare_payments: 'suppliers:write',
   gnubok_cancel_payment_order: 'suppliers:write',
   gnubok_get_payments_signing_link: 'suppliers:read',
@@ -596,6 +602,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_group_link: 'companies:write',
   // The attest policy for supplier invoices (lib/operations/supplier-invoice-attest.ts).
   gnubok_get_attest_policy: 'suppliers:read',
+  gnubok_get_supplier_invoice_attestations: 'suppliers:read',
   // Changed supplier bank details: stages a person's approval (web UI only).
   gnubok_confirm_supplier_payee: 'suppliers:write',
   // Bankgiro Lookup (lib/operations/bankgiro-lookup.ts): the registered name
@@ -613,6 +620,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_bulk_book_invoices: 'invoices:write',
   gnubok_book_supplier_invoice: 'suppliers:write',
   gnubok_list_expense_claims: 'suppliers:read',
+  gnubok_get_expense_claim: 'suppliers:read',
   gnubok_create_expense_claim: 'suppliers:write',
   gnubok_delete_expense_claim: 'suppliers:write',
   gnubok_record_expense_payout: 'suppliers:write',

@@ -73,7 +73,7 @@ git -C ~/gnubok-website fetch origin
 git -C ~/gnubok-website worktree add /tmp/loop-docs-freshness-wt -b loop/docs-freshness-<run-fingerprint> origin/main
 ```
 
-Re-run the export/copy against the worktree, commit, push, and open a PR **in
+Re-run the export/copy against the worktree (`DOCS_WEBSITE_DIR=/tmp/loop-docs-freshness-wt npx tsx scripts/export-docs-to-website.mts`; without the variable the script writes into `~/gnubok-website` itself), commit, push, and open a PR **in
 `jakobwennberg/gnubok-website`** whose body links this repo's drift issue and embeds the same
 fingerprint marker. Then remove the worktree. Never merge; the founder deploys the website.
 
