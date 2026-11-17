@@ -18,9 +18,9 @@
  *     unless it is the company's earliest year (BFL 3 kap. 1 and 3 §§);
  *   - years are contiguous: a new year chains onto its predecessor (starts
  *     the day after it ends) and, when it fills a gap one legal year can
- *     close, ends the day before its successor; a gap longer than a year may
- *     be is filled one year at a time from its oldest end (crm#1982); a year
- *     prepended before the earliest ends the day before it; years never
+ *     close, ends the day before its successor; a gap longer than one legal
+ *     year is filled one year at a time from its oldest end (crm#1982); a
+ *     year prepended before the earliest ends the day before it; years never
  *     overlap (409, also the DB exclusion constraint);
  *   - a closed or locked year is never edited (the name may change on an
  *     open one at any time), except that the earliest year's start may be
