@@ -246,9 +246,9 @@ describe('commitSubmitVatDeclaration', () => {
     expect(result.error).toMatch(/^Utkastet är sparat hos Skatteverket\. Skatteverket låste inte utkastet för signering: Begäran kan ej utföras\./)
   })
 
-  // The wording is all that changes for an approval: whatever Skatteverket
-  // answers, a technical error included, consumes the operation as before.
-  it.each([500, 502, 503, 504])('Skatteverket answering %i → still non-recoverable, with what it said', async (status) => {
+  // Skatteverket's service being down says nothing about the declaration:
+  // the operation waits, and the same approval can be given again.
+  it.each([502, 503, 504])('Skatteverket answering %i → recoverable, the operation is kept', async (status) => {
     mockSkvRequest.mockResolvedValueOnce({
       ok: false, status,
       text: async () => JSON.stringify({ kod: status, meddelandeTillAnvandare: 'Tekniskt fel', meddelandeTillUtvecklare: 'Service unavailable' }),
@@ -256,14 +256,45 @@ describe('commitSubmitVatDeclaration', () => {
 
     const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
 
-    expect(result).toMatchObject({
-      ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: status, recoverable: false,
-      details: { stage: 'draft', draft_saved: false, skv_status: status, skv_user_message: 'Tekniskt fel' },
-    })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: status, recoverable: true })
     expect(result.error).toBe(
       'Skatteverket tog inte emot utkastet: Tekniskt fel. Skatteverkets detalj: Service unavailable. ' +
         'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.',
     )
+  })
+
+  it('a 500 from Skatteverket is still a refusal: one that comes back every time is not cured by waiting', async () => {
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: false, status: 500,
+      text: async () => JSON.stringify({ kod: 500, meddelandeTillAnvandare: 'Tekniskt fel', meddelandeTillUtvecklare: 'Internal server error' }),
+    })
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: 500, recoverable: false })
+  })
+
+  it('a lock that returns no signing link is our own 502, not Skatteverket\'s: the operation is consumed', async () => {
+    mockSkvRequest
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) }) // utkast
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) }) // las, no link
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: 502, recoverable: false })
+  })
+
+  it.each([
+    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'Skatteverket svarade inte i tid. Försök igen om en stund.'],
+    ['no connection', new TypeError('fetch failed'), 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'],
+  ])('%s → recoverable, in Swedish, the operation is kept', async (_label, thrown, sentence) => {
+    mockSkvRequest.mockRejectedValueOnce(thrown)
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toEqual({
+      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true, error: sentence,
+    })
   })
 
   // An op staged while the books passed, approved after they changed: the

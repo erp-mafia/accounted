@@ -1,0 +1,1 @@
+[2026-11-17] An approved momsdeklaration that meets Skatteverket's own 502, 503, 504 or no answer stays pending and can be approved again; any other refusal still consumes the proposal, with Skatteverket's answer in words (crm#1866): a service that is down is no verdict on the declaration.
