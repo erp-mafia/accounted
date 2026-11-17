@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { tools, isDefaultCatalogTool } from '../server'
 import { coerceStringifiedScalars, toolInputSchema } from '../operation-tools'
+import { toToolError } from '../tool-result'
 import { OPERATIONS } from '@/lib/operations/registry'
 
 describe('toolInputSchema', () => {
@@ -148,5 +149,54 @@ describe('generated operation tools', () => {
     expect(written).toEqual([])
     // A dry run is also the staging preview: it never seeds the system dims.
     expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  // crm#1982: what an agent reads when it asks for a year in the middle of a
+  // hole longer than one räkenskapsår (a year ending 2023-09-30, the next one
+  // starting 2026-10-01). The envelope carries no details for this code, so
+  // the sentence and the remediation must say the way forward themselves.
+  it('refuses a year in the middle of a multi-year gap with where the fill starts, without staging anything', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_create_fiscal_period')!
+    const written: string[] = []
+    const answers: Record<string, unknown> = {
+      fiscal_periods: [
+        { id: 'old', period_start: '2022-10-01', period_end: '2023-09-30', is_closed: true },
+        { id: 'current', period_start: '2026-10-01', period_end: '2027-09-30', is_closed: false },
+      ],
+      companies: { entity_type: 'aktiebolag' },
+    }
+    const chain = (table: string): unknown =>
+      new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: answers[table] ?? null, error: null })
+            return (..._args: unknown[]) => {
+              if (prop === 'insert' || prop === 'update') written.push(table)
+              return chain(table)
+            }
+          },
+        },
+      )
+    const supabase = { from: vi.fn((table: string) => chain(table)), rpc: vi.fn() }
+
+    const refusal = await tool
+      .execute(
+        { name: 'Räkenskapsår 2025/2026', period_start: '2025-10-01', period_end: '2026-09-30' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )
+
+    const { error } = toToolError(refusal)
+    expect(error).toMatchObject({ code: 'FISCAL_PERIOD_NOT_CONTIGUOUS', retryable: false })
+    expect(error.message_sv).toContain('måste börja 2023-10-01')
+    expect(error.message_sv).toContain('fylls ett räkenskapsår i taget')
+    expect(error.remediation?.description).toContain('one year at a time')
+    expect(written).toEqual([])
   })
 })
