@@ -198,7 +198,9 @@ describe('underlagOf', () => {
     'match_expense_payout',
     'detach_document_from_transaction',
     'some_future_type',
-  ])('every type that names one bank row has the row looked up: %s', (operation_type) => {
+  ])('every type that names one bank row has the row looked up: %s', (name) => {
+    // The last name is no member of the union on purpose: a type added later is looked up too.
+    const operation_type = name as PendingOperation['operation_type']
     expect(underlagOf(op({ operation_type, params: { transaction_id: TX } }))).toMatchObject({
       document: null,
       transactionId: TX,
