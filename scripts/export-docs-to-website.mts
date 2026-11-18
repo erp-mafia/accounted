@@ -1,7 +1,8 @@
 /**
- * One-shot script that exports the registry-derived docs content (errors +
- * reference) plus the static Connect-with-Claude and command-line (CLI) pages
- * as TypeScript modules into the gnubok-website repo. Both static pages ship
+ * One-shot script that exports every docs page as TypeScript modules into the
+ * gnubok-website repo: the registry-derived content (errors + reference), the
+ * static Connect-with-Claude and command-line (CLI) pages, and the prose
+ * pages (landing, versioning, webhooks, changelog, the cookbook). Both static pages ship
  * in two languages: the docs site has no locale routing, so each language is
  * its own page.
  *
@@ -11,7 +12,7 @@
  * structured-errors, the v1 endpoint registry, connect-claude, or cli
  * materially changes.
  */
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 
@@ -145,5 +146,69 @@ write(
   'lib/docs/content/kommandorad.generated.ts',
   `// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via \`npx tsx scripts/export-docs-to-website.mts\` in erp-base.\nexport const KOMMANDORAD_MD = ${JSON.stringify(kommandoradMd)}\n`,
 )
+
+// ── The prose pages ──────────────────────────────────────────────────
+// These were copied into the website repo by hand, and so they fell behind:
+// the landing page there was never re-copied after its first version. They
+// are exported like the pages above, as the rendered text under the same
+// file and constant names the website already imports, so one run of this
+// script carries every docs page.
+const RENDERED_HEADER =
+  '// AUTO-GENERATED from erp-base: do not hand-edit.\n// Regenerate via `npx tsx scripts/export-docs-to-website.mts` in erp-base.\n'
+
+/** Every exported Markdown constant of one content module, rendered. */
+async function writeRendered(source: string, target: string) {
+  const loaded = (await import(source)) as Record<string, unknown> & { default?: Record<string, unknown> }
+  const mod = Object.keys(loaded).some((k) => k.endsWith('_MD')) ? loaded : (loaded.default ?? loaded)
+  const constants = Object.entries(mod).filter(
+    (entry): entry is [string, string] => entry[0].endsWith('_MD') && typeof entry[1] === 'string',
+  )
+  if (constants.length === 0) {
+    console.error(`No *_MD constant in ${source}. Inspect:`, Object.keys(mod))
+    process.exit(1)
+  }
+  write(
+    target,
+    RENDERED_HEADER +
+      constants.map(([name, md]) => `export const ${name} = ${JSON.stringify(adaptForWebsite(md))}\n`).join(''),
+  )
+}
+
+const PROSE_PAGES = ['landing', 'versioning', 'webhooks', 'changelog']
+const COOKBOOK_RECIPES = [
+  'quickstart',
+  'webhooks',
+  'ingest-bank-transactions',
+  'file-vat-declaration',
+  'run-payroll-and-agi',
+  'onboard-payroll-customer',
+  'year-end-closing',
+]
+
+// The registry that lists the recipes imports only its sibling files, so it
+// is carried over as it is.
+const cookbookIndex = readFileSync(resolve('src/lib/docs/content/cookbook/index.ts'), 'utf8')
+const recipeImports = [...cookbookIndex.matchAll(/from '\.\/([a-z0-9-]+)'/g)].map((m) => m[1])
+const unknownRecipes = recipeImports.filter((name) => !COOKBOOK_RECIPES.includes(name))
+if (unknownRecipes.length > 0) {
+  console.error('The cookbook registry imports recipes this script does not export:', unknownRecipes)
+  process.exit(1)
+}
+
+ModuleCtor._load = function (request: string, ...rest: unknown[]) {
+  if (request === 'server-only') return {}
+  return originalLoad.call(this, request, ...rest)
+}
+try {
+  for (const page of PROSE_PAGES) {
+    await writeRendered(`@/lib/docs/content/${page}`, `lib/docs/content/${page}.ts`)
+  }
+  for (const recipe of COOKBOOK_RECIPES) {
+    await writeRendered(`@/lib/docs/content/cookbook/${recipe}`, `lib/docs/content/cookbook/${recipe}.ts`)
+  }
+} finally {
+  ModuleCtor._load = originalLoad
+}
+write('lib/docs/content/cookbook/index.ts', cookbookIndex)
 
 console.log('done.')

@@ -3,8 +3,8 @@
  * https://docs.accounted.se match what this repo would generate today.
  *
  * The docs site is served by the separate gnubok-website repo from snapshot
- * files (`*.generated.ts` exported via scripts/export-docs-to-website.mts,
- * plus hand-copied duplicates for changelog/versioning/webhooks/cookbook).
+ * files, all written by scripts/export-docs-to-website.mts (the generated
+ * reference and guides, and the prose pages as rendered text).
  * Nothing re-syncs them automatically, so they drift whenever an endpoint,
  * error code, or content page changes here. Every docs page has a raw
  * markdown mirror route (`/<page>.md`), which makes the check exact: build

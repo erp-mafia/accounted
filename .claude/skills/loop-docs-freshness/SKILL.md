@@ -55,15 +55,13 @@ it with a pointer to the new issue and close it: one open drift issue at a time.
 
 ## 4. Propose the fix (cap: 1 website PR per run)
 
-Two failure classes, two remedies:
-
-- **Generated snapshots stale** (`reference*`, `errors.md`, `connect-claude.md`): run
-  `npx tsx scripts/export-docs-to-website.mts`. It writes `*.generated.ts` into
-  `~/gnubok-website`.
-- **Hand-copied pages stale** (`changelog.md`, `versioning.md`, `webhooks.md`, `cookbook/*`):
-  copy the exported markdown constants from this repo's `src/lib/docs/content/` over the website
-  repo's duplicates in `lib/docs/content/`. Mechanical copy only; if the two sides have diverged
-  in structure (not just content), escalate with `loop:needs-human` instead.
+One remedy for every stale page: run `npx tsx scripts/export-docs-to-website.mts`. It writes the
+generated snapshots (`*.generated.ts`: reference, errors, the connect and CLI guides) and the
+prose pages (`landing.ts`, `versioning.ts`, `webhooks.ts`, `changelog.ts`, `cookbook/*`) as
+rendered text, under the file and constant names the website imports. Nothing is copied by hand:
+the prose pages used to be, and fell behind (the landing page was never re-copied after its first
+version). A page that exists here with no route on the website (the CLI guides had none until
+2026-11-17) needs its `page.tsx` and `.md` route added there: the export only writes content.
 
 The `~/gnubok-website` checkout is often on a human's WIP branch. **Never commit on it.** Work in
 a fresh worktree from origin/main:
