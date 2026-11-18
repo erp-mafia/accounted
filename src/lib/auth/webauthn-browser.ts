@@ -62,8 +62,10 @@ function encode(buffer: ArrayBuffer | null | undefined): string | undefined {
 }
 
 function credentialToJson(credential: PublicKeyCredential): JsonCredential {
-  const withJson = credential as PublicKeyCredential & { toJSON?: () => JsonCredential }
-  if (typeof withJson.toJSON === 'function') return withJson.toJSON()
+  // The browser's own serialiser when it has one. The DOM library types its
+  // result differently from version to version, so it is read as ours here.
+  const withJson = credential as unknown as { toJSON?: () => unknown }
+  if (typeof withJson.toJSON === 'function') return withJson.toJSON() as JsonCredential
   const response = credential.response
   let body: Record<string, unknown>
   if ('attestationObject' in response) {

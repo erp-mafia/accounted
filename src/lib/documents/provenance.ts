@@ -33,7 +33,9 @@ export function humanAgent(supabase: SupabaseClient, userId: string): Promise<st
 }
 
 async function ensureAgent(supabase: SupabaseClient, row: Record<string, string>, key: Record<string, string>): Promise<string> {
-  const { error } = await supabase.from('agents').upsert(row, { onConflict: Object.keys(key).join(','), ignoreDuplicates: true })
+  const { error } = await supabase
+    .from('agents')
+    .upsert<Record<string, string>>(row, { onConflict: Object.keys(key).join(','), ignoreDuplicates: true })
   if (error) throw new Error(`agent upsert failed: ${error.message}`)
   const { data, error: readError } = await supabase.from('agents').select('id').match(key).single()
   if (readError) throw new Error(`agent read failed: ${readError.message}`)

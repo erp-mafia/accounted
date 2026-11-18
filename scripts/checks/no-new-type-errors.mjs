@@ -13,8 +13,15 @@
  * index signature. Both were caught by the build. Neither was caught by 18 000
  * green tests, which is exactly the wrong order to learn it in.
  *
- * `tsc --noEmit` finds both in about two minutes, and unlike the build it also
- * covers `__tests__` files, which the Next.js build never compiles.
+ * `tsc --noEmit` finds both, and unlike the build it also covers `__tests__`
+ * files, which the Next.js build never compiles.
+ *
+ * ## Which compiler
+ *
+ * The check runs TypeScript 7, the native compiler, installed beside the
+ * project's `typescript` package under the name `@typescript/native`. It reads
+ * the same tsconfig.json. The editor, ESLint and the Next.js build keep using
+ * `typescript`: TypeScript 7.0 has no programmatic API for them to call.
  *
  * ## Why the baseline is keyed by FILE, not by error code
  *
@@ -35,6 +42,7 @@
  * failure with no file errors), so a dead tsc can never read as "0 errors".
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -43,22 +51,49 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'typecheck-baseline.json')
 
 /**
- * This project's graph does not fit in Node's default heap: a bare
- * `tsc --noEmit` dies with "Ineffective mark-compacts near heap limit" after
- * about two minutes of work, which reads like a hang rather than a
- * misconfiguration. The build sets the same flag for the same reason.
- * A cold check of main measured 8.6 GB on 2026-10-14 (3.76M types) and 12.5 GB
- * on 2026-11-01 (5.55M types), past the old 12 GB cap. The cap only ends a run
- * that would finish, so it sits above the measured need, up to what a 16 GB
- * runner host can give one job.
+ * The compiler's own program for this platform, not the `tsc` launcher beside
+ * it: the launcher is a Node script that turns a killed compiler into exit
+ * status 1, which is also the status for "found type errors".
  */
-const HEAP_MB = 14336
+const TSC_EXE = path.join(
+  ROOT,
+  'node_modules',
+  '@typescript',
+  `typescript-${process.platform}-${process.arch}`,
+  'lib',
+  process.platform === 'win32' ? 'tsc.exe' : 'tsc',
+)
+
+/**
+ * Type-checker workers. The same number everywhere: a different count can, in
+ * rare cases, change which of two equivalent errors is reported, and the
+ * baseline counts errors per file. More workers finish sooner and hold more
+ * memory.
+ */
+const CHECKERS = 2
+
+/**
+ * The compiler is a Go program, and Go grows its heap to about twice the live
+ * data before it collects. On a 16 GB host that doubling is what runs the
+ * machine out of memory, not the program itself. GOMEMLIMIT tells the runtime
+ * where to start collecting harder instead; it is a soft limit, a check that
+ * needs more still finishes. Three quarters of the machine, unless the caller
+ * set its own.
+ *
+ * @param {number} totalBytes
+ * @returns {string}
+ */
+export function memoryLimit(totalBytes) {
+  return `${Math.max(1024, Math.floor((totalBytes * 0.75) / (1024 * 1024)))}MiB`
+}
 
 function runTsc() {
-  const tscBin = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
-  const args = [tscBin, '--noEmit', '--pretty', 'false']
-  // CI keeps tsc's incremental state between pipelines (CHECKS_CACHE_DIR, see
-  // .gitlab-ci.yml). A warm run rechecks only the changed files and their
+  if (!fs.existsSync(TSC_EXE)) {
+    return { status: null, signal: null, stdout: '', stderr: '', error: new Error(`${path.relative(ROOT, TSC_EXE)} is missing. Run: npm install`) }
+  }
+  const args = ['--noEmit', '--pretty', 'false', '--checkers', String(CHECKERS), '--diagnostics']
+  // CI keeps tsc's incremental state between runs (CHECKS_CACHE_DIR, see
+  // .github/workflows/ci.yml). A warm run rechecks only the changed files and their
   // dependents, and the stored diagnostics still report every error in the
   // unchanged ones, so the per-file counts below stay complete.
   if (process.env.CHECKS_CACHE_DIR) {
@@ -66,11 +101,11 @@ function runTsc() {
     fs.mkdirSync(cacheDir, { recursive: true })
     args.push('--incremental', '--tsBuildInfoFile', path.join(cacheDir, 'tsc.tsbuildinfo'))
   }
-  return spawnSync(process.execPath, args, {
+  return spawnSync(TSC_EXE, args, {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, NODE_OPTIONS: `--max-old-space-size=${HEAP_MB}` },
+    env: { GOMEMLIMIT: memoryLimit(os.totalmem()), ...process.env },
   })
 }
 
@@ -91,8 +126,14 @@ const ERROR_RE = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/
 export function judgeTscRun(result) {
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
   if (result.error) return { ok: false, message: `tsc could not run: ${result.error.message}` }
-  if (/Ineffective mark-compacts|JavaScript heap out of memory/.test(output)) {
-    return { ok: false, message: `tsc ran out of memory at ${HEAP_MB} MB. Raise HEAP_MB.` }
+  if (/fatal error: runtime: out of memory|cannot allocate memory/.test(output)) {
+    return { ok: false, message: 'tsc ran out of memory before it finished; partial output is not a result.' }
+  }
+  // A crash of the compiler itself exits with status 2, like a run that found
+  // errors, and may come after some file errors were already printed.
+  const crash = /^(?:fatal error|panic): .*$/m.exec(output)
+  if (crash) {
+    return { ok: false, message: `tsc crashed before it finished (${crash[0].trim()}); partial output is not a result.` }
   }
   if (result.signal) {
     return { ok: false, message: `tsc was killed by ${result.signal} before it finished; partial output is not a result. Rerun when the machine has memory to spare.` }
@@ -105,6 +146,21 @@ export function judgeTscRun(result) {
     return { ok: false, message: `tsc failed (status ${result.status}) without reporting any file errors:\n${head}` }
   }
   return { ok: true, output }
+}
+
+/**
+ * What the run cost, from the lines `--diagnostics` prints.
+ *
+ * @param {string} output
+ * @returns {string} for example "71.3 s, 9.6 GB", or "" when the lines are missing
+ */
+export function describeCost(output) {
+  const seconds = /^Total time:\s+([\d.]+)s$/m.exec(output)
+  const kilobytes = /^Memory used:\s+(\d+)K$/m.exec(output)
+  const parts = []
+  if (seconds) parts.push(`${Number(seconds[1]).toFixed(1)} s`)
+  if (kilobytes) parts.push(`${(Number(kilobytes[1]) / (1024 * 1024)).toFixed(1)} GB`)
+  return parts.join(', ')
 }
 
 function collect(output) {
@@ -131,6 +187,8 @@ function main() {
   }
   const { perFile, locations } = collect(run.output)
   const total = Object.values(perFile).reduce((a, b) => a + b, 0)
+  const cost = describeCost(run.output)
+  if (cost) console.log(`no-new-type-errors: tsc took ${cost}.`)
 
   if (process.argv.includes('--update')) {
     const sorted = Object.fromEntries(Object.entries(perFile).sort(([a], [b]) => a.localeCompare(b)))
@@ -168,7 +226,7 @@ function main() {
       }
     }
     console.error(`
-Fix the new error(s): run \`NODE_OPTIONS=--max-old-space-size=${HEAP_MB} npx tsc --noEmit\` to see them all.
+Fix the new error(s): run \`npx --package=@typescript/native tsc --noEmit\` to see them all.
 (If you fixed MORE legacy errors than you added and a file still trips,
 re-baseline with: node scripts/checks/no-new-type-errors.mjs --update)
 `)

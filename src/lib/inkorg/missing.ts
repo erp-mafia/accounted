@@ -180,7 +180,7 @@ export function purchaseDisplay(purchase: Pick<MissingPurchase, 'merchant_name' 
   const merchant = purchase.merchant_name?.trim() || null
   const text = purchase.description?.trim() || null
   const vendor = vendorKeyFor(merchant) ?? vendorKeyFor(text)
-  const name = readableName(merchant ?? (vendor ? (vendorLook(vendor)?.title ?? null) : null) ?? text)
+  const name = readableName(merchant ?? (vendor ? vendorLook(vendor)?.title : null) ?? text)
   const saysTheName = text !== null && text.toLocaleLowerCase('sv-SE') === name?.toLocaleLowerCase('sv-SE')
   return { name, vendor, bankText: text && !saysTheName ? text : null }
 }

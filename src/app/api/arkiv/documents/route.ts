@@ -179,7 +179,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     const settled = (...names: string[]) => names.map((n) => payload[n]?.normalized).find((v) => v != null) ?? null
     const counterparty =
       agreement?.counterparty_name ??
-      (d.doc_type ? (ISSUER[d.doc_type] ?? null) : null) ??
+      (d.doc_type ? ISSUER[d.doc_type] : null) ??
       (settled(
         'counterparty_name',
         'landlord_name',

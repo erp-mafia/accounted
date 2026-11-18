@@ -20,9 +20,9 @@ name: CI
 # variable names another one. TYPECHECK_RUNNER is the label of a runner that
 # takes one job at a time on a host with 16 GB. The two jobs that need most of
 # that memory run there, so they never run at the same moment: the type check
-# (12.5 GB cold) and the build (8.5 GB). CI_RUNNER is the label for every
-# other job. The pg jobs map Postgres and PostgREST to fixed host ports, so a
-# host that carries CI_RUNNER must run one of those jobs at a time.
+# and the build (8.5 GB). CI_RUNNER is the label for every other job. The pg
+# jobs map Postgres and PostgREST to fixed host ports, so a host that carries
+# CI_RUNNER must run one of those jobs at a time.
 #
 # No job here reads a secret, except pr-privacy, which reads the customer name
 # list when the repository has one.
@@ -95,10 +95,11 @@ jobs:
         run: npm run notice:check
 
       - name: Lint
-        # Keyed on content, not mtime: a checkout rewrites every mtime.
+        # Keyed on content, not mtime: a checkout rewrites every mtime. On
+        # several threads: a run without the cache reads every file.
         run: |
           mkdir -p "$CHECKS_CACHE_DIR"
-          npm run check:lint -- --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
+          npm run check:lint -- --concurrency auto --cache --cache-location "$CHECKS_CACHE_DIR/eslint" --cache-strategy content
 
       - name: Generate route types
         # The route types next build generates (.next/types, validator.ts).
@@ -108,9 +109,9 @@ jobs:
 
       - name: Type check
         id: types
-        # A cold check of main measured 12.5 GB of heap on 2026-11-01. The
-        # hosted runner for a public repository has 16 GB; a private
-        # repository sets TYPECHECK_RUNNER (see the header).
+        # TypeScript 7, the native compiler (scripts/checks/no-new-type-errors.mjs
+        # says how it is installed and how its memory is bounded). The step
+        # prints the time and the memory the check took.
         run: npm run check:types
 
       - name: Antipattern ratchet
