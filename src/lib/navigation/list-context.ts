@@ -4,6 +4,8 @@
  * List pages write the full ordered id array (post filter/sort, not just the
  * visible slice) when the user navigates into a record; the detail page reads
  * it back to offer "bladdra" between records without returning to the list.
+ * A list that keeps its view in its address writes that address too, so the
+ * detail page's link back to the list opens it as it was (listReturnHref).
  *
  * sessionStorage on purpose: the context is a per-tab browsing session. A deep
  * link or a new tab has no context and the pager simply does not render.
@@ -15,6 +17,12 @@
 export interface ListContext {
   /** Ordered record ids exactly as the list presented them. */
   ids: string[]
+  /**
+   * The list's own address when the record was opened (path and query: its
+   * filters, search and page), for the detail page's way back to it. Lists
+   * that keep no view in their address leave it out.
+   */
+  href?: string
 }
 
 export interface ListNeighbors {
@@ -71,9 +79,12 @@ export function readListContext(
     if (!Array.isArray(candidate.ids)) return null
     if (candidate.ids.some((id) => typeof id !== 'string')) return null
     // Deliberately tolerant of extra properties (e.g. the listPath field
-    // older builds wrote): only ids is consumed, and previously stored
-    // contexts must keep parsing.
-    return { ids: candidate.ids as string[] }
+    // older builds wrote): only ids and href are consumed, and previously
+    // stored contexts must keep parsing.
+    const href = (parsed as { href?: unknown }).href
+    return typeof href === 'string'
+      ? { ids: candidate.ids as string[], href }
+      : { ids: candidate.ids as string[] }
   } catch {
     // Garbage in storage (manual edits, older shapes): behave as no context.
     return null
@@ -94,4 +105,17 @@ export function computeNeighbors(ids: string[], currentId: string): ListNeighbor
     index: position + 1,
     total: ids.length,
   }
+}
+
+/**
+ * Where a detail page's way back to its list leads: the list's address as it
+ * was when this record was opened from it (the context's href), or `basePath`
+ * when the record is not one of the context's (a deep link, a new tab, a
+ * record reached from somewhere else) or the stored address is not that
+ * list's own.
+ */
+export function listReturnHref(context: ListContext | null, currentId: string, basePath: string): string {
+  const href = context?.href
+  if (!context || !href || !context.ids.includes(currentId)) return basePath
+  return href === basePath || href.startsWith(`${basePath}?`) ? href : basePath
 }

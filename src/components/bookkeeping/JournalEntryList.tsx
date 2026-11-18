@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
   DataList,
@@ -61,12 +61,13 @@ import {
   XMarkIcon,
 } from '@/components/icons'
 import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
-import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { formatVoucher, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
 import { isBoundedVerifikatScope } from '@/lib/bookkeeping/verifikat-search'
 import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
-import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { readVerifikatListQuery, writeVerifikatListQuery, type VerifikatListQuery } from '@/lib/bookkeeping/verifikat-list-query'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
@@ -171,11 +172,21 @@ const PAGE_SIZE_STORAGE_KEY_PREFIX = 'Accounted:journal-page-size:'
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 
+// The page the list lives on: its view is written into this page's address.
+const LIST_PATH = '/bookkeeping'
+
+// The search box's text as the list sends it. Require 2 or more characters:
+// a single character matches almost every verifikationstext and isn't a
+// useful filter, so 0-1 chars are "no search" instead of a query on every
+// keystroke (ASVS V2.4).
+function effectiveSearch(input: string): string {
+  const trimmed = input.trim()
+  return trimmed.length >= 2 ? trimmed : ''
+}
+
 export default function JournalEntryList({
   pristineSlot,
   refreshToken,
-  initialShowMissingOnly = false,
-  initialGapPeriodId = null,
 }: {
   pristineSlot?: ReactNode
   /**
@@ -186,23 +197,21 @@ export default function JournalEntryList({
    * selection, pagination and scroll position.
    */
   refreshToken?: number
-  /**
-   * Deep-link arrival (dashboard "Verifikat utan underlag" card,
-   * push-notification link): start with the "Visa saknade underlag" filter on
-   * and, for this visit only, scope to all fiscal years so the visible set
-   * matches the all-years dashboard count. The saved fiscal-year preference
-   * is not overwritten.
-   */
-  initialShowMissingOnly?: boolean
-  /**
-   * Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
-   * this visit to the räkenskapsår whose unexplained voucher gap blocked the
-   * bokslut, so the gap line above the table counts the ones it named. In memory
-   * only; the saved fiscal-year preference is not overwritten.
-   */
-  initialGapPeriodId?: string | null
 } = {}) {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  // The view the list opens on: its filters, search and page from the address
+  // (crm#1998), so Back from a verifikat, the verifikat's link back here, a
+  // reload and a shared link show the list as it was. Read once, on mount;
+  // from then on the state below is the view and the address follows it (the
+  // effect after fetchEntries). The deep links from Hem ("Verifikat utan
+  // underlag", the push notification) and the bokslut preflight ("Förklara
+  // luckan") arrive through the same reader: the first turns the
+  // saknade-underlag filter on for all years, the second opens this visit on
+  // the räkenskapsår whose gap blocked the bokslut. Neither overwrites the
+  // saved fiscal-year preference.
+  const [initialQuery] = useState<VerifikatListQuery>(() => readVerifikatListQuery(searchParams))
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
@@ -235,7 +244,7 @@ export default function JournalEntryList({
   // first load and the whole ledger's total after a toggle (#2395); a badge
   // with no honest source is hidden, not guessed.
   const [missingCount, setMissingCount] = useState<number | null>(null)
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(initialQuery.page)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   // Entries a customer invoice points at (registration link or payment row):
   // backed by that invoice under BFL 5 kap 7 § (hänvisning), the same verdict
@@ -252,7 +261,7 @@ export default function JournalEntryList({
   // (BFL 5 kap 5 §), not only on the detail page.
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
-  const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
+  const [showMissingOnly, setShowMissingOnly] = useState(initialQuery.missingOnly)
   // Unexplained voucher gaps the VoucherGapNotice attn line is showing. The
   // page has one attn slot (convention 6) and a missing BFNAR 2013:2
   // explanation outranks the SIE import pointer, so that line yields.
@@ -285,9 +294,7 @@ export default function JournalEntryList({
   // (or the current one if that year is gone). Choosing a year in the
   // sidebar ends the visit's scope.
   const fiscalScope = useFiscalScope()
-  const [visitScope, setVisitScope] = useState<{ periodId: string | null } | null>(() =>
-    initialShowMissingOnly ? { periodId: null } : initialGapPeriodId ? { periodId: initialGapPeriodId } : null,
-  )
+  const [visitScope, setVisitScope] = useState<{ periodId: string | null } | null>(initialQuery.visitScope)
   const [seenYear, setSeenYear] = useState<string | null | undefined>(undefined)
   if (fiscalScope.ready && seenYear !== fiscalScope.periodId) {
     setSeenYear(fiscalScope.periodId)
@@ -304,22 +311,25 @@ export default function JournalEntryList({
   // Hold the first fetch until the scope is known; an all-years visit knows it at once.
   const periodHydrated = visitScope?.periodId === null || fiscalScope.ready
   const [filterOpen, setFilterOpen] = useState(false)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [dateFromInput, setDateFromInput] = useState('')
-  const [dateToInput, setDateToInput] = useState('')
-  const [seriesFilter, setSeriesFilter] = useState<string>('all')
+  const [dateFrom, setDateFrom] = useState(initialQuery.dateFrom)
+  const [dateTo, setDateTo] = useState(initialQuery.dateTo)
+  const [dateFromInput, setDateFromInput] = useState(initialQuery.dateFrom)
+  const [dateToInput, setDateToInput] = useState(initialQuery.dateTo)
+  const [seriesFilter, setSeriesFilter] = useState<string>(initialQuery.series ?? 'all')
   const seriesLetters = useSeriesFilterLetters(company?.id, seriesFilter)
-  const [searchInput, setSearchInput] = useState('')
-  const [search, setSearch] = useState('')
+  // Each letter with the name the company gave the series, or the standard
+  // name, through the one resolver every series picker uses (crm#1997).
+  const seriesLabels = useCompanySettings().settings?.voucher_series_labels ?? null
+  const [searchInput, setSearchInput] = useState(initialQuery.search)
+  const [search, setSearch] = useState(() => effectiveSearch(initialQuery.search))
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
   // committed list server-side and surfaced here behind a count badge.
-  const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
+  const [listMode, setListMode] = useState<'committed' | 'drafts'>(initialQuery.mode)
   // Storno and reversed (Omförd) rows, chosen in the filter dialog:
   // 'collapse' (default) folds a correction group to the live correction and
   // keeps a pure storno pair, so the series stays gapless (#3149); 'hide'
   // drops every storno and reversed original (PH 231); 'all' shows the chain.
-  const [correctionView, setCorrectionView] = useState<'all' | 'collapse' | 'hide'>('collapse')
+  const [correctionView, setCorrectionView] = useState<'all' | 'collapse' | 'hide'>(initialQuery.correctionView)
   const [draftCount, setDraftCount] = useState(0)
   // All-years emptiness, resolved only when the scoped list comes back empty:
   // the pristine start card must key on "this ledger has never had an entry",
@@ -496,18 +506,18 @@ export default function JournalEntryList({
     [cashAccounts],
   )
 
-  // Debounce the free-text search before it reaches the API. Require ≥2 chars:
-  // a single character matches almost every verifikationstext and isn't a useful
-  // filter, so 0-1 chars are treated as "no search" instead of firing a query on
-  // every keystroke (ASVS V2.4).
+  // Debounce the free-text search before it reaches the API. Only a search
+  // that changes goes back to the first page: the search the list opened
+  // with (from the address) keeps the page it opened on.
   useEffect(() => {
+    const next = effectiveSearch(searchInput)
+    if (next === search) return
     const handle = setTimeout(() => {
-      const trimmed = searchInput.trim()
-      setSearch(trimmed.length >= 2 ? trimmed : '')
+      setSearch(next)
       setPage(0)
     }, 300)
     return () => clearTimeout(handle)
-  }, [searchInput])
+  }, [searchInput, search])
 
   // Sort/filter changes fire fetchEntries while an earlier request may still
   // be in flight; only the newest request may write state, or a slow earlier
@@ -521,6 +531,9 @@ export default function JournalEntryList({
   async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
+    // Set when this load moves to another page and leaves the loading state
+    // to the load that page starts.
+    let movedPage = false
     setLoading(true)
     if (!preserveSelection) selection.clear() // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
@@ -578,6 +591,13 @@ export default function JournalEntryList({
         ? await collectPages(fetchChunk, { want: Number.POSITIVE_INFINITY })
         : await fetchChunk(page * pageSize, pageSize)
       if (!isCurrent()) return
+      // A page past the end (an address from before verifikat went away, or
+      // typed by hand) opens the last page instead of an empty table.
+      if (!showingAll && page > 0 && loadedEntries.length === 0 && (total || 0) > 0) {
+        movedPage = true
+        setPage(Math.ceil((total || 0) / pageSize) - 1)
+        return
+      }
       setLoadFailed(false)
       setEntries(loadedEntries)
       setCount(total || 0)
@@ -634,7 +654,7 @@ export default function JournalEntryList({
       setMissingCount(null)
       setHasLoaded(true)
     } finally {
-      if (isCurrent()) setLoading(false)
+      if (isCurrent() && !movedPage) setLoading(false)
     }
   }
 
@@ -677,6 +697,28 @@ export default function JournalEntryList({
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
   }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, correctionView, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // The address follows the view (crm#1998): the list's own keys are
+  // rewritten, every other parameter stays. The History API with no state of
+  // its own, which Next keeps in step with useSearchParams: no navigation and
+  // no server render per filter change or search.
+  const viewQuery: VerifikatListQuery = {
+    mode: listMode,
+    series: seriesFilter === 'all' ? null : seriesFilter,
+    dateFrom,
+    dateTo,
+    search,
+    correctionView,
+    missingOnly: showMissingOnly,
+    visitScope,
+    page,
+  }
+  const currentQuery = searchParams.toString()
+  const wantedQuery = writeVerifikatListQuery(currentQuery, viewQuery).toString()
+  useEffect(() => {
+    if (pathname !== LIST_PATH || wantedQuery === currentQuery) return
+    window.history.replaceState(null, '', wantedQuery ? `${LIST_PATH}?${wantedQuery}` : LIST_PATH)
+  }, [wantedQuery, currentQuery, pathname])
 
   // Parent-driven in-place refresh (see the refreshToken prop). Skips the
   // mount value: the main effect above owns the initial fetch, and a token
@@ -945,9 +987,12 @@ export default function JournalEntryList({
 
   // Detail-pager context: the loaded page as rendered, written when the user
   // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  // The list's own address rides along for the verifikat's link back here.
   const rememberListContext = () => {
+    const listQuery = writeVerifikatListQuery('', viewQuery).toString()
     writeListContext(listContextKey('bookkeeping', company?.id), {
       ids: filteredEntries.map((e) => e.id),
+      href: listQuery ? `${LIST_PATH}?${listQuery}` : LIST_PATH,
     })
   }
 
@@ -1188,16 +1233,23 @@ export default function JournalEntryList({
               <div className="space-y-2">
                 <Label className="text-sm font-medium">{t('filter_section_series')}</Label>
                 <Select value={seriesFilter} onValueChange={(v) => { setSeriesFilter(v); setPage(0) }}>
-                  <SelectTrigger className="h-9 w-full text-sm font-mono" aria-label={t('filter_section_series')}>
+                  <SelectTrigger className="h-9 w-full text-sm" aria-label={t('filter_section_series')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Alla serier</SelectItem>
-                    {seriesLetters.map((letter) => (
-                      <SelectItem key={letter} value={letter} className="font-mono">
-                        Serie {letter}
-                      </SelectItem>
-                    ))}
+                    {/* The letter and its name, as the series picker in
+                        Nytt verifikat shows them; a letter without a name
+                        stands alone. */}
+                    {seriesLetters.map((letter) => {
+                      const name = voucherSeriesLabel(letter, seriesLabels)
+                      return (
+                        <SelectItem key={letter} value={letter}>
+                          <span className="font-mono">{letter}</span>
+                          {name && <span className="ml-2 text-muted-foreground">{name}</span>}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               </div>

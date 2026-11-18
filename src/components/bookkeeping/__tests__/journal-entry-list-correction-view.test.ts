@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { DEFAULT_VERIFIKAT_LIST_QUERY, readVerifikatListQuery } from '@/lib/bookkeeping/verifikat-list-query'
 
 const SRC = fs.readFileSync(
   path.resolve(__dirname, '../JournalEntryList.tsx'),
@@ -21,7 +22,11 @@ const readMessages = (locale: string) =>
  */
 describe('JournalEntryList storno and Omförd view', () => {
   it('defaults to collapsing correction groups only', () => {
-    expect(SRC).toContain("useState<'all' | 'collapse' | 'hide'>('collapse')")
+    // The list opens on the view its address holds (crm#1998); an address
+    // without one is the default view.
+    expect(SRC).toContain("useState<'all' | 'collapse' | 'hide'>(initialQuery.correctionView)")
+    expect(DEFAULT_VERIFIKAT_LIST_QUERY.correctionView).toBe('collapse')
+    expect(readVerifikatListQuery(new URLSearchParams('')).correctionView).toBe('collapse')
   })
 
   it('maps each state to its route parameter', () => {

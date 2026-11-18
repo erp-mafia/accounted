@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -61,19 +61,19 @@ export default function BookkeepingPage() {
     const raw = searchParams.get('copy_from')
     return canWrite && raw && UUID_RE.test(raw) ? raw : null
   }, [searchParams, canWrite])
-  // Deep link from the dashboard "Verifikat utan underlag" card (and the
-  // push-notification link): open the list with the saknade-underlag filter
-  // already on. Read once on mount: the param stays in the URL (shareable),
-  // and later in-page filter changes must not be fought by the URL.
-  const [initialShowMissingOnly] = useState(
-    () => searchParams.get('missingUnderlag') === 'true',
+  // The list's own view (filters, search, page, and the deep links from Hem
+  // and the bokslut preflight) lives in the same query and is the list's to
+  // read and write (lib/bookkeeping/verifikat-list-query.ts). The deep links
+  // below consume only their own key, so that view survives them (crm#1998).
+  const replaceWithout = useCallback(
+    (key: string) => {
+      const rest = new URLSearchParams(window.location.search)
+      rest.delete(key)
+      const qs = rest.toString()
+      router.replace(qs ? `/bookkeeping?${qs}` : '/bookkeeping')
+    },
+    [router],
   )
-  // Deep link from the bokslut preflight ("Förklara luckan"): scope the list
-  // to the räkenskapsår whose voucher gap blocked the bokslut. Read once, as above.
-  const [initialGapPeriodId] = useState<string | null>(() => {
-    const raw = searchParams.get('gaps')
-    return raw && UUID_RE.test(raw) ? raw : null
-  })
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -158,9 +158,9 @@ export default function BookkeepingPage() {
         setIsLoadingCopy(false)
         // Clear copy_from so a refresh doesn't re-trigger and so clicking the
         // same entry's Kopiera button again re-fires this effect.
-        router.replace('/bookkeeping')
+        replaceWithout('copy_from')
       })
-  }, [copyFromId, toast, router])
+  }, [copyFromId, toast, replaceWithout])
 
   // React to the skattekonto deep link the same way: consume the staged
   // payload (single-use, sessionStorage; the URL carries only the opaque id),
@@ -172,12 +172,12 @@ export default function BookkeepingPage() {
     const rawId = searchParams.get('skv_tx')
     if (!rawId) return
     const prefill = takeSkvManualPrefill(rawId)
-    router.replace('/bookkeeping')
+    replaceWithout('skv_tx')
     if (!prefill) return
     setSkvLink(prefill)
     setCopyPrefill(null)
     setShowNewEntry(true)
-  }, [searchParams, copyFromId, router, canWrite])
+  }, [searchParams, copyFromId, replaceWithout, canWrite])
 
   // ?new opens the empty "Nytt verifikat" dialog: the Bokföring area's create
   // button in the sidebar links here. The param is consumed so a refresh or
@@ -185,11 +185,11 @@ export default function BookkeepingPage() {
   const wantsNew = canWrite && searchParams.has('new')
   useEffect(() => {
     if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
-    router.replace('/bookkeeping')
+    replaceWithout('new')
     setCopyPrefill(null)
     setSkvLink(null)
     setShowNewEntry(true)
-  }, [wantsNew, copyFromId, searchParams, router])
+  }, [wantsNew, copyFromId, searchParams, replaceWithout])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
@@ -322,8 +322,6 @@ export default function BookkeepingPage() {
           losing expansion/selection/scroll. */}
       <JournalEntryList
         refreshToken={refreshKey}
-        initialShowMissingOnly={initialShowMissingOnly}
-        initialGapPeriodId={initialGapPeriodId}
         pristineSlot={
           <div className="animate-fade-in space-y-4">
             <StartCard

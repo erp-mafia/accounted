@@ -68,6 +68,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useDimensions } from '@/lib/reference-data/hooks'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
+import { useListReturnHref } from '@/lib/hooks/use-detail-pager'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useAttribution } from '@/lib/attribution/use-attribution'
 import type { JournalEntry, JournalEntryLine } from '@/types'
@@ -120,6 +121,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const router = useRouter()
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
+  // Back to the verifikat list as it was when this verifikat was opened from
+  // it: its filters, search and page (crm#1998).
+  const listHref = useListReturnHref(listContextKey('bookkeeping', company?.id), '/bookkeeping', id)
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
@@ -376,7 +380,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             ? t('toast_delete_draft_description')
             : t('toast_delete_entry_description', { voucher: formatVoucher(result.data ?? {}) }),
         })
-        router.push('/bookkeeping')
+        router.push(listHref)
       } else {
         toast({ title: t('toast_delete_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
         setShowDeleteConfirm(false)
@@ -387,7 +391,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     } finally {
       setIsDeleting(false)
     }
-  }, [id, router, toast, t])
+  }, [id, router, toast, t, listHref])
 
   // Pure reversal (storno), shared with the journal list (useReverseJournalEntry).
   const { reverse, isReversing } = useReverseJournalEntry({
@@ -418,7 +422,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     return (
       <div className="space-y-8">
         <Link
-          href="/bookkeeping"
+          href={listHref}
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeftIcon className="h-4 w-4" />
@@ -638,7 +642,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           detail page: the sidebar says where we are, so there is no back
           link, and the prev/next pager sits in the bar. */}
       <RecordHeader
-        parent={{ label: tNav('v3_vouchers'), href: '/bookkeeping' }}
+        parent={{ label: tNav('v3_vouchers'), href: listHref }}
         title={title}
         // The title carries the voucher number, the facts the entry description.
         mask

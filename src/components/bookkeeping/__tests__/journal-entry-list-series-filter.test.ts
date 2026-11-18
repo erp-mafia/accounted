@@ -13,6 +13,13 @@ describe('JournalEntryList series filter', () => {
   it('builds its options from the series in use, not a fixed A-G', () => {
     expect(SRC).not.toContain("'ABCDEFG'")
     expect(SRC).toContain('useSeriesFilterLetters(company?.id, seriesFilter)')
-    expect(SRC).toContain('{seriesLetters.map((letter) => (')
+    expect(SRC).toContain('{seriesLetters.map((letter) => {')
+  })
+
+  // crm#1997: the options showed the letter only, not the series' name.
+  it("names each letter through the one series resolver, with the company's own names", () => {
+    expect(SRC).toContain('useCompanySettings().settings?.voucher_series_labels')
+    expect(SRC).toContain('voucherSeriesLabel(letter, seriesLabels)')
+    expect(SRC).not.toContain('Serie {letter}')
   })
 })
