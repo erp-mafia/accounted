@@ -20,6 +20,15 @@ type Filter = 'all' | SigningRequestStatusFilter
 
 const FILTERS: Filter[] = ['all', 'open', 'completed', 'declined', 'cancelled']
 
+interface SigningRequestsListProps {
+  /** Bumped by the page when a request was sent from its top bar: the list reads again. */
+  reloadSignal?: number
+  /** The page's one line about its own action (an upload running, refused, kept); it takes the place of the list's refresh line. */
+  notice?: React.ReactNode
+  /** The page's primary, offered where the first row would be while there is nothing to list. Without it the empty list points to the archive. */
+  emptyOffer?: { description: string; action: React.ReactNode }
+}
+
 /**
  * /arkiv/signeringar: every signing request of the company, newest first,
  * filtered by status. One line per request (the document, who is asked,
@@ -28,7 +37,7 @@ const FILTERS: Filter[] = ['all', 'open', 'completed', 'declined', 'cancelled']
  * signed copy. An open request past its expiry is listed under Öppna and
  * says it has expired.
  */
-export function SigningRequestsList() {
+export function SigningRequestsList({ reloadSignal = 0, notice = null, emptyOffer }: SigningRequestsListProps) {
   const t = useTranslations('signing')
   const tCommon = useTranslations('common')
   // Chasing a request already sent needs the feature, not the plan (only sending a new one does).
@@ -57,7 +66,7 @@ export function SigningRequestsList() {
     return () => {
       cancelled = true
     }
-  }, [load, reloadKey])
+  }, [load, reloadKey, reloadSignal])
 
   const toolbar = (
     <div className="flex items-center justify-between gap-4">
@@ -88,9 +97,16 @@ export function SigningRequestsList() {
         <Skeleton className="h-8 w-2/3" />
       </LateReveal>
     )
-  else if (requests.length === 0)
-    body = <EmptyState icon={PencilSquareIcon} title={filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
-  else
+  else if (requests.length === 0) {
+    const title = filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')
+    body = emptyOffer ? (
+      <EmptyState icon={PencilSquareIcon} title={title} description={emptyOffer.description}>
+        {emptyOffer.action}
+      </EmptyState>
+    ) : (
+      <EmptyState icon={PencilSquareIcon} title={title} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
+    )
+  } else
     body = (
       <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
@@ -159,9 +175,8 @@ export function SigningRequestsList() {
   return (
     <div className="space-y-4">
       {toolbar}
-      {failed && requests && (
-        <AttnLine action={{ label: tCommon('retry'), onClick: retry }}>{tCommon('refresh_failed')}</AttnLine>
-      )}
+      {/* One attention line per page: the page's own line wins over the refresh line. */}
+      {notice ?? (failed && requests ? <AttnLine action={{ label: tCommon('retry'), onClick: retry }}>{tCommon('refresh_failed')}</AttnLine> : null)}
       {body}
     </div>
   )

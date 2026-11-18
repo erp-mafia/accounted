@@ -235,6 +235,51 @@ describe('the palette answers to the names the menu had before', () => {
   })
 })
 
+/**
+ * Two reports on 2026-11-17: the inbox was not found by the name people know
+ * it by (its row is Inkommande, under Dokument), and absence, which has no
+ * page of its own, was not found at all. "inkorg" opened the bank rows: the
+ * Boka transaktion action said "transaktionsinkorgen" and the actions are
+ * listed first. Read in the palette's own order, with both inbox pages.
+ */
+describe('the palette finds the inbox, the review page and absence by the words people use', () => {
+  const firstHit = (query: string, pages = pagesFor()) =>
+    [...actionEntries(null), ...pages].find((entry) => matches(entry, query))?.href
+
+  it.each(['inkorg', 'inkorgen', 'dokumentinkorg', 'dokumentinkorgen'])('"%s" opens the inbox first, on the page the company has it', (word) => {
+    expect(firstHit(word, pagesFor({ inkorgV2Enabled: false }))).toBe('/e/general/invoice-inbox')
+    expect(firstHit(word, pagesFor({ inkorgV2Enabled: true }))).toBe('/inkorg')
+  })
+
+  it('"inbox" opens the inbox first in English too, where the action said "transaction inbox"', () => {
+    const english = (key: string) => (en.command_palette as Record<string, string>)[key] ?? key
+    const entries = [...actionEntries(null).map((entry) => localizeEntry(entry, english)), ...pagesFor({ inkorgV2Enabled: true })]
+    expect(entries.find((entry) => matches(entry, 'inbox'))?.href).toBe('/inkorg')
+  })
+
+  it.each(['pending', 'granskning', 'agentförslag'])('"%s" opens Rutin first', (word) => {
+    expect(firstHit(word)).toBe('/pending')
+  })
+
+  it.each(['frånvaro', 'vab', 'sjukfrånvaro', 'sjuk', 'föräldraledighet', 'tjänstledig', 'sick leave'])(
+    '"%s" opens Lönekörningar first: absence is entered in a salary run',
+    (word) => {
+      expect(firstHit(word)).toBe('/salary')
+    },
+  )
+
+  it('lets the words for absence go with payroll when the company does not have it', () => {
+    const pages = pagesFor({ surface: { hidden: [], notForLegalForm: ['payroll'] } })
+    expect(firstHit('frånvaro', pages)).toBeUndefined()
+    expect(firstHit('vab', pages)).toBeUndefined()
+  })
+
+  // The action lost the word "inkorg", not the words it is found by.
+  it.each(['transaktion', 'boka', 'bokför', 'kategorisera'])('"%s" still opens the bank rows first', (word) => {
+    expect(firstHit(word)).toBe('/transactions')
+  })
+})
+
 describe('paletteStartPages', () => {
   it('shows one row per area, where its rail button lands, with the area as the hint', () => {
     const start = paletteStartPages(pagesFor())

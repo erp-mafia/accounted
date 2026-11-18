@@ -52,7 +52,9 @@ export function inboxHref(inkorgV2Enabled: boolean): string {
  * An utlägg starts here (the receipt, then "Vem betalade?"), and the
  * Utlägg menu row stays hidden until the first claim exists, so "utlägg"
  * and "kvitto" must land on the inbox rather than on nothing (PH 201).
+ * The menu calls the inbox Inkommande, and people ask for "inkorgen": a
+ * typed word must be found whole, so the definite form is a word of its own.
  * Swedish in every locale: it is what people type, not text on screen.
  */
 export const INBOX_SEARCH_KEYWORDS =
-  'inkorg dokumentinkorg underlag kvitto kvitton utlägg eget utlägg privat betalat fakturor saknar underlag inbox receipt expense'
+  'inkorg inkorgen dokumentinkorg dokumentinkorgen underlag kvitto kvitton utlägg eget utlägg privat betalat fakturor saknar underlag inbox receipt expense'

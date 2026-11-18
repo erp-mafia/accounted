@@ -1,0 +1,1 @@
+[2026-11-17] Command palette: "inkorg" opens the inbox (Inkommande), not Bankrader. The Boka transaktion action said "transaktionsinkorgen" and actions list first; its hint now names the page as the menu does ("Gå till bankraderna"). "frånvaro" and "vab" lead to Lönekörningar.

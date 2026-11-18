@@ -17,13 +17,13 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { CheckIcon, ChevronRightIcon, DocumentTextIcon } from '@/components/icons'
 import { cn, formatAmount, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
-import { isUuid } from '@/lib/invariants/uuid'
 import type { PendingOperation } from '@/types'
 import { OperationPreview, useComplianceWarningText } from './OperationPreview'
 import { ProposalDocument } from './ProposalDocument'
-import type { ProposalDocumentRef } from './proposal-document'
+import { bankRowDocumentRef, type ProposalDocumentRef } from './proposal-document'
 import { Fact, FactList, MissingLabelsContext, MissingMark, PreviewDensityContext, ReviewTitleContext, factLabelText } from './preview-parts'
 import {
   headlineAmount,
@@ -31,13 +31,17 @@ import {
   proposalFacts,
   reviewHistory,
   reviewReason,
+  rowsUnderlagState,
   stagedPostingLines,
   underlagOf,
   underlagState,
   type HistoryEvent,
+  type ReviewBankRow,
+  type RowsUnderlagState,
   type StepPosition,
   type UnderlagState,
 } from './review-model'
+import { useRowsUnderlag } from './use-rows-underlag'
 import { rejectionCategoryLabel } from './vocabulary'
 
 const SECTION_TITLE_CLASS = 'text-[15px] font-medium text-strong'
@@ -85,22 +89,8 @@ function useTransactionUnderlag(transactionId: string | null) {
     let cancelled = false
     fetch(`/api/transactions/${transactionId}/underlag`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .then((body: { data?: { document?: { id?: unknown; file_name?: unknown; mime_type?: unknown } | null } }) => {
-        if (cancelled) return
-        const doc = body.data?.document
-        setFetched({
-          id: transactionId,
-          failed: false,
-          document:
-            doc && isUuid(doc.id)
-              ? {
-                  kind: 'document',
-                  documentId: doc.id,
-                  fileName: typeof doc.file_name === 'string' ? doc.file_name : null,
-                  mime: typeof doc.mime_type === 'string' ? doc.mime_type : null,
-                }
-              : null,
-        })
+      .then((body: { data?: unknown }) => {
+        if (!cancelled) setFetched({ id: transactionId, failed: false, document: bankRowDocumentRef(body.data) })
       })
       .catch(() => {
         if (!cancelled) setFetched({ id: transactionId, document: null, failed: true })
@@ -113,11 +103,120 @@ function useTransactionUnderlag(transactionId: string | null) {
   return { loading: transactionId != null && current == null, document: current?.document ?? null, failed: current?.failed ?? false }
 }
 
+/** A bank row as the review states it: when and what, one quiet line under it, the amount on the right. */
+function BankRowLine({ row, className, children }: { row: ReviewBankRow | null; className?: string; children: ReactNode }) {
+  return (
+    <div className={cn('flex min-h-11 items-center gap-4 py-2 text-[13px]', className)}>
+      <div className="min-w-0 flex-1">
+        {row && (
+          // data-ph-mask: the bank's text names a counterparty.
+          <p className="break-words text-strong" data-ph-mask="">
+            {[row.date ? formatDate(row.date) : null, row.text].filter(Boolean).join(' · ')}
+          </p>
+        )}
+        {children}
+      </div>
+      {row && row.amount !== null && (
+        <span className="shrink-0 tabular-nums text-strong" data-ph-mask="">
+          {formatCurrency(row.amount, row.currency)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The files on the bank rows of a samlingsverifikat: one line per row that
+ * has one, the row as the review states a bank row and its file under it,
+ * opened in a new tab as each row of a bulk link proposal is. A row without
+ * a file is not listed. Under the list: how many rows could not be read, and
+ * the way to the rows past the first read. Empty only after the reviewer
+ * asked for the rest and no row had a file: it then says so.
+ */
+export function ReviewRowFiles({
+  rows,
+  onReadRest,
+}: {
+  rows: Extract<RowsUnderlagState, { kind: 'list' }>
+  onReadRest: () => void
+}) {
+  const t = useTranslations('pending')
+  const tViewer = useTranslations('document_viewer')
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const askedForRest = useRef(false)
+  const allRead = rows.read >= rows.total
+  // The button that asked for the rest is gone once the rest has landed. The
+  // focus it held goes to the heading of the list it filled, never to
+  // nothing: on the full page a key pressed with the focus on nothing acts on
+  // the whole proposal, and a screen reader would start over from the top.
+  useEffect(() => {
+    if (!allRead || !askedForRest.current) return
+    askedForRest.current = false
+    const active = document.activeElement
+    if (!active || active === document.body) headingRef.current?.focus({ preventScroll: true })
+  }, [allRead])
+  return (
+    <div>
+      <h3 ref={headingRef} tabIndex={-1} className={cn(SLOT_LABEL_CLASS, 'outline-none')}>
+        {t('preview_link_document_heading')}
+      </h3>
+      {rows.files.length > 0 && (
+        <ul className="border-t-hairline">
+          {rows.files.map((file) => (
+            <li key={file.transactionId} className="relative border-b-hairline">
+              <BankRowLine row={file.bankRow}>
+                {/* On a touch screen the whole row opens the file: the link alone is a 16px target. */}
+                <a
+                  href={`/api/documents/${file.document.documentId}/inline`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    QUIET_LINK_CLASS,
+                    'break-words rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 pointer-coarse:after:absolute pointer-coarse:after:inset-0',
+                  )}
+                  data-ph-mask=""
+                >
+                  {file.document.fileName ?? t('link_preview_file')}
+                  <span className="sr-only">, {tViewer('open_in_new_tab')}</span>
+                </a>
+              </BankRowLine>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rows.failed > 0 && <p className="py-2 text-[13px] text-muted-foreground">{t('review_rows_underlag_failed', { count: rows.failed })}</p>}
+      {allRead && rows.files.length === 0 && rows.failed === 0 && (
+        <p className="py-2 text-[13px] text-muted-foreground">{t('review_no_underlag')}</p>
+      )}
+      {rows.read < rows.total && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2">
+          <p className="min-w-0 flex-1 basis-48 text-[13px] text-muted-foreground">
+            {t('review_rows_underlag_read', { read: rows.read, total: rows.total })}
+          </p>
+          <Button
+            variant="outline"
+            loading={rows.reading}
+            onClick={() => {
+              askedForRest.current = true
+              onReadRest()
+            }}
+          >
+            {t('review_rows_underlag_rest')}
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const NO_ROWS: readonly string[] = []
+
 /**
  * The underlag slot: the real file shown as the file (the proposal's own, or
- * the one on the bank row it names), the bank row the proposal acts on, or
- * the plain state that there is none. Renders nothing for a proposal with no
- * underlag to speak of (a new customer).
+ * the one on the bank row it names), the bank row the proposal acts on, the
+ * files on the rows of a batch, or the plain state that there is none.
+ * Renders nothing for a proposal with no underlag to speak of (a new
+ * customer).
  */
 export function ReviewUnderlag({
   op,
@@ -134,9 +233,12 @@ export function ReviewUnderlag({
   const underlag = underlagOf(op)
   const ofRow = useTransactionUnderlag(underlag?.transactionId ?? null)
   const state: UnderlagState = underlag ? underlagState(underlag, ofRow, slot) : { kind: 'none' }
+  const rowIds = underlag?.rowIds ?? NO_ROWS
+  const ofRows = useRowsUnderlag(rowIds)
+  const rows = rowsUnderlagState(rowIds, ofRows, slot)
   const bankRow = underlag?.bankRow ?? null
   const heading = <h3 className={SLOT_LABEL_CLASS}>{t('preview_link_document_heading')}</h3>
-  if (state.kind === 'none' && !bankRow) {
+  if (state.kind === 'none' && !bankRow && rows.kind === 'none') {
     if (!slot) return null
     return (
       <section className="min-w-0" aria-label={t('preview_link_document_heading')}>
@@ -175,21 +277,19 @@ export function ReviewUnderlag({
         </div>
       )}
       {bankRow && (
-        <div className="flex min-h-11 items-center gap-4 border-y-hairline py-2 text-[13px]">
-          <div className="min-w-0 flex-1">
-            {/* data-ph-mask: the bank's text names a counterparty. */}
-            <p className="break-words text-strong" data-ph-mask="">
-              {[bankRow.date ? formatDate(bankRow.date) : null, bankRow.text].filter(Boolean).join(' · ')}
-            </p>
-            <p className="text-xs text-muted-foreground">{t('review_bank_row')}</p>
-          </div>
-          {bankRow.amount !== null && (
-            <span className="shrink-0 tabular-nums text-strong" data-ph-mask="">
-              {formatCurrency(bankRow.amount, bankRow.currency)}
-            </span>
-          )}
-        </div>
+        <BankRowLine row={bankRow} className="border-y-hairline">
+          <p className="text-xs text-muted-foreground">{t('review_bank_row')}</p>
+        </BankRowLine>
       )}
+      {rows.kind === 'loading' && (
+        // As for one row: the heading waits with the skeleton it heads. One
+        // row high: most batches have no file, and the slot then says so in a line.
+        <LateReveal>
+          {heading}
+          <Skeleton className="h-12 w-full rounded-sm" />
+        </LateReveal>
+      )}
+      {rows.kind === 'list' && <ReviewRowFiles rows={rows} onReadRest={ofRows.readRest} />}
     </section>
   )
 }

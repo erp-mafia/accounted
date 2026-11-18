@@ -1,11 +1,13 @@
 /**
  * Names the command palette finds a page by that are not on its screen: the
- * name a menu row had before the V7 shell renamed it (2026-11-16), and the
- * settings pages people look for by name. Each one joins PAGE_ALIASES
- * (components/common/CommandPalette.tsx), so it moves, hides and gates with
- * the menu like every other alias (components/common/palette-pages.ts): one
- * whose href is a row lends the row its words, the others are entries filed
- * under the area the shell lights for their address.
+ * name a menu row had before the V7 shell renamed it (2026-11-16), the
+ * settings pages people look for by name, and the word for a thing that is
+ * done inside another page (frånvaro, in a salary run). Each one joins
+ * PAGE_ALIASES (components/common/CommandPalette.tsx), so it moves, hides and
+ * gates with the menu like every other alias
+ * (components/common/palette-pages.ts): one whose href is a row lends the row
+ * its words, the others are entries filed under the area the shell lights for
+ * their address.
  *
  * Swedish in every locale, like INBOX_SEARCH_KEYWORDS (lib/inkorg/flag.ts):
  * these are words people type, not text on screen. The English name a row
@@ -45,6 +47,10 @@ export const PALETTE_WORD_ALIASES: readonly PaletteWordAlias[] = [
   // the income declarations (INK2, INK3, NE) are too.
   { id: 'årsbokslut', label: 'Årsbokslut', href: '/bookkeeping/year-end', keywords: 'årsredovisning' },
   { id: 'inkomstdeklaration', label: 'Inkomstdeklaration', href: '/reports', keywords: 'ink2 ink3 ne-bilaga årsredovisning' },
+  // Absence has no page of its own: it is entered per day in the calendar of
+  // a salary run (sjukfrånvaro, VAB, föräldraledighet, tjänstledighet), so
+  // the words for it lead to Lönekörningar.
+  { id: 'frånvaro', label: 'Frånvaro', href: '/salary', keywords: 'vab sjukfrånvaro sjukdom föräldraledighet tjänstledighet ledighet absence sick leave' },
   // Koppla en agent was "API och MCP" under Inställningar.
   { id: 'api', label: 'API och MCP', href: '/settings/api', keywords: 'nyckel nycklar api-nyckel api-nycklar claude chatgpt' },
   // Settings pages by the name their section has. No row in the tree: each is

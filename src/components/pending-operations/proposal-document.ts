@@ -20,9 +20,15 @@ const SUPPLIER_INVOICE_TYPES = new Set(['link_supplier_invoice_voucher', 'approv
 /** Once resolved, the file these point at may be gone. */
 const REMOVES_DOCUMENT = new Set(['delete_document', 'delete_inbox_item'])
 
-export type ProposalDocumentRef =
-  | { kind: 'document'; documentId: string; fileName: string | null; mime: string | null }
-  | { kind: 'supplier_invoice'; supplierInvoiceId: string }
+/** A file by its id, as opposed to a supplier invoice whose file is looked up. */
+export interface DocumentFileRef {
+  kind: 'document'
+  documentId: string
+  fileName: string | null
+  mime: string | null
+}
+
+export type ProposalDocumentRef = DocumentFileRef | { kind: 'supplier_invoice'; supplierInvoiceId: string }
 
 export interface ProposalDocumentInput {
   operation_type: string
@@ -62,4 +68,16 @@ export function proposalDocumentRef(op: ProposalDocumentInput): ProposalDocument
     return { kind: 'supplier_invoice', supplierInvoiceId: params.supplier_invoice_id }
   }
   return null
+}
+
+/**
+ * The file on a bank row, read off an answer of GET
+ * /api/transactions/[id]/underlag (the document pinned to the row, or
+ * matched to it from the inbox). Null when the row has none. One reading for
+ * the proposal that names one bank row and the one that names several.
+ */
+export function bankRowDocumentRef(answer: unknown): DocumentFileRef | null {
+  const document = record(record(answer).document)
+  if (!isUuid(document.id)) return null
+  return { kind: 'document', documentId: document.id, fileName: text(document.file_name), mime: text(document.mime_type) }
 }

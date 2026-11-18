@@ -7,6 +7,7 @@
  */
 import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isSignableMimeType } from './signable-file'
 import { SIGNING_MAX_DOCUMENT_BYTES } from './types'
 
 export interface SignableDocument {
@@ -83,7 +84,7 @@ export async function loadSignableDocument(
   if (error) throw error
   const row = data as DocumentRow | null
   if (!row) return { ok: false, code: 'SIGNING_DOCUMENT_NOT_FOUND' }
-  if (row.mime_type !== 'application/pdf') return { ok: false, code: 'SIGNING_DOCUMENT_UNSUPPORTED' }
+  if (!isSignableMimeType(row.mime_type)) return { ok: false, code: 'SIGNING_DOCUMENT_UNSUPPORTED' }
   if ((options.requireCurrentVersion ?? true) && !row.is_current_version) return { ok: false, code: 'SIGNING_DOCUMENT_UNSUPPORTED' }
   if (row.file_size_bytes !== null && row.file_size_bytes > SIGNING_MAX_DOCUMENT_BYTES) return { ok: false, code: 'SIGNING_DOCUMENT_UNSUPPORTED' }
   // A preview reads the row only; the bytes are checked when the request is made.

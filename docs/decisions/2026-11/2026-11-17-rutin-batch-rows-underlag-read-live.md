@@ -1,0 +1,1 @@
+[2026-11-17] Rutin reads the underlag on each bank row of a samlingsverifikat proposal live, 4 requests at a time, the first 25 rows unasked, the rest on a click (crm#1977): an id stored at staging misses a receipt added later and every proposal already waiting. Rows without a file are not listed.

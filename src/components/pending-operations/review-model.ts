@@ -19,7 +19,7 @@ import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-in
 import { isHandledElsewhere } from '@/lib/pending-operations/handled-elsewhere'
 import { closedByRefusalReason } from '@/lib/pending-operations/approval-refusal'
 import { currencyForField } from './preview-facts'
-import { proposalDocumentRef, type ProposalDocumentRef } from './proposal-document'
+import { bankRowDocumentRef, proposalDocumentRef, type DocumentFileRef, type ProposalDocumentRef } from './proposal-document'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 
 type Data = Record<string, unknown>
@@ -343,6 +343,14 @@ export interface ReviewUnderlag {
    * file is shown when it has one, and nothing is said when it has none.
    */
   rowUnderlagExpected: boolean
+  /**
+   * The bank rows the proposal names when it names several (a
+   * samlingsverifikat's params.tx_ids), each once, in its own order. Every
+   * row's underlag is the proposal's: the slot showed one file, so a batch
+   * showed none of its rows' files (crm#1977). Empty for every other
+   * proposal.
+   */
+  rowIds: string[]
   /** The staging tool said the verifikat has no underlag (BFL 5 kap 6 §). */
   missing: boolean
 }
@@ -404,8 +412,11 @@ export function underlagOf(
   const transactionId =
     !document && !NOT_A_BANK_ROW.has(op.operation_type) && isUuid(params.transaction_id) ? params.transaction_id : null
   const rowUnderlagExpected = transactionId != null && ROW_UNDERLAG_EXPECTED.has(op.operation_type)
+  const rowIds = !document && Array.isArray(params.tx_ids) ? [...new Set(params.tx_ids.filter(isUuid))] : []
   const missing = !document && complianceWarningOf(op)?.kind === 'missing_underlag'
-  return document || bankRow || missing || transactionId ? { document, bankRow, transactionId, rowUnderlagExpected, missing } : null
+  return document || bankRow || missing || transactionId || rowIds.length > 0
+    ? { document, bankRow, transactionId, rowUnderlagExpected, rowIds, missing }
+    : null
 }
 
 /** What the review read for the bank row's own underlag. */
@@ -443,6 +454,103 @@ export function underlagState(underlag: ReviewUnderlag, row: RowUnderlagRead, ke
     if (row.failed) return { kind: 'failed' }
   }
   return { kind: underlag.missing || underlag.rowUnderlagExpected ? 'missing' : 'none' }
+}
+
+/* ------------------------------------------ the rows of a samlingsverifikat */
+
+/**
+ * The most bank rows of a batch whose underlag the review reads unasked. A
+ * row is one request (GET /api/transactions/[id]/underlag, the read the
+ * single row uses) and a batch holds up to 200 (BulkBookSchema): the first
+ * 25 cover the same-day batches the type is for, and the rest are read when
+ * the reviewer asks for them.
+ */
+export const ROWS_UNDERLAG_UNASKED = 25
+
+/** The rows whose underlag is read: the first ones, or all of them once the reviewer asked for the rest. */
+export function rowsToRead(rowIds: readonly string[], all: boolean): string[] {
+  return all ? [...rowIds] : rowIds.slice(0, ROWS_UNDERLAG_UNASKED)
+}
+
+/** What was read for one bank row of a batch: the row and the file on it, or that it could not be read. */
+export type RowUnderlagResult =
+  | { failed: false; bankRow: ReviewBankRow | null; document: DocumentFileRef | null }
+  | { failed: true }
+
+/**
+ * One row's answer from GET /api/transactions/[id]/underlag as the review
+ * reads it. An answer that is no answer (an error body, an older shape) is a
+ * row that could not be read, never a row without underlag.
+ */
+export function rowUnderlagResult(answer: unknown): RowUnderlagResult {
+  if (answer == null || typeof answer !== 'object' || !('document' in answer)) return { failed: true }
+  const stated = record((answer as Data).row)
+  const bankRow: ReviewBankRow | null =
+    text(stated.date) || text(stated.text) || finite(stated.amount) !== null
+      ? { date: text(stated.date), text: text(stated.text), amount: finite(stated.amount), currency: text(stated.currency) ?? 'SEK' }
+      : null
+  return { failed: false, bankRow, document: bankRowDocumentRef(answer) }
+}
+
+/** What the review has read for the rows of a batch so far. */
+export interface RowsUnderlagRead {
+  /**
+   * By bank row. A read lands whole (every row it asked about at once), so
+   * the list never grows row by row under the reviewer.
+   */
+  results: ReadonlyMap<string, RowUnderlagResult>
+  /** A read is out. */
+  reading: boolean
+  /** The reviewer asked for the rows past the first read. */
+  askedForRest: boolean
+}
+
+export interface RowUnderlagFile {
+  transactionId: string
+  document: DocumentFileRef
+  bankRow: ReviewBankRow | null
+}
+
+export type RowsUnderlagState =
+  | { kind: 'none' | 'loading' }
+  | {
+      kind: 'list'
+      /** The rows that have a file, in the proposal's order. A row without one is not listed: nothing is missing from it here. */
+      files: RowUnderlagFile[]
+      /** Rows whose underlag could not be read. */
+      failed: number
+      /** Rows read, of the rows the proposal names. Fewer while the rows past the first read wait to be asked for. */
+      read: number
+      total: number
+      /** The read the reviewer asked for is out. */
+      reading: boolean
+    }
+
+/**
+ * What the underlag slot shows for a proposal that names several bank rows:
+ * the rows that have a file, how many could not be read, and how many are
+ * not read yet. Nothing when every row is read and none has a file: a batch
+ * is booked from its rows, and a row without underlag is no gap the review
+ * states (the same call underlagState makes for a matched payment). Once the
+ * reviewer has asked for the rest the list stays, also empty: the section
+ * they pressed the button in says that there is none, it does not just go.
+ *
+ * `keepsPlace` as in underlagState: on the full page the first read shows a
+ * skeleton; in the drawer it holds no room, since most batches have no file.
+ */
+export function rowsUnderlagState(rowIds: readonly string[], read: RowsUnderlagRead, keepsPlace: boolean): RowsUnderlagState {
+  const landed = rowIds.filter((id) => read.results.has(id))
+  if (landed.length === 0) return { kind: read.reading && keepsPlace ? 'loading' : 'none' }
+  const files: RowUnderlagFile[] = []
+  let failed = 0
+  for (const id of landed) {
+    const result = read.results.get(id)
+    if (!result) continue
+    if (result.failed) failed += 1
+    else if (result.document) files.push({ transactionId: id, document: result.document, bankRow: result.bankRow })
+  }
+  if (files.length === 0 && failed === 0 && landed.length === rowIds.length && !read.askedForRest) return { kind: 'none' }
+  return { kind: 'list', files, failed, read: landed.length, total: rowIds.length, reading: read.reading }
 }
 
 /* ------------------------------------------------------------------ reason */

@@ -25,6 +25,7 @@ import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { RequestSignatureDialog } from '@/components/signing/RequestSignatureDialog'
 import { SigningRequestsSection } from '@/components/signing/SigningRequestsSection'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
+import { isSignableMimeType } from '@/lib/signing/signable-file'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
 import { useFieldLabel } from './useFieldLabel'
@@ -203,7 +204,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           // beside signing where it is open, and keeps the delete for a document nothing is booked on (crm#230) in the
           // menu after them: a text button between two pills read as a third, odd action.
           <div className="flex items-center gap-2">
-            {signing.available && view.mime_type === 'application/pdf' ? (
+            {signing.available && isSignableMimeType(view.mime_type) ? (
               <Button size="toolbar" variant="outline" onClick={() => setRequestingSignature(true)} disabled={!canWrite} title={lockedTitle}>
                 {t('record_request_signature')}
               </Button>

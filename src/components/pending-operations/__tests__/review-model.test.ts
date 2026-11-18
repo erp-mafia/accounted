@@ -14,6 +14,10 @@ import {
   proposalFacts,
   reviewHistory,
   reviewReason,
+  ROWS_UNDERLAG_UNASKED,
+  rowUnderlagResult,
+  rowsToRead,
+  rowsUnderlagState,
   stagedPostingLines,
   stepAfterLeaving,
   stepPosition,
@@ -23,6 +27,7 @@ import {
   voucherFacts,
   type FactRow,
   type RowUnderlagRead,
+  type RowUnderlagResult,
 } from '../review-model'
 
 const DOC = '11111111-1111-4111-8111-111111111111'
@@ -168,7 +173,7 @@ describe('underlagOf', () => {
       op({ operation_type: 'categorize_transaction', params: { transaction_id: TX }, preview_data: { date: '2026-11-10', amount: 500, lines: VOUCHER_LINES } }),
     )
     // The preview states the amount unsigned and no bank text: no row is drawn from it.
-    expect(underlag).toEqual({ document: null, bankRow: null, transactionId: TX, rowUnderlagExpected: true, missing: false })
+    expect(underlag).toEqual({ document: null, bankRow: null, transactionId: TX, rowUnderlagExpected: true, rowIds: [], missing: false })
   })
 
   it('a payment matched to an invoice points at its bank row too (crm#1977)', () => {
@@ -185,6 +190,7 @@ describe('underlagOf', () => {
       transactionId: TX,
       // The invoice is what the payment is booked from: a row without a file is no gap.
       rowUnderlagExpected: false,
+      rowIds: [],
       missing: false,
     })
   })
@@ -215,9 +221,26 @@ describe('underlagOf', () => {
     ).toBeNull()
     // A skattekonto row is no bank row.
     expect(underlagOf(op({ operation_type: 'book_skattekonto_row', params: { transaction_id: TX } }))).toBeNull()
-    // A batch names many rows; the slot shows one file.
-    expect(underlagOf(op({ operation_type: 'bulk_book_transactions', params: { tx_ids: [TX] } }))).toBeNull()
     expect(underlagOf(op({ operation_type: 'ignore_transaction', params: { transaction_id: 'not-an-id' } }))).toBeNull()
+  })
+
+  it('a samlingsverifikat points at every bank row it names, each once, in its own order (crm#1977)', () => {
+    const TX_2 = '55555555-5555-4555-8555-555555555555'
+    const underlag = underlagOf(
+      op({
+        operation_type: 'bulk_book_transactions',
+        params: { tx_ids: [TX_2, TX, TX_2, 'not-an-id', 7] },
+        preview_data: { tx_count: 2, tx_date: '2026-11-03', tx_sum: -298, mode: 'create_new', lines: VOUCHER_LINES },
+      }),
+    )
+    // No one row to read and no row drawn from the preview: the rows are read one by one.
+    expect(underlag).toEqual({ document: null, bankRow: null, transactionId: null, rowUnderlagExpected: false, rowIds: [TX_2, TX], missing: false })
+    // A type nobody listed that names its rows the same way is read too.
+    const later = 'some_future_batch' as PendingOperation['operation_type']
+    expect(underlagOf(op({ operation_type: later, params: { tx_ids: [TX] } }))?.rowIds).toEqual([TX])
+    // A batch that names no usable row has no underlag to speak of.
+    expect(underlagOf(op({ operation_type: 'bulk_book_transactions', params: { tx_ids: [] } }))).toBeNull()
+    expect(underlagOf(op({ operation_type: 'bulk_book_transactions', params: { tx_ids: 'x' } }))).toBeNull()
   })
 
   it('says underlag saknas only when the staging tool did', () => {
@@ -291,6 +314,142 @@ describe('underlagState: the one thing the underlag slot shows', () => {
       underlagState(match, read({ document: FILE }), true),
     ]
     expect(states.map((state) => headed(state.kind))).toEqual([false, false, false])
+  })
+})
+
+describe('rowUnderlagResult: one row of a batch, read off the underlag route', () => {
+  it('reads the row and the file on it', () => {
+    expect(
+      rowUnderlagResult({
+        source: 'pinned',
+        document: { id: DOC, file_name: 'kvitto.pdf', mime_type: 'application/pdf' },
+        row: { date: '2026-11-03', text: 'Pressbyrån', amount: -49, currency: 'SEK' },
+      }),
+    ).toEqual({
+      failed: false,
+      bankRow: { date: '2026-11-03', text: 'Pressbyrån', amount: -49, currency: 'SEK' },
+      document: { kind: 'document', documentId: DOC, fileName: 'kvitto.pdf', mime: 'application/pdf' },
+    })
+  })
+
+  it('a row without a file is read, and has none', () => {
+    expect(rowUnderlagResult({ source: null, document: null, row: { date: '2026-11-03', text: null, amount: -12, currency: null } })).toEqual({
+      failed: false,
+      bankRow: { date: '2026-11-03', text: null, amount: -12, currency: 'SEK' },
+      document: null,
+    })
+  })
+
+  it('an answer that does not state the row still shows the file, by its name alone', () => {
+    expect(rowUnderlagResult({ document: { id: DOC, file_name: null, mime_type: null } })).toEqual({
+      failed: false,
+      bankRow: null,
+      document: { kind: 'document', documentId: DOC, fileName: null, mime: null },
+    })
+  })
+
+  it('an answer that is no answer is a row that could not be read, never a row without underlag', () => {
+    for (const answer of [undefined, null, 'x', {}, { error: { code: 'TX_CATEGORIZE_TX_NOT_FOUND' } }]) {
+      expect(rowUnderlagResult(answer)).toEqual({ failed: true })
+    }
+  })
+})
+
+describe('rowsUnderlagState: the files on the rows of a samlingsverifikat (crm#1977)', () => {
+  const id = (n: number) => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
+  const FILE = { kind: 'document' as const, documentId: DOC, fileName: 'kvitto.pdf', mime: 'application/pdf' }
+  const ROW = { date: '2026-11-03', text: 'Pressbyrån', amount: -49, currency: 'SEK' }
+  const withFile: RowUnderlagResult = { failed: false, bankRow: ROW, document: FILE }
+  const without: RowUnderlagResult = { failed: false, bankRow: ROW, document: null }
+  const failed: RowUnderlagResult = { failed: true }
+  const read = (results: Array<[string, RowUnderlagResult]>, reading = false, askedForRest = false) => ({
+    results: new Map(results),
+    reading,
+    askedForRest,
+  })
+
+  it('lists the rows that have a file, in the proposal\'s order, and says nothing of a row without one', () => {
+    const rows = [id(1), id(2), id(3)]
+    const state = rowsUnderlagState(rows, read([[id(3), withFile], [id(2), without], [id(1), withFile]]), false)
+    expect(state).toEqual({
+      kind: 'list',
+      files: [
+        { transactionId: id(1), document: FILE, bankRow: ROW },
+        { transactionId: id(3), document: FILE, bankRow: ROW },
+      ],
+      failed: 0,
+      read: 3,
+      total: 3,
+      reading: false,
+    })
+  })
+
+  it('shows nothing when every row is read and none has a file: a batch is no place to ask for underlag', () => {
+    const rows = [id(1), id(2)]
+    expect(rowsUnderlagState(rows, read([[id(1), without], [id(2), without]]), false)).toEqual({ kind: 'none' })
+    // Also where the slot keeps its place: the full page then states that the proposal has none.
+    expect(rowsUnderlagState(rows, read([[id(1), without], [id(2), without]]), true)).toEqual({ kind: 'none' })
+  })
+
+  it('counts a row that could not be read, beside the rows that were', () => {
+    const rows = [id(1), id(2), id(3)]
+    expect(rowsUnderlagState(rows, read([[id(1), withFile], [id(2), without], [id(3), failed]]), false)).toMatchObject({
+      kind: 'list',
+      files: [{ transactionId: id(1) }],
+      failed: 1,
+      read: 3,
+      total: 3,
+    })
+    // Nothing found and one row unread is still something to say.
+    expect(rowsUnderlagState([id(1), id(2)], read([[id(1), without], [id(2), failed]]), false)).toMatchObject({ kind: 'list', files: [], failed: 1 })
+  })
+
+  it('holds no room in the drawer while the first read is out, and does where the slot keeps its place', () => {
+    const rows = [id(1), id(2)]
+    expect(rowsUnderlagState(rows, read([], true), false)).toEqual({ kind: 'none' })
+    expect(rowsUnderlagState(rows, read([], true), true)).toEqual({ kind: 'loading' })
+    // A proposal that names no rows reads nothing.
+    expect(rowsUnderlagState([], read([]), true)).toEqual({ kind: 'none' })
+  })
+
+  it('reads the first rows of a batch larger than the cap, and the rest only when asked', () => {
+    const rows = Array.from({ length: ROWS_UNDERLAG_UNASKED + 15 }, (_, n) => id(n + 1))
+    const first = rowsToRead(rows, false)
+    expect(first).toEqual(rows.slice(0, ROWS_UNDERLAG_UNASKED))
+    expect(rowsToRead(rows, true)).toEqual(rows)
+    // A batch at the cap or under it is read whole, unasked.
+    expect(rowsToRead(rows.slice(0, ROWS_UNDERLAG_UNASKED), false)).toHaveLength(ROWS_UNDERLAG_UNASKED)
+
+    // The first read landed, none of its rows has a file: the rows past it are still to ask for.
+    const landed = first.map((row): [string, RowUnderlagResult] => [row, without])
+    expect(rowsUnderlagState(rows, read(landed), false)).toEqual({
+      kind: 'list',
+      files: [],
+      failed: 0,
+      read: ROWS_UNDERLAG_UNASKED,
+      total: rows.length,
+      reading: false,
+    })
+    // Asked for: what is listed stays while the rest is out, and the count closes when it lands.
+    const withOne = [...landed.slice(1), [first[0], withFile] as [string, RowUnderlagResult]]
+    expect(rowsUnderlagState(rows, read(withOne, true), false)).toMatchObject({ kind: 'list', files: [{ transactionId: first[0] }], reading: true })
+    const all = [...withOne, ...rows.slice(ROWS_UNDERLAG_UNASKED).map((row): [string, RowUnderlagResult] => [row, without])]
+    expect(rowsUnderlagState(rows, read(all, false, true), false)).toMatchObject({ kind: 'list', read: rows.length, total: rows.length, reading: false })
+  })
+
+  it('stays, empty, when the reviewer asked for the rest and no row had a file: the section never just goes after a press', () => {
+    const rows = Array.from({ length: ROWS_UNDERLAG_UNASKED + 2 }, (_, n) => id(n + 1))
+    const none = rows.map((row): [string, RowUnderlagResult] => [row, without])
+    expect(rowsUnderlagState(rows, read(none, false, true), false)).toEqual({
+      kind: 'list',
+      files: [],
+      failed: 0,
+      read: rows.length,
+      total: rows.length,
+      reading: false,
+    })
+    // Unasked, the same read shows nothing.
+    expect(rowsUnderlagState(rows, read(none), false)).toEqual({ kind: 'none' })
   })
 })
 

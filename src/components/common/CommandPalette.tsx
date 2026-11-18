@@ -53,7 +53,10 @@ type Entry = {
 
 const ACTION_ENTRIES: Entry[] = [
   { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: DocumentTextIcon, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
-  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowsRightLeftIcon, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
+  // The hint names the page as the menu does (Bankrader). It said
+  // "transaktionsinkorgen", and the actions are listed first, so "inkorg"
+  // opened the bank rows instead of the inbox.
+  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till bankraderna', icon: ArrowsRightLeftIcon, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
   { id: 'new-customer', label: 'Lägg till kund', icon: UsersIcon, href: '/customers', keywords: 'kund customer ny lägg till' },
   { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: WalletIcon, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
   { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: ChartBarIcon, href: '/reports', keywords: 'rapport resultat balans report' },
