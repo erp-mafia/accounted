@@ -2,6 +2,8 @@
 
 This guide walks you through deploying Accounted on your own infrastructure using Docker.
 
+To try Accounted on your own machine, or to develop it, you need neither this guide nor a Supabase account: `npm run local:up` starts everything locally (see [Development Setup](../README.md#development-setup)).
+
 ## Prerequisites
 
 - Docker and Docker Compose v2+

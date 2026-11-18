@@ -127,17 +127,20 @@ You need a Supabase project and must apply the database migrations before first 
 
 ## Development Setup
 
-Prerequisites: Node.js 20 or newer (CI runs Node 20; the Docker image ships Node 22), a Supabase project.
+Prerequisites: Node.js 20 or newer (CI runs Node 20; the Docker image ships Node 22), Docker, and the [Supabase CLI](https://supabase.com/docs/guides/local-development). No Supabase account is needed.
 
 ```bash
 npm install
-npm run dev       # Start dev server (auto-generates extension registry)
-npm test          # Run tests
-npm run build     # Production build
-npm run lint      # ESLint
+npm run local:up    # Local Supabase with every migration applied, a user and a company, and the dev server
+npm run local:down  # Stop it and delete its data
+npm test            # Run tests
+npm run build       # Production build
+npm run lint        # ESLint
 ```
 
-See [contributing guide](.github/CONTRIBUTING.md) for the full development workflow.
+`npm run local:up` prints the URL to open and the login to use. A start takes several minutes: it downloads the Supabase images the first time and applies every migration. It will not start in a checkout that has a `.env`, `.env.local` or `.env.development` file, because the dev server would load the keys in them. Add `-- --sim` for a company with three years of example books.
+
+To develop against a Supabase project of your own instead, see the [contributing guide](.github/CONTRIBUTING.md), which also covers the full development workflow.
 
 ## Tech Stack
 

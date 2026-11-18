@@ -8,12 +8,21 @@ Everyone interacting in the project is expected to follow the [Code of Conduct](
 
 1. Fork the repository and clone your fork
 2. Install dependencies: `npm install`
-3. Start the dev server: `npm run dev`
+3. Start a local backend and the dev server: `npm run local:up` (see [Supabase Setup](#supabase-setup))
 4. Run tests: `npm test`
 
 ## Supabase Setup
 
-You need a Supabase project for local development:
+The app runs on a Supabase backend. You do not need a Supabase account for one: with Docker and the [Supabase CLI](https://supabase.com/docs/guides/local-development) installed, one command starts it on your machine.
+
+```bash
+npm run local:up     # prints the URL to open and the login to use
+npm run local:down   # stops it and deletes its data
+```
+
+`local:up` starts a Supabase stack of its own for this checkout, applies `supabase/bootstrap.sql` and every migration, creates a user and a company, and starts the dev server on a free port. The dev server gets the local stack's URL and keys and no provider, mail or analytics key. It refuses to start in a checkout that has a `.env`, `.env.local` or `.env.development` file, because the dev server would load the keys in them. `npm run local:up -- --sim` also builds a company with three years of example books.
+
+To use a Supabase project of your own instead:
 
 1. Create a free project at [supabase.com](https://supabase.com)
 2. Run `supabase/bootstrap.sql` once, then all migrations from `supabase/migrations/` in filename order (see [docs/SELF-HOSTING.md](../docs/SELF-HOSTING.md#3-apply-database-migrations); a project created since 2026-05-30 answers every request with 42501 if the bootstrap is skipped)
@@ -21,6 +30,7 @@ You need a Supabase project for local development:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
+4. Start the dev server: `npm run dev`
 
 ## Development Workflow
 
