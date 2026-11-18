@@ -3154,6 +3154,9 @@
     "journey_dup_open": "Öppna {name}",
     "journey_dup_copy": "Skapa en separat kopia ändå",
     "journey_dup_open_failed": "Kunde inte öppna företaget. Försök igen.",
+    "journey_dup_many_title": "Du har redan {count} företag med det här numret",
+    "journey_dup_many_sub": "Öppna det du arbetar i och fortsätt där du var, i stället för att börja om i ännu en tom kopia.",
+    "journey_dup_created": "Skapad {date}",
     "journey_pending_invite_note": "Du har en väntande inbjudan till ett företag. Öppna länken i inbjudningsmejlet för att gå med istället.",
     "journey_fact_vat": "Momsregistrerat",
     "journey_fact_ceased": "Avregistrerat",
@@ -10099,7 +10102,8 @@
     "managed_elsewhere": "Hanteras via annan domän",
     "managed_via": "Hanteras via {domain}",
     "locked_note": "Pausat: kräver betald plan",
-    "switch_company_aria": "{company}, byt företag"
+    "switch_company_aria": "{company}, byt företag",
+    "created_on": "Skapad {date}"
   },
   "system_notice": {
     "high_load": "Just nu är det hög belastning i systemet. Vissa sidor kan svara långsamt eller tillfälligt ge fel. Vi jobbar på det.",

@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
 import { DISCORD_INVITE_URL, DiscordLogo } from '@/components/community/discord'
 import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
+import { useCompanyRowDetails } from '@/components/dashboard/use-company-row-details'
 import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import {
   ArrowRightStartOnRectangleIcon,
@@ -197,6 +198,7 @@ export default function UserMenu({
   const filteredCompanies = companies.filter(({ company: c }) =>
     c.name.toLowerCase().includes(query.trim().toLowerCase()),
   )
+  const rowDetails = useCompanyRowDetails(companies)
 
   const menuRow =
     'flex min-h-7.5 w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] ' +
@@ -279,7 +281,10 @@ export default function UserMenu({
                         {tSwitcher('no_results')}
                       </p>
                     )}
-                    {filteredCompanies.map(({ company: c, role }) => (
+                    {filteredCompanies.map(({ company: c, role }) => {
+                      const createdLine = rowDetails.createdLine(c.id)
+                      const roleLabel = rowDetails.roleLabel(role)
+                      return (
                       <button
                         key={c.id}
                         onClick={() => handleSwitch(c.id)}
@@ -292,11 +297,20 @@ export default function UserMenu({
                         )}
                       >
                         <CompanyMark name={c.name} />
-                        <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                        {role !== 'owner' && <span className="flex-shrink-0 text-xs text-muted-foreground">{role}</span>}
+                        {createdLine ? (
+                          // Another listed company has this name: when it was created tells them apart.
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{c.name}</span>
+                            <span className="block truncate text-xs">{createdLine}</span>
+                          </span>
+                        ) : (
+                          <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                        )}
+                        {roleLabel && <span className="flex-shrink-0 text-xs text-muted-foreground">{roleLabel}</span>}
                         {isPending && <SpinnerIcon className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />}
                       </button>
-                    ))}
+                      )
+                    })}
                   </div>
                   {/* Companies homed on another domain (home-domain rule,
                       WL-01): subtle, non-clickable signpost entries. */}

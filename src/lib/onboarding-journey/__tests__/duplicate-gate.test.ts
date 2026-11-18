@@ -1,7 +1,39 @@
 import { describe, expect, it } from 'vitest'
-import { isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '../duplicate-gate'
+import { existingCompanyMatch, isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '../duplicate-gate'
 
-const match: ExistingCompanyMatch = { orgNumber: '5588990019', companyId: 'c1', name: 'Dubblettbolaget AB' }
+const match: ExistingCompanyMatch = {
+  orgNumber: '5588990019',
+  companies: [{ id: 'c1', name: 'Dubblettbolaget AB', role: 'owner', createdAt: '2026-01-10T09:00:00+00:00' }],
+}
+
+describe('existingCompanyMatch', () => {
+  it('keeps every company the check answered, oldest first', () => {
+    const result = existingCompanyMatch('5588990019', [
+      { id: 'c-new', name: 'Dubblettbolaget AB', role: 'admin', created_at: '2026-10-02T14:05:00+00:00' },
+      { id: 'c-old', name: 'Dubblettbolaget AB', role: 'owner', created_at: '2025-01-15T08:00:00+00:00' },
+    ])
+    expect(result).toEqual({
+      orgNumber: '5588990019',
+      companies: [
+        { id: 'c-old', name: 'Dubblettbolaget AB', role: 'owner', createdAt: '2025-01-15T08:00:00+00:00' },
+        { id: 'c-new', name: 'Dubblettbolaget AB', role: 'admin', createdAt: '2026-10-02T14:05:00+00:00' },
+      ],
+    })
+  })
+
+  it('reads an answer without role or created time (an older server) as one company', () => {
+    expect(existingCompanyMatch('5588990019', [{ id: 'c1', name: 'Dubblettbolaget AB' }])).toEqual({
+      orgNumber: '5588990019',
+      companies: [{ id: 'c1', name: 'Dubblettbolaget AB', role: '', createdAt: null }],
+    })
+  })
+
+  it('is null when the answer names no company', () => {
+    expect(existingCompanyMatch('5588990019', [])).toBeNull()
+    expect(existingCompanyMatch('5588990019', undefined)).toBeNull()
+    expect(existingCompanyMatch('5588990019', [{ name: 'no id' }, null, 'x'])).toBeNull()
+  })
+})
 
 describe('shouldGateDuplicate', () => {
   it('gates the step after the orgnr when the user already has the company', () => {
@@ -49,7 +81,7 @@ describe('shouldGateDuplicate', () => {
 describe('isSoleTraderMatch', () => {
   it('is true for a firm whose org number is a personnummer (PH 216)', () => {
     // A Luhn-valid test personnummer (month 12 < 20: a natural person).
-    expect(isSoleTraderMatch({ orgNumber: '1212121212', companyId: 'c2', name: 'Firma' })).toBe(true)
+    expect(isSoleTraderMatch({ ...match, orgNumber: '1212121212' })).toBe(true)
   })
 
   it('is false for a juridisk person', () => {

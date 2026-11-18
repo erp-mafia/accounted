@@ -3154,6 +3154,9 @@
     "journey_dup_open": "Open {name}",
     "journey_dup_copy": "Create a separate copy anyway",
     "journey_dup_open_failed": "Could not open the company. Try again.",
+    "journey_dup_many_title": "You already have {count} companies with this number",
+    "journey_dup_many_sub": "Open the one you work in and continue where you left off, instead of starting over in yet another empty copy.",
+    "journey_dup_created": "Created {date}",
     "journey_pending_invite_note": "You have a pending invitation to a company. Open the link in the invitation email to join instead.",
     "journey_fact_vat": "VAT registered",
     "journey_fact_ceased": "Deregistered",
@@ -10099,7 +10102,8 @@
     "managed_elsewhere": "Managed on another domain",
     "managed_via": "Managed via {domain}",
     "locked_note": "Paused: requires a paid plan",
-    "switch_company_aria": "{company}, switch company"
+    "switch_company_aria": "{company}, switch company",
+    "created_on": "Created {date}"
   },
   "system_notice": {
     "high_load": "The system is under high load right now. Some pages may respond slowly or fail temporarily. We are on it.",

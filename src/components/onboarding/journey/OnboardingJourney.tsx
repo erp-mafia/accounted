@@ -53,7 +53,14 @@ import {
   readOrgFieldText,
   suggestedFormForOrgNumber,
 } from '@/lib/onboarding-journey/org-number-hint'
-import { isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
+import {
+  existingCompanyMatch,
+  isSoleTraderMatch,
+  shouldGateDuplicate,
+  type ExistingCompany,
+  type ExistingCompanyMatch,
+} from '@/lib/onboarding-journey/duplicate-gate'
+import { companyRoleLabelKey, createdLabels, formatCreatedMoment } from '@/lib/company/company-copies'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 import { stockholmYearMonth } from '@/lib/dates/iso'
@@ -195,6 +202,8 @@ export default function OnboardingJourney({
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
+  // Role labels as the company's member settings name them (the duplicate stop).
+  const tRoles = useTranslations('settings_company')
   const { appName } = useBranding()
   const locale = useLocale()
   const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
@@ -227,11 +236,11 @@ export default function OnboardingJourney({
   // Säte as the register gave it at creation (SCB Säteskommun). The postal
   // town in settings.city is never shown as säte.
   const [registeredOffice, setRegisteredOffice] = useState<string | null>(null)
-  const [dupName, setDupName] = useState<string | null>(null)
-  // The company the user already has under the org number being set up, and
-  // the org number they explicitly chose a separate copy for. Together they
-  // drive the duplicate stop (shouldGateDuplicate).
+  // The companies the user already has under the org number being set up
+  // (oldest first), and the org number they explicitly chose a separate copy
+  // for. Together they drive the duplicate stop (shouldGateDuplicate).
   const [dupMatch, setDupMatch] = useState<ExistingCompanyMatch | null>(null)
+  const dupName = dupMatch?.companies[0]?.name ?? null
   const [dupAckOrg, setDupAckOrg] = useState<string | null>(null)
   const [dupOpening, setDupOpening] = useState(false)
   const [dupSwitchFailed, setDupSwitchFailed] = useState(false)
@@ -292,7 +301,6 @@ export default function OnboardingJourney({
 
   const dupCheckedOrg = useRef<string | null>(null)
   const checkDuplicate = useCallback((orgNumber: string) => {
-    setDupName(null)
     setDupMatch(null)
     const canonical = normalizeOrgNumber(orgNumber)
     dupCheckedOrg.current = canonical
@@ -305,9 +313,7 @@ export default function OnboardingJourney({
       .then(async (res) => {
         if (!res.ok) return
         const { data } = await res.json()
-        const first = data?.companies?.[0] as { id: string; name: string } | undefined
-        setDupName(first?.name ?? null)
-        setDupMatch(first && canonical ? { orgNumber: canonical, companyId: first.id, name: first.name } : null)
+        setDupMatch(canonical ? existingCompanyMatch(canonical, data?.companies) : null)
       })
       .catch(() => {})
   }, [])
@@ -360,7 +366,7 @@ export default function OnboardingJourney({
       }
       // A previous orgnr's "you already have X" note must not sit above the
       // chip row; the pick re-checks for the number it resolves to.
-      setDupName(null)
+      setDupMatch(null)
       lastConfirmed.current = trimmed
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
@@ -434,7 +440,7 @@ export default function OnboardingJourney({
       setSuggestActive(-1)
       lastConfirmed.current = suggestion.name.trim()
       setOrgInput(suggestion.name)
-      setDupName(null)
+      setDupMatch(null)
       dispatch({ type: 'SUGGESTION_PICKED', suggestion })
       lookupFor(suggestion.orgNumber).then((outcome) => {
         dispatch({ type: 'LOOKUP_RESULT', outcome })
@@ -679,17 +685,40 @@ export default function OnboardingJourney({
         step: state.step,
       })
     ) {
+      // More than one copy under this org number: each is a choice, told
+      // apart by when it was created and the user's role there. One copy
+      // keeps the single "Öppna" button.
+      const copies = dupMatch.companies
+      const many = copies.length > 1
+      const created = many
+        ? createdLabels(copies, (iso, precision) => formatCreatedMoment(iso, precision, locale))
+        : null
+      const detailOf = (c: ExistingCompany) => {
+        const date = created?.get(c.id)
+        const roleKey = c.role === 'owner' ? null : companyRoleLabelKey(c.role)
+        const parts = [date ? t('journey_dup_created', { date }) : null, roleKey ? tRoles(roleKey) : null]
+        return parts.filter(Boolean).join(' · ') || undefined
+      }
+      // A sole trader's firm has one bookkeeping for all its business:
+      // a part kept apart (a property) is a project there, not a copy.
+      const sub = isSoleTraderMatch(dupMatch)
+        ? t('journey_dup_ef_sub', { appName })
+        : many
+          ? t('journey_dup_many_sub')
+          : t('journey_dup_sub', { appName })
       return (
         <Question
-          title={t('journey_dup_title', { name: dupMatch.name })}
-          // A sole trader's firm has one bookkeeping for all its business:
-          // a part kept apart (a property) is a project there, not a copy.
-          sub={isSoleTraderMatch(dupMatch) ? t('journey_dup_ef_sub', { appName }) : t('journey_dup_sub', { appName })}
+          title={many ? t('journey_dup_many_title', { count: copies.length }) : t('journey_dup_title', { name: copies[0].name })}
+          sub={sub}
           attn={dupSwitchFailed ? t('journey_dup_open_failed') : undefined}
         >
           <ChipRow
             options={[
-              { key: 'open', label: t('journey_dup_open', { name: dupMatch.name }) },
+              ...copies.map((c) => ({
+                key: `open:${c.id}`,
+                label: t('journey_dup_open', { name: c.name }),
+                rec: many ? detailOf(c) : undefined,
+              })),
               { key: 'copy', label: t('journey_dup_copy') },
             ]}
             disabled={dupOpening}
@@ -698,9 +727,11 @@ export default function OnboardingJourney({
                 setDupAckOrg(dupMatch.orgNumber)
                 return
               }
+              const picked = copies.find((c) => `open:${c.id}` === k)
+              if (!picked) return
               setDupOpening(true)
               setDupSwitchFailed(false)
-              performCompanySwitch(dupMatch.companyId).then((result) => {
+              performCompanySwitch(picked.id).then((result) => {
                 if (result?.error) {
                   setDupOpening(false)
                   setDupSwitchFailed(true)
@@ -858,7 +889,6 @@ export default function OnboardingJourney({
                   disabled={state.lookupPending}
                   onClick={() => {
                     // A duplicate found for an earlier number is not this company's.
-                    setDupName(null)
                     setDupMatch(null)
                     dispatch({ type: 'NO_ORG_CONTINUE' })
                   }}

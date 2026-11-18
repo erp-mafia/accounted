@@ -11,6 +11,7 @@ import { companyInitials } from './company-initials'
 import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompanyRowDetails } from './use-company-row-details'
 import {
   CheckIcon,
   ChevronUpDownIcon,
@@ -63,6 +64,8 @@ export default function CompanySwitcher({ variant = 'field', trailing }: Company
   const searchable = companies.length > SEARCH_FROM
   const needle = query.trim().toLowerCase()
   const listed = searchable && needle ? companies.filter(({ company: c }) => c.name.toLowerCase().includes(needle)) : companies
+  // Over the whole list, not the search hits: a row's second line stays put while searching.
+  const rowDetails = useCompanyRowDetails(companies)
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current || !dropdownRef.current) return
@@ -260,8 +263,10 @@ export default function CompanySwitcher({ variant = 'field', trailing }: Company
 
               <div className="max-h-48 overflow-y-auto px-1">
                 {listed.length === 0 && <p className="px-2.5 py-2 text-xs text-muted-foreground">{t('no_results')}</p>}
-                {listed.map(({ company: c, role }) =>
-                  lockedCompanyIds.includes(c.id) ? (
+                {listed.map(({ company: c, role }) => {
+                  const createdLine = rowDetails.createdLine(c.id)
+                  const roleLabel = rowDetails.roleLabel(role)
+                  return lockedCompanyIds.includes(c.id) ? (
                     // Multi-user seat gate: frozen for this user until the
                     // company pays. Shown, not hidden: the membership exists
                     // and the row explains why it cannot be entered.
@@ -272,7 +277,9 @@ export default function CompanySwitcher({ variant = 'field', trailing }: Company
                     >
                       <span className="flex-1 min-w-0">
                         <span className="block truncate" title={c.name}>{c.name}</span>
-                        <span className="block truncate text-xs">{t('locked_note')}</span>
+                        <span className="block truncate text-xs">
+                          {createdLine ? `${createdLine} · ${t('locked_note')}` : t('locked_note')}
+                        </span>
                       </span>
                       <LockClosedIcon className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
                     </div>
@@ -291,10 +298,18 @@ export default function CompanySwitcher({ variant = 'field', trailing }: Company
                     role="option"
                     aria-selected={c.id === company?.id}
                   >
-                    <span className="flex-1 min-w-0">{c.name}</span>
-                    {role !== 'owner' && (
+                    {createdLine ? (
+                      // Another listed company has this name: when it was created tells them apart.
+                      <span className="flex-1 min-w-0">
+                        <span className="block truncate" title={c.name}>{c.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{createdLine}</span>
+                      </span>
+                    ) : (
+                      <span className="flex-1 min-w-0">{c.name}</span>
+                    )}
+                    {roleLabel && (
                       <span className="text-xs text-muted-foreground flex-shrink-0">
-                        {role}
+                        {roleLabel}
                       </span>
                     )}
                     {c.id === company?.id && (
@@ -304,8 +319,8 @@ export default function CompanySwitcher({ variant = 'field', trailing }: Company
                       <SpinnerIcon className="h-3 w-3 animate-spin text-muted-foreground flex-shrink-0" />
                     )}
                   </button>
-                  ),
-                )}
+                  )
+                })}
               </div>
             </>
           )}

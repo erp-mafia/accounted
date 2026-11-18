@@ -1,13 +1,47 @@
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
+import { orderCompanyCopies } from '@/lib/company/company-copies'
 import type { JourneyStep } from './reducer'
 
-/** A company the caller already belongs to with the org number being set up. */
+/** One company the caller already belongs to with the org number being set up. */
+export interface ExistingCompany {
+  id: string
+  name: string
+  /** The caller's role there (company_members.role). */
+  role: string
+  /** companies.created_at; null when the answer carried none. */
+  createdAt: string | null
+}
+
+/** The companies the caller already belongs to with the org number being set up. */
 export interface ExistingCompanyMatch {
   /** Canonical 10-digit org number the check ran for. */
   orgNumber: string
-  companyId: string
-  name: string
+  /** At least one; oldest first (orderCompanyCopies). */
+  companies: ExistingCompany[]
+}
+
+/**
+ * The match in a POST /api/company/check-org-number answer (`data.companies`)
+ * for the canonical org number the check ran for. Null when it names no
+ * company. Entries without an id or a name are left out.
+ */
+export function existingCompanyMatch(orgNumber: string, answered: unknown): ExistingCompanyMatch | null {
+  if (!Array.isArray(answered)) return null
+  const companies = answered.flatMap((entry): ExistingCompany[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const { id, name, role, created_at: createdAt } = entry as Record<string, unknown>
+    if (typeof id !== 'string' || typeof name !== 'string') return []
+    return [
+      {
+        id,
+        name,
+        role: typeof role === 'string' ? role : '',
+        createdAt: typeof createdAt === 'string' ? createdAt : null,
+      },
+    ]
+  })
+  return companies.length > 0 ? { orgNumber, companies: orderCompanyCopies(companies) } : null
 }
 
 /**
