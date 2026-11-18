@@ -187,4 +187,6 @@ All commits require a [DCO sign-off](.github/DCO) (`git commit -s`).
 
 [AGPL-3.0-or-later](LICENSE) with an **extension exception**: third-party extensions that interact solely through the documented Extension API may be licensed under any terms, including proprietary. See [LICENSE](LICENSE) for details and [NOTICE](NOTICE) for third-party attributions.
 
+If the AGPL's obligations don't work for you, for example because you want to embed Accounted in a closed product, contact us at [support@accounted.se](mailto:support@accounted.se) for a commercial license from Arcim Technology AB.
+
 The name Accounted and the Accounted logo are trademarks of Arcim Technology AB and are not covered by the AGPL: a modified version you offer to others needs its own name. See [TRADEMARK.md](TRADEMARK.md).
