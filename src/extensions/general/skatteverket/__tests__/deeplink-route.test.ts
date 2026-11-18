@@ -457,14 +457,18 @@ describe('POST /system-connection/verify: one check a minute', () => {
   const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 
   it('429 when the register was asked within the minute', async () => {
-    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(20_000) })
+    // One clock read for both stamps: read apart, a millisecond can tick
+    // between them, and a later last_probe_at reads as a link minted since.
+    const checkedAt = ago(20_000)
+    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: checkedAt, last_probe_at: checkedAt })
     const res = await verify()
     expect(res.status).toBe(429)
     expect(mockProbeCompanyGrants).not.toHaveBeenCalled()
   })
 
   it('the 429 names the wait that is left of the minute, in the body and in Retry-After', async () => {
-    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: ago(20_000), last_probe_at: ago(20_000) })
+    const checkedAt = ago(20_000)
+    mockGetConnection.mockResolvedValue({ id: 'conn-1', lasombud_checked_at: checkedAt, last_probe_at: checkedAt })
     const res = await verify()
     expect(res.status).toBe(429)
     const body = (await res.json()) as { retry_after_seconds: number }
