@@ -20,6 +20,14 @@ vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
 
+// The bank matcher a posted typed verifikat is handed to
+// (lib/reconciliation/voucher-bank-link.ts, tested there): here only that
+// the door asks, and when it must not.
+const mockBankLink = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/reconciliation/voucher-bank-link', () => ({
+  linkOpenBankRowsToVoucher: (...args: unknown[]) => mockBankLink(...args),
+}))
+
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeJournalEntry } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -150,6 +158,46 @@ describe('commitPendingOperation: create_voucher', () => {
     // findFiscalPeriod must NOT be called when fiscal_period_id is supplied:
     // it's the caller's explicit choice.
     expect(findFiscalPeriod).not.toHaveBeenCalled()
+    // The posted verifikat meets the open bank row it books (crm#1958).
+    expect(mockBankLink).toHaveBeenCalledTimes(1)
+    const [, linkCompany, linkUser, linkedVoucher] = mockBankLink.mock.calls[0]
+    expect([linkCompany, linkUser]).toEqual(['company-1', 'user-1'])
+    expect(linkedVoucher).toMatchObject({ journalEntryId: 'je-100', entryDate: '2026-05-12' })
+    expect((linkedVoucher as { lines: Array<{ account_number: string }> }).lines.map((l) => l.account_number)).toEqual(['1010', '1930'])
+    // Nothing was linked (the matcher is mocked silent): the result says nothing about bank rows.
+    expect(result.data).not.toHaveProperty('bank_rows_linked')
+    expect(result.data).not.toHaveProperty('bank_rows_suggested')
+  })
+
+  it('tells the caller when the posted verifikat was linked to its open bank row (crm#1958)', async () => {
+    // An agent that reads this does not link the same row once more with
+    // gnubok_reconcile_match, which would answer ALREADY_LINKED.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-101', voucher_number: 43, voucher_series: 'A' })
+    )
+    mockBankLink.mockResolvedValueOnce({ linked: 1, suggested: 0 })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-09-01',
+        description: 'Bank till kortskuld',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '1930', debit_amount: 0, credit_amount: 61.25 },
+          { account_number: '2890', debit_amount: 61.25, credit_amount: 0 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ journal_entry_id: 'je-101', bank_rows_linked: 1 })
+    expect(result.data).not.toHaveProperty('bank_rows_suggested')
   })
 
   it('runs the executor inside the opts.actor attribution scope (migration 20260619120000)', async () => {
@@ -384,6 +432,8 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(findCalls('fiscal_periods', 'update')).toContainEqual([
       { opening_balance_entry_id: 'je-ib', opening_balances_set: true },
     ])
+    // An IB's bank line is a balance, never a bank movement: no row to meet.
+    expect(mockBankLink).not.toHaveBeenCalled()
   })
 
   // Agent feedback seqs 892914, 897234, 897844: a second IB voucher in a year
@@ -949,6 +999,8 @@ describe('commitPendingOperation: create_voucher', () => {
     // Critical: document MUST NOT be linked to the racing loser JE: the
     // inbox already points at the winner's JE.
     expect(linkToJournalEntry).not.toHaveBeenCalled()
+    // Nor does a reversed verifikat take a bank row.
+    expect(mockBankLink).not.toHaveBeenCalled()
   })
 
   it('inbox-direct: a claim write that errors releases its own claim and reverses the verifikat', async () => {

@@ -13,6 +13,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { dbError } from '@/lib/errors/db-error'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 import {
   MissingUnderlagQueryError,
   listMissingUnderlagPage,
@@ -458,6 +459,17 @@ export const POST = withRouteContext(
         door: 'dashboard_voucher',
         log,
       })
+    }
+    // A posted typed verifikat meets the open bank row it books
+    // (lib/reconciliation/voucher-bank-link.ts); a draft does when it is committed.
+    if (!asDraft) {
+      await linkOpenBankRowsToVoucher(
+        supabase,
+        companyId,
+        user.id,
+        { journalEntryId: entry.id, entryDate: body.entry_date, lines: body.lines },
+        log,
+      )
     }
     return NextResponse.json({ data: entry })
   } catch (err) {

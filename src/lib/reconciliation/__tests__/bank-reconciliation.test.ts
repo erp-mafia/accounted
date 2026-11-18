@@ -809,6 +809,118 @@ describe('runReconciliation', () => {
     expect(result.errors).toBe(0)
   })
 
+  it("keeps only the named verifikat's matches when onlyJournalEntryIds is set (crm#1958)", async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx1 = makeTransaction({ id: 'tx-1', amount: 1000, date: '2024-06-15', currency: 'SEK' })
+    const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const line1 = makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', debit_amount: 1000, entry_date: '2024-06-15' })
+    const line2 = makeGLLine({ line_id: 'line-2', journal_entry_id: 'je-2', credit_amount: 500, entry_date: '2024-06-15' })
+
+    enqueue({ data: [line1, line2] })
+    enqueue({ data: [tx1, tx2] })
+    // Only ONE update should run: the named verifikat's pair.
+    enqueue({ data: [{ id: 'tx-2' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      onlyJournalEntryIds: ['je-2'],
+    })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].glLine.journal_entry_id).toBe('je-2')
+    expect(result.applied).toBe(1)
+    expect(result.errors).toBe(0)
+  })
+
+  it.each([
+    ['the other verifikat comes first in the ledger order', ['je-other', 'je-named']],
+    ['the named verifikat comes first in the ledger order', ['je-named', 'je-other']],
+  ])('gives a named verifikat no row another unlinked verifikat fits as well: %s (crm#1958)', async (_case, order) => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // One open row, two unlinked verifikat with the same claim to it. A sweep
+    // pairs the row with the first in ledger order; a run for one verifikat
+    // leaves the choice to a person, whichever of the two it is.
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const lines = order.map((id, i) =>
+      makeGLLine({ line_id: `line-${id}`, journal_entry_id: id, credit_amount: 500, entry_date: '2024-06-15', voucher_number: i + 1 }),
+    )
+
+    enqueue({ data: lines })
+    enqueue({ data: [tx] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      onlyJournalEntryIds: ['je-named'],
+    })
+
+    expect(result.matches).toEqual([])
+    expect(result.applied).toBe(0)
+    expect(result.errors).toBe(0)
+  })
+
+  it('gives a named verifikat no row when two open rows fit its line equally (crm#1958)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx1 = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const named = makeGLLine({ line_id: 'line-named', journal_entry_id: 'je-named', credit_amount: 500, entry_date: '2024-06-15' })
+
+    enqueue({ data: [named] })
+    enqueue({ data: [tx1, tx2] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      onlyJournalEntryIds: ['je-named'],
+    })
+
+    expect(result.matches).toEqual([])
+    expect(result.applied).toBe(0)
+  })
+
+  it('a weaker rival does not hold a named verifikat back: the exact pair is applied (crm#1958)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // The row and the named verifikat share the date (0.95). Another row and
+    // another verifikat sit a day off (0.85 against either): no rival.
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const nearRow = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-16', currency: 'SEK' })
+    const named = makeGLLine({ line_id: 'line-named', journal_entry_id: 'je-named', credit_amount: 500, entry_date: '2024-06-15' })
+    const nearVoucher = makeGLLine({ line_id: 'line-near', journal_entry_id: 'je-near', credit_amount: 500, entry_date: '2024-06-14' })
+
+    enqueue({ data: [nearVoucher, named] })
+    enqueue({ data: [tx, nearRow] })
+    enqueue({ data: [{ id: 'tx-1' }] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      dryRun: false,
+      confidenceThreshold: 0.9,
+      onlyJournalEntryIds: ['je-named'],
+    })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].transaction.id).toBe('tx-1')
+    expect(result.matches[0].glLine.journal_entry_id).toBe('je-named')
+    expect(result.applied).toBe(1)
+  })
+
+  it('a sweep that names no verifikat still pairs equal rows in ledger order, as before', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx1 = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const tx2 = makeTransaction({ id: 'tx-2', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const line = makeGLLine({ line_id: 'line-1', journal_entry_id: 'je-1', credit_amount: 500, entry_date: '2024-06-15' })
+
+    enqueue({ data: [line] })
+    enqueue({ data: [tx1, tx2] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: true })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].transaction.id).toBe('tx-1')
+  })
+
   it('skips matches below confidenceThreshold in apply mode but still reports them', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 

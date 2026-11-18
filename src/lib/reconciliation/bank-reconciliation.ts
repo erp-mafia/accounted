@@ -117,6 +117,14 @@ export interface ReconciliationRunResult {
  */
 export const DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD = 0.9
 
+/**
+ * How many days a bank row may lie from a verifikat's date and still be
+ * proposed on amount alone (auto_date_range). A caller that runs the matcher
+ * for one verifikat reads its window from here, so the window is the reach of
+ * the rule and never a second number.
+ */
+export const MATCH_DATE_RANGE_DAYS = 3
+
 export interface ReconciliationStatus {
   /**
    * The currency EVERY monetary field in this object is expressed in: the
@@ -350,6 +358,19 @@ export interface ReconciliationOptions {
    */
   applyOnly?: Array<{ transactionId: string; journalEntryId: string }>
   /**
+   * Keep only the matches of these verifikat, and of those only the ones
+   * nothing rivals. The matcher still runs over every open row and every
+   * unlinked verifikat in the window; the filter comes after it. A named
+   * verifikat then keeps its row only when no other open row fits its line
+   * as well and no other unlinked verifikat fits that row as well
+   * (isUnrivalledMatch): a sweep over a whole history may pair equal rows in
+   * ledger order, a run for one verifikat a person just posted never guesses
+   * which of two rows, or which of two verifikat, was meant. For the run a
+   * door makes when it posts one typed verifikat
+   * (lib/reconciliation/voucher-bank-link.ts).
+   */
+  onlyJournalEntryIds?: readonly string[]
+  /**
    * Server-side confidence floor for the apply path (0..1; out-of-range values
    * are clamped, mirroring gnubok_auto_match_period). Matches below it are NOT
    * applied: they stay in `matches` and are counted in skippedBelowThreshold.
@@ -551,7 +572,7 @@ export function tryReconcileTransaction(
     const amountMatches = Math.abs(Math.abs(txAmount) - Math.abs(lineAmount)) < 0.005
     const fuzzyAmountMatches = Math.abs(Math.abs(txAmount) - Math.abs(lineAmount)) <= 0.01
     const exactDateMatch = txDate === line.entry_date
-    const dateWithinRange = isDateWithinRange(txDate, line.entry_date, 3)
+    const dateWithinRange = isDateWithinRange(txDate, line.entry_date, MATCH_DATE_RANGE_DAYS)
     // Reference matches require BOTH a real OCR/reference token AND a bounded
     // date window. Never description-only: that collides on recurring monthly
     // charges (same description, same amount, different year). Never cross-year.
@@ -614,6 +635,7 @@ export async function runReconciliation(
     cashAccountId,
     includeUnassigned = true,
     applyOnly,
+    onlyJournalEntryIds,
     confidenceThreshold,
     persistSuggestions = false,
   } = options
@@ -682,6 +704,16 @@ export async function runReconciliation(
 
   // Run greedy matching, highest confidence first
   let matches = greedyMatch(transactions, candidateLines, currency)
+
+  // A run for named verifikat keeps their matches only, after the full run
+  // has assigned every row, and none that a row or a verifikat rivals: see
+  // onlyJournalEntryIds.
+  if (onlyJournalEntryIds) {
+    const wanted = new Set(onlyJournalEntryIds)
+    matches = matches.filter(
+      (m) => wanted.has(m.glLine.journal_entry_id) && isUnrivalledMatch(m, transactions, candidateLines, currency),
+    )
+  }
 
   if (dryRun) {
     return {
@@ -2388,6 +2420,30 @@ function isDateWithinRange(date1: string, date2: string, dayRange: number): bool
   const diffMs = Math.abs(d1.getTime() - d2.getTime())
   const diffDays = diffMs / (1000 * 60 * 60 * 24)
   return diffDays <= dayRange
+}
+
+/**
+ * Whether nothing in the run fits either side of a match as well as its own
+ * pair does: no other open row fits the verifikat's line at this confidence
+ * or higher, and no line of another verifikat fits the row at this
+ * confidence or higher. Two rows of one amount on one date, or two unlinked
+ * verifikat that both book the row, are a choice for a person
+ * (the rule autoReconcileTransactionForLinkedVoucher keeps for the invoice
+ * door: two same-amount rows near the date, don't guess).
+ */
+function isUnrivalledMatch(
+  match: ReconciliationMatch,
+  transactions: Transaction[],
+  glLines: UnlinkedGLLine[],
+  expectedCurrency: string,
+): boolean {
+  const fitsAsWell = (tx: Transaction, line: UnlinkedGLLine) =>
+    (tryReconcileTransaction(tx, [line], expectedCurrency)?.confidence ?? 0) >= match.confidence
+  const rivalRow = transactions.some((tx) => tx.id !== match.transaction.id && fitsAsWell(tx, match.glLine))
+  if (rivalRow) return false
+  return !glLines.some(
+    (line) => line.journal_entry_id !== match.glLine.journal_entry_id && fitsAsWell(match.transaction, line),
+  )
 }
 
 /**

@@ -24,6 +24,7 @@ import { entryDebitTotal } from '@/lib/bookkeeping/unattended-ceiling'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { AcknowledgedWarningsSchema, DASHBOARD_VOUCHER_SOURCE_TYPES } from '@/lib/api/schemas'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 
 const JE_RESPONSE_COLUMNS =
   'id, fiscal_period_id, voucher_series, voucher_number, entry_date, description, status, source_type, source_id, created_at, updated_at'
@@ -229,6 +230,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           door: 'v1_commit',
           log: ctx.log,
         })
+        // A posted typed verifikat meets the open bank row it books
+        // (lib/reconciliation/voucher-bank-link.ts).
+        await linkOpenBankRowsToVoucher(
+          ctx.supabase,
+          ctx.companyId!,
+          ctx.userId,
+          { journalEntryId: entryId, entryDate: typed.entry_date, lines: typed.lines ?? [] },
+          ctx.log,
+        )
       }
       // Refetch the projection-only columns to keep the response shape tight.
       const { data } = await ctx.supabase

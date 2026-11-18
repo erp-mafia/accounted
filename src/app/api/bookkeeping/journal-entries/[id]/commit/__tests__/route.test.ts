@@ -37,6 +37,13 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: (...args: unknown[]) => mockAppendProcessingHistory(...args),
 }))
 
+// The bank matcher a posted typed verifikat is handed to
+// (lib/reconciliation/voucher-bank-link.ts, tested there).
+const mockLink = vi.fn()
+vi.mock('@/lib/reconciliation/voucher-bank-link', () => ({
+  linkOpenBankRowsToVoucher: (...args: unknown[]) => mockLink(...args),
+}))
+
 /**
  * The draft the route reads before committing, as every query answers it:
  * one thenable chain whose terminal call resolves to `result`.
@@ -234,6 +241,47 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       const request = new Request('http://localhost/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST', body: '{nope' })
       const response = await POST(request as never, createMockRouteParams({ id: 'entry-1' }))
       expect((await parseJsonResponse(response)).status).toBe(400)
+    })
+  })
+
+  describe('a committed typed draft meets its open bank row (crm#1958)', () => {
+    const bankPayment = {
+      entry_date: '2026-09-01',
+      description: 'Bank till kortskuld',
+      source_type: 'manual',
+      lines: [
+        { account_number: '1930', debit_amount: 0, credit_amount: 61.25 },
+        { account_number: '2890', debit_amount: 61.25, credit_amount: 0 },
+      ],
+    }
+
+    it('hands the posted verifikat, its date and its lines to the bank matcher', async () => {
+      mockCreateClient.mockResolvedValue(clientWithDraft(bankPayment))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+
+      const response = await POST(
+        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
+        createMockRouteParams({ id: 'entry-1' }),
+      )
+
+      expect((await parseJsonResponse(response)).status).toBe(200)
+      expect(mockLink).toHaveBeenCalledTimes(1)
+      const [, companyId, userId, voucher] = mockLink.mock.calls[0]
+      expect([companyId, userId]).toEqual(['company-1', 'user-1'])
+      expect(voucher).toEqual({ journalEntryId: 'entry-1', entryDate: '2026-09-01', lines: bankPayment.lines })
+    })
+
+    it('leaves a draft another flow generated alone: that flow anchors its own bank row', async () => {
+      mockCreateClient.mockResolvedValue(clientWithDraft({ ...bankPayment, source_type: 'bank_transaction' }))
+      mockCommitEntry.mockResolvedValue(makeJournalEntry({ id: 'entry-1', status: 'posted' }))
+
+      const response = await POST(
+        createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' }),
+        createMockRouteParams({ id: 'entry-1' }),
+      )
+
+      expect((await parseJsonResponse(response)).status).toBe(200)
+      expect(mockLink).not.toHaveBeenCalled()
     })
   })
 })

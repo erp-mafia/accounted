@@ -61,6 +61,12 @@ export interface UnattendedSweepOptions {
    * row is skipped, never widened to the pooled 1930 run.
    */
   ledgerAccounts?: readonly string[]
+  /**
+   * Keep only these verifikat's matches (runReconciliation's
+   * onlyJournalEntryIds): the sweep a door runs for the one typed verifikat
+   * it just posted.
+   */
+  journalEntryIds?: readonly string[]
 }
 
 /**
@@ -193,6 +199,7 @@ export async function runUnattendedReconciliationSweep(
       includeUnassigned: scope.includeUnassigned,
       confidenceThreshold,
       persistSuggestions,
+      ...(options.journalEntryIds ? { onlyJournalEntryIds: options.journalEntryIds } : {}),
     }
     try {
       const result = await runReconciliation(supabase, companyId, userId, runOptions)

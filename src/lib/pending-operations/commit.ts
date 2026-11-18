@@ -147,6 +147,7 @@ import {
 import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import { bookingReviewLimitCovers } from '@/lib/booking-review/operation-gate'
@@ -5135,6 +5136,13 @@ async function commitCreateVoucher(
     // never leaves it in the inbox to be booked twice. Best effort.
     if (inboxItemId) await followPairedReceipt({ supabase, companyId, userId, log }, inboxItemId)
 
+    // A posted typed verifikat meets the open bank row it books
+    // (lib/reconciliation/voucher-bank-link.ts). Last, once the claim above
+    // is won: a verifikat reversed for a lost claim never takes a row.
+    const bankLink = voucherGuard?.ok
+      ? await linkOpenBankRowsToVoucher(supabase, companyId, userId, { journalEntryId: entry.id, entryDate, lines }, log)
+      : null
+
     return {
       data: {
         journal_entry_id: entry.id,
@@ -5144,6 +5152,10 @@ async function commitCreateVoucher(
         // inbox_linked stays in the result for callers that read it; a
         // committed op with an inbox item has always claimed it now.
         ...(inboxItemId ? { inbox_item_id: inboxItemId, inbox_linked: true } : {}),
+        // Said only when it happened, so an agent does not link the same row
+        // once more (gnubok_reconcile_match would answer ALREADY_LINKED).
+        ...(bankLink && bankLink.linked > 0 ? { bank_rows_linked: bankLink.linked } : {}),
+        ...(bankLink && bankLink.suggested > 0 ? { bank_rows_suggested: bankLink.suggested } : {}),
       },
     }
   } catch (err) {

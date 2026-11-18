@@ -4,6 +4,7 @@ import { CommitJournalEntryDraftSchema, DASHBOARD_VOUCHER_SOURCE_TYPES } from '@
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { postingPort } from '@/lib/posting/port'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
+import { linkOpenBankRowsToVoucher } from '@/lib/reconciliation/voucher-bank-link'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.commit',
@@ -63,6 +64,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         door: 'dashboard_draft_commit',
         log,
       })
+    }
+    // A posted typed verifikat meets the open bank row it books
+    // (lib/reconciliation/voucher-bank-link.ts).
+    if (typed) {
+      await linkOpenBankRowsToVoucher(
+        supabase,
+        companyId,
+        user.id,
+        { journalEntryId: id, entryDate: draft.entry_date, lines: draft.lines ?? [] },
+        log,
+      )
     }
     return NextResponse.json({ data: posted })
   },
