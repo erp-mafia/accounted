@@ -9,6 +9,7 @@ import {
 } from '../oauth-allowlist'
 import { ALL_SCOPES, type ApiKeyScope } from '../scope-catalog'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { FLYTT_EXTENSION_ID, FLYTT_EXTENSION_REDIRECT_URI } from '../flytt-extension'
 
 describe('isBuiltInRedirectUri', () => {
   it.each([
@@ -64,6 +65,16 @@ describe('isBuiltInRedirectUri', () => {
     ['https://evilsquidler.io/api/oauth/callback/accounted', false],
     ['http://squidler.io/api/oauth/callback/accounted', false],
     ['http://dev.squidler.io/api/oauth/callback/accounted', false],
+    // The browser extension's chrome.identity redirect: the one id, the
+    // exact root path, https only.
+    [FLYTT_EXTENSION_REDIRECT_URI, true],
+    [`${FLYTT_EXTENSION_REDIRECT_URI}oauth`, false],
+    [`${FLYTT_EXTENSION_REDIRECT_URI}?next=x`, false],
+    [FLYTT_EXTENSION_REDIRECT_URI.replace(/\/$/, ''), false],
+    [FLYTT_EXTENSION_REDIRECT_URI.replace('https://', 'http://'), false],
+    ['https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.chromiumapp.org/', false],
+    [`https://x${FLYTT_EXTENSION_ID}.chromiumapp.org/`, false],
+    [`https://${FLYTT_EXTENSION_ID}.chromiumapp.org.evil.com/`, false],
     ['http://localhost:8787/callback', true],
     ['http://localhost:3000/cb', true],
     ['http://localhost/cb', true],
@@ -92,6 +103,7 @@ describe('builtInRedirectProvider', () => {
     ['https://squidler.io/api/oauth/callback/accounted', 'squidler'],
     ['https://dev.squidler.io/api/oauth/callback/accounted', 'squidler'],
     ['https://squidler.io/api/oauth/callback/other', null],
+    [FLYTT_EXTENSION_REDIRECT_URI, 'flytt_extension'],
     ['http://localhost:8787/callback', 'local'],
     ['http://localhost:3000/cb', 'local'],
     ['http://127.0.0.1:8080/cb', 'local'],

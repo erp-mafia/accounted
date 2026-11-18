@@ -1,0 +1,1 @@
+[2026-11-17] The MCP endpoint accepts one foreign Origin, Accounted's own browser extension Flytta till Accounted, and its chrome.identity redirect is a built-in OAuth redirect: the extension hid its Origin to get in. One id, whole-string match; a valid key is still required.

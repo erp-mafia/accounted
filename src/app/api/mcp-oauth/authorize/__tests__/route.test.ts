@@ -76,6 +76,7 @@ const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provide
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const SQUIDLER: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'squidler' }
+const FLYTT_EXTENSION: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'flytt_extension' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
 const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
@@ -582,6 +583,24 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Squidler')
     expect(html).toContain('Verifierad')
     expect(html).toContain('squidler.io')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it("names Accounted's own move extension for its chrome.identity redirect", async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(FLYTT_EXTENSION)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://ooeaogbjfhciekiidjaehikcbccomkmj.chromiumapp.org/',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Flytta till Accounted')
+    expect(html).toContain('Verifierad')
     expect(html).not.toContain('En extern applikation')
   })
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest'
 import { isForbiddenOrigin, forbiddenOriginResponse } from '../origin-guard'
 import type { mcpServerExtension as McpServerExtension } from '../index'
 import { testRoutes } from '@/tests/helpers'
+import { FLYTT_EXTENSION_ID, FLYTT_EXTENSION_ORIGIN } from '@/lib/auth/flytt-extension'
 
 const ENDPOINT = 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
 
@@ -85,6 +86,24 @@ describe('isForbiddenOrigin', () => {
     expect(
       isForbiddenOrigin(makeRequest({ origin: 'not a url', host: 'app.gnubok.se' })),
     ).toBe(true)
+  })
+
+  it("allows Accounted's own browser extension, by its whole origin", () => {
+    expect(
+      isForbiddenOrigin(makeRequest({ origin: FLYTT_EXTENSION_ORIGIN, host: 'app.gnubok.se' })),
+    ).toBe(false)
+  })
+
+  it('rejects every other extension origin', () => {
+    for (const origin of [
+      'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      `${FLYTT_EXTENSION_ORIGIN}x`,
+      `${FLYTT_EXTENSION_ORIGIN}/`,
+      `moz-extension://${FLYTT_EXTENSION_ID}`,
+      `https://${FLYTT_EXTENSION_ID}`,
+    ]) {
+      expect(isForbiddenOrigin(makeRequest({ origin, host: 'app.gnubok.se' }))).toBe(true)
+    }
   })
 })
 

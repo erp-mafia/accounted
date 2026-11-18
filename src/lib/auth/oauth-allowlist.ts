@@ -26,6 +26,7 @@ export type BuiltInProvider =
   | 'cursor'
   | 'cursor_deeplink'
   | 'squidler'
+  | 'flytt_extension'
   | 'local'
 
 /**
@@ -83,6 +84,11 @@ export type BuiltInProvider =
  * decision 2026-11-17, replacing the per-user registration chosen for it on
  * 2026-11-04). Each is an exact path on Squidler's own https host, never a
  * prefix, so no other squidler.io path and no other subdomain rides on it.
+ *
+ * The browser extension "Flytta till Accounted" (flytt-extension.ts) signs
+ * in through chrome.identity, whose redirect is https://<id>.chromiumapp.org/.
+ * Chrome hands that URL only to the extension with that id, so it is matched
+ * for the one id, as the exact root path.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -95,6 +101,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
   { pattern: /^https:\/\/dev\.squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
+  { pattern: /^https:\/\/ooeaogbjfhciekiidjaehikcbccomkmj\.chromiumapp\.org\/$/, provider: 'flytt_extension' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]
