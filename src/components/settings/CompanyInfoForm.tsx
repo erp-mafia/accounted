@@ -124,7 +124,13 @@ export function CompanyInfoForm({ settings, companyOrgNumber, onWrongCompany }: 
           help={t('registered_office_help')}
           align="baseline"
         >
+          {/* Keyed on the stored säte: the field starts from settings the
+              browser may have held since before the säte was stored somewhere
+              else (the annual report fetches a missing one from the register).
+              When the fresh settings arrive the field starts over from them,
+              so a save here cannot put the old empty value back. */}
           <SettingsInput
+            key={settings.registered_office || ''}
             id="registered_office"
             name="registered_office"
             defaultValue={settings.registered_office || ''}

@@ -8,9 +8,8 @@ import type { CompanySettings } from '@/types'
  * Säte belongs to a legal person (aktiebolag, förening); a form whose org
  * number is the owner's personnummer (enskild firma) has none, the same rule
  * the settings form uses to show the field. Only the stored
- * `registered_office` prints: unlike the annual report, an invoice never
- * falls back to the postal town (`city`), so a company that has not set its
- * säte prints nothing rather than a guess.
+ * `registered_office` prints, never the postal town (`city`): a company that
+ * has not set its säte prints nothing rather than a guess.
  */
 export function sellerRegisteredOffice(
   company: Pick<CompanySettings, 'entity_type' | 'registered_office'>,

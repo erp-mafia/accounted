@@ -13897,6 +13897,8 @@
     "loading": "Kontrollerar årsredovisningen...",
     "load_error": "Kunde inte läsa årsredovisningskontrollen",
     "save_error": "Kunde inte spara bedömningen",
+    "registered_office_fetched_title": "Säte hämtat från SCB",
+    "registered_office_fetched_description": "{office} används som säte i årsredovisningen. Ändra det under Inställningar → Företag om det inte stämmer.",
     "scope_saved": "Bedömningen har sparats",
     "save_content_first": "Spara alla textändringar först",
     "content_confirmed": "Innehållet är granskat",

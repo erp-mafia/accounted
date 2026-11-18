@@ -167,6 +167,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     ],
     'entity_type and org_number are fixed; payroll fields via PATCH /salary/settings',
   ),
+  'POST /api/settings/registered-office/from-register': covered(
+    [`PATCH ${V}/settings`, 'gnubok_update_company_settings'],
+    'a door stores the säte it is given (registered_office); asking the register for a missing one has no door',
+  ),
   'POST /api/settings/logo': gap('P3', 'invoice logo upload'),
   'DELETE /api/settings/logo': gap('P3'),
   'POST /api/settings/invoice-font': gap('P3', 'invoice font upload'),

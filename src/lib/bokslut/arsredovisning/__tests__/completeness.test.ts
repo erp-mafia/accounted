@@ -170,7 +170,20 @@ describe('validateAnnualReportCompleteness', () => {
     const result = validateAnnualReportCompleteness(value)
     const issue = result.issues.find((item) => item.code === 'AR-COMPANY-REGISTERED-OFFICE')
     expect(issue?.severity).toBe('error')
+    // Says where to enter it and that it is not the postal town.
+    expect(issue?.remediation).toContain('Inställningar → Företag')
+    expect(issue?.remediation).toContain('orten i postadressen')
     expect(result.ok).toBe(false)
+  })
+
+  it('blocks a whitespace-only säte the same way, at every stage', () => {
+    for (const stage of ['draft', 'signing', 'filing'] as const) {
+      const value = input(stage)
+      value.report.company.registered_office = '  '
+      const result = validateAnnualReportCompleteness(value)
+      expect(result.issues.find((item) => item.code === 'AR-COMPANY-REGISTERED-OFFICE')?.severity).toBe('error')
+      expect(result.ok).toBe(false)
+    }
   })
 
   it('requires confirmation that the signer roster matches Bolagsverket', () => {

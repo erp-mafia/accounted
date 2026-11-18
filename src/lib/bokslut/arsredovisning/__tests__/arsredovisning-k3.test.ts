@@ -431,15 +431,16 @@ describe('buildArsredovisningData: säte', () => {
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.company.registered_office).toBe('Sateskommunen')
-    expect(data.warnings.join('\n')).not.toContain('Säte saknas')
   })
 
-  it('falls back to the postal town with a warning while the säte is unknown', async () => {
-    const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice: null, city: 'Postorten' })
-    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
-    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
-    expect(data.company.registered_office).toBe('Postorten')
-    expect(data.warnings).toContainEqual(expect.stringContaining('Säte saknas i företagsinställningarna'))
+  it('carries no säte when none is stored: the postal town never stands in', async () => {
+    for (const registeredOffice of [null, '  ']) {
+      const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice, city: 'Postorten' })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      expect(data.company.registered_office).toBeNull()
+      expect(JSON.stringify(data)).not.toContain('Postorten')
+    }
   })
 })
 

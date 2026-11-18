@@ -629,6 +629,7 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     '/api/company/members': MEMBERS,
     'PATCH /api/onboarding/state': SETTINGS,
     'PUT /api/settings': SETTINGS,
+    '/api/settings/registered-office': SETTINGS,
     '/api/settings/collections': SETTINGS,
     '/api/settings/data-sharing': SETTINGS,
     '/api/settings/skattekonto-account': SETTINGS,

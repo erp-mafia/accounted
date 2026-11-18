@@ -70,6 +70,11 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAmountInput } from '@/lib/money'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useCompany } from '@/contexts/CompanyContext'
+import {
+  askRegisterForRegisteredOffice,
+  loadReportWithRegisteredOffice,
+} from '@/lib/bokslut/arsredovisning/registered-office-fill'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
@@ -120,6 +125,34 @@ export default function ArsredovisningPage() {
   const [error, setError] = useState<string | null>(null)
   // Bumped by "Försök igen" to load the same year again.
   const [loadAttempt, setLoadAttempt] = useState(0)
+  // A missing säte is fetched from the register while the report loads
+  // (lib/bokslut/arsredovisning/registered-office-fill.ts). What that needs
+  // from the page is read through refs, so it adds nothing to what makes the
+  // report load again: a reload replaces unsaved text.
+  const { company, role } = useCompany()
+  const companyId = company?.id ?? null
+  // Storing a säte is an owner's or admin's write, like every company
+  // setting: nobody else asks the register.
+  const mayStoreRegisteredOffice = role === 'owner' || role === 'admin'
+  const registerAskerRef = useRef<{ companyId: string | null; mayStore: boolean }>({ companyId: null, mayStore: false })
+  useEffect(() => {
+    registerAskerRef.current = { companyId, mayStore: mayStoreRegisteredOffice }
+  }, [companyId, mayStoreRegisteredOffice])
+  // The register is asked once per company and visit, not once per year
+  // picked or retry: every load that finds no säte waits for the same answer,
+  // so a year picked while the question is out still gets it.
+  const registerAnswerRef = useRef<{ companyId: string; answer: Promise<string | null> } | null>(null)
+  // A fetched säte is said once, where it came from and where to change it,
+  // also when the person has left this page by the time the register answered.
+  const announceRegisteredOfficeRef = useRef<(registeredOffice: string) => void>(() => {})
+  useEffect(() => {
+    announceRegisteredOfficeRef.current = (registeredOffice) => {
+      toast({
+        title: tStudio('registered_office_fetched_title'),
+        description: tStudio('registered_office_fetched_description', { office: registeredOffice }),
+      })
+    }
+  }, [toast, tStudio])
 
   // Editable narrative fields: persisted to arsredovisning_narratives so
   // the PDF always reflects the latest saved version and a refresh / new
@@ -272,8 +305,26 @@ export default function ArsredovisningPage() {
     // loads, and drop a stale error so the picker stays reachable.
     setLoading(true)
     setError(null)
+    const loadReport = () =>
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`).then((r) => r.json())
     Promise.all([
-      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`).then((r) => r.json()),
+      // A report without a säte: the register is asked before anything is
+      // shown (lib/bokslut/arsredovisning/registered-office-fill.ts).
+      loadReportWithRegisteredOffice({
+        loadReport,
+        askRegister: () => {
+          const { companyId: askingFor, mayStore } = registerAskerRef.current
+          if (!askingFor || !mayStore) return Promise.resolve(null)
+          if (registerAnswerRef.current?.companyId !== askingFor) {
+            const answer = askRegisterForRegisteredOffice()
+            registerAnswerRef.current = { companyId: askingFor, answer }
+            void answer.then((registeredOffice) => {
+              if (registeredOffice) announceRegisteredOfficeRef.current(registeredOffice)
+            })
+          }
+          return registerAnswerRef.current.answer
+        },
+      }),
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`).then((r) =>
         r.json(),
       ),

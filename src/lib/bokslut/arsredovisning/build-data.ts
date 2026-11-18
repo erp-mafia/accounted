@@ -46,7 +46,6 @@ import {
   loadTransitionSplitOpenings,
   noteAsset,
 } from './asset-note-figures'
-import { registeredOfficeFallbackWarning, resolveRegisteredOffice } from './registered-office'
 import { k2EquityPosts, loadEquitySpecification } from './equity-specification'
 import { K3_SPLITS, k3EquityPosts, toK3Presentation } from './k3-presentation'
 import { USER_CLASSIFIABLE_KINDS, type EquityMovementKind } from './equity-kinds'
@@ -188,7 +187,7 @@ export async function buildArsredovisningReport(
       .single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, registered_office, city, entity_type')
+      .select('company_name, org_number, registered_office, entity_type')
       .eq('company_id', companyId)
       .maybeSingle(),
     // Source-of-truth for entity_type lives on companies.
@@ -246,12 +245,12 @@ export async function buildArsredovisningReport(
   // made the whole settings query fail, so every ÅR fell back to "Bolaget"
   // with an empty org number.
   //
-  // Säte is its own column (registered_office); `city` is the postal town.
-  // Until a company has a säte, the postal town stands in with a warning
-  // (registered-office.ts holds the switch to block instead).
-  const registeredOffice = resolveRegisteredOffice(
-    settings as { registered_office?: string | null; city?: string | null } | null,
-  )
+  // Säte is its own column (registered_office), never the postal town
+  // (`city`): the two differ whenever the post goes to another town than the
+  // municipality of the seat. Without a säte the report carries none, and
+  // completeness refuses to finalise it (AR-COMPANY-REGISTERED-OFFICE).
+  const registeredOffice =
+    (settings as { registered_office?: string | null } | null)?.registered_office?.trim() || null
 
   // Previous fiscal year → jämförelsesiffror (ÅRL 3:5 §). Resolved from the
   // already-fetched period list; a TB failure downgrades to "no comparison
@@ -533,9 +532,6 @@ export async function buildArsredovisningReport(
     ...equity_specification.warnings,
     ...registerOverrideWarnings(narrative, registerTexts),
   ]
-  if (registeredOffice.fromCity && registeredOffice.value) {
-    warnings.push(registeredOfficeFallbackWarning(registeredOffice.value))
-  }
   if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
@@ -600,7 +596,7 @@ export async function buildArsredovisningReport(
       name: companyName,
       org_number: orgNumber,
       entity_type: entityType,
-      registered_office: registeredOffice.value,
+      registered_office: registeredOffice,
     },
     fiscal_period: {
       id: period.id,

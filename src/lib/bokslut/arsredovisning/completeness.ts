@@ -313,8 +313,8 @@ export function validateAnnualReportCompleteness(
       'Komplettera företagsinställningarna.',
     )
   }
-  // registered_office is the säte (never the postal town); null means the
-  // company has none and no fallback applied (registered-office.ts).
+  // registered_office is the säte, never the postal town: null means the
+  // company has none stored, and the report is not finalised without it.
   if (!report.company.registered_office?.trim()) {
     push(
       issues,
@@ -322,7 +322,7 @@ export function validateAnnualReportCompleteness(
       'error',
       'company',
       'Företagets registrerade säte saknas.',
-      'Ange säte under Inställningar → Företag.',
+      'Ange säte under Inställningar → Företag. Sätet är kommunen där företaget är registrerat och kan skilja sig från orten i postadressen.',
     )
   }
   if (!report.forvaltningsberattelse.description.trim()) {

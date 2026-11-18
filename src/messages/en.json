@@ -13897,6 +13897,8 @@
     "loading": "Checking the annual report...",
     "load_error": "Could not load the annual report check",
     "save_error": "Could not save the assessment",
+    "registered_office_fetched_title": "Registered office fetched from SCB",
+    "registered_office_fetched_description": "{office} is used as the registered office in the annual report. Change it under Settings → Company if it is not right.",
     "scope_saved": "The assessment has been saved",
     "save_content_first": "Save all text changes first",
     "content_confirmed": "The content has been reviewed",

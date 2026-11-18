@@ -122,11 +122,10 @@ export interface ArsredovisningData {
     org_number: string
     entity_type: string
     /** Företagets säte: company_settings.registered_office, the municipality
-     *  the company is registered in (never the postal town). Null when
-     *  unknown; while the default holds, the postal town stands in
-     *  with a warning (registered-office.ts). Printed on the cover, in
-     *  förvaltningsberättelsen and on the underskrifter and
-     *  fastställelseintyg place lines. */
+     *  the company is registered in (never the postal town). Null when the
+     *  company has none stored; completeness then refuses to finalise the
+     *  report. Printed on the cover, in förvaltningsberättelsen and on the
+     *  underskrifter and fastställelseintyg place lines. */
     registered_office: string | null
   }
   fiscal_period: {

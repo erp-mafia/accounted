@@ -86,6 +86,7 @@ const HAND_WRITERS: Record<string, string> = {
   'lib/company/settings-writer.ts': 'the writer',
   'lib/company/settings-service.ts': 'the settings save: gates itself, adminVerified from requireAdmin on the session door',
   'lib/company/create-company.ts': 'the row is born with the company, before there is a role to ask',
+  'lib/company/registered-office.ts': 'fills a missing säte from the register behind requireAdmin, guarded on the empty value it read; answers not_saved when no row changed',
   'app/api/sandbox/seed/route.ts': 'fills the sandbox row claim_sandbox_seed reserved',
   'app/api/v1/companies/[companyId]/salary/settings/route.ts': 'creates the missing row behind requireSettingsAdmin',
   'lib/reminders/automatic.ts': "Accounted's own column, written with the service role behind requireAdmin; answers the state it reads back",
