@@ -12441,6 +12441,8 @@
     "th_net": "Netto",
     "th_avgifter": "Avgifter",
     "th_vacation": "Semester",
+    "vacation_in_pay": "i lönen",
+    "vacation_in_pay_extra": "+ {amount} i lönen",
     "th_payslip": "Lönespec",
     "diff_new_employee": "Ny",
     "view_payslip_title": "Visa lönespecifikationen som den anställda får den",

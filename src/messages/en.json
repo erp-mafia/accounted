@@ -12441,6 +12441,8 @@
     "th_net": "Net",
     "th_avgifter": "Contributions",
     "th_vacation": "Vacation",
+    "vacation_in_pay": "in pay",
+    "vacation_in_pay_extra": "+ {amount} in pay",
     "th_payslip": "Payslip",
     "diff_new_employee": "New",
     "view_payslip_title": "View the payslip as the employee receives it",

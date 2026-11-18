@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { effectiveRow } from '@/lib/salary/effective-figures'
+import { runRowVacation } from '@/lib/salary/run-row-vacation'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -213,6 +214,12 @@ export function RunEmployeesTable({
                 const taxValue = figures.tax_withheld
                 const avgifterValue = figures.avgifter_amount
                 const netValue = figures.net_salary
+                // Semester: the accrued semesterlöneskuld, or, when the payslip
+                // pays semesterersättning with the salary (vacation_rule
+                // 'semesterersattning' accrues nothing), that amount marked as
+                // part of the pay instead of a bare 0 kr (crm#2017).
+                const vacation = runRowVacation(sre)
+                const vacationPaidOnly = vacation.accrued === 0 && vacation.paidOut !== 0
                 const basis = payBasis(sre, isDraft)
                 const hourlyInput = showInputSalary && basis.salaryType === 'hourly'
                 const editableSalary = isDraft && canWrite && basis.salaryType === 'monthly'
@@ -292,7 +299,18 @@ export function RunEmployeesTable({
                         <td className={numericTd}>{formatRunAmount(taxValue)}</td>
                         <td className={numericTd}>{formatRunAmount(netValue)}</td>
                         <td className={numericTd}>{formatRunAmount(avgifterValue)}</td>
-                        <td className={numericTd}>{formatRunAmount(sre.vacation_accrual)}</td>
+                        <td className={numericTd}>
+                          <span className="inline-flex items-center justify-end gap-2">
+                            <span>{formatRunAmount(vacationPaidOnly ? vacation.paidOut : vacation.accrued)}</span>
+                            {vacation.paidOut !== 0 && (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                {vacationPaidOnly
+                                  ? t('vacation_in_pay')
+                                  : t('vacation_in_pay_extra', { amount: formatRunAmount(vacation.paidOut) })}
+                              </span>
+                            )}
+                          </span>
+                        </td>
                       </>
                     )}
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
