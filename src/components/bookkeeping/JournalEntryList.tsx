@@ -64,6 +64,7 @@ import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
+import { isBoundedVerifikatScope } from '@/lib/bookkeeping/verifikat-search'
 import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
@@ -967,6 +968,23 @@ export default function JournalEntryList({
   // The year is app-wide context, not a page filter.
   const activeFilterCount = dialogFilterCount
 
+  // The search box says what the request it sends can find. With "Visa
+  // saknade underlag" on, the list is read by an RPC that takes the text and
+  // the voucher label only (lib/bookkeeping/missing-underlag.ts). With no
+  // fiscal year on the request (all years, or the drafts view, which spans
+  // them) the route reads no amount (isBoundedVerifikatScope).
+  const searchReadsAmounts = listMode === 'committed' && isBoundedVerifikatScope({ periodId })
+  const searchPlaceholder = showMissingOnly
+    ? t('search_placeholder_missing')
+    : searchReadsAmounts
+      ? t('search_placeholder')
+      : t('search_placeholder_all_years')
+  const searchHint = showMissingOnly
+    ? t('search_hint_missing')
+    : searchReadsAmounts
+      ? t('search_hint')
+      : t('search_hint_all_years')
+
   // When any filter or search is active we keep the filter bar mounted even
   // with zero results, so the user can edit or clear their query. The pristine
   // "no entries yet" state below only applies to an untouched, empty ledger.
@@ -1306,8 +1324,9 @@ export default function JournalEntryList({
           <ToolbarSearch
             type="text"
             inputMode="search"
-            placeholder={t('search_placeholder')}
-            aria-label={t('search_placeholder')}
+            placeholder={searchPlaceholder}
+            aria-label={searchHint}
+            title={searchHint}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             containerClassName="min-w-0 max-w-none"

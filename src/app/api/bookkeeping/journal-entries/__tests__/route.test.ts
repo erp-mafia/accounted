@@ -302,7 +302,9 @@ describe('GET /api/bookkeeping/journal-entries', () => {
 
   describe('account number search (crm#1847)', () => {
     const emptyParams = { params: Promise.resolve({}) }
-    const ACCOUNT_SELECT = '*, lines:journal_entry_lines(*), account_match:journal_entry_lines()'
+    // Four digits are an account number and an amount: both joins, both arms.
+    const ACCOUNT_SELECT =
+      '*, lines:journal_entry_lines(*), account_match:journal_entry_lines(), amount_match:journal_entry_lines()'
 
     it('finds verifikat with a line on a four-digit account, next to the text match', async () => {
       enqueue({ data: [], error: null, count: 0 })
@@ -315,7 +317,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
 
       expect(status).toBe(200)
       expect(mockSupabase.rpc).not.toHaveBeenCalled()
-      // The lines are joined a second time under their own alias, with no
+      // The lines are joined again under their own aliases, with no
       // columns: `lines` still carries every line of each verifikat.
       const selectCalls = findCalls('journal_entries', 'select')
       expect(selectCalls).toHaveLength(1)
@@ -323,10 +325,11 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       // The alias is narrowed to the account (a string, never a number)...
       const eqCalls = findCalls('journal_entries', 'eq')
       expect(eqCalls).toContainEqual(['account_match.account_number', '1630'])
-      // ...and a row matches on its text OR on having such a line.
-      const orCalls = findCalls('journal_entries', 'or')
+      // ...and a row matches on its text OR on having such a line (or, the
+      // needle being 1 630 kr too, a line of that amount).
+      const orCalls = findCalls('journal_entries', 'or').filter(([, options]) => !options)
       expect(orCalls).toHaveLength(1)
-      expect(orCalls[0][0]).toBe('description.ilike."%1630%",account_match.not.is.null')
+      expect(orCalls[0][0]).toBe('description.ilike."%1630%",account_match.not.is.null,amount_match.not.is.null')
       // The plain ilike must not also run, or it would AND the account arm away.
       expect(findCalls('journal_entries', 'ilike')).toHaveLength(0)
       // Still the caller's company and fiscal year only.
@@ -376,8 +379,30 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       expect(neqCalls).toContainEqual(['status', 'reversed'])
     })
 
-    it('leaves every search that is not exactly four digits as it was', async () => {
+    it('reads only exactly four digits as an account number', async () => {
       for (const needle of ['163', '16300', '16 30', '1630a', 'konto 1630']) {
+        reset()
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+        enqueue({ data: [], error: null, count: 0 })
+        const request = createMockRequest('/api/bookkeeping/journal-entries', {
+          searchParams: { period_id: 'period-1', search: needle },
+        })
+        await GET(request, emptyParams)
+
+        expect(String(findCalls('journal_entries', 'select')[0][0]), needle).not.toContain('account_match')
+        expect(
+          findCalls('journal_entries', 'eq').some(([column]) => String(column).startsWith('account_match')),
+          needle,
+        ).toBe(false)
+        expect(
+          findCalls('journal_entries', 'or').some(([filters]) => String(filters).includes('account_match')),
+          needle,
+        ).toBe(false)
+      }
+    })
+
+    it('leaves a search that is neither a label, an account, an amount nor a date as it was', async () => {
+      for (const needle of ['1630a', 'konto 1630', 'hyra mars', '12 500 kronor', '2026-3-15']) {
         reset()
         mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
         enqueue({ data: [], error: null, count: 0 })
@@ -388,10 +413,6 @@ describe('GET /api/bookkeeping/journal-entries', () => {
 
         expect(findCalls('journal_entries', 'select')[0][0], needle).toBe('*, lines:journal_entry_lines(*)')
         expect(findCalls('journal_entries', 'or'), needle).toHaveLength(0)
-        expect(
-          findCalls('journal_entries', 'eq').some(([column]) => String(column).startsWith('account_match')),
-          needle,
-        ).toBe(false)
         expect(findCalls('journal_entries', 'ilike'), needle).toHaveLength(1)
       }
     })
@@ -405,6 +426,270 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       await GET(request, emptyParams)
 
       expect(findCalls('journal_entries', 'select')[0][0]).toBe('*, lines:journal_entry_lines(*)')
+    })
+  })
+
+  describe('amount search', () => {
+    const emptyParams = { params: Promise.resolve({}) }
+    const AMOUNT_SELECT = '*, lines:journal_entry_lines(*), amount_match:journal_entry_lines()'
+
+    it('finds verifikat with a line of that debit or credit amount, next to the text match', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '12 500' },
+      })
+      const response = await GET(request, emptyParams)
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      // One more join of the lines, under its own alias and with no columns.
+      expect(findCalls('journal_entries', 'select')).toEqual([[AMOUNT_SELECT, { count: 'exact' }]])
+      const orCalls = findCalls('journal_entries', 'or')
+      // The alias keeps the lines whose debit or credit is the amount...
+      expect(orCalls).toContainEqual([
+        'debit_amount.eq.12500,credit_amount.eq.12500',
+        { referencedTable: 'amount_match' },
+      ])
+      // ...and a row matches on its text (as typed) OR on having such a line.
+      expect(orCalls).toContainEqual(['description.ilike."%12 500%",amount_match.not.is.null'])
+      expect(orCalls).toHaveLength(2)
+      // The plain ilike must not also run, or it would AND the amount arm away.
+      expect(findCalls('journal_entries', 'ilike')).toHaveLength(0)
+      // Still the caller's company and fiscal year only.
+      const eqCalls = findCalls('journal_entries', 'eq')
+      expect(eqCalls).toContainEqual(['company_id', 'company-1'])
+      expect(eqCalls).toContainEqual(['fiscal_period_id', 'period-1'])
+    })
+
+    it('reads the amount in every form the box promises, to the öre', async () => {
+      const forms: Array<[string, string]> = [
+        ['12500', '12500'],
+        ['12 500', '12500'],
+        ['12 500,50', '12500.5'],
+        ['12500.5', '12500.5'],
+        ['12 500 kr', '12500'],
+        ['-12500', '12500'],
+      ]
+      for (const [needle, amount] of forms) {
+        reset()
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+        enqueue({ data: [], error: null, count: 0 })
+        const request = createMockRequest('/api/bookkeeping/journal-entries', {
+          searchParams: { period_id: 'period-1', search: needle },
+        })
+        await GET(request, emptyParams)
+
+        const orCalls = findCalls('journal_entries', 'or')
+        expect(orCalls, needle).toContainEqual([
+          `debit_amount.eq.${amount},credit_amount.eq.${amount}`,
+          { referencedTable: 'amount_match' },
+        ])
+        // The text arm keeps the needle as typed, quoted: its decimal comma
+        // must not read as the or() list's separator.
+        expect(orCalls, needle).toContainEqual([`description.ilike."%${needle}%",amount_match.not.is.null`])
+      }
+    })
+
+    it('does not search for zero: every line has one side at zero', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '0,00' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'select')[0][0]).toBe('*, lines:journal_entry_lines(*)')
+      expect(findCalls('journal_entries', 'or')).toHaveLength(0)
+      expect(findCalls('journal_entries', 'ilike')).toEqual([['description', '%0,00%']])
+    })
+
+    it('counts and pages the widened set in one statement, under the other list filters', async () => {
+      const entries = [makeJournalEntry(), makeJournalEntry()]
+      enqueue({ data: entries, error: null, count: 61 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          period_id: 'period-1',
+          search: '12 500 kr',
+          series: 'B',
+          exclude_draft: 'true',
+          date_from: '2026-01-01',
+          limit: '2',
+          offset: '4',
+        },
+      })
+      const response = await GET(request, emptyParams)
+      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(response)
+
+      expect(status).toBe(200)
+      // One read: no id list is fetched first, so the exact count and the
+      // page window both apply to text matches and amount matches together.
+      expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+      expect(findCalls('journal_entries', 'range')).toEqual([[4, 5]])
+      expect(findCalls('journal_entries', 'eq')).toContainEqual(['voucher_series', 'B'])
+      expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-01-01'])
+      expect(findCalls('journal_entries', 'neq')).toContainEqual(['status', 'draft'])
+      expect(body.data).toEqual(entries)
+      expect(body.count).toBe(61)
+    })
+  })
+
+  describe('an amount is read only inside a fiscal period', () => {
+    const emptyParams = { params: Promise.resolve({}) }
+    const PLAIN_SELECT = '*, lines:journal_entry_lines(*)'
+    const aliasFilters = () =>
+      findCalls('journal_entries', 'eq').filter(([column]) => String(column).includes('_match'))
+
+    it('sends the query main sends for a number typed with no period (an order number in the order dialog)', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      // What MarkOrderBookedDialog sends once a person types: no period, no dates.
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { status: 'posted', exclude_draft: 'true', limit: '50', sort_by: 'date_desc', search: '10432' },
+      })
+      const response = await GET(request, emptyParams)
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      // No join on the lines, no filter on a join, no or(): the plain text
+      // search it was before amounts were read, over every year.
+      expect(findCalls('journal_entries', 'select')).toEqual([[PLAIN_SELECT, { count: 'exact' }]])
+      expect(findCalls('journal_entries', 'or')).toHaveLength(0)
+      expect(aliasFilters()).toHaveLength(0)
+      expect(findCalls('journal_entries', 'ilike')).toEqual([['description', '%10432%']])
+    })
+
+    it('keeps the account arm for four digits typed with no period, and adds no amount to it', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { status: 'posted', exclude_draft: 'true', sort_by: 'date_desc', search: '1930' },
+      })
+      await GET(request, emptyParams)
+
+      // The account search as crm#1847 put it live, alias for alias.
+      expect(findCalls('journal_entries', 'select')).toEqual([
+        ['*, lines:journal_entry_lines(*), account_match:journal_entry_lines()', { count: 'exact' }],
+      ])
+      expect(aliasFilters()).toEqual([['account_match.account_number', '1930']])
+      expect(findCalls('journal_entries', 'or')).toEqual([
+        ['description.ilike."%1930%",account_match.not.is.null'],
+      ])
+    })
+
+    it('reads the amount once a fiscal period bounds the same request', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          period_id: 'period-1', status: 'posted', exclude_draft: 'true', limit: '50', sort_by: 'date_desc', search: '10432',
+        },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'select')).toEqual([
+        ['*, lines:journal_entry_lines(*), amount_match:journal_entry_lines()', { count: 'exact' }],
+      ])
+      expect(findCalls('journal_entries', 'or')).toEqual([
+        ['debit_amount.eq.10432,credit_amount.eq.10432', { referencedTable: 'amount_match' }],
+        ['description.ilike."%10432%",amount_match.not.is.null'],
+      ])
+      expect(findCalls('journal_entries', 'eq')).toContainEqual(['fiscal_period_id', 'period-1'])
+    })
+
+    it('does not take a date range for a bound: it can span every year', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { exclude_draft: 'true', date_from: '2019-01-01', date_to: '2026-12-31', search: '12 500 kr' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'select')).toEqual([[PLAIN_SELECT, { count: 'exact' }]])
+      expect(findCalls('journal_entries', 'or')).toHaveLength(0)
+      expect(findCalls('journal_entries', 'ilike')).toEqual([['description', '%12 500 kr%']])
+      // The range still narrows the list, as a filter of its own.
+      expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2019-01-01'])
+      expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-12-31'])
+    })
+
+    it('keeps reading a date with no period: it is a column of the verifikat, not a probe of its lines', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { status: 'posted', exclude_draft: 'true', search: '2026-03-15' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'select')).toEqual([[PLAIN_SELECT, { count: 'exact' }]])
+      expect(findCalls('journal_entries', 'or')).toEqual([
+        ['description.ilike."%2026-03-15%",entry_date.eq.2026-03-15'],
+      ])
+    })
+  })
+
+  describe('date search', () => {
+    const emptyParams = { params: Promise.resolve({}) }
+
+    it('finds the verifikat of one bokföringsdatum, next to the text match', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '2026-03-15' },
+      })
+      const response = await GET(request, emptyParams)
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      // A date reads no lines: the select stays the list's own.
+      expect(findCalls('journal_entries', 'select')[0][0]).toBe('*, lines:journal_entry_lines(*)')
+      expect(findCalls('journal_entries', 'or')).toEqual([
+        ['description.ilike."%2026-03-15%",entry_date.eq.2026-03-15'],
+      ])
+      expect(findCalls('journal_entries', 'ilike')).toHaveLength(0)
+      expect(findCalls('journal_entries', 'eq')).toContainEqual(['fiscal_period_id', 'period-1'])
+    })
+
+    it('reads a month as its first to its last day', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '2026-02' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'or')).toEqual([
+        ['description.ilike."%2026-02%",and(entry_date.gte.2026-02-01,entry_date.lte.2026-02-28)'],
+      ])
+    })
+
+    it('narrows inside the date range of the filter dialog, never past it', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '2026-03-15', date_from: '2026-03-01', date_to: '2026-03-31' },
+      })
+      await GET(request, emptyParams)
+
+      // The dialog's bounds are ANDed filters of their own; the search arm
+      // sits inside the or() and cannot widen them.
+      expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-03-01'])
+      expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-03-31'])
+    })
+
+    it('does not read a date that does not exist', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: '2026-02-31' },
+      })
+      await GET(request, emptyParams)
+
+      expect(findCalls('journal_entries', 'or')).toHaveLength(0)
+      expect(findCalls('journal_entries', 'ilike')).toEqual([['description', '%2026-02-31%']])
     })
   })
 

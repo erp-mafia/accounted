@@ -82,6 +82,7 @@ function makeClient() {
 import {
   generateGeneralLedger,
   generateGeneralLedgerAccountPage,
+  generateGeneralLedgerArrangedPage,
   generateGeneralLedgerOverview,
   GENERAL_LEDGER_INLINE_LINES,
 } from '../general-ledger'
@@ -679,5 +680,153 @@ describe('generateGeneralLedgerAccountPage', () => {
       'rpc:get_general_ledger_account_page': [{ data: null, error: { code: '57014', message: 'timeout' } }],
     }
     await expect(generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930')).rejects.toThrow(/get_general_ledger_account_page/)
+  })
+})
+
+describe('generateGeneralLedgerArrangedPage', () => {
+  const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }
+  const lineId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+
+  function ledgerRow(i: number, date: string, voucher: number, description: string, debit: number, credit: number) {
+    return {
+      line_id: lineId(i),
+      account_number: '1930',
+      debit_amount: debit,
+      credit_amount: credit,
+      dimensions: {},
+      journal_entry_id: `e${i}`,
+      entry_date: date,
+      voucher_series: 'A',
+      voucher_number: voucher,
+      description,
+      source_type: 'manual',
+    }
+  }
+
+  // The account in ledger order. IB 10 000.
+  const ROWS = [
+    ledgerRow(1, '2026-01-05', 3, 'Kundbetalning', 12500, 0),
+    ledgerRow(2, '2026-01-20', 4, 'Hyra januari', 0, 8000),
+    ledgerRow(3, '2026-02-01', 7, 'Bankavgift', 0, 45.5),
+    ledgerRow(4, '2026-03-15', 9, 'Hyra mars', 0, 8000),
+  ]
+  const BALANCES = [22500, 14500, 14454.5, 6454.5]
+
+  /** Every read of the account answers `pages` in turn (one RPC page each). */
+  function accountMocks(pages: Array<{ before_debit?: number; before_credit?: number; lines: unknown[] }>) {
+    mockResults = {
+      fiscal_periods: pages.map(() => ({ data: PERIOD, error: null })),
+      'rpc:compute_prior_opening_balances': pages.map(() => ({
+        data: [{ account_number: '1930', debit: 10000, credit: 0 }],
+        error: null,
+      })),
+      'rpc:get_general_ledger_account_page': pages.map((page) => ({
+        data: { before_debit: 0, before_credit: 0, ...page },
+        error: null,
+      })),
+    }
+  }
+
+  it('in ledger order without a search it is the account page: the same lines and balances', async () => {
+    accountMocks([{ lines: ROWS }])
+    const paged = await generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930')
+    accountMocks([{ lines: ROWS }])
+    const arranged = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {})
+
+    expect(arranged.lines).toEqual(paged.lines)
+    expect(arranged.lines.map((l) => l.balance)).toEqual(BALANCES)
+    expect(arranged).toMatchObject({ line_count: 4, next_offset: null, matched: null })
+  })
+
+  it('reads the account in the window, under the filter, from its first line', async () => {
+    accountMocks([{ lines: ROWS }])
+    await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      dimensions: { '1': 'KS01' },
+      fromDate: '2026-01-01',
+      toDate: '2026-06-30',
+      sort: { column: 'debit', ascending: false },
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_account_page', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_account_number: '1930',
+      p_from_date: '2026-01-01',
+      p_to_date: '2026-06-30',
+      p_exclude_entry_id: null,
+      p_dimensions: { '1': 'KS01' },
+      p_after_date: null,
+      p_after_voucher: null,
+      p_after_line_id: null,
+      p_limit: 5000,
+    })
+  })
+
+  it('sorts newest first with each line still carrying the balance after it', async () => {
+    accountMocks([{ lines: ROWS }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      sort: { column: 'date', ascending: false },
+    })
+
+    expect(page.lines.map((l) => [l.voucher_number, l.balance])).toEqual([
+      [9, 6454.5], [7, 14454.5], [4, 14500], [3, 22500],
+    ])
+    expect(page.matched).toBeNull()
+  })
+
+  it('narrows by a search and sums everything it found, keeping the ledger balances', async () => {
+    accountMocks([{ lines: ROWS }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: '8 000 kr',
+    })
+
+    expect(page.lines.map((l) => [l.voucher_number, l.credit, l.balance])).toEqual([[4, 8000, 14500], [9, 8000, 6454.5]])
+    expect(page.line_count).toBe(2)
+    expect(page.matched).toEqual({ debit: 0, credit: 16000 })
+    expect(page.next_offset).toBeNull()
+  })
+
+  it('pages the arrangement by offset, with the count and the sums of all of it', async () => {
+    accountMocks([{ lines: ROWS }])
+    const first = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: 'a', sort: { column: 'credit', ascending: false }, limit: 3,
+    })
+    expect(first.lines.map((l) => l.voucher_number)).toEqual([4, 9, 7])
+    expect(first).toMatchObject({ line_count: 4, next_offset: 3, matched: { debit: 12500, credit: 16045.5 } })
+
+    accountMocks([{ lines: ROWS }])
+    const second = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: 'a', sort: { column: 'credit', ascending: false }, limit: 3, offset: 3,
+    })
+    expect(second.lines.map((l) => l.voucher_number)).toEqual([3])
+    expect(second).toMatchObject({ line_count: 4, next_offset: null, matched: { debit: 12500, credit: 16045.5 } })
+  })
+
+  it('reads a long account to its end, continuing the balance over the reads', async () => {
+    // A full read of 5 000 lines says another follows; the short one ends it.
+    const many = Array.from({ length: 5000 }, (_, i) => ledgerRow(i + 1, '2026-01-10', i + 1, `Rad ${i + 1}`, 1, 0))
+    const tail = [ledgerRow(5001, '2026-02-01', 5001, 'Sista raden', 0, 250)]
+    accountMocks([{ lines: many }, { before_debit: 5000, lines: tail }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      sort: { column: 'date', ascending: false }, limit: 2,
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_account_page', expect.objectContaining({
+      p_after_date: '2026-01-10', p_after_voucher: 5000, p_after_line_id: lineId(5000), p_limit: 5000,
+    }))
+    expect(page.line_count).toBe(5001)
+    // 10 000 + 5 000 - 250, then the line before it.
+    expect(page.lines.map((l) => [l.voucher_number, l.balance])).toEqual([[5001, 14750], [5000, 15000]])
+    expect(page.next_offset).toBe(2)
+  })
+
+  it('throws when the account cannot be read', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:get_general_ledger_account_page': [{ data: null, error: { code: '57014', message: 'timeout' } }],
+    }
+    await expect(
+      generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', { search: 'hyra' }),
+    ).rejects.toThrow(/get_general_ledger_account_page/)
   })
 })

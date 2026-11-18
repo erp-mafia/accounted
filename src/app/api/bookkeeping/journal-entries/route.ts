@@ -6,9 +6,7 @@ import { postingPort } from '@/lib/posting/port'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
-import { escapeLikePattern } from '@/lib/supabase/like-pattern'
-import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { isAccountNumber } from '@/lib/invariants/account-number'
+import { applyVerifikatSearch, readVerifikatQuerySearch, verifikatSearchJoins } from '@/lib/bookkeeping/verifikat-search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { dbError } from '@/lib/errors/db-error'
@@ -225,24 +223,19 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     return listResponse(entries, count)
   }
 
-  // A search that is an account number (four digits) also finds every
-  // verifikat with a line on that account (crm#1847). The lines are joined a
-  // second time under their own alias, filtered to the account and with no
-  // columns selected: `lines` keeps every line of the verifikat, and the
-  // search filter below asks whether the alias found anything. The database
-  // probes idx_journal_entry_lines_entry_account (journal_entry_id,
-  // account_number) once per verifikat of the filtered set, so the count and
-  // the page stay one statement and nothing is fetched to build an id list.
-  const accountSearch = search && isAccountNumber(search) ? search : null
+  // What the needle is besides text (lib/bookkeeping/verifikat-search.ts): a
+  // voucher label, an account number (crm#1847), an amount or a
+  // bokföringsdatum. The account and the amount look at the lines, through a
+  // filtered join of their own next to `lines` (verifikatSearchJoins), which
+  // applyVerifikatSearch below asks whether it found anything. The amount is
+  // read only when a fiscal period bounds the request
+  // (isBoundedVerifikatScope): with none, a number typed is searched as it
+  // was before amounts were read.
+  const needle = search ? readVerifikatQuerySearch(search, { periodId }) : null
 
   let query = supabase
     .from('journal_entries')
-    .select(
-      accountSearch
-        ? '*, lines:journal_entry_lines(*), account_match:journal_entry_lines()'
-        : '*, lines:journal_entry_lines(*)',
-      { count: 'exact' },
-    )
+    .select(`*, lines:journal_entry_lines(*)${needle ? verifikatSearchJoins(needle) : ''}`, { count: 'exact' })
     .eq('company_id', companyId)
 
   if (sortKeys.length > 0) {
@@ -321,35 +314,8 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     query = query.eq('voucher_series', seriesFilter)
   }
 
-  if (search) {
-    // Escape LIKE wildcards (\ % _) so they match literally, and cap the needle
-    // length (≤200 chars): both handled by the shared escapeLikePattern helper.
-    // The cap bounds DB work against oversized/pathological inputs (compliance
-    // A.8.28 / ASVS V1.2.5); escaping prevents silent over-matching on values
-    // like "50%". Supabase parameterises the value, so this is not about SQLi.
-    const needle = `%${escapeLikePattern(search)}%`
-    // The first thing a user searches for is the voucher's own label ("A209").
-    // A description-only match never finds it (only OTHER vouchers that
-    // mention A209 in their text), so a label-shaped needle also matches
-    // voucher_series + voucher_number. The OR is a PostgREST filter list, so
-    // the needle is double-quoted to keep commas/parentheses literal.
-    const voucher = parseVoucher(search)
-    const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-    if (voucher) {
-      query = query.or(
-        `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
-      )
-    } else if (accountSearch) {
-      // The text match stays, so the result only grows: a verifikat that
-      // mentions the digits in its text, or one with a line on the account.
-      // `account_match.not.is.null` is PostgREST's test that the filtered
-      // join found a row; inside or() it sits next to an ordinary column.
-      query = query
-        .eq('account_match.account_number', accountSearch)
-        .or(`description.ilike.${quotedNeedle},account_match.not.is.null`)
-    } else {
-      query = query.ilike('description', needle)
-    }
+  if (search && needle) {
+    query = applyVerifikatSearch(query, search, needle)
   }
 
   // Collapse correction groups (voucher-sort / search path): fold the reversed

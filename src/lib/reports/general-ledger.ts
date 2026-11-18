@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { dbError } from '@/lib/errors/db-error'
 import { getOpeningBalances } from './opening-balances'
+import { arrangeLedgerRows, type LedgerRowSort } from './general-ledger-rows'
 
 export interface GeneralLedgerLine {
   date: string
@@ -560,5 +561,68 @@ export async function generateGeneralLedgerAccountPage(
     next: rows.length >= limit && last
       ? { date: last.entry_date, voucher_number: last.voucher_number, line_id: last.line_id }
       : null,
+  }
+}
+
+/** One page of an account's lines in another order than the ledger's, or narrowed by a search. */
+export interface GeneralLedgerArrangedPage {
+  lines: GeneralLedgerLine[]
+  /** How many lines the arrangement holds over all its pages: the account's window lines, or those the search found. */
+  line_count: number
+  /** Where the next page starts, or null when this one ends the arrangement. */
+  next_offset: number | null
+  /** With a search: the debit and credit of every line it found, on all pages. Null without one. */
+  matched: { debit: number; credit: number } | null
+}
+
+/** Lines per read while an account is collected for an arrangement: the most get_general_ledger_account_page returns. */
+const GENERAL_LEDGER_ARRANGE_READ_SIZE = 5000
+
+/**
+ * One account's huvudbok lines sorted on something else than ledger order,
+ * or narrowed by a search, from `offset` on, at most GENERAL_LEDGER_PAGE_SIZE.
+ *
+ * The account's window lines are read to their end through
+ * generateGeneralLedgerAccountPage, so every line is the line the ledger
+ * view shows and carries the balance it shows there (the balance after that
+ * line in ledger order); arrangeLedgerRows then only filters and reorders
+ * them. Neither a sort on an amount nor a search on text has an index to
+ * answer it: either way every line of the account is read, here in reads of
+ * 5 000, so the cost follows the account, not the period.
+ */
+export async function generateGeneralLedgerArrangedPage(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string,
+  accountNumber: string,
+  options: LedgerScopeOptions & {
+    sort?: LedgerRowSort | null
+    search?: string | null
+    offset?: number
+    limit?: number
+  },
+): Promise<GeneralLedgerArrangedPage> {
+  const lines: GeneralLedgerLine[] = []
+  let after: GeneralLedgerCursor | undefined
+  do {
+    const page = await generateGeneralLedgerAccountPage(supabase, companyId, periodId, accountNumber, {
+      dimensions: options.dimensions,
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      after,
+      limit: GENERAL_LEDGER_ARRANGE_READ_SIZE,
+    })
+    lines.push(...page.lines)
+    after = page.next ?? undefined
+  } while (after)
+
+  const arranged = arrangeLedgerRows(lines, { sort: options.sort, search: options.search })
+  const offset = options.offset ?? 0
+  const end = offset + (options.limit ?? GENERAL_LEDGER_PAGE_SIZE)
+  return {
+    lines: arranged.rows.slice(offset, end),
+    line_count: arranged.rows.length,
+    next_offset: end < arranged.rows.length ? end : null,
+    matched: arranged.matched,
   }
 }

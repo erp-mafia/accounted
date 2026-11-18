@@ -1,0 +1,1 @@
+[2026-11-18] The verifikat search reads an amount only inside one fiscal period: its line probe measured 0.4 to 1.9 s per count on the four largest years, and 10 s plus 9.4 s (count, page) across all years of the largest company, past the 8 s timeout. A date range is no bound: it can span all years.

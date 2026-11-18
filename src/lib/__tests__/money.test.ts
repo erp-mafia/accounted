@@ -408,11 +408,19 @@ describe('parseAmountTerm', () => {
     expect(parseAmountTerm('17500.50')).toBe(17500.5)
   })
 
+  it('reads an amount with a trailing "kr", as a list or a total writes it', () => {
+    expect(parseAmountTerm('12 500 kr')).toBe(12500)
+    expect(parseAmountTerm('12500kr')).toBe(12500)
+    expect(parseAmountTerm('12 500,50 Kr')).toBe(12500.5)
+  })
+
   it('rejects non-amounts', () => {
     expect(parseAmountTerm('Testbrand')).toBeNull()
     expect(parseAmountTerm('26-27')).toBeNull()
     expect(parseAmountTerm('14000,123')).toBeNull()
     expect(parseAmountTerm('')).toBeNull()
+    expect(parseAmountTerm('kr')).toBeNull()
+    expect(parseAmountTerm('12 500 kronor')).toBeNull()
   })
 })
 

@@ -396,13 +396,14 @@ export function parseAmountInput(input: string | null | undefined): number | nul
 }
 
 /**
- * Parse "14 000", "17 500,50", "17500.50", "-17500" → magnitude (absolute
- * value); null when not an amount. \s covers NBSP/thin-NBSP thousand
- * separators from sv-SE formatting. Sign is discarded: credit notes store
+ * Parse "14 000", "17 500,50", "17500.50", "-17500", "12 500 kr" → magnitude
+ * (absolute value); null when not an amount. \s covers NBSP/thin-NBSP thousand
+ * separators from sv-SE formatting, and a trailing "kr" is what an amount
+ * copied from a list or a total carries. Sign is discarded: credit notes store
  * negative totals, and a user searching a belopp thinks in magnitudes.
  */
 export function parseAmountTerm(term: string): number | null {
-  const compact = term.replace(/\s/g, '').replace(',', '.')
+  const compact = term.replace(/\s/g, '').replace(/kr$/i, '').replace(',', '.')
   if (!/^-?\d+(\.\d{1,2})?$/.test(compact)) return null
   const value = Number(compact)
   return Number.isFinite(value) ? Math.abs(value) : null

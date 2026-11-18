@@ -143,9 +143,13 @@ export async function listMissingUnderlagPage(
   }: { order?: readonly MissingUnderlagOrderTerm[]; limit: number; offset?: number },
 ): Promise<MissingUnderlagPage> {
   const search = filters.search?.trim() || null
-  // Same search semantics as the journal list's direct query: a
-  // voucher-label-shaped needle ("A209") also matches series+number, so
-  // searching for a voucher by its own label works with the filter on.
+  // This path reads the needle itself, as text and as a voucher label: a
+  // label-shaped needle ("A209") also matches series+number, so searching
+  // for a voucher by its own label works with the filter on. The journal
+  // list's direct query reads more (an account number, an amount, a
+  // bokföringsdatum: lib/bookkeeping/verifikat-search.ts). The RPC takes
+  // none of those, so the list's search box names only the text and the
+  // label while the filter is on.
   const voucher = search ? parseVoucher(search) : null
 
   const { data, error } = await supabase.rpc('list_verifikat_missing_underlag', {
