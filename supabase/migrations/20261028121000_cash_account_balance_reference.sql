@@ -30,9 +30,9 @@
 -- use it. With the column removed again, the token, fingerprint and proofs
 -- of existing rows are unchanged by this migration.
 --
--- The six functions are restated from their live bodies (byte-identical to
--- pg_get_functiondef on prod 2026-10-28), changing only the observation keys
--- and, in persist_bank_sync_result, adding the reference.
+-- The six functions are restated from their live bodies. The only changes
+-- are the observation keys and, in persist_bank_sync_result, the added
+-- reference.
 -- pg-test: covered-by tests/pg/bank-sync-result.pg.test.ts
 -- pg-test: covered-by tests/pg/cash-account-twin-heal.pg.test.ts
 

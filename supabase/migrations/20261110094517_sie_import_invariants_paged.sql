@@ -42,10 +42,10 @@
 -- migration transaction (precedent 20260710101000, 20261027060517,
 -- 20261031110200). The build holds a SHARE lock on journal_entries: reads go
 -- on, writes to journal_entries wait for the build. It scans the heap once
--- (2.43 M rows on production on 2026-10-29) and sorts only the posted
--- imported vouchers. 20261031110200 built two full indexes on this table and
--- its migration took 32 s on production (2026-10-30); expect writes to pause
--- for roughly 10 to 20 s for this one. lock_timeout keeps the build from
+-- and sorts only the posted imported vouchers, so it is cheaper than the two
+-- full indexes 20261031110200 built on this table; how long writes pause
+-- still follows the size of journal_entries, so on a large table expect
+-- some seconds. lock_timeout keeps the build from
 -- queueing behind a long transaction, where every later write to
 -- journal_entries would queue behind it; on a timeout the migration fails and
 -- is re-run (precedent 20261012100500, 20261016001100).

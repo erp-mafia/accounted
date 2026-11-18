@@ -6,12 +6,11 @@
 --
 -- Why it is needed: when more than one live company claims an org number,
 -- the ombud connection goes to the one company where a member has proven with
--- their own BankID that Skatteverket lets them represent the number (founder
--- decision 2026-11-08). The proof is a skattekonto read for that number that
--- Skatteverket answered on the person's session. Both credential kinds read
--- the skattekonto under the same endpoint label, and a call Accounted makes
--- as ombud is no proof of who owns the number, so the row has to say which
--- one made it.
+-- their own BankID that Skatteverket lets them represent the number. The
+-- proof is a skattekonto read for that number that Skatteverket answered on
+-- the person's session. Both credential kinds read the skattekonto under the
+-- same endpoint label, and a call Accounted makes as ombud is no proof of who
+-- owns the number, so the row has to say which one made it.
 --
 -- The table stays append-only: the immutability triggers are untouched and
 -- earlier rows keep NULL (they cannot be updated, and none of them is counted

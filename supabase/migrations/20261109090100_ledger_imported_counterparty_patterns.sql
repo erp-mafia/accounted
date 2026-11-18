@@ -4,11 +4,12 @@
 -- resource) learned counterparty patterns only from bank rows booked in
 -- Accounted. A company that migrated its books (SIE or a provider import,
 -- journal_entries.source_type 'import') brought its whole year of
--- verifikat, which counted toward account usage but taught no counterparty:
--- of the 780 live companies with 50+ imported verifikat in the last 12
--- months, the 313 with fewer than 5 counterparty templates had no company
--- reaching 5 patterns and 261 had none at all. Their agents booked as if the
--- company had no past.
+-- verifikat, which counted toward account usage but taught no counterparty.
+-- A newly migrated company has few bank rows booked in Accounted, so it
+-- had few counterparty patterns or none at all, however much history it
+-- had imported: who it buys from and sells to, on which accounts and with
+-- which VAT, was in the books and went unread. The agent of such a company
+-- booked as if the company had no past.
 --
 -- New section imported_counterparty_patterns, a second basis next to
 -- counterparty_patterns (which is unchanged):
@@ -42,17 +43,16 @@
 --   accounts, a mix or no moms line read as unknown (null). BAS roles per
 --   the swedish-vat reference (BAS 26xx series).
 --
--- The RPC returns counts, not verdicts: ledger-context.ts applies the share
--- floor and the two-verifikat minimum and fills the slots the bank-row
--- patterns leave, so Accounted's own bookings keep precedence and explicit
--- mapping rules still outrank both. Measured read-only on production before
--- writing: 257 of the 313 then reach 5+ patterns; a time holdout (learn on
--- the first 70 % of each company's imported verifikat, test on the rest)
--- finds the learned account on 96 % of later verifikat and the learned VAT
--- on 98 %.
+-- The RPC returns counts, not verdicts. ledger-context.ts decides what a
+-- count is worth:
+--   * it applies the share floor and the two-verifikat minimum;
+--   * it fills only the slots the bank-row patterns leave, so Accounted's
+--     own bookings keep precedence over the imported history;
+--   * explicit mapping rules still outrank both the bank-row patterns and
+--     the imported ones.
 --
--- The rest of the body is the 20261101003600 definition (md5 of prosrc on
--- production equal to that file's body before this was written), unchanged.
+-- The rest of the body is the 20261101003600 definition, unchanged: the
+-- imported_counterparty_patterns section is the only addition.
 -- Same signature, so CREATE OR REPLACE keeps the grants; restated as the
 -- last definition did. Functions only, no data change.
 --

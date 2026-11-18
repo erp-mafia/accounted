@@ -4,8 +4,8 @@
 -- instead of every journal line.
 --
 -- Why: every report summed journal_entry_lines at read time. A year of
--- 50 000 verifikat is 150 000 lines (prod already holds a company with three
--- such years). get_trial_balance_aggregates took ~850 ms for that year under
+-- 50 000 verifikat is 150 000 lines, and a company can hold several such
+-- years. get_trial_balance_aggregates took ~850 ms for that year under
 -- the lines' RLS policy, which re-checks the parent entry once per line, and
 -- still ~200 ms index-only with no RLS at all; a resultatrapport reads two
 -- years and a KPI page three aggregates, so they took 3-4 s. The sum of a

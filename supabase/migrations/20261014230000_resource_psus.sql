@@ -1,7 +1,7 @@
 -- The PSU-ID a bank resource was created with, kept so that every later call
 -- to the same resource sends it again.
 --
--- Open Payments (written answer, 2026-10-14): PSU-ID is a required header in
+-- Open Payments: PSU-ID is a required header in
 -- production, and when a resource was created with a personnummer as PSU-ID,
 -- several banks require the same PSU-ID on every later call to it (reading
 -- the consent's accounts and transactions, a payment's status in a decoupled

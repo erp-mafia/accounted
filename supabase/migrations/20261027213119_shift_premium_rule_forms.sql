@@ -38,8 +38,7 @@
 -- Additive for every existing row: amount_form defaults to percent_of_hourly
 -- where premium_percent is already set, both validity dates are NULL (no
 -- bound), and every existing line has neither provenance column. Both tables
--- are small (shift_premium_rules has no production rows; salary_line_items a
--- few thousand), so the CHECKs are added validated in one step.
+-- are small, so the CHECKs are added validated in one step.
 
 ALTER TABLE public.shift_premium_rules
   ADD COLUMN IF NOT EXISTS amount_form text NOT NULL DEFAULT 'percent_of_hourly',

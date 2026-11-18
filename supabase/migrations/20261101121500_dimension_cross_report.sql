@@ -6,11 +6,11 @@
 -- Why a new summary: a line tagged region NORR and channel WEB counts once
 -- under dimension 1 and once under dimension 2 in ledger_dimension_days, so
 -- those rows cannot say how much NORR made through WEB (per-dimension sums
--- cannot be intersected, 20261023093900). Reading the lines instead was
--- measured on production on 2026-10-31: 51 ms warm for the company with the
--- most two-dimension lines (9 752 result lines in 1 053 verifikat), and
--- 431 ms warm for the largest company's year if all its 70 000 result lines
--- carried tags, against the 100 ms database budget (scripts/perf/bench).
+-- cannot be intersected, 20261023093900). Reading the lines instead costs
+-- what the company's tagged result lines cost: fine for a company with few
+-- of them, but past the 100 ms database budget (scripts/perf/bench) for a
+-- large company's year once most of its result lines carry tags.
+--
 -- Keyed by the line's whole tag set, any two dimensions are a GROUP BY over
 -- one company's rows: a day of lines sharing a tag set and account is one
 -- row.
@@ -31,11 +31,11 @@
 -- build cron, /api/reports/ledger-account-days/build/cron). Until then the
 -- report reads the lines. The build reads only the verifikat that carry a
 -- tag (ledger_dimension_entries), so a company without tags is instant and
--- the largest tagged company takes well under a second.
+-- a heavily tagged one takes well under a second.
 --
 -- Function bodies of ledger_days_apply_lines are verbatim from
--- 20261023093900 (identical to prod, md5 checked 2026-10-31) with the tag
--- set block added.
+-- 20261023093900 with the tag set block added; nothing else in them
+-- changes.
 --
 -- pg-test: tests/pg/dimension-cross.pg.test.ts
 

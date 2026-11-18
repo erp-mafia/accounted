@@ -7,8 +7,8 @@
 -- rule lived in application code only. The provider import broke it: the
 -- Visma mapper fell back to 'draft' for an issued invoice that carried no send
 -- or booking flag, and the import's link step then attached the source's
--- booking verifikat. 59 such invoices exist in prod, all from Visma imports.
--- Skicka on one of them booked the sale a second time.
+-- booking verifikat. Such invoices exist, all from Visma imports, and Skicka
+-- on one of them books the sale a second time.
 --
 -- 1. Repair: those invoices were issued in the source system (Visma's
 --    /customerinvoices lists issued invoices only; drafts live under

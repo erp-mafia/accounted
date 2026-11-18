@@ -14,7 +14,7 @@
 -- A forecast row is not räkenskapsinformation: it never reaches a verifikat
 -- and nothing here touches the books. That is why API and MCP callers write
 -- rows directly under the forecast:write scope instead of staging them for
--- approval (decision 2026-10-28).
+-- approval.
 --
 -- Rules:
 --   * Idempotent upserts: an outside system names each row by

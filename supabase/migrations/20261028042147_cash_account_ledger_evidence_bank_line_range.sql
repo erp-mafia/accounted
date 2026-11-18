@@ -6,13 +6,13 @@
 -- and it is not leakproof, so under RLS the planner must run the policy on
 -- journal_entry_lines (an EXISTS back to journal_entries, one lookup per line)
 -- before it may apply the regex. Every line of every verifikat up to the last
--- bank row was fetched and policy-checked, more than half of them only to be
--- thrown away. On production (read only, 2026-10-28) the largest company
--- (34 600 verifikat, 61 700 bank lines out of 147 600) took 2.0 s warm
--- through RLS and 4.1 s on a first, cold run without RLS; the call peaks at 7.8 s,
--- next to the 8 s statement timeout of the authenticated role, and four
--- "Ledger evidence: canceling statement due to statement timeout" reached
--- PostHog on 2026-10-26 and 2026-10-27.
+-- bank row was fetched and policy-checked, and every line that is not a
+-- bank line was then thrown away.
+--
+-- The cost therefore followed the whole ledger, not its bank lines. On a
+-- large ledger the call came close to the 8 s statement timeout of the
+-- authenticated role, and at times passed it
+-- ("Ledger evidence: canceling statement due to statement timeout").
 --
 -- What changes. Both joins onto journal_entry_lines also say
 -- account_number >= '1900' AND account_number < '2000'. Text comparison is
@@ -20,13 +20,13 @@
 -- idx_journal_entry_lines_entry_account (journal_entry_id, account_number):
 -- only the 19xx lines are fetched and policy-checked. The regex stays, so the
 -- set of lines read is exactly the one before (every value it matches lies
--- in that range, in the database's ICU en-US collation as in C). Measured on
--- the same company as a generic plan through RLS: the ledger read
--- policy-checked 147 600 lines over 736 000 buffers and now checks 61 700
--- over 411 000; the whole call went from 2.0 s to 0.97 s. Nothing else in
--- the body changes; it is copied from 20261010210000, the only migration that
--- defines the function. SECURITY INVOKER, the grants and the comment stay as
--- they are (CREATE OR REPLACE keeps grants and comment).
+-- in that range, in the database's ICU en-US collation as in C). The policy
+-- now runs for the bank lines only, so the call costs what the company's
+-- bank lines cost.
+--
+-- Nothing else in the body changes; it is copied from 20261010210000, the
+-- only migration that defines the function. SECURITY INVOKER, the grants and
+-- the comment stay as they are (CREATE OR REPLACE keeps grants and comment).
 
 CREATE OR REPLACE FUNCTION public.cash_account_ledger_evidence(p_company_id uuid)
 RETURNS TABLE (

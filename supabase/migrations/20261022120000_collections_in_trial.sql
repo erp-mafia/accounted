@@ -1,8 +1,8 @@
--- Collections joins the trial (founder decision 2026-10-22, reversing the
--- paid-plan-only decision of 2026-10-04 and 20261012030000): a company in
--- its trial can activate its collections provider and hand invoices over
--- like a paying one. lib/entitlements/keys.ts PAID_PLAN_ONLY_CAPABILITIES is
--- now empty, so TRIAL_CAPABILITIES (which this VALUES list must match) gains
+-- Collections joins the trial (reversing the paid-plan-only rule of
+-- 20261012030000): a company in its trial can activate its collections
+-- provider and hand invoices over like a paying one.
+-- lib/entitlements/keys.ts PAID_PLAN_ONLY_CAPABILITIES is now empty, so
+-- TRIAL_CAPABILITIES (which this VALUES list must match) gains
 -- collections.
 --
 -- 1. seed_trial_capability_grants() from its latest body (20260909100300)

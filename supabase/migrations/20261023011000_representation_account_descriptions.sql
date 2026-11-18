@@ -1,9 +1,9 @@
 -- Replace the old seed descriptions of 6072, 7631 and 7632 in every kontoplan
 -- that still holds them word for word (accounted#92).
 --
--- !765 (live via !781 on 2026-10-22) corrected the BAS reference texts in
--- src/lib/bookkeeping/bas-data (class-6-other-external.ts and
--- class-7-personnel.ts). A chart row copies the description when the account
+-- The BAS reference texts in src/lib/bookkeeping/bas-data
+-- (class-6-other-external.ts and class-7-personnel.ts) were corrected on
+-- 2026-10-22. A chart row copies the description when the account
 -- is added, so every chart seeded before kept the old text. Two of them are
 -- wrong: 6072's says only the part above a deductible amount is
 -- non-deductible, while a meal is not income-tax deductible at all since 2017
@@ -12,11 +12,11 @@
 -- chart. The kontoplan and the MCP list-accounts tool show these texts to
 -- people and agents.
 --
--- Prod when this was written (read-only count, 2026-10-23): the old 6072 text
--- in 1 257 charts, the old 7631 text in 1 081, the old 7632 text in 1 079;
--- 61, 52 and 52 of them belong to companies archived by a migration reset,
--- which stay as they are (company_migration_resets). 6071's old text is in no
--- chart, so it is not listed.
+-- Left as they are:
+--   * the charts of companies archived by a migration reset, which the
+--     update skips (company_migration_resets);
+--   * 6071: its old text is in no chart, so the account is not listed
+--     below.
 --
 -- Only a description that still equals the old seed text exactly changes: a
 -- text a person, an agent or an import wrote stays. The account name (a

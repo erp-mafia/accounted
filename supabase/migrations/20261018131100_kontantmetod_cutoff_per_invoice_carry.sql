@@ -12,7 +12,7 @@
 -- time through the cash entry, while the excluded vändning never took the
 -- year-1 moms back out. Moms was declared twice, once in each year.
 --
--- The replacement is what Fortnox and Visma do (founder decision 2026-10-03):
+-- The replacement is what Fortnox and Visma do:
 -- one year_end verifikat per open invoice, dated on period_end, linked
 -- through invoices.journal_entry_id / supplier_invoices.
 -- registration_journal_entry_id exactly like a faktureringsmetod
@@ -22,8 +22,8 @@
 -- 20260813124509 applies to legacy rows only; nothing new is hidden from the
 -- VAT functions, which stay unchanged so a filed legacy figure cannot move.
 --
--- No data migration: production has never posted a cut-off. Self-hosted
--- legacy rows (the four old kinds) keep validating and keep their figures.
+-- No data migration: legacy rows (the four old kinds) keep validating and
+-- keep their figures.
 --
 -- What this migration adds, all additive:
 --   (a) the marker table learns the invoice it carries: invoice_id or

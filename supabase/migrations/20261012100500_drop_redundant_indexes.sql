@@ -1,5 +1,4 @@
--- Drop 34 redundant indexes in public (the two largest alone are 116 MB on
--- prod).
+-- Drop 34 redundant indexes in public.
 --
 -- Each one is redundant next to an index that stays: every write pays to
 -- maintain it, autovacuum scans it, and it holds shared_buffers, for reads
@@ -14,11 +13,11 @@
 --      sandbox cleanup deletes auth.users rows, and the foreign-key probes of
 --      those deletes are what scan it.
 --
--- Evidence (prod, read-only, 2026-10-11): index stats run from 2026-09-11, a
--- 30-day window with no read replica, so idx_scan is complete. None of these
--- is unique, primary, backing a constraint, the replica identity or clustered,
--- and nothing depends on it. Every foreign key a dropped index served keeps a
--- covering index (tests/pg/drop-redundant-indexes.pg.test.ts asserts that).
+-- Evidence: the index statistics cover a 30-day window with no read replica,
+-- so idx_scan is complete. None of these is unique, primary, backing a
+-- constraint, the replica identity or clustered, and nothing depends on it.
+-- Every foreign key a dropped index served keeps a covering index
+-- (tests/pg/drop-redundant-indexes.pg.test.ts asserts that).
 --
 -- Deliberately kept: idx_journal_entry_lines_entry_id (hot, asserted by
 -- tests/pg/db-advisor-lockdowns.pg.test.ts), idx_audit_log_company_id (btree
@@ -30,8 +29,8 @@
 -- (cost_centers, projects, tax_table_rates, extension_toggles), so the two
 -- apply in either order.
 --
--- IF EXISTS everywhere: several names exist only on prod, created outside the
--- migration history; fresh-from-migrations databases never had them.
+-- IF EXISTS everywhere: several names were created outside the migration
+-- history, so a fresh-from-migrations database never had them.
 --
 -- Plain DROP INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
 -- migration transaction (precedent 20260710101000). A drop is catalog-only,

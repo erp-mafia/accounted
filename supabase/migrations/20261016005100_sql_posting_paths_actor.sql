@@ -1,6 +1,5 @@
 -- The SQL posting paths record WHO committed their verifikat (attribution
--- step 2, Phase 1 "the actor record on every write", founder-accepted
--- 2026-10-15).
+-- step 2, Phase 1 "the actor record on every write").
 --
 -- Four RPCs post a verifikat themselves through commit_journal_entry and
 -- passed it no actor, so committed_actor_type / committed_actor_label stayed

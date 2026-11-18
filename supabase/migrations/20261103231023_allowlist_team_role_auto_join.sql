@@ -3,9 +3,9 @@
 -- A white-label brand puts its byrå's people on brand_signup_allowlist so they
 -- can create an account on the brand domain. The allowlist only opened the
 -- door: membership of the byrå team was a separate team_members insert that
--- ops did by hand after noticing the signup. Owners who signed up waited up to
--- six days without the byrå view (2026-11-03: three such owners), and their
--- clients' companies were already sitting in the team.
+-- ops did by hand after noticing the signup. Owners who signed up waited
+-- without the byrå view until then, and their clients' companies were already
+-- sitting in the team.
 --
 -- The allowlist now says what the person is, not only that they may sign up:
 --
@@ -201,8 +201,8 @@ CREATE POLICY "brand_signup_allowlist_insert" ON public.brand_signup_allowlist
 -- =============================================================================
 
 -- After the triggers, so an owner who already confirmed but was never added
--- joins now (none in production on 2026-11-04; the update is the same rule
--- applied once to the rows that predate it).
+-- joins now (the update is the same rule applied once to the rows that
+-- predate it).
 UPDATE public.brand_signup_allowlist
 SET team_role = 'owner'
 WHERE note = 'Byrå owner'

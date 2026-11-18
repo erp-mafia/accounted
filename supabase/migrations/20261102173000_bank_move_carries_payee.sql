@@ -32,7 +32,7 @@
 -- other caller (callback, renewal, twin repair) keeps the strict rules.
 --
 -- Everything else in the function is byte-identical to its definition in
--- 20261101180000 (the definition live in production on 2026-11-02).
+-- 20261101180000 (the installed definition).
 --
 -- pg-test: covered-by tests/pg/bank-account-selection.pg.test.ts
 

@@ -11,8 +11,8 @@
 -- to 'posted'. Done for the whole batch, every imported verifikat is active
 -- again while the import says 'undone', and the user is stuck: the batch
 -- entries can never be deleted (retain_sie_batch_entry) and the undo will
--- not run again. That is how one company ended up with an "undone" import
--- whose 99 verifikat were all posted.
+-- not run again. That is how an "undone" import ends up with all of its
+-- verifikat posted.
 --
 -- This trigger guards the state itself rather than one caller: an entry of
 -- an SIE import that is undoing or undone never goes back from 'reversed'

@@ -1,9 +1,9 @@
 -- Match on arrival: an inbox item's proposal that a bank row already paid it.
 -- pg-test: skip (additive nullable columns, CHECKs and an index only: no trigger, function or policy)
 --
--- Production, last 90 days: 47% of the supplier invoices entered were already
--- paid when they were entered, and 36% of payments were marked paid by hand
--- with no bank row, which is where double bookings come from. The bank-row
+-- Many supplier invoices are already paid when they are entered, and many
+-- payments are marked paid by hand with no bank row, which is where double
+-- bookings come from. The bank-row
 -- matchers run only when a bank row arrives, and only against invoices
 -- already registered; nothing looked in the bank when an invoice or a receipt
 -- arrived. src/lib/documents/bank-match now does, with the bank feed's own

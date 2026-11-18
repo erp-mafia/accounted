@@ -1,7 +1,7 @@
 SELECT set_config('lock_timeout', '5s', true);
 
 -- Purchase-category codes are children of the posting port's business-event
--- categories (decided 2026-10-17: one category list). A code is now
+-- categories (one category list). A code is now
 -- '<port key>.<item>', e.g. 'expense.software.saas' under expense.software,
 -- so it has at least three segments, where 20261017000000 allowed exactly
 -- two ('software.saas'). The list itself stays in
@@ -13,9 +13,9 @@ SELECT set_config('lock_timeout', '5s', true);
 -- is always a child of a port key, never the port key itself, and a value
 -- stored here is one a business event can carry as its category.
 --
--- Nothing is stored in the old shape: 20261017000000 and this file reach
--- prod in the same merge (both ride integration/inbox-2026-10-16), and the
--- column was added without a backfill. Were a two-segment value ever stored,
+-- Nothing is stored in the old shape: 20261017000000 and this file are
+-- applied together, and the column was added without a backfill. Were a
+-- two-segment value ever stored,
 -- the VALIDATE in 20261017123200 fails the job rather than keep it. Added
 -- NOT VALID and validated there, in a separate transaction, so this file
 -- never scans the table under the ALTER's lock.

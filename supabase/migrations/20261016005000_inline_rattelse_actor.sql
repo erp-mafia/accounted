@@ -1,5 +1,5 @@
 -- Inline rättelse records WHO acted, not only which user (attribution step 2,
--- Phase 1 "the actor record on every write", founder-accepted 2026-10-15).
+-- Phase 1 "the actor record on every write").
 --
 -- journal_entry_rattelse_log kept the acting user as a uuid (actor) and
 -- nothing else, so the behandlingshistorik (BFNAR 2013:2 p. 9.16) and an

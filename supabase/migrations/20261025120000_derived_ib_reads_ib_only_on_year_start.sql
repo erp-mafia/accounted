@@ -8,14 +8,14 @@
 -- period movement: only the period's linked IB leaves it. The derived IB of
 -- the next year did not. It ranked them as IB verifikat, so on an account
 -- with an earlier IB they counted nowhere, and on one without they became its
--- opening balance. Prod on 2026-10-25: 73 such verifikat in 11 companies, 5
--- of them live; in one, a 210 000 kr loan repayment was missing from next
--- year's IB, with the difference absorbed on 2099.
+-- opening balance. Such verifikat exist: a loan repayment tagged that way
+-- is missing from the next year's IB on its account, and the difference is
+-- absorbed on 2099.
 --
 -- The door is closed: 20261006121003 and the MCP is_opening_balance check
--- both require the year's first day, and all 1 333 other posted IB verifikat
--- on prod are dated on it. A verifikat tagged opening_balance on any other day
--- is now read as what it is, ordinary history. Both paths change together;
+-- both require the year's first day, and every other posted IB verifikat is
+-- dated on it. A verifikat tagged opening_balance on any other day is now
+-- read as what it is, ordinary history. Both paths change together;
 -- tests/pg/prior-opening-balances-summaries.pg.test.ts holds them equal.
 
 -- 1 ---------------------------------------------------------------------------

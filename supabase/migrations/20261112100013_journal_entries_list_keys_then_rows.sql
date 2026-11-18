@@ -3,13 +3,12 @@
 -- The list RPC answers one page of verifikat (20 by default) and the size of
 -- the whole filtered set. It selected je.* for every verifikat of the year,
 -- pushed those wide rows through COUNT(*) OVER () and through the sort, and
--- only then cut the page: for the largest company in production (79 121
--- verifikat in the open year) 610 to 840 ms for every page of the list,
--- measured as that company's user on 2026-11-12. The three OR arms (the
--- year's own verifikat, and the payments and credit notes booked in another
--- year for an invoice of this one) also kept the planner from reading the
--- year through its own index: it bitmap-ANDed the company's 154 000 entries
--- with the year's.
+-- only then cut the page, so every page of the list cost as much as reading
+-- the whole year, which is slow for a company with a very large year. The
+-- three OR arms (the year's own verifikat, and the payments and credit notes
+-- booked in another year for an invoice of this one) also kept the planner
+-- from reading the year through its own index: it bitmap-ANDed all of the
+-- company's entries with the year's.
 --
 -- Same rows, same order, same total. What changes is what is carried:
 --   - `candidates` is the same set as before, written as its two disjoint
@@ -22,11 +21,10 @@
 --     top-N sort of it.
 --   - The full row and its lines are read for the rows of the page alone.
 --
--- Checked against production before the merge (read-only): on the 25 fiscal
--- years with the most verifikat, corrections or cross-year payments (358 026
--- rows) the old predicate and this one select exactly the same ids, and the
--- same page and total come back, in 190 ms where the old shape took 420 ms
--- inline and 610 to 840 ms as the function.
+-- Checked on the fiscal years with the most verifikat, corrections or
+-- cross-year payments: the old predicate and this one select exactly the same
+-- ids, and the same page and total come back, several times faster than from
+-- the old function.
 --
 -- Same 12-arg signature as 20260927201017, so CREATE OR REPLACE keeps the
 -- existing GRANTs. An empty page still answers no row at all (and so no

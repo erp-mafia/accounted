@@ -37,8 +37,8 @@
 -- announces each verifikat it posts with journal_entry.committed from
 -- TypeScript, so no new event appears: it only can no longer be lost. SIE
 -- imports, their undo and provider migrations post without this RPC and stay
--- silent (DECISIONS.md 2026-10-08). The company row lock this RPC takes first
--- serialises commits per company, so these rows commit in sequence order
+-- silent. The company row lock this RPC takes first serialises
+-- commits per company, so these rows commit in sequence order
 -- within a company.
 --
 -- Webhook deliveries for the event are still queued by the bus handler after
@@ -46,12 +46,12 @@
 -- reconcile deliveries against.
 --
 -- The CREATE UNIQUE INDEX scans event_log once (all NULL in the new column)
--- and blocks writes to it for that scan: about 1.17M rows / 763 MB heap on
--- prod (2026-10-15). Plain, not CONCURRENTLY: migrations run inside a
--- transaction (precedent 20260901140000). lock_timeout keeps the ALTER and the
--- build from queueing behind a long transaction, where every later write to
--- event_log would queue behind them; on a timeout the migration fails and is
--- re-run (precedent 20261012100500).
+-- and blocks writes to it for that scan, which grows with the table.
+-- Plain, not CONCURRENTLY: migrations run inside a transaction (precedent
+-- 20260901140000). lock_timeout keeps the ALTER and the build from queueing
+-- behind a long transaction, where every later write to event_log would
+-- queue behind them; on a timeout the migration fails and is re-run
+-- (precedent 20261012100500).
 SELECT set_config('lock_timeout', '5s', true);
 
 ALTER TABLE public.event_log

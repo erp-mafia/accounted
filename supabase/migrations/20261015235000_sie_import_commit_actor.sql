@@ -5,7 +5,7 @@
 -- chunks a worker writes later, often under a cron. write_sie_job_entries
 -- posted them with a plain draft-to-posted UPDATE, so committed_actor_type,
 -- committed_actor_label and commit_method stayed NULL and the audit rows fell
--- back to 'user' (prod, 30 days: all 1,019,894 'import' entries NULL).
+-- back to 'user' (every 'import' entry posted that way has them NULL).
 --
 -- Now:
 --   * submitSIEJob (sie-jobs.ts) seals the submitting actor into the job

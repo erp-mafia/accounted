@@ -8,7 +8,7 @@
 -- without a number until the user typed one by hand.
 --
 -- Body copied from 20260901100000_revoke_anon_execute_on_definer_writes.sql
--- (the latest definition; identical to prod on 2026-11-01). Only the allocation
+-- (the latest definition). Only the allocation
 -- step changes: lock the counter row, walk forward to the first number not
 -- taken in the company, assign it, and move the counter past it. A unique
 -- violation from a concurrent manual insert of the same number is caught and

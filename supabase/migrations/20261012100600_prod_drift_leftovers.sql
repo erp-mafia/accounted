@@ -8,7 +8,7 @@
 --    Nothing calls it, EXECUTE is service_role only since 20260901100000,
 --    and it cannot work: it inserts invoices without company_id, which is
 --    NOT NULL. 20260901100000 revoked it and left the drop to a migration of
---    its own (DECISIONS.md, 2026-09-01).
+--    its own.
 --
 -- 2. public.update_reconciliation_session_counts(): production-only
 --    SECURITY DEFINER trigger function, executable by PUBLIC, anon and

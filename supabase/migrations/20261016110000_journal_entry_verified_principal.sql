@@ -1,5 +1,5 @@
 -- The verified principal of a commit, beside the asserted actor (building
--- blocks plan, Phase 1; record-only, founder decision 2026-10-16).
+-- blocks plan, Phase 1; record-only).
 --
 -- committed_actor_type, committed_actor_label and commit_method say who the
 -- application says committed a verifikat (20260619120000, and the attribution

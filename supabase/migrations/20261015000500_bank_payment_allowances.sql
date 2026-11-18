@@ -1,16 +1,16 @@
 -- A hard monthly cap on bank payments sent through the payment initiation
 -- provider (Open Payments), with a per-company override and a way to ask for
--- more (founder decision 2026-10-14: the provider prices per payment and our
--- own pricing is not set, so the beta includes 10 payments per company and
--- Stockholm calendar month). Payment files (betalfil, pain.001) never reach
--- the provider and are not capped.
+-- more. The default is 10 payments per company and Stockholm calendar
+-- month, and a signing that would pass the cap is refused
+-- (BANK_PAYMENTS_ALLOWANCE_EXCEEDED). Payment files (betalfil, pain.001)
+-- never reach the provider and are not capped.
 --
 -- The count itself is not stored: it is read from payment_orders (the orders
 -- that reached the provider, src/lib/payments/usage.ts), so it cannot drift.
 -- Two tables hold only what the count cannot tell:
 --
 --   company_bank_payment_allowances  the number of payments a month a company
---     may send when it is not the default (10). A founder raises a cap by
+--     may send when it is not the default (10). An operator raises a cap by
 --     inserting or updating the row as the service role. A company never
 --     raises its own cap: members may read their company's row, and a
 --     browser session has no INSERT, UPDATE or DELETE (no policy and no
@@ -19,7 +19,7 @@
 --     betalningar" under Inställningar, Bankbetalningar). The row is written
 --     by POST /api/payments/allowance-requests as the service role, which
 --     also mails support; members read their company's requests. handled_at
---     is set by a founder once answered.
+--     is set by an operator once answered.
 --
 -- No audit trigger: neither table is räkenskapsinformation or a booking
 -- decision (the payments themselves keep their events in

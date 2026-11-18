@@ -2,7 +2,7 @@
 -- MFA.
 -- pg-test: tests/pg/api-keys-require-mfa-session.pg.test.ts
 --
--- The hole (verified in production 2026-11-02): `authenticated` holds INSERT
+-- The hole: `authenticated` holds INSERT
 -- and UPDATE on public.api_keys, and the permissive policies only ask for
 -- user_id = auth.uid() and an owner/admin role. MFA is enforced in the app
 -- (withRouteContext, the middleware), never in the database. Whoever knows

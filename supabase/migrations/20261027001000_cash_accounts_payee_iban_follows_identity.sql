@@ -45,11 +45,11 @@
 --      identity was that IBAN then. Rows that print another account's IBAN
 --      for any other reason (the 2026-09-04 backfill, typing, a connection
 --      creating a row for an IBAN another row prints) keep it: their intent
---      is unknown, and the settings flag shows them. One row on prod on
---      2026-10-26. Companies that are a migration-reset source are skipped
---      (their rows are immutable by trigger). The company lock is taken
---      waiting first, so bank_configuration_writer_guard's NOWAIT lock does
---      not fail the migration while a bank sync holds it.
+--      is unknown, and the settings flag shows them. Companies that are a
+--      migration-reset source are skipped (their rows are immutable by
+--      trigger). The company lock is taken waiting first, so
+--      bank_configuration_writer_guard's NOWAIT lock does not fail the
+--      migration while a bank sync holds it.
 
 CREATE OR REPLACE FUNCTION public.cash_accounts_payee_iban_follows_identity()
 RETURNS trigger

@@ -12,8 +12,8 @@
 --     not a verifikat that names the row in its bank_booking_context.
 --   * Two bookings of the same row that both pass the gate before either is
 --     posted (a double submit, two tabs, an agent and a person) are both
---     posted: nothing in the database compares them. Production holds 22 rows
---     with two posted verifikat booked from each (left as they are here).
+--     posted: nothing in the database compares them. Rows with two posted
+--     verifikat booked from each exist (left as they are here).
 --
 -- The verifikat already names the bank rows it books, in the transaction that
 -- posts it: guard_bank_booking_context requires every 'bank_transaction'

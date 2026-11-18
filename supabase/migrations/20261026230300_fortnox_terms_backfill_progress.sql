@@ -1,6 +1,6 @@
 -- crm#1245: progress of the one-off Fortnox payment-terms backfill.
 --
--- Customers and suppliers imported from Fortnox before !747/!874 all got
+-- Customers and suppliers imported from Fortnox by earlier versions all got
 -- 30-day terms. The fortnox-terms-backfill cron reads each card's terms from
 -- Fortnox and writes them where the card is still on 30. A company with tens
 -- of thousands of cards takes many runs, so each company's cursor and outcome

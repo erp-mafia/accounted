@@ -7,19 +7,19 @@
 --      (twice for a document in the folder being paged);
 --   2. arkiv_document_day(...), the same, once per document dated;
 --   3. the verifikat's date, one journal_entries_pkey probe per booked
---      document. journal_entries is 3.0 M rows under random uuid keys, so
---      each probe lands on a cold index leaf and a cold heap page.
+--      document. journal_entries is a large table under random uuid keys,
+--      so each probe lands on a cold index leaf and a cold heap page.
 -- 20261027185323 made step 3 a probe (it was a scan of every company's
 -- entries); the cost still follows the company's whole archive, with a large
--- constant. On production (read-only, as a member of the company with the
--- most documents: 15 751 documents, 15 633 of them booked, 54 734 verifikat):
---   arkiv_document_page, one folder, 26 rows:  916 to 1 957 ms, 50 500 buffers
---   arkiv_document_type_counts, no year:       802 ms, 38 900 buffers
---   of which the 15 633 verifikat-date probes alone: about 550 ms
--- Both run on every Arkiv view. At ten times the archive that is 9 to 20 s
--- against an 8 s statement timeout: the page stops opening for the largest
--- companies first. Since 2026-09-26 the two ran 49 969 times, mean 0.93 s,
--- slowest calls cut off at the timeout.
+-- constant:
+--   * arkiv_document_page reads and dates every document of the company to
+--     return one page of one folder;
+--   * arkiv_document_type_counts does the same to count them, also when no
+--     year is asked for and no date is needed;
+--   * the verifikat-date probes are the largest single part of the cost.
+-- Both run on every Arkiv view. The time grows in step with the archive, so
+-- the page runs into the statement timeout as an archive grows: it stops
+-- opening for the companies with the most documents first.
 --
 -- Now one function, arkiv_document_rows, reads the archive once and both
 -- callers select from it:
@@ -32,20 +32,20 @@
 --     2 000 booked documents or more. Below that the per-document probe is
 --     cheaper (at most 2 000 probes, about 70 ms) and a company with a large
 --     ledger and a handful of documents does not pay for a scan of its ledger.
---     Measured: 54 734 entries scan in 27 ms, the largest ledger (154 336) in
---     75 ms, against 550 ms for 15 633 probes;
+--     Above it, one range scan of even a very large ledger takes a fraction
+--     of the time the probes took;
 --   * the counts skip dates entirely when no year is asked for.
--- The same call on production with this body: 208 ms cold, all 15 633 rows
--- dated, 37 700 buffers. The cost still grows with the company's archive, at
--- roughly a fifth of the old constant: ten times the largest archive is about
--- one to two seconds, inside the timeout. Bounding a page by the page (an
--- index on a stored document date) needs that date kept on write from three
--- tables; that is a read model, noted in the MR as the next step if a company
--- passes a few hundred thousand documents.
+-- The cost still grows with the company's archive, at roughly a fifth of
+-- the old constant, which leaves a wide margin to the statement timeout.
+-- Bounding a page by the page (an index on a stored document date) needs
+-- that date kept on write from three tables; that is a read model, and
+-- the next step if a company passes a few hundred thousand documents. It
+-- is not built here: this migration changes how the archive is read, not
+-- what is stored.
 --
 -- arkiv_effective_doc_type and arkiv_document_day had no other caller
--- (pg_proc, views, policies and indexes checked on production) and are
--- dropped: the type rule and the date rule now have one home each, below.
+-- (pg_proc, views, policies and indexes checked) and are dropped: the type
+-- rule and the date rule now have one home each, below.
 -- Signatures and results of the two public functions are unchanged
 -- (tests/pg/arkiv-folder-pages.pg.test.ts).
 

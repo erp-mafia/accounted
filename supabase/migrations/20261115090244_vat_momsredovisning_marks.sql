@@ -6,12 +6,12 @@
 -- against the skattekonto). The rutor leave such a verifikat out, and the
 -- Moms page counts the period as settled and offers no momsredovisning of its
 -- own. Intent is not recorded on manual and imported verifikat, and every
--- arithmetic narrowing of the shape broke real momsredovisningar (decision
--- 2026-09-20, #2805; a sales-based rule tried for crm#1849 took a year-end
--- voucher that clears the year's VAT for a correction). A correction that
--- moves output VAT to 1650 next to a sales correction has the same shape, so
--- that tail gets the explicit per-verifikat answer the 2026-09-20 decision
--- left as the follow-up.
+-- arithmetic narrowing of the shape broke real momsredovisningar (#2805; a
+-- sales-based rule tried for crm#1849 took a year-end voucher that clears
+-- the year's VAT for a correction). A correction that moves output VAT to
+-- 1650 next to a sales correction has the same shape as a momsredovisning,
+-- so that tail gets an explicit per-verifikat answer in place of another
+-- rule.
 --
 -- vat_momsredovisning_marks is append-only, like vat_check_reviews: the
 -- latest row per verifikat wins. 'not_momsredovisning' makes both shapes skip

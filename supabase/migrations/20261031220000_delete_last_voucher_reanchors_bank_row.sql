@@ -7,8 +7,8 @@
 -- voucher in the series (an undo of the un-booking), 20260920190000 sets the
 -- original back to 'posted' but leaves the row released. The verifikat books
 -- the money; the row sits in Att bokfora (is_business IS NULL) and asks to be
--- booked again, which books the same money twice. On prod 2026-10-31: four
--- rows in two companies, the oldest from 2026-08-16.
+-- booked again, which books the same money twice. Rows in that state exist;
+-- this migration does not repair them.
 --
 -- The fix, inside the storno branch only:
 --   1. When the original is a bank verifikat (source_type 'bank_transaction',

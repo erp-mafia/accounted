@@ -5,7 +5,7 @@
 -- trial balance, huvudbok, resultaträkning) and by entry_date (the derived
 -- opening balance, the momsdeklaration). An entry dated outside the year it
 -- references is counted in one year by the first and in another by the
--- second, so the reports disagree. Prod holds 710 such entries (2026-10-24):
+-- second, so the reports disagree. Such entries exist from earlier writers:
 -- SIE imports from before the import's date guard, stornos and corrections
 -- from before storno-target.ts checked the reversal date, and payments in
 -- seeded demo companies. Every writer in the code is fixed, but the rule
@@ -35,8 +35,8 @@
 --
 -- Both raise a registered code (lib/errors/structured-errors.ts), so the
 -- user reads its Swedish sentence: ENTRY_DATE_OUTSIDE_FISCAL_PERIOD and
--- FISCAL_PERIOD_DATES_BLOCKED. The existing 710 entries are a data repair
--- (storno and rebook in the right year), not part of this migration.
+-- FISCAL_PERIOD_DATES_BLOCKED. The entries that already exist are a data
+-- repair (storno and rebook in the right year), not part of this migration.
 --
 -- SECURITY INVOKER like enforce_period_lock: the period and the original are
 -- read with the caller's rights. A caller always sees its own company's

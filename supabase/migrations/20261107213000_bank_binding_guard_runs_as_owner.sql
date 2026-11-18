@@ -6,10 +6,10 @@
 -- posted_entries_naming_bank_row (SECURITY INVOKER), runs under the
 -- journal_entries select policy. jsonb @> is not leakproof, so under that
 -- policy Postgres may not use the GIN index for the bank-context half of the
--- probe: in production on 2026-11-07 it read about 116,000 pages per moved row
--- (1.24 s) as `authenticated`, against 0.7 ms as the table owner. One
--- customer's move of 1,060 rows timed out five times after 20261107100200,
--- and any move of more than a handful of rows by a person would.
+-- probe: as `authenticated` it reads a large part of the table for every
+-- moved row, where the table owner answers the same probe from the index.
+-- The cost is paid once per moved row, so a move of more than a handful of
+-- rows by a person timed out.
 --
 -- What changes. The trigger function runs as its owner (SECURITY DEFINER),
 -- as cash_transaction_is_movable and observe_cash_account_company, which it

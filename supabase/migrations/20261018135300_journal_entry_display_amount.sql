@@ -24,11 +24,11 @@
 -- No index can serve it (it reads other tables, so it is STABLE, never
 -- IMMUTABLE). Under SECURITY INVOKER every RLS-protected table it reads runs
 -- its policy's user_company_ids() once per call, and that per-call function
--- startup, not the line scan, is what the sort spends its time on: on prod
--- total_amount already costs about 0.5 ms per row (a 3,000-voucher year about
--- 1.7 s; a 37,000-voucher year exceeds the 8 s statement timeout), and an
--- invoker version of this function reads two such tables (lines and
--- cash_accounts) and measured 1.4x total_amount.
+-- startup, not the line scan, is what the sort spends its time on:
+-- total_amount already costs a fraction of a millisecond per row (seconds
+-- for a year of a few thousand vouchers; a very large year exceeds the 8 s
+-- statement timeout), and an invoker version of this function reads two such
+-- tables (lines and cash_accounts) and measured 1.4x total_amount.
 --
 -- So it is SECURITY DEFINER with ONE explicit visibility check: it re-reads
 -- the stored entry by id and answers only when that entry's company is one of
@@ -37,9 +37,9 @@
 -- the row value passed in. A forged row value (a direct call with another
 -- company's entry id) gets NULL, and the caller learns nothing RLS would hide:
 -- the lines and cash accounts of an entry it may read are readable to it too.
--- Measured on 20,000 vouchers as a member: 0.4x to 0.6x of total_amount, with
--- results identical to the invoker version. A caller without a user JWT (anon,
--- a bare service-role client) gets NULL; the verifikat list always reads with
+-- Measured as a member it costs 0.4x to 0.6x of total_amount, with results
+-- identical to the invoker version. A caller without a user JWT (anon, a
+-- bare service-role client) gets NULL; the verifikat list always reads with
 -- the user's session. search_path is pinned empty per project convention
 -- (migration 20260304191528); the body fully qualifies every reference.
 --

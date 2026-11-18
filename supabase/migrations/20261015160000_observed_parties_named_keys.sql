@@ -6,8 +6,8 @@
 -- that ranking at 1000 (the statement-timeout bound of 20260921141539, kept).
 -- Callers asked for 5000 and silently got 1000, so a party whose keys ranked
 -- below the cut showed no ledger stats, sorted last, and defaulted to the
--- supplier role whatever side of the ledger it sits on. In production 34
--- companies reach the cap (2026-10-15).
+-- supplier role whatever side of the ledger it sits on. Companies with more
+-- than 1000 keys reach the cap.
 --
 -- p_keys names keys to return whatever their rank, next to the unchanged top
 -- list. With p_keys NULL the result is identical to before. The cost sits in

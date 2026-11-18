@@ -4,9 +4,9 @@
 -- The Hem row "Verifikat utan underlag", the sidebar badge, the VAT close
 -- check and the MCP tool all call this RPC. It tested seven NOT EXISTS
 -- conditions per posted verifikat and summed every candidate's lines before
--- filtering: for a company with 60 000 verifikat the planner probed the
--- documents index 28 000 times behind a cross-tenant source_type bitmap and
--- the call took ~240 ms, most of Hem's load time.
+-- filtering: for a company with a large ledger the planner probed the
+-- documents index once per candidate behind a cross-tenant source_type
+-- bitmap, and the call was most of Hem's load time.
 --
 -- Now the needs-doc verifikat are read once, from a partial index that holds
 -- exactly them, every NOT EXISTS is a hash anti join against a
@@ -14,10 +14,10 @@
 -- an amount: all the missing ones under a min_amount, the page's otherwise. The conditions are those of 20261011203300 with one
 -- deliberate narrowing: a document and a "no underlag required" waiver count
 -- only when they belong to the verifikat's own company. Another company's
--- file is not this company's underlag, the narrowing can only surface a
--- warning, never hide one, and production holds no document attached
--- across companies (checked 2026-10-23). Without it each of those two arms
--- is a probe per verifikat. Pinned by
+-- file is not this company's underlag, and the narrowing can only surface
+-- a warning, never hide one. Without the narrowing each of those two arms
+-- is a probe per verifikat instead of a hash anti join against the
+-- company's own set. Pinned by
 -- tests/pg/verifikat-without-documents-rpc.pg.test.ts and
 -- tests/pg/document-surfaces-unification.pg.test.ts. Same signature:
 -- CREATE OR REPLACE keeps the grants; they are restated.
@@ -27,7 +27,7 @@
 -- from the index's still answers the same, only without the index.
 
 -- The invoice-payment arm reads a company's payment rows; until now only
--- invoice and transaction ids were indexed (3 000 rows in production).
+-- invoice and transaction ids were indexed.
 CREATE INDEX IF NOT EXISTS idx_invoice_payments_company_id ON public.invoice_payments (company_id);
 
 -- The posted verifikat that need an underlag, with what the count and the

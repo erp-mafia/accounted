@@ -1,16 +1,16 @@
 -- Drop six tables that were never used and the retired bookkeeping digest.
 --
--- Prod evidence (2026-10-11): tax_table_rates, extension_toggles,
--- metered_events, connector_peppol_submissions, cost_centers and projects all
--- hold 0 rows, and no app code reads or writes any of them.
+-- tax_table_rates, extension_toggles, metered_events,
+-- connector_peppol_submissions, cost_centers and projects hold no rows, and
+-- no app code reads or writes any of them.
 -- notification_settings.email_digest_enabled has had no reader since the
--- digest was retired on 2026-09-24 (DECISIONS.md).
+-- digest was retired on 2026-09-24.
 --
 -- pg-test: covered-by tests/pg/drop-unused-tables.pg.test.ts
 
--- 0. Fail closed if prod moved since the evidence above: refuse to drop a
---    table that has gained rows or a journal_entry_lines column that has
---    gained values. Raising here rolls the whole migration back.
+-- 0. Fail closed: refuse to drop a table that holds rows or a
+--    journal_entry_lines column that holds values. Raising here rolls the
+--    whole migration back.
 DO $guard$
 DECLARE
   t text;
@@ -180,8 +180,8 @@ $function$;
 REVOKE ALL ON FUNCTION public.erase_user_personal_data(uuid) FROM PUBLIC, anon, authenticated, service_role;
 
 -- 2. Legacy dimension registries, replaced by dimensions/dimension_values
---    (20260702084500). Prod alone carries journal_entry_lines.cost_center_id
---    and project_id (uuid, FK to these tables, indexed, 0 non-null rows): no
+--    (20260702084500). journal_entry_lines.cost_center_id and project_id
+--    (uuid, FK to these tables, indexed, never filled) may exist too: no
 --    repo migration ever created them, hence IF EXISTS so a replay passes.
 --    The text columns cost_center and project are live (the legacy mirror kept
 --    by lineDimensionColumns()) and are not touched.

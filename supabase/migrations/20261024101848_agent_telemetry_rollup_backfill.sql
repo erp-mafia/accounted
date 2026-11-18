@@ -5,6 +5,6 @@
 -- Its own file so the tables and the RPC stay in place if this one fails: the
 -- events cleanup cron then rolls the missing days a few per night, oldest
 -- first. 181 days is the cron's 180-day retention plus the day the last purge
--- may have cut into. On prod this reads about a million rows (~1-2 minutes);
--- on a fresh database it reads none.
+-- may have cut into. On a database with months of telemetry this takes
+-- minutes (it reads every event of those days); on a fresh one it reads none.
 SELECT public.rollup_agent_telemetry(now() - interval '181 days', 400);

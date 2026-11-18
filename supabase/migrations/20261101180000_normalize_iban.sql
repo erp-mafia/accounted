@@ -11,7 +11,7 @@
 -- expression swapped for the call and nothing else. An IBAN that is blank after
 -- the spaces go reads NULL everywhere now. Five sites had no nullif, so a blank
 -- read '' there: each sits behind a test that the IBAN is present, or compares
--- with IS DISTINCT FROM against one that is, and prod stores no blank IBAN.
+-- with IS DISTINCT FROM against one that is, and no stored IBAN is blank.
 -- resolve_bank_ingest_route hashes the value into a short-lived route token,
 -- where a NULL IBAN stays NULL. Nothing here rewrites a row.
 --

@@ -25,10 +25,10 @@
 -- Editing a live converted draft afterwards is not re-checked (the trigger
 -- only fires on status and converted_from_id), as before.
 --
--- Read-only check on prod 2026-10-15 (non-archived companies): 25 quotes,
--- 5 with a live converted invoice, at most one live conversion per source
--- (the index guaranteed it), none above its quote's net, so every existing
--- row satisfies the new rule.
+-- Existing rows satisfy the new rule: until now the unique index guaranteed
+-- at most one live conversion per source, and no live conversion bills
+-- more than its quote's net. No row is rewritten and none is left in a
+-- state the guard would refuse.
 --
 -- The plain index idx_invoices_converted_from_id stays and serves the sum.
 

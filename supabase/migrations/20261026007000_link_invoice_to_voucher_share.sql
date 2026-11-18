@@ -46,8 +46,8 @@
 -- WHAT CHANGES FOR A CALL WITHOUT p_amount: only a verifikat that already
 -- carries payment rows for other invoices. It used to be read at its full
 -- side again (and could settle a second invoice with the same amount); now it
--- is read at what it has left. Read-only check on production before this
--- change: no row link_invoice_to_voucher ever wrote would have been refused.
+-- is read at what it has left.
+--
 -- Every other outcome, the order of the guards, the codes and their details
 -- are unchanged, and so is everything the function writes: one
 -- invoice_payments row, the invoice's paid state and, on the SEK-booked
@@ -67,11 +67,11 @@
 -- only when a share is stated, so a link without one reads the same against a
 -- database that does not have this migration yet.
 --
--- Body: the installed definition (20261018210300, byte-identical to
--- production's prosrc on 2026-10-25) plus only the changes above. Tenant
--- guard, attribution, link basis, business-event linking, lock order,
--- SECURITY DEFINER, search_path, grants and the comment's existing text are
--- kept. No table change, no trigger touched.
+-- Body: the installed definition (20261018210300) plus only the changes
+-- above.
+-- Kept: the tenant guard, attribution, link basis, business-event linking,
+-- lock order, SECURITY DEFINER, search_path, grants and the comment's
+-- existing text. No table change, no trigger touched.
 --
 -- What this does NOT do: record an invoice as written off (status
 -- 'written_off') against a verifikat booked elsewhere. That is the

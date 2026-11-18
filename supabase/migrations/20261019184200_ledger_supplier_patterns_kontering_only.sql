@@ -10,10 +10,10 @@
 -- 20260928150100), and it recurs on every invoice whatever the invoice
 -- bought. So it always had the highest count or tied with the cost row, and
 -- the account_number tiebreak then picked '2641' over any 4xxx-7xxx account.
--- Measured on production before this migration (12-month window, archived
--- and sandbox companies excluded): 502 of the 1196 supplier patterns that
--- ledger_context showed, in 141 companies, named 26xx, 3740, 244x or 19xx
--- as the dominant account (437 of them 26xx).
+-- The same count put 3740, 244x and 19xx forward for other suppliers: rows
+-- that say how an invoice was rounded, owed or paid, not what it bought. A
+-- large share of the supplier patterns shown in ledger_context named 26xx
+-- or one of those as the dominant account.
 --
 -- The counterparty branch of the same function had this fixed in
 -- 20260708110000 (19xx and 26xx left out of the contra); the supplier branch

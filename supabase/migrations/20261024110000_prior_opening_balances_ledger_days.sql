@@ -2,12 +2,12 @@
 --
 -- Why: a fiscal year with no linked IB verifikat opens on every earlier line
 -- (getOpeningBalances behind saldobalans, huvudbok, balansrapport and
--- resultatrapport; the KPI report; the byrå overview). None of the 13
--- companies over 20 000 verifikat has an IB verifikat on its current year, so
--- each of those reports summed every prior journal line: 7.3 s on prod for
--- the largest (154 000 verifikat) under the lines' RLS policy, 0.56 s for a
--- 15-year company. The summaries (20261023093900_ledger_account_days) already
--- hold those sums per account and day.
+-- resultatrapport; the KPI report; the byrå overview). A company with a
+-- large ledger often has no IB verifikat on its current year, so each of
+-- those reports summed every prior journal line under the lines' RLS
+-- policy, which can take seconds and grows with every year of history. The
+-- summaries (20261023093900_ledger_account_days) already hold those sums
+-- per account and day.
 --
 -- What it returns is unchanged, to the öre (prior_opening_balance_lines,
 -- 20261001213328): per balance-sheet account (class 1-2), the posted lines
@@ -16,18 +16,18 @@
 -- The summaries count the posted and reversed entries of every kind, so the
 -- sum is theirs less the lines of the entries that rule leaves out: reversed
 -- entries, stornos and IB verifikat, read directly through the partial index
--- below (none for most companies; the largest such set on prod is 37 000
--- entries). Whether an account's IB counts is decided the same way, by line
--- counts: the summaries' lines before the IB day less the left-out ones. An
--- amount counts as 0 when NULL, as it does in the summaries; prod has no NULL
--- amounts.
+-- below (none for most companies). Whether an account's IB counts is
+-- decided the same way, by line counts: the summaries' lines before the IB
+-- day less the left-out ones.
+--
+-- An amount counts as 0 when NULL, as it does in the summaries.
 --
 -- The summaries answer no filter and a filter on one string value. Anything
 -- else (several values, the empty object) keeps the line path, which is the
 -- function as it was.
 --
 -- SECURITY DEFINER, like verifikat_without_documents: the lines' RLS policy
--- re-checks the parent entry once per line, which was most of the 7.3 s. The
+-- re-checks the parent entry once per line, which was most of the cost. The
 -- caller's access is checked here instead, and an API-role caller outside the
 -- company gets no rows, as RLS gave them before.
 

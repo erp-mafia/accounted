@@ -44,9 +44,8 @@
 -- (src/lib/observability/trace-column.ts), so a missing column never fails a
 -- write.
 --
--- Locks (prod 2026-11-09: pending_operations ~90k rows, 120 MB heap;
--- suggestion_log ~33k rows, 35 MB; business_events ~30k rows, 11 MB; a full
--- heap scan of each measured 70 to 320 ms):
+-- Locks (the three tables are small enough that a full heap scan of each
+-- takes well under a second):
 --   * ADD COLUMN without a default is a catalog change; it does not rewrite.
 --   * The CHECKs are NOT VALID: every existing row is NULL, so a validation
 --     scan under the ALTER's ACCESS EXCLUSIVE lock would prove nothing. New

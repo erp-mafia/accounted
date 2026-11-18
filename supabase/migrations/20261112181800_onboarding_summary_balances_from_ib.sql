@@ -10,9 +10,9 @@
 -- and +2 000 in 2024, IB 1630 = 7 000 and -1 000 in 2025) read 13 000 here
 -- where /skattekonto and the balance sheet read 6 000.
 --
--- Prod 2026-11-12, read only: of the 149 companies with two or more IB
--- verifikat and something on 1630, 133 got a different skattekonto balance
--- from this function than from the floored read, median gap 7 851 kr.
+-- Most companies with two or more IB verifikat and something on 1630 got a
+-- different skattekonto balance from this function than from the floored
+-- read.
 --
 -- The floor is public.account_ib_floor (20261101180100), the rule the bank
 -- reconciliation and the skattekonto status already read: the latest posted

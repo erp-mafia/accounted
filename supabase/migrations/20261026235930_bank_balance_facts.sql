@@ -5,9 +5,9 @@
 -- reported beside them, never against the books. An account whose opening
 -- balance never reached the books, or whose real payments were ignored, reads
 -- "Banken och bokföringen stämmer" while its balance is off by the whole
--- amount. Prod 2026-10-26: 993 of 1,479 bank accounts differ from the bank's
--- own balance, 160 of them only by the opening balance or ignored rows, which
--- the movement verdict cannot see.
+-- amount. Many bank accounts differ from the bank's own balance, a part of
+-- them only by the opening balance or ignored rows, which the movement
+-- verdict cannot see.
 --
 -- The balance check (lib/reconciliation/bank-balance-check.ts) compares the
 -- balance the bank reported with the booked balance on the same day and

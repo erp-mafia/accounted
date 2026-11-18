@@ -7,17 +7,15 @@
 -- hourly completion pass (complete-invoice-lines.ts, migrations
 -- 20260921073428 and 20260921135834) fetches the rows later. That pass left
 -- out every draft, on the premise that "a draft without rows is a draft
--- someone is still writing, not an import shortfall". Production disproves
--- it: on 2026-10-15 every row-less draft with a non-zero total in a
--- non-archived company was an untouched import (160 Fortnox drafts in 11
--- companies, 29 of them in the reporting company, which ran both systems in
--- parallel because its unsent invoices came over without rows and with no
--- VAT rate). No company without a provider connection holds one.
+-- someone is still writing, not an import shortfall". The premise does not
+-- hold: a row-less draft with a non-zero total is an untouched import (an
+-- unsent invoice that came over without rows and with no VAT rate), and no
+-- company without a provider connection holds one.
 --
 -- A draft written in Accounted has its rows, or a total of 0: the totals are
 -- computed from the rows. So the four functions below take a row-less draft
 -- when its total is not 0, and keep leaving the empty in-app draft alone
--- (21 Bokio drafts are empty at the source too: total 0, no rows). Nothing
+-- (a draft that is empty at the source too has total 0 and no rows). Nothing
 -- else changes, byte for byte: the bodies are restated from 20260921135834
 -- (claim_invoice_completion_work, invoice_completion_block_status) and
 -- 20260921073428 (save_invoice_completion_page,

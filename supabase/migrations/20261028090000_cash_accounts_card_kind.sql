@@ -6,8 +6,8 @@
 --
 --   cash_accounts.kind ('bank' | 'card', default 'bank')
 --     Every existing row stays 'bank' (bank, till and PSP clearing are still
---     told apart by ledger range), so no backfill. Production held no 2xxx
---     cash account when this was written, so the shape CHECK below holds for
+--     told apart by ledger range), so no backfill. No 2xxx cash account
+--     existed when this was written, so the shape CHECK below holds for
 --     every existing row.
 --
 --   cash_accounts.card_issuer, cash_accounts.card_last4

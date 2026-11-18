@@ -49,21 +49,21 @@
 -- returned as counted_opening_balances (an added key) so the momsredovisning
 -- matcher reads the same decision.
 --
--- Measured on production 2026-10-21 (read-only, non-archived, non-sandbox),
--- placing each entry in its company's VAT period. Of the opening balances
--- that carry 26xx declaration lines, 244 are dated on their period's first day
--- and now stay out. 38 are dated inside their period: 23 (22 companies, all
--- SIE imports with nothing earlier in the period) still count; 15 stay out
--- because the period's earlier verifikat are in the books (6 year-end
--- roll-forwards into a räkenskapsår starting mid-quarter, 4 companies; 9 SIE
--- imports that also brought those verifikat, 3 companies). 16 entries tagged
--- opening_balance that book a resultatkonto (4 companies) are read as the
--- ordinary verifikat they are; none of their figures moves. Of the IB chains,
--- 16 stornos were dropped by the 2650 shape while their IB counted (the
--- crm#1333 class). No chain member is dated apart from its IB. Every storno or
--- rättelse pair outside the IB chains is classified the same on both sides
--- today (38 330 import pairs, 650 bank pairs and so on), so nothing else
--- moves. The 2650/1650 shape and the skattekonto shape are NOT narrowed: they
+-- What this means for books already kept:
+--   * an opening balance with 26xx declaration lines dated on its period's
+--     first day now stays out;
+--   * one dated inside its period still counts when nothing earlier in the
+--     period is in the books (a SIE import that starts mid-period);
+--   * one dated inside its period stays out when the period's earlier
+--     verifikat are in the books (a year-end roll-forward into a
+--     räkenskapsår starting mid-quarter, or a SIE import that also brought
+--     those verifikat);
+--   * an entry tagged opening_balance that books a resultatkonto is read as
+--     the ordinary verifikat it is;
+--   * a storno that the 2650 shape dropped while its IB counted (the
+--     crm#1333 class) now follows its IB.
+--
+-- The 2650/1650 shape and the skattekonto shape are NOT narrowed: they
 -- still see every entry outside the IB chains.
 --
 -- B. -------------------------------------------------------------------------
@@ -71,24 +71,24 @@
 -- Why: a SQL function is planned without its parameter values (PG 17), so
 -- `= ANY (p_accounts)` is a linear scan of a 70-element array wherever it
 -- appears, and shape 1's EXISTS against vat_lines ran as a nested loop over
--- vat_lines for every verifikat: in one quarter of a company with 23 778
--- verifikat, 12 594 x 18 547 row checks. Shape 2 called
--- skattekonto_shape_accounts() once per line it probed. The function took
--- 48 s for that quarter on production (2026-10-21, read-only); the API's
--- statement timeout is 8 s, so every month and quarter failed.
+-- vat_lines for every verifikat: the period's verifikat times its VAT lines
+-- in row checks. Shape 2 called skattekonto_shape_accounts() once per line
+-- it probed. For a company with tens of thousands of verifikat a year the
+-- function ran far past the API's 8 s statement timeout, so its months and
+-- quarters all failed.
 --
 -- Now: the account lists become a small lookup table (account_lists), joined
 -- by hash; every line of the period's verifikat is read once into one row of
 -- flags per verifikat (shape_flags), one flag per former EXISTS with the same
 -- predicate; the shapes, the totals and the drill-down filter on those flags;
--- the constants are MATERIALIZED, so the function runs once. Measured on
--- production with the function's own planning (a prepared statement on a
--- generic plan, warm cache): that quarter 47.6 s before, 0.54 s now, the
--- whole year (79 121 verifikat) 1.6 s. Results are identical by construction
--- and were compared on production (read-only CTE copies of the old body and
--- of this one with the old opening-balance rule held): 70 company-periods
--- incl. the largest company, 160 shaped verifikat and 511 account totals gave
--- identical JSON, and 40 drill-downs identical rows.
+-- the constants are MATERIALIZED, so the function runs once.
+--
+-- Under the function's own planning (a prepared statement on a generic
+-- plan) a whole year of such a company stays well inside the timeout.
+--
+-- Results are identical by construction, and the old body and this one
+-- (with the old opening-balance rule held) were compared side by side:
+-- identical JSON for the totals and identical rows for the drill-downs.
 --
 -- Bodies are 20261015030000 apart from: the ib_chain CTE and its filter in
 -- non_settlement_entries, the opening-balance exemption widened from the IB

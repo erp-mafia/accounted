@@ -15,7 +15,7 @@
 -- no window without a policy.
 --
 -- Left out on purpose (follow-up):
---   * webhooks: open MR !904 rewrites "Members can view company webhooks";
+--   * webhooks: pending work rewrites "Members can view company webhooks";
 --     altering it here could undo that change depending on merge order.
 --   * companies, teams, pending_operations, stripe/shopify/woocommerce/
 --     zettle_connections, suggestion_log: the flagged policy is INSERT-only

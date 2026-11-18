@@ -6,9 +6,9 @@
 -- links CTEs, which have no index: the planner took the CTEs' one-row
 -- estimates and probed every link for every verifikat on the account, for
 -- each linked row, twice (the window filter reads the anchor once per bound).
--- A company with 6 148 verifikat on 1930, 122 linked rows and 1 811 links
--- ran past the 8 s statement timeout, so its bank reconciliation failed on
--- every load (prod, 2026-10-24), and two more companies took 1 to 4 s.
+-- A company with thousands of verifikat on 1930 and many links per linked
+-- row ran past the 8 s statement timeout, so its bank reconciliation failed
+-- on every load.
 --
 -- The anchor is now a grouped join, the shape get_bank_reconciliation_items'
 -- link_anchor already has: per row, the latest entry_date among the

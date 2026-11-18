@@ -6,7 +6,7 @@
 -- advisor (lint 0028, anon_security_definer_function_executable) still lists
 -- 66 functions the anon key can reach as POST /rest/v1/rpc/<name>.
 --
--- State before this migration (read-only against production, 2026-10-26):
+-- State before this migration:
 --
 --   * 53 of the 66 return `trigger` (all plpgsql). They are not callable over
 --     PostgREST: invoked directly, plpgsql refuses with "trigger functions can

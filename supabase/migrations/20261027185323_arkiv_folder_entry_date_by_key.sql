@@ -7,10 +7,10 @@
 -- These SQL functions run on a generic plan, and with the key behind COALESCE
 -- and a subquery the planner cannot probe journal_entries_pkey: it hash-joins
 -- after a sequential scan of journal_entries, every company's rows, each one
--- filtered through RLS. On prod (2026-10-26, 2.27 million entries) one call
--- for a 3 800-document archive read about 650 MB and ran 13 s, past the 8 s
--- statement timeout, so /api/arkiv/documents and /folders answered 500:
--- 10 727 times from 2026-09-29, none before.
+-- filtered through RLS. The cost follows the whole table, not the company:
+-- on a large database one call for an archive of a few thousand documents
+-- runs past the 8 s statement timeout, and /api/arkiv/documents and /folders
+-- answer 500.
 --
 -- The date is now looked up per document by primary key: the verifikat the
 -- document names, else the verifikat of the line it names. The answer is the

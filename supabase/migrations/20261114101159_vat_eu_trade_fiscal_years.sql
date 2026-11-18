@@ -6,8 +6,7 @@
 -- andra EU-länder", so a yearly filer that bought or sold within the EU with
 -- the setting off got the later date on the deadline list, in the calendar,
 -- the reminders, Betala via banken and the forecast, while the VAT close check
--- named the earlier one (2026-11-12: 209 companies with EU trade booked in
--- 2026 and a later open yearly deadline).
+-- named the earlier one.
 --
 -- The nightly job (alignYearlyVatDeadlinesWithBooks) reads a period's
 -- declaration rutor, the way the declaration does, while the earlier date is

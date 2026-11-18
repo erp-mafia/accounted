@@ -7,7 +7,7 @@
 -- WHY
 -- ---
 -- The register (20261027180109_contract_revenue.sql, behind
--- NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED, no rows in production) booked the
+-- NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED) booked the
 -- difference between its positions and the WHOLE balance of 1620, 2450, 2290,
 -- 1471 and 2431. 2290 Övriga avsättningar holds other provisions too, and a
 -- company that booked pågående arbeten by hand before has them on 1620/2450:

@@ -8,17 +8,14 @@
 -- 1. An invoice whose rows cannot be had (the provider's detail holds none,
 --    its total or rows disagree, no source matches) got its outcome and a
 --    retry one day later, forever: every such invoice was asked of the
---    provider once a day. On production (read only, 2026-10-28): 621 of them
---    in about 60 companies (583 provider_empty, 21 total_mismatch,
---    11 unmatched, 6 rows_mismatch), the oldest retried daily since
---    2026-09-21.
+--    provider once a day (outcomes provider_empty, total_mismatch, unmatched
+--    and rows_mismatch).
 -- 2. A company is released with no delay after its run, so its queue row is
 --    always due, and claim_invoice_completion_work tests every due company
 --    for an invoice without rows: an anti-join over all of the company's
 --    invoices against invoice_items, on every claim, several claims per run.
---    463 companies were tested to find 8 with work: 556 ms and 505 000
---    buffers per claim (pg_stat_statements: 3 988 calls, mean 523 ms, max
---    5.2 s).
+--    Nearly every company tested has no work, so the cost of a claim follows
+--    the number of companies, not the work there is.
 --
 -- What changes.
 --
@@ -30,7 +27,7 @@
 --    count. A change of provider or account, which already re-arms every
 --    entry in claim_invoice_completion_work, now also resets it. Existing
 --    entries get the tries their age stands for (one a day since the entry
---    was made, at most 7): 516 end now, 105 younger ones go on.
+--    was made, at most 7): the old ones end now, younger ones go on.
 -- 2. A company with no candidate at all (no invoice without rows that has no
 --    entry or a due one: the claim's own predicate, word for word) is marked
 --    idle by enqueue_invoice_completion_work, which every run calls once
@@ -54,8 +51,8 @@
 --
 -- Bodies restated from the latest definitions: claim_invoice_completion_work
 -- from 20261015233500, finish_invoice_completion from 20260921120903,
--- enqueue_invoice_completion_work from 20260921073428 (all three equal to
--- production on 2026-10-28). Only the lines named above change. Grants stay
+-- enqueue_invoice_completion_work from 20260921073428 (all three the
+-- installed definitions). Only the lines named above change. Grants stay
 -- (CREATE OR REPLACE keeps them).
 --
 -- pg-test: tests/pg/invoice-completion-end.pg.test.ts

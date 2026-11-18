@@ -14,8 +14,8 @@
 --     call rolled its own counter step back, so it never moved on), and a
 --     counter below an imported series restarted the series under it.
 --   * Uniqueness was checked on the text, so '001' was issued next to an
---     imported '1', and an import added '1' next to an issued '001'. Prod held
---     ten such pairs on 2026-10-12.
+--     imported '1', and an import added '1' next to an issued '001'. Such
+--     pairs exist.
 --
 -- From here the invoices decide and the counter is the company's choice of
 -- where its series continues:
@@ -28,7 +28,7 @@
 --      23505 like idx_invoices_company_invoice_number, so every caller that
 --      already answers a taken number (the provider migration's review list,
 --      register-booked-invoice) answers this one the same way. It checks only
---      the row being written, so the ten existing pairs stay as they were
+--      the row being written, so pairs that already exist stay as they were
 --      issued. An exact repeat of the text is still left to the unique index.
 --   2. invoice_number_series_position() says where a company's own series
 --      stands. The series is invoice_prefix followed by digits, read as a value

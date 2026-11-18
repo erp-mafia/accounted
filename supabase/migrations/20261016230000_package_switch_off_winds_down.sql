@@ -8,8 +8,8 @@
 -- unbooked POS days; src/lib/modules/obligations.ts) resolves to
 -- winding_down, keeps its pages, tools and Att göra rows, and only its start
 -- doors refuse (src/lib/modules/package-doors.ts), until the obligations are
--- settled and the package disappears. The founder's rule: "off" closes the
--- start paths only, obligations keep running, and a switch is refused only
+-- settled and the package disappears. The rule: "off" closes the start
+-- paths only, obligations keep running, and a switch is refused only
 -- for plan, country or legal form, which the application checks before it
 -- stages the switch.
 --

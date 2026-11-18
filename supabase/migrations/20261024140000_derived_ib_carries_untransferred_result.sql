@@ -11,7 +11,7 @@
 --     without a voucher (Fortnox);
 --   - a year klarmarkerat as closed elsewhere;
 --   - a year not yet closed in Accounted.
--- The prod reconciliation of 2026-10-23 found 566 such years.
+-- Such years are common.
 --
 -- The derived opening balance now reads such a year as if it had been closed.
 -- Each ended fiscal year gets one line on the form's closing account, dated

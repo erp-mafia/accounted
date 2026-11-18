@@ -9,7 +9,7 @@
 --      11.30 was Dr 1932 1000 / Cr 1510 1000, status paid, 10 300 kr left on
 --      1510, and the entry balanced, so no trigger saw it. It now refuses a
 --      foreign row with BATCH_FOREIGN_CURRENCY, as bulk_book_transactions and
---      create_expense_payout_batch do. Prod holds no such verifikat. The row is
+--      create_expense_payout_batch do. No such verifikat exists. The row is
 --      SEK from there on, so every line the function writes says SEK, and a
 --      legacy NULL currency reads as the SEK it has always meant, on the row
 --      and on the invoice, as the preview already read it.
@@ -35,7 +35,7 @@
 --   5. fx_deviation_too_large: how far a SEK figure may sit from the SEK booked
 --      and still be this document at another rate, the side of
 --      fxDeviationTooLarge (lib/bookkeeping/fx-settlement.ts). The two link
---      functions keep their literal for now (open MRs restate them): the pg
+--      functions keep their literal for now (pending work restates them): the pg
 --      test probes all of them at the edge.
 --
 -- Nothing here rewrites a row. A fix applies from now on: öre already stranded

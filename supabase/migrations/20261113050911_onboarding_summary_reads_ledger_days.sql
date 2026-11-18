@@ -6,10 +6,10 @@
 -- account's latest ingående balans on (20261112181800). The function runs as
 -- the caller, so every line also passed the journal_entry_lines_select
 -- policy, which re-reads the parent verifikat. Cost follows the company's
--- whole history with a large constant. Production, read-only as a member of
--- the largest company (154 336 verifikat, 464 132 lines), 2026-11-12: no
--- answer in 15 s with a warm cache; the authenticated limit is 8 s. The
--- summary feeds the onboarding findings (lib/onboarding/findings.ts).
+-- whole history with a large constant: for a company with a very large
+-- ledger the call did not answer inside the 8 s limit of the authenticated
+-- role. The summary feeds the onboarding findings
+-- (lib/onboarding/findings.ts).
 --
 -- ledger_account_days (20261023093900) holds, per company, account and day,
 -- the debit, credit and line count of every posted and reversed verifikat,
@@ -23,20 +23,20 @@
 --   * the balances: sums over each account's summary rows from its IB floor
 --     on, the floor from public.account_ib_floor as before. The floors are
 --     read once per account (MATERIALIZED). Left to the planner, the lateral
---     call was joined in per summary row: 3 954 calls and 3.6 s for the
---     largest company.
--- The same statements on production, as that member: 60 to 64 ms warm,
--- 9 580 buffers. The balances were compared with the line form of
--- 20261112181800 on ten companies with two IB years (four of them with
--- skattekonto account 2012): equal on every figure. The year matched the
--- line form on those ten and the two largest companies; revenue and result
--- are the sums compared row for row on 2026-11-12 (three companies, one
--- with 54 734 verifikat). Cost now follows the company's account-days
--- (19 102 rows for the largest company), not its lines.
+--     call was joined in per summary row: thousands of calls for a company
+--     with a long history.
+--
+-- What was checked. The balances, the year, revenue and result equal the
+-- line form of 20261112181800, compared figure for figure, also for
+-- companies with two IB years and for companies with skattekonto account
+-- 2012.
+--
+-- Cost now follows the company's account-days, not its lines, and stays
+-- far inside the limit also for a very large ledger.
 --
 -- A company whose summaries are not built (ledger_account_days_ready false)
 -- keeps the line path of 20261112181800, verbatim, as every other reader of
--- the summaries does. All companies on production are built.
+-- the summaries does.
 --
 -- Signature, payload, SECURITY INVOKER, search_path and grants unchanged.
 --

@@ -3,9 +3,9 @@
 -- pg-test: tests/pg/link-basis-sql-writers.pg.test.ts
 --
 -- Since the link basis columns landed (20261016160000), every bank line this
--- function linked got link_basis NULL: in production one company bulk-booked
--- 81 bank lines and none of their transaction_voucher_links rows says why it
--- exists. The application writers stamp a basis; this one did not.
+-- function linked got link_basis NULL: none of the transaction_voucher_links
+-- rows of a bulk booking says why it exists. The application writers stamp a
+-- basis; this one did not.
 --
 -- What it records now, through public.resolve_link_basis (20261016180100)
 -- with the p_actor_type the engine door already passes:

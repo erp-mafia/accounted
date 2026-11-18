@@ -1,6 +1,6 @@
 -- processing_history's actor vocabulary gains 'service_account', end to end
--- (follow-up of 20261016120000/120100, decision
--- 2026-10-16-processing-history-actor-vocabulary-unchanged).
+-- (follow-up of 20261016120000_service_accounts and
+-- 20261016120100_actor_type_service_account).
 -- pg-test: tests/pg/cash-account-twin-heal.pg.test.ts
 --
 -- processing_history.actor is a JSONB object with no CHECK on its type: the
@@ -21,7 +21,7 @@
 -- No CHECK constraint is added to processing_history: nothing in the
 -- repository shows which actor types older rows carry, and an append whose
 -- type falls outside a new CHECK would be lost silently by the best-effort
--- callers (decision 2026-10-16-processing-history-no-actor-check).
+-- callers.
 
 CREATE OR REPLACE FUNCTION public.heal_cash_account_twins(p_company_id uuid, p_expected_fingerprint text, p_operation_id uuid, p_actor jsonb)
  RETURNS jsonb

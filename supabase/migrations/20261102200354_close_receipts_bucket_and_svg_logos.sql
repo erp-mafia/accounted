@@ -10,8 +10,8 @@
 -- already dropped its anonymous read policy. No code uses the bucket: there is
 -- no storage.from('receipts') and no public or signed URL against it
 -- (public.receipts, the table, is a different object and is not touched here).
--- Production holds 2 objects from 2026-02. They stay: documents are never
--- deleted (7-year retention).
+-- Objects already in the bucket stay: documents are never deleted (7-year
+-- retention).
 --
 --   * public = false: the objects are no longer served on an unauthenticated
 --     /object/public/receipts/... URL.

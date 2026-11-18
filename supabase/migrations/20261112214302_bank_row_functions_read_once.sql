@@ -9,19 +9,19 @@
 --   get_bank_balance_facts: LEFT JOIN open_bank_rows o ON o.id = t.id. The
 --   whole open_bank_rows view (two arms, four anchor tables, an anti join)
 --   re-ran once per bank row of the cash account: quadratic in the company's
---   bank rows. Production, read-only as a member: 1 071 rows took 1 532 ms and
---   993 725 buffers; the company with the most rows (4 657) did not finish in
---   15 s, and the authenticated limit is 8 s. Six companies are past that
---   limit today, 38 pay 1.5 s or more per call, and 199 have 300 rows or more.
---   lib/reconciliation/service.ts catches the error, so for those companies
---   the bank balance check silently goes missing. 205 642 calls since
---   2026-09-11 (a cancelled call is never counted).
+--   bank rows. With a few thousand rows on one cash account the call
+--   passes the 8 s limit of the authenticated role and is cancelled.
+--   lib/reconciliation/service.ts catches the error, so for such a
+--   company the bank balance check silently goes missing. A cancelled
+--   call is never counted in the statement statistics either, so the
+--   companies that are hit hardest are the ones the statistics show
+--   least.
 --
 --   cash_account_booked_rows: EXISTS (anchored x JOIN journal_entry_lines)
 --   per bank row. The planner joined every anchor to its lines first and
 --   filtered on the row afterwards, once per row: rows x anchors line probes.
---   1 071 rows with 181 anchors took 1 971 ms and 1 494 469 buffers. A company
---   with 2 000 booked rows is 4 million probes: it never answers.
+--   The cost grows with the product, not the sum: a company with 2 000
+--   booked rows is 4 million probes, and it never answers.
 --
 -- The fix is the shape, not the plan mode: each function now reads its set
 -- once into a MATERIALIZED CTE and tests membership through a hashed subplan
@@ -30,15 +30,15 @@
 --   cash_account_booked_rows: the company's anchors, once; then one line
 --   probe per anchor by (journal_entry_id, account_number), written as a
 --   scalar subquery so it stays a probe by key. Written as a join it started
---   from every company's lines on that account number and ran past 12 s on
---   the same data (tested read-only on production before this was written).
--- Same body on production with a generic plan forced, as a member:
---   get_bank_balance_facts, 4 657 rows: 17 ms (was: over 15 s)
---   cash_account_booked_rows, 1 071 rows / 181 anchors: 83 ms (was 1 971 ms)
---   cash_account_booked_rows, 2 047 rows / 2 021 anchors: 60 ms warm
--- Results compared with the old functions on production: identical facts for
--- four argument sets, identical count. Cost is now linear in the company's
--- bank rows and anchors: ten times the largest is still well under a second.
+--   from every company's lines on that account number, not from this
+--   company's anchors, and was slower than the form it replaces.
+--
+-- With a generic plan forced, as the functions run, each call is now one
+-- read of its set and one hash probe per bank row (get_bank_balance_facts)
+-- or one line probe per anchor (cash_account_booked_rows): linear in the
+-- company's bank rows and anchors, where it grew with their product.
+--
+-- The results equal the old functions': same facts, same count.
 --
 -- Signatures, return types, security (invoker) and grants are unchanged.
 

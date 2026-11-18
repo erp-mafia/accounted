@@ -3,9 +3,9 @@
 --
 -- 20260901100000 (definer writers) and 20261026210000 (definer readers)
 -- closed every non-trigger SECURITY DEFINER function in public to anon. The
--- advisor (lint 0028, anon_security_definer_function_executable) still reports
--- 54 functions, read-only against production on 2026-10-28, and every one of
--- them returns `trigger`:
+-- advisor (lint 0028, anon_security_definer_function_executable) still
+-- reports 54 functions at the time of writing, and every one of them
+-- returns `trigger`:
 --
 --   * None is reachable over PostgREST. Called directly, plpgsql refuses with
 --     "trigger functions can only be called as triggers", so this is not a live
@@ -40,8 +40,8 @@
 -- DEFINER, callable by anon) restricted to trigger functions, so the database
 -- ends with only the enforcement functions left whatever drift exists between
 -- production, pg-real and preview branches. Functions created after this
--- migration still get EXECUTE for PUBLIC and anon from the default ACL; see
--- the founder decision on ALTER DEFAULT PRIVILEGES in the MR.
+-- migration still get EXECUTE for PUBLIC and anon from the default ACL: this
+-- migration leaves ALTER DEFAULT PRIVILEGES alone.
 --
 -- pg-test: tests/pg/anon-definer-trigger-functions.pg.test.ts
 

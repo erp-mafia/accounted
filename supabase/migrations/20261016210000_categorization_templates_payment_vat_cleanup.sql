@@ -13,8 +13,8 @@
 --
 -- (b) A correction kept the old moms when the corrected pair books none
 --     (insertOrUpdateTemplate, fixed in the same change): a template moved from
---     a cost with 25 % to 1630 or 2440 kept the 25 %. Every row this matched on
---     production had exactly that history in audit_log. The moms is cleared on
+--     a cost with 25 % to 1630 or 2440 kept the 25 %. The rows this matches
+--     have exactly that history in audit_log. The moms is cleared on
 --     corrected single-pair templates whose pair is a bank ledger against an
 --     account a bank payment never carries input VAT on: the skattekonto
 --     (1630, 2012), the owner (2013, 2018, 2393, 2893), a payable being settled

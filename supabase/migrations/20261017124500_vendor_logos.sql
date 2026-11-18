@@ -1,6 +1,6 @@
--- Vendor logos fetched once from the brand's own website (founder decision
--- 2026-10-17, replacing the 2026-08-31 logo.dev choice: logo.dev allows
--- rehosting only on its Enterprise plan, Brandfetch requires hotlinking).
+-- Vendor logos fetched once from the brand's own website and served from
+-- our own storage, instead of through a logo service (those either require
+-- hotlinking or restrict rehosting).
 --
 -- One row per vendor domain, never per company: the cron in
 -- src/app/api/vendor-logos/cron resolves domains from the vendors companies

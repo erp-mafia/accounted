@@ -2,15 +2,14 @@
 -- rows must fit in what other bank rows leave of the verifikat's bank leg,
 -- and every row linked records reconciliation_method 'manual'.
 --
--- 1. Room on the bank leg (GitHub #3507, follow-up of
---    docs/decisions/2026-10/2026-10-20-bank-link-room-on-voucher-leg.md).
+-- 1. Room on the bank leg (GitHub #3507).
 --    The single-link doors refuse a bank row that does not fit in what other
 --    rows already hold of the verifikat's bank leg (VOUCHER_BANK_LEG_CONSUMED,
 --    src/lib/transactions/voucher-bank-leg.ts). This door only compared the
 --    rows' sum with the verifikat's bank net, so N rows summing to a verifikat
 --    another row already settled linked anyway: a second payment shown as
---    booked while its affärshändelse never was (prod: one such link, a monthly
---    payment linked to the previous month's verifikat).
+--    booked while its affärshändelse never was (for example a monthly payment
+--    linked to the previous month's verifikat).
 --    The same rule as fitsBankLeg, per settlement ledger of the rows and in
 --    their direction: holders are the other rows whose pointer names the
 --    verifikat (whole amount) and the bank_line slices of other rows (their
@@ -27,11 +26,10 @@
 --    method to tell it from a booking made from the row. One row linked here
 --    already recorded 'manual' (on its pointer); several rows (junction rows
 --    only, no pointer) recorded nothing, so they read as bookings and could
---    not be unlinked (prod: one link of 78 rows). Now every linked row records
---    'manual', like the 1:N split, except a row put back on the verifikat
---    booked from it (source bank_transaction + its id): that restores a
---    booking, which records no method. writeBankLink applies the same rule
---    for the single doors.
+--    not be unlinked. Now every linked row records 'manual', like the 1:N
+--    split, except a row put back on the verifikat booked from it (source
+--    bank_transaction + its id): that restores a booking, which records no
+--    method. writeBankLink applies the same rule for the single doors.
 --
 -- What does not change: every other check, refusal, lock, line, voucher
 -- number, attribution, link basis, event link and the create_new branch.

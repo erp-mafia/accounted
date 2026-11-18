@@ -1,7 +1,7 @@
 -- Priced usage, asked for instead of accepted (src/lib/usage/requests.ts).
 --
 -- When a company reaches what a month includes, the paid action stops and
--- a person asks for more; a founder opens the charge for the company by
+-- a person asks for more; an operator opens the charge for the company by
 -- writing its usage_consents row. usage_requests keeps those asks: the
 -- server writes one per company, kind and day and mails support with the
 -- company, the requester and the month's usage.

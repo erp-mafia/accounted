@@ -5,26 +5,23 @@
 -- every company with a connected bank account. Its balance kind summed every
 -- 19xx line of every verifikat up to the last bank row (ledger_days), each
 -- line policy-checked under RLS. 20261028042147 narrowed that read to the
--- 19xx lines, but the cost still grew with the whole history: on production
--- (read only, 2026-10-30, as a member through RLS, generic plan) a company
--- with 54 700 verifikat read 376 000 buffers per call, 0.82 s warm and
--- 2.9 to 11.5 s cold, past the 8 s statement timeout of the authenticated
--- role. On 2026-10-29, after 20261028042147 was live, 11 calls took over a
--- second and the slowest 7.05 s; it is the slowest RPC users wait on.
+-- 19xx lines, but the cost still grew with the whole history: for a company
+-- with a very large ledger a cold call ran past the 8 s statement timeout
+-- of the authenticated role, and warm ones were the slowest RPC users wait
+-- on.
 --
 -- What changes. A company whose ledger summaries are built
--- (ledger_account_days_ready, 20261023093900; every company with a bank
--- connection is, 2026-10-30) reads ledger_account_days instead: the same
+-- (ledger_account_days_ready, 20261023093900) reads ledger_account_days
+-- instead: the same
 -- posted and reversed lines per account and day, already summed. The two
 -- things the summaries do not tell apart are read from the journal, and
 -- only where they are needed: the posted opening balances (the floor), a
 -- handful of verifikat; and whether a day holds a posted line (has_posted),
 -- asked in candidates for the latest days of each account only, newest
 -- first, until one has one. A company without summaries keeps the line read
--- unchanged. Same rows out: the new body and 20261028042147 gave identical
--- results for all 1 121 companies with a connected bank account on
--- production (read only, 571 of them with evidence, 855 rows). The company
--- above now takes 30 ms and about 3 900 buffers.
+-- unchanged. Same rows out: the new body and 20261028042147 were compared
+-- for every company with a connected bank account and gave identical
+-- results. A call for a very large ledger now takes tens of milliseconds.
 --
 -- Everything else in the body is copied from 20261028042147, the latest
 -- migration that defines the function. SECURITY INVOKER, the grants and the

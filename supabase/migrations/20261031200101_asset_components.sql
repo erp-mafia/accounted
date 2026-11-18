@@ -36,13 +36,13 @@
 --      refuses an asset with a derecognised component; a new
 --      commit_asset_component_replacement posts a replacement voucher and
 --      updates the register in one transaction.
---   5. A backfill of the JSONB components into the table (production has
---      none; the backfill exists so no row is ever left behind), with the
---      posted history of those assets split per component by each
---      component's share of the annual charge, the split the old engine used.
+--   5. A backfill of the JSONB components into the table (so that no row is
+--      ever left behind), with the posted history of those assets split per
+--      component by each component's share of the annual charge, the split
+--      the old engine used.
 --
--- The founder decision of 2026-09-23 (no opening balances for K3
--- components) is reversed by the K3 plan accepted 2026-10-26 (decision 4).
+-- This reverses the earlier rule that K3 components carry no opening
+-- balances.
 --
 -- pg-test: tests/pg/asset-components.pg.test.ts
 
@@ -1535,11 +1535,11 @@ COMMENT ON FUNCTION public.commit_asset_component_replacement(
 -- =============================================================================
 -- 10. Backfill: JSONB components into the table
 -- =============================================================================
--- Production holds no component assets (checked 2026-10-26); this keeps any
--- row a self-hosted install or a preview database may have. The JSONB value
--- itself is left as it was. Companies archived by a migration reset are
--- static and skipped. An element the old validation would have refused is
--- left in the JSONB only, with a notice.
+-- The backfill keeps any row an install may already have (a self-hosted
+-- install or a preview database, for example). The JSONB value itself is
+-- left as it was. Companies archived by a migration reset are static and
+-- skipped. An element the old validation would have refused is left in the
+-- JSONB only, with a notice.
 
 -- One JSONB element the old Zod validation would have accepted: numeric cost
 -- above 0, a positive life, a salvage value between 0 and the cost. CASE

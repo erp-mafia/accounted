@@ -5,13 +5,13 @@
 -- and orders by id, the stable total order paging needs. No index served
 -- both: Postgres either sorted the company's rows on every page or, for a
 -- company with many verifikat, walked journal_entries_pkey in id order over
--- every tenant's rows and filtered on company_id. On production (read-only
--- EXPLAIN ANALYZE, 2026-10-26) the largest company's skattekonto read at
--- OFFSET 30000 walked the primary key and filtered out 819 000 rows, most of
--- them other companies': 852 000 buffers, 2.1 s, and later pages reach the 8 s statement
--- timeout (three of them in the 24 h before, as 500s). Since 2026-09-11 the
--- shape class ran 662 000 times for 11 700 s, 6 200 s of it in calls that
--- averaged above 500 ms.
+-- every tenant's rows and filtered on company_id. A deep page of a large
+-- company's read (a high OFFSET) then walked the primary key from its start
+-- and filtered out every other company's rows on the way: the cost of a
+-- page grew with the whole table and with the offset, and the later pages
+-- of such a read reached the statement timeout and failed. Paged reads are
+-- among the most frequent statements on the table, so that cost was paid
+-- often.
 --
 -- With this index the same read is a range scan of the company's own
 -- entries in id order: the cost of a page is bounded by the company's
@@ -24,8 +24,8 @@
 -- Plain CREATE INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
 -- migration transaction (precedent 20260710101000, 20261023093920). The
 -- build holds a SHARE lock on journal_entries: reads go on, writes to
--- journal_entries wait for the build. Size on production: 2.30 M rows, 723
--- MB heap. idx_journal_entries_posted_needs_doc, built on the same table on
--- 2026-10-23, took 4.7 s; expect writes to pause for roughly 5 to 10 s.
+-- journal_entries wait for the build. Expect writes to pause for the
+-- seconds the build takes on a large table, as they did for
+-- idx_journal_entries_posted_needs_doc (20261023093920) on the same table.
 CREATE INDEX IF NOT EXISTS idx_journal_entries_company_id_id
   ON public.journal_entries (company_id, id);

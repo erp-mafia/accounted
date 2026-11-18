@@ -4,14 +4,14 @@
 -- Why: that boundary query went through ledger_located_entries, whose UNION
 -- ALL of the two locator tables hides the index order from the planner. It
 -- read and sorted every locator of the account in the period to keep the
--- first v_need, whatever the page size: for the largest company's 2440 on
--- prod that is 26 898 rows and about 27 000 buffers per page, 2.6 s when they
--- are not cached and 55 ms when they are. Read from the table, the index
--- order answers ORDER BY ... LIMIT and the same boundary reads 201 rows.
+-- first v_need, whatever the page size: the cost of a page followed the
+-- account's whole period, and a busy account was slow whenever its locators
+-- were not cached. Read from the table, the index order answers
+-- ORDER BY ... LIMIT and the boundary reads only the rows the page needs.
 --
 -- Only that query changes. The page and the movement before it keep the
--- helper: their ranges are bounded, so their plans are fine (200 locators,
--- 4 ms, for the same page). Restated from 20261023093940.
+-- helper: their ranges are bounded, so their plans are fine. Restated from
+-- 20261023093940.
 --
 -- The huvudbok pages read to the end on both paths, with and without a
 -- dimension filter, walk both branches of the boundary query:

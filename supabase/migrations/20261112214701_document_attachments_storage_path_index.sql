@@ -6,13 +6,13 @@
 -- and file name by its storage key:
 --   SELECT mime_type, file_name FROM document_attachments
 --   WHERE storage_path = $1 LIMIT 1
--- No index held storage_path, so each view read every company's documents.
--- On production (read-only EXPLAIN ANALYZE, 2026-11-12, one real path of the
--- company with the most documents): Parallel Seq Scan, 363 000 rows read for
--- the one returned, 37 900 buffers (the whole 296 MB heap), 1 430 ms cold.
--- Since 2026-09-11 the statement ran 10 814 times, mean 54 ms, 16 417 blocks
--- per call. The cost follows the table, not the document: at ten times the
--- archive every view is about half a second warm and over ten seconds cold.
+-- No index held storage_path, so each view read every company's documents:
+-- a parallel sequential scan of the whole table, every row read and
+-- discarded for the one returned. The statement runs once for every
+-- document a browser opens, so that scan was paid on every view. The cost
+-- follows the table, not the document: as the archive of all companies
+-- grows, every view of any document slows with it, and a cold read slows
+-- the most.
 --
 -- With the index the lookup is one probe, whatever the table holds.
 --
@@ -22,9 +22,9 @@
 -- Plain CREATE INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
 -- migration transaction (precedent 20261031110200, 20261027060517). The
 -- build holds a SHARE lock on document_attachments: reads go on, writes
--- (uploads, page stamps, links) wait for the build. 359 000 rows, 296 MB
--- heap on production; idx_journal_entries_posted_needs_doc on a 723 MB heap
--- took 4.7 s (2026-10-23), so expect writes to pause for 1 to 3 s.
+-- (uploads, page stamps, links) wait for the build. Expect them to pause
+-- for the seconds the build takes, as writes to journal_entries did for
+-- idx_journal_entries_posted_needs_doc (20261023093920).
 --
 -- Before the build can start it waits for its SHARE lock behind any write
 -- transaction already open on the table, and every writer that arrives

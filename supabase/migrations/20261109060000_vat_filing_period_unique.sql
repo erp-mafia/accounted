@@ -9,8 +9,8 @@
 -- src/lib/vat/filing-record-store.ts catch the refusal and read again.
 SELECT set_config('lock_timeout', '5s', true);
 
--- Rows that already break the rule (prod 2026-11-07: one period with two
--- completed 'submitted' rows recording the same filing). Keep one record:
+-- Rows that already break the rule (a period with two completed
+-- 'submitted' rows recording the same filing). Keep one record:
 -- a Skatteverket confirmation first, then a row carrying notes (the filing
 -- reference), then the newest row, which the generator built with the
 -- current due date. The others are dismissed, never deleted: dismissal is

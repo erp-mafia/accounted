@@ -1,5 +1,5 @@
 -- A supplier number reused on every invoice from the same supplier
--- (crm#1039; founder decision 2026-10-06, option B).
+-- (crm#1039).
 --
 -- Some suppliers print the same reference on every invoice: an insurer's
 -- autogiro or contract reference, typed into the provider's invoice number
@@ -28,8 +28,8 @@
 -- Bokio completion pass can still complete it.
 --
 -- Both functions are copied verbatim from their latest definitions
--- (20260925205556 and 20260922172815, identical to production) with only the
--- edits above. Privileges are kept by CREATE OR REPLACE.
+-- (20260925205556 and 20260922172815) with only the edits above. Privileges
+-- are kept by CREATE OR REPLACE.
 
 CREATE OR REPLACE FUNCTION public.commit_provider_migration_records(p_job_id uuid,p_worker_id uuid,p_attempt integer,p_records jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$

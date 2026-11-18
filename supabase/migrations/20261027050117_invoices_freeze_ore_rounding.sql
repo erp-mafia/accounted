@@ -19,9 +19,8 @@
 -- 1. Backfill: an issued invoice without its own choice, where the choice
 --    changes the amount (SEK with öre), gets the company setting in effect at
 --    issue. Issue is the first delivery or the issue verifikat, whichever came
---    first, else the row's creation. Read-only check on 2026-10-26: 3 541 rows
---    (26 resolve to off, 3 515 to on), and for every one of them that setting
---    equals today's company setting, so
+--    first, else the row's creation. For every row the backfill touched
+--    when this was written, that setting equals today's company setting, so
 --    nothing printed or reported changes; the rows only stop following future
 --    toggles. Whole-krona and foreign-currency rows are left alone: no setting
 --    changes their amount, and the trigger below freezes them when their status

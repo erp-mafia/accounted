@@ -1,5 +1,5 @@
 -- The stornos of an SIE undo record WHO asked for it (attribution step 2,
--- Phase 1 "the actor record on every write", founder-accepted 2026-10-15).
+-- Phase 1 "the actor record on every write").
 --
 -- undo_sie_import_chunk and undo_sie_duplicate_repair_chunk post their
 -- stornos with a plain draft-to-posted UPDATE, outside commit_journal_entry,

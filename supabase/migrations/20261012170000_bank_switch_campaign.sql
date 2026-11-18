@@ -9,7 +9,7 @@
 --      nudge), so neither the daily cron nor the byrå action ever sends the
 --      same mail twice. Service role only: written by the cron and the byrå
 --      route, read back by the same code; nothing in the browser reads it.
---   2. bank_switch_progress(p_uncovered text[]): the founders' counter,
+--   2. bank_switch_progress(p_uncovered text[]): the operator's counter,
 --      totals across every company (pending, done, uncovered, per bank).
 --      Service role only. The banks Open Payments does not reach come in as
 --      the argument, from the one TypeScript list, so SQL and TypeScript

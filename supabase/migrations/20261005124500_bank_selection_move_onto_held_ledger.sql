@@ -6,10 +6,10 @@
 -- every company is seeded with (an allocator rule fixed since, crm#129). The
 -- imported history is on 1930, so the user moved the account there in the
 -- bank picker. 1930 is held by the seeded manual row, so the save goes
--- through keeper adoption (decision 2026-09-25): promote_psd2_cash_account
--- binds the account to the 1930 row and retires the account's own row on
--- 1931. Both rows had been reconciled ("Markera som avstämd"), and the
--- retirement refused any row with a sign-off:
+-- through keeper adoption: promote_psd2_cash_account binds the account to
+-- the 1930 row and retires the account's own row on 1931. Both rows had
+-- been reconciled ("Markera som avstämd"), and the retirement refused any
+-- row with a sign-off:
 -- CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES under SQLSTATE 23514, a name the
 -- error registry did not know, so the picker said "Förfrågan innehåller
 -- ogiltiga uppgifter" and nothing could move the account. An account

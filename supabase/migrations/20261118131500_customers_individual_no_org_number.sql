@@ -8,9 +8,9 @@
 -- one copy per write path, and the paths that lacked a copy (the MCP create
 -- tool before 2026-08-21, the CSV register import until 2026-10-05) wrote
 -- the personnummer into org_number. The one-off repair
--- (/api/customers/personal-number-repair/cron) sealed 730 such cards in
--- production on 2026-10-29 and 2026-10-30 and has written nothing since; on
--- 2026-11-18 none of the 46,078 individual cards holds an org number.
+-- (/api/customers/personal-number-repair/cron) sealed such cards and has
+-- written nothing since; no individual card held an org number when this
+-- was written.
 --
 -- The application rule stays, so a person still gets the Swedish message
 -- before the write. This CHECK is what holds for every writer, present and

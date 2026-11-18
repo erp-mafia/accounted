@@ -4,7 +4,7 @@
 -- (lib/events/bus.ts, Promise.allSettled). The outbox is where a consumer
 -- will be delivered from instead, after the request, once it is flipped to
 -- async (step E3, one consumer at a time, each with its idempotency key).
--- Founder decisions 2026-10-17 (docs/decisions/2026-10/):
+-- The design choices:
 --   - a table of its own, not event_log: event_log is the public feed
 --     (GET /api/events) and internal events stay out of it;
 --   - a few seconds (the after() kick) up to one minute (the cron) of

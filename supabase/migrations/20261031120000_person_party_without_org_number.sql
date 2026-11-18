@@ -7,9 +7,8 @@
 -- its party was made (an import that typed private persons as companies, a
 -- user who changed the type later, the register repair that retypes imported
 -- cards) kept a party of kind 'company' holding the personnummer in plain
--- text as org_number: 5,689 parties in 66 companies on 2026-10-28, while the
--- cards themselves hold the number sealed in personal_number. Three changes
--- close it:
+-- text as org_number, while the cards themselves hold the number sealed in
+-- personal_number. Three changes close it:
 --
 --   1. link_party_on_role_write: when an individual card is written and its
 --      party carries an org number that no business card or supplier uses,

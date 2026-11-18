@@ -22,13 +22,13 @@
 --   anything else as a door                                  -> NULL
 --
 -- exactly resolveLinkBasis() without a pending operation (a unit of the
--- pg-real suite compares the two over every door and actor). What the
--- database cannot see is the pending-operation approval the application
--- keeps in an AsyncLocalStorage: a SQL writer run inside an approval records
--- the approver's basis (user_* for a person in Accounted, client_asserted for
--- a credential relaying it), where the application writers record
--- agent_proposed_user_approved. The decision record
--- docs/decisions/2026-10/2026-10-16-sql-link-basis-from-actor.md says why.
+-- pg-real suite compares the two over every door and actor).
+--
+-- What the database cannot see is the pending-operation approval the
+-- application keeps in an AsyncLocalStorage: a SQL writer run inside an
+-- approval records the approver's basis (user_* for a person in Accounted,
+-- client_asserted for a credential relaying it), where the application
+-- writers record agent_proposed_user_approved.
 --
 -- Never raises and never blocks a booking: plain SQL over its arguments and
 -- current_setting(..., missing_ok => true), no table read, and it only ever

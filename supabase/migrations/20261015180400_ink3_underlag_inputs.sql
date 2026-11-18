@@ -4,7 +4,7 @@
 --
 -- The INK3 underlag (lib/reports/ink3) reads the INK3R balance sheet and the
 -- "enligt redovisningen" column from the books. Three things cannot be read
--- from them and are stored here (founder decisions on #47, 2026-10-15):
+-- from them and are stored here (#47):
 --
 --   * allmannyttig: whether the förening is allmännyttig (IL 7 kap. 3 §). The
 --     product never decides it; the user states it, and null means not yet

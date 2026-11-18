@@ -27,12 +27,12 @@
 -- migration writes that number on the proposals that still wait (pending,
 -- committing). It does NOT write it on the ones already decided:
 -- pending_operations_immutability (20261109170400) refuses every UPDATE of a
--- decided row, citing BFL 7 kap., and switching that trigger off for a
--- backfill is the founders' decision, not a migration's. Their places stay
--- free (numbers 1 to existing_count belong to the proposals that existed
--- here), so a later migration can write exactly those numbers and nothing is
--- renumbered. Until then a proposal decided before today reads without a
--- number, which the code shows as no label at all.
+-- decided row, citing BFL 7 kap., and this migration does not switch that
+-- trigger off for a backfill. Their places stay free (numbers 1 to
+-- existing_count belong to the proposals that existed here), so a later
+-- migration can write exactly those numbers and nothing is renumbered. Until
+-- then a proposal decided before today reads without a number, which the
+-- code shows as no label at all.
 --
 -- Triggers that fire on the UPDATE of the waiting rows:
 --   * pending_operations_updated_at would stamp now() on every waiting row,
@@ -50,16 +50,16 @@
 -- Companies archived by a migration reset are left as they are
 -- (.claude/rules/database.md, rule 9).
 --
--- Locks and run time (production 2026-11-17: 107 087 rows, 1 706 of them
--- waiting, 140 MB heap, 1 053 companies). The ALTER takes ACCESS EXCLUSIVE
--- and `supabase db push` runs the file in one transaction, so the table is
--- locked until the commit, for: one sequential read of the heap to rank every
--- row (measured read-only on production: 0.27 s warm), the UPDATE of about
--- 1 700 rows by primary key, one more read to count each company's rows, and
--- the partial unique index (a third read, indexing about 1 700 rows).
--- Expected one to three seconds. The ranking reads the heap through a
--- MATERIALIZED CTE: left to itself the planner walks idx_pending_ops_actor_type
--- for the company order and took 5.7 s, mostly random reads. lock_timeout
+-- Locks and run time. The ALTER takes ACCESS EXCLUSIVE and `supabase db push`
+-- runs the file in one transaction, so the table is locked until the commit,
+-- for: one sequential read of the heap to rank every row, the UPDATE of the
+-- waiting rows by primary key (a small part of the table: most proposals
+-- are already decided), one more read to count each company's rows, and
+-- the partial unique index (a third read, indexing the waiting rows only).
+-- Expected a few seconds in all. The ranking reads the heap through a
+-- MATERIALIZED CTE: left to itself the planner walks
+-- idx_pending_ops_actor_type for the company order, which is mostly random
+-- reads and many times slower than the sequential read. lock_timeout
 -- fails the job instead of queueing every staging and approval behind it;
 -- the next pipeline retries.
 --

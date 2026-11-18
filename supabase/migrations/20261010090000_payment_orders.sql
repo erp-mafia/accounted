@@ -3,12 +3,11 @@
 -- account through a bank API (payment initiation, Open Payments first),
 -- signed by the account holder with BankID.
 --
--- Founder decision 2026-09-07 (DECISIONS.md, src/lib/supplier-invoices/
--- stages.ts): the supplier invoice lifecycle stays DERIVED, and payment
--- initiation "swaps its evidence, not its place". An invoice is "in payment"
--- when an open payment file batch OR an open payment order covers it, so this
--- migration adds no state to supplier_invoices. The instruction and what the
--- bank reports about it live here.
+-- The supplier invoice lifecycle stays DERIVED (src/lib/supplier-invoices/
+-- stages.ts), and payment initiation "swaps its evidence, not its place". An
+-- invoice is "in payment" when an open payment file batch OR an open payment
+-- order covers it, so this migration adds no state to supplier_invoices. The
+-- instruction and what the bank reports about it live here.
 --
 -- Why not rows in supplier_payment_batches: a batch is an immutable pain.001
 -- snapshot (created -> cancelled only, no per-item state, NOT NULL file

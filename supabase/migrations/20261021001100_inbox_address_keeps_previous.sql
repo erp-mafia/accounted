@@ -10,9 +10,8 @@
 -- on). That is the right tool for a leaked or spammed address and the wrong
 -- one for a rename: a renamed company had to choose between an address with
 -- the wrong name and losing every mail its suppliers still send to the old
--- one. Prod 2026-10-21 (read-only): 49 live companies have an active address
--- that no longer slugs their name; 6 of them received 54 mails at it in the
--- last 28 days.
+-- one. Companies whose active address no longer slugs their name exist, and
+-- some of them still receive mail at it.
 --
 -- 1. company_inboxes.status gains 'previous': an earlier address of the
 --    company that still receives. The webhook files mail to it exactly as to

@@ -1,5 +1,5 @@
 -- A migrated foreign-currency invoice takes the SEK amount its verifikat books
--- (crm#1039; founder decision 2026-10-06).
+-- (crm#1039).
 --
 -- The provider worker links an imported invoice to the verifikat the source
 -- system booked it with, once that verifikat's amount on 151x (customer) or

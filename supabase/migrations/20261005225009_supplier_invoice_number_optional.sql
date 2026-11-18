@@ -22,9 +22,9 @@
 -- A missing number has one form only: NULL. An empty or whitespace-only
 -- string would count as a real number in that index, so two number-less
 -- invoices from one supplier would collide on it. The CHECK keeps such
--- strings out. Production held none on 2026-10-05 (14 561 rows), so the
--- constraint is added validated. Numbers with surrounding whitespace stay as
--- stored: the CHECK refuses only a value with no visible character.
+-- strings out. No existing row holds one, so the constraint is added
+-- validated. Numbers with surrounding whitespace stay as stored: the CHECK
+-- refuses only a value with no visible character.
 
 ALTER TABLE public.supplier_invoices
   ALTER COLUMN supplier_invoice_number DROP NOT NULL;

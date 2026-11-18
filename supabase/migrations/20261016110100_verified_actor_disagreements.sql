@@ -1,6 +1,5 @@
 -- Where the asserted actor and the verified principal of a commit disagree
--- (read-only diagnostic; building blocks plan, Phase 1, founder decision
--- 2026-10-16).
+-- (read-only diagnostic; building blocks plan, Phase 1).
 --
 -- 20261016110000 stamps every commit with the principal the database itself
 -- verified (journal_entries.committed_auth_role, committed_auth_uid) beside

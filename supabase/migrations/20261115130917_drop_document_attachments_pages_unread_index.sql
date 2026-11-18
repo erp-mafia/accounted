@@ -2,20 +2,18 @@
 -- the narrower index built for it (2026-11-15).
 --
 -- 20261112214702 added idx_document_attachments_backfill_unread, which
--- carries document_backfill_candidates' own predicate: the 17 000 unread
--- documents a reader could take, none of the 92 000 bank archives that are
--- never read. The old index stayed, on the expectation that the function
+-- carries document_backfill_candidates' own predicate: the unread documents
+-- a reader could take, none of the bank archives that are never read. The
+-- old index stayed, on the expectation that the function
 -- would stop using it. It did not. document_backfill_candidates is LANGUAGE
 -- sql with a SET clause, so Postgres plans its body with the limit as an
 -- unknown parameter (costed as a tenth of the rows), and that plan is a
--- parallel scan of the old index (8.5 MB, 109 000 entries, the archives
--- filtered out after each heap fetch). The new index (392 kB) is
--- smaller than min_parallel_index_scan_size, so it has no parallel plan to
--- compete with. Production, 2026-11-13, after 20261112214702:
---   the live 03:15 cron call:      231 ms, 243 567 blocks; the old index's
---                                  idx_scan rose by one, the new one's not
---   the same body, literal limit:  idx_document_attachments_backfill_unread,
---                                  183 ms, 146 050 buffers
+-- parallel scan of the old index (the archives filtered out after each
+-- heap fetch). The new index is smaller than
+-- min_parallel_index_scan_size, so it has no parallel plan to compete
+-- with: after 20261112214702 the cron's call still raised the old index's
+-- idx_scan and not the new one's, while the same body with a literal limit
+-- took the new index.
 -- With the old index gone, the new one is the only index that gives the
 -- function its order on its own predicate (tests/pg/scale-indexes.pg.test.ts
 -- plans it as a generic plan): about 40 % fewer blocks on every run, every

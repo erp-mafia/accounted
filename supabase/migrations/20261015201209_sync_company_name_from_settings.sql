@@ -12,9 +12,8 @@
 -- (auto_provision_company_inbox and rotate_company_inbox slug
 -- companies.name, so "Skapa ny inkorgsadress" minted the old name again),
 -- payslips, AGI, payment files, bokslutsbilagor, systemdokumentation, agent
--- briefings. Prod 2026-10-15 (read-only): 51 non-archived companies carry a
--- settings name that differs from companies.name, every one with an active
--- inbox; 36 more are archived.
+-- briefings. Companies whose settings name differs from companies.name
+-- exist, with an active inbox under the old name.
 --
 -- The settings copy is written from many doors (PUT /api/settings, the v1
 -- settings operation and its MCP tool, company creation, the provider

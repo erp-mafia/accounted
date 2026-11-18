@@ -2,7 +2,7 @@
 -- capability 'signing' (lib/entitlements/keys.ts PAID_CAPABILITIES, so the
 -- Stripe subscription sync writes it on the next subscription event and
 -- TRIAL_CAPABILITIES, which this VALUES list must match, gains it). No price
--- per document for now (docs/decisions/2026-10/2026-10-26-signing-in-paid-plan.md).
+-- per document for now.
 --
 -- 1. seed_trial_capability_grants() from its latest body (20261022120000)
 --    with signing added to the VALUES list; the byrå suppression and

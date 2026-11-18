@@ -10,9 +10,9 @@
 -- which never ran that test, answered ok. The SIE wizard was built for that
 -- case: its IB toggle defaults off when the year already has an IB verifikat
 -- (issue #1882), and a continuation import never books the file's IB at all
--- (crm#1099, prior_activity). Prod, 90 days: every refusal caused only by
--- such a verifikat had import_opening_balances=false, and in four of five
--- companies the agent then typed the file's vouchers in by hand.
+-- (crm#1099, prior_activity). A refusal caused only by such a verifikat
+-- came with import_opening_balances=false, and the agent then often typed
+-- the file's vouchers in by hand.
 --
 -- Now:
 --   * sie_import_admission_refusal is the rule: NULL when the import is

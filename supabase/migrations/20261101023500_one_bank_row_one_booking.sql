@@ -37,9 +37,9 @@
 --   4. The same verifikat rule on transaction_voucher_links: the link is the
 --      other way to anchor a row, and it had no guard at all.
 --
--- Prod holds no link to an opening balance or a storno, and one pointer on a
--- storno, which stays: the triggers fire only when the pointer or the link
--- changes. Nothing here rewrites a row.
+-- An existing pointer on a storno stays, and so would an existing link to
+-- an opening balance or a storno: the triggers fire only when the pointer
+-- or the link changes. Nothing here rewrites a row.
 --
 -- pg-test: tests/pg/customer-bank-match-doors.pg.test.ts,
 --          tests/pg/bank-row-one-booking.pg.test.ts

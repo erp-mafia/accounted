@@ -5,8 +5,8 @@
 -- 20261026007000 on link_invoice_to_voucher's. link_supplier_invoice_to_voucher
 -- was restated two days after the feature (20261018210400) without it, and
 -- attach_supplier_invoice_settlement_voucher never had it, so a link through
--- either read as NULL on the Kopplingar view and in the audit package: 157 rows
--- since 2026-10-17, none on the customer side. Those rows stay as they are.
+-- either read as NULL on the Kopplingar view and in the audit package (none
+-- on the customer side). The rows written that way stay as they are.
 --
 -- Neither function can pick the basis alone. A person names the pair on both,
 -- but the auto-linker (bulk-reconcile-supplier-vouchers.ts), the provider

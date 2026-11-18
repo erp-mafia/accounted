@@ -22,7 +22,7 @@
 --     the invoice builder allows on zero-VAT lines);
 -- and it does not debit 2013 while crediting 19xx (firm money moved to the
 -- owner is a withdrawal, not the customer's payment). Every bank_debit link
--- in production at the time of writing passes; the refusal is
+-- that existed at the time of writing passes; the refusal is
 -- LINK_VOUCHER_NO_SALE, answered after LINK_VOUCHER_NO_AR_CREDIT so a
 -- verifikat with no settlement line keeps its old answer. The TypeScript
 -- candidate search and validator read the twin (voucherBooksSale,

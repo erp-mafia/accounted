@@ -8,9 +8,9 @@
 -- owner's own tax to 2013, while Fortnox, Björn Lundén and the BAS K1 chart
 -- (förenklat årsbokslut) use 2012 Avräkning för skatter och avgifter
 -- (skattekonto) under eget kapital, because the firm shares its skattekonto
--- with the owner. Prod 2026-10-14 (read-only, non-archived, not sandbox): 61
--- enskilda firmor book 2012 and never 1630, 20 of them with the skattekonto
--- connected; the connection could not follow them.
+-- with the owner. Enskilda firmor that book 2012 and never 1630 exist, some
+-- of them with the skattekonto connected; the connection could not follow
+-- them.
 --
 -- 1. company_settings.skattekonto_account: NULL (= 1630), '1630' or '2012'.
 --    The value is only honoured for an enskild firma: an aktiebolag (and every
@@ -34,8 +34,8 @@
 --    enskild firma 2012 has no other meaning (K1 chart), so a pure 26xx/2012
 --    verifikat is a settlement against the skattekonto whichever account the
 --    firm runs today, and a firm that switches keeps its declared history
---    unchanged. Prod 2026-10-14: 0 verifikat in enskilda firmor have that
---    shape, so no figure moves.
+--    unchanged. No verifikat of an enskild firma had that shape when this
+--    was written, so no figure moves.
 -- 6. get_vat_declaration_totals / get_vat_ruta_source_lines: 20260920182259
 --    verbatim apart from tax_accounts in tax_shape_constants.
 -- 7. get_onboarding_books_summary: 20260920215406 verbatim plus two keys,

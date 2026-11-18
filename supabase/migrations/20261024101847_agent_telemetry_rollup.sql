@@ -306,7 +306,7 @@ COMMENT ON FUNCTION public.rollup_agent_telemetry(timestamptz, integer) IS
   'Rolls whole UTC days of event_log agent telemetry (mcp.*, agent.*) into the anonymous daily tables, oldest first, each day once. Service role only (the events cleanup cron, before it purges).';
 
 -- =============================================================================
--- 4. A day of telemetry is ~25k rows today; give the RPC the 30 s the SIE
+-- 4. A day of telemetry is many rows; give the RPC the 30 s the SIE
 --    chunk writer and the ledger build get instead of PostgREST's 8 s.
 --    Restated from 20261023093900 with rollup_agent_telemetry added.
 -- =============================================================================

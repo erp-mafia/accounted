@@ -24,7 +24,7 @@
 -- Not moved, on purpose:
 --   save_bank_account_selection: its current_date mirrors the provider cursor,
 --   which the Enable Banking handler checks against UTC midnight.
---   delete_last_voucher: an open merge request restates the same body; the one
+--   delete_last_voucher: pending work restates the same body; the one
 --   word follows once that has landed.
 --   block_document_deletion and enforce_retention_journal_entries (the
 --   enforcement triggers), enforce_invoice_delivery_immutability,

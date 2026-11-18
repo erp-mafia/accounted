@@ -5,8 +5,8 @@
 -- twice; status reserved, then sent or failed; and the provider's message id,
 -- so the delivery webhook records a bounce on the reminder it belongs to
 -- (apply_invoice_reminder_provider_status, the invoice deliveries' rule).
--- The 61 rows the old sender wrote (2026-04-12 to 2026-05-22) were all sent,
--- all carry sent_at and hold no duplicate (invoice, level): they read as sent.
+-- The rows the old sender wrote were all sent, all carry sent_at and hold
+-- no duplicate (invoice, level): they read as sent.
 --
 -- company_settings.reminders_enabled_at: when the company last turned
 -- reminders on. Only invoices dated on or after it join the ladder by

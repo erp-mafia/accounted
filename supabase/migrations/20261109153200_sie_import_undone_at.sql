@@ -27,9 +27,8 @@
 --      signature, owner and ACL, and the revoke and comment are restated.
 --
 -- Imports undone before this migration keep undone_at NULL: their time is in
--- the audit_log UPDATE rows, and writing it back is a separate,
--- founder-approved data change. The behandlingshistorik shows such an undo
--- without a time.
+-- the audit_log UPDATE rows, and writing it back is a separate data change.
+-- The behandlingshistorik shows such an undo without a time.
 --
 -- Rollout: the application reads undone_at and falls back to the columns
 -- before it on 42703 (src/lib/reports/behandlingshistorik.ts), and an unknown

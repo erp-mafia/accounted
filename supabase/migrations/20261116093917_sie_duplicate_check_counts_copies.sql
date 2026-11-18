@@ -3,24 +3,23 @@
 --
 -- check_sie_import_duplicate_vouchers (20261110094517) counted every group of
 -- posted imported vouchers sharing company, fiscal period, source series and
--- source number, and the weekly cron answered 503 on any group. Its first
--- finished run (2026-11-16) found 4,961 groups, and none of them was a new
--- problem:
+-- source number, and the weekly cron answered 503 on any group. That count
+-- takes in two kinds of group that are no new problem, so the alert fired
+-- with nothing new in it:
 --
--- 1. 107 groups were no copies at all: different vouchers that reuse a source
+-- 1. Groups that are no copies at all: different vouchers that reuse a source
 --    number inside one fiscal year (a first fiscal year longer than twelve
 --    months, where the old system restarts its numbering each calendar year,
 --    or two source years in one file). Their dates differ.
--- 2. 4,861 groups were real copies, two whole SIE files imported twice on
---    2026-09-07 and 2026-09-11, before imports had a durable batch identity
---    (#2532, 2026-09-14). Those vouchers carry no import_batch_id, and no such
---    voucher can be posted any more: guard_sie_entry_provenance
---    (20260911140515) refuses an imported voucher without a batch, and
---    journal_import_source_owned_idx refuses a second batch-owned posted
---    voucher with the same source identity in a fiscal year. The set of
---    legacy copies can only shrink (storno or undo), so a weekly alert on it
---    repeats the same news until someone repairs books the founders decided
---    to leave alone.
+-- 2. Real copies: whole SIE files imported twice, before imports had a
+--    durable batch identity (#2532, 2026-09-14). Those vouchers carry no
+--    import_batch_id, and no such voucher can be posted any more:
+--    guard_sie_entry_provenance (20260911140515) refuses an imported voucher
+--    without a batch, and journal_import_source_owned_idx refuses a second
+--    batch-owned posted voucher with the same source identity in a fiscal
+--    year. The set of legacy copies can only shrink (storno or undo), so a
+--    weekly alert on it repeats the same news about books that are left as
+--    they are.
 --
 -- What counts now:
 -- - A copy group: two or more posted imported vouchers of one company and
@@ -28,7 +27,7 @@
 --   date tells a reused number apart from the same source voucher posted
 --   twice; full content (sie_repair_content_hash) would also miss a second
 --   import under a different account mapping, which double counts just the
---   same. On 2026-11-16 the two keys gave the same 4,861 groups.
+--   same.
 -- - duplicate_groups / extra_vouchers / duplicate_samples: the copy groups
 --   that hold a batch-owned voucher, the only ones the import engine can
 --   still create. These make the cron answer 503.

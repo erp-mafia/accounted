@@ -1,10 +1,10 @@
 -- list_verifikat_missing_underlag in lockstep with verifikat_without_documents
 -- again: a document or a "no underlag required" waiver backs a verifikat only
 -- when it belongs to the verifikat's own company (20261023093920). Another
--- company's file is not this company's underlag, the narrowing can only
--- surface a warning, never hide one, and production holds no document
--- attached across companies. Restated from 20261023001000 with the two arms
--- scoped to $1, nothing else changed.
+-- company's file is not this company's underlag, and the narrowing can
+-- only surface a warning, never hide one.
+-- Restated from 20261023001000 with the two arms scoped to $1, nothing else
+-- changed.
 --
 -- pg-test: tests/pg/list-verifikat-missing-underlag.pg.test.ts
 

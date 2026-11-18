@@ -6,8 +6,8 @@
 -- with 42501 "row-level security: no write access to company ... for INSERT
 -- on dimensions", so the read-only role could not list dimensions at all.
 --
--- The system dimensions were NOT missing. Every company in the production
--- errors already had dims 1 and 6, seeded days before. The function always
+-- The system dimensions were NOT missing. Every company that hit the error
+-- already had dims 1 and 6, seeded days before. The function always
 -- proposed both rows and relied on ON CONFLICT DO NOTHING to skip the
 -- existing ones, but row-level BEFORE INSERT triggers run before the
 -- conflict check. aa_enforce_company_writer_role (20260902093000) is such a
@@ -35,7 +35,7 @@
 -- substrate's design (core stays zero-config), the system dims are
 -- undeletable (enforce_dimension_registry_guards) so a creation-time seed
 -- would block the rollback delete in createCompanyCore, and none of the
--- production failures was a missing row.
+-- failures was a missing row.
 --
 -- pg-test: covered-by tests/pg/dimensions-substrate.pg.test.ts
 

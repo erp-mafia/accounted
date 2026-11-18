@@ -14,8 +14,8 @@
 --    correction of it books on a bank account (standing_correction). correctEntry
 --    moves the row's anchors along, but it logs a failed move and carries on, and
 --    before 3c7800fc2 a correction could take the bank leg to another bank
---    account, where the binding guard refused the move: prod holds 35 such rows
---    whose amount is booked once on the other 19xx. Reading them as open would
+--    account, where the binding guard refused the move: such rows exist, with
+--    the amount booked once on the other 19xx. Reading them as open would
 --    offer the money for a second verifikat, and the duplicate guard looks on the
 --    row's own ledger only. They stay as they read today; the gate now refuses
 --    them too. A correction with no bank line (a purchase rebooked as a supplier
@@ -24,9 +24,9 @@
 --
 --    A supplementary link (role 'other', 'clearing') books no bank amount, so it
 --    anchors nothing on its own: the gate always read it so. A payment row whose
---    verifikat was deleted names no verifikat at all, and a row with nothing else
---    on it is open work; the invoice's fate stays the payment register's. Prod
---    holds no row of the first shape and one of the second.
+--    verifikat was deleted names no verifikat at all, so it anchors nothing
+--    either, and a row with nothing else on it is open work; the invoice's
+--    fate stays the payment register's.
 --
 --    The shape is the planner's. The arms are four plain tables with no WHERE, so
 --    Postgres flattens them and an anti join can probe each table's index with
@@ -51,8 +51,8 @@
 -- 3. account_ib_floor: the floor of every balance, the rule findOpeningBalanceFloor
 --    held in TypeScript and 9c115bbc5c gave the derived IB. The bank status took
 --    the latest verifikat labelled opening_balance on any date and did not skip
---    a date whose IB entries cancel. So 81 labelled lines off a year start and
---    14 cancelling dates moved both sides of the status. The status and the
+--    a date whose IB entries cancel. So labelled lines off a year start and
+--    cancelling dates moved both sides of the status. The status and the
 --    bank list now start at the same floor.
 --
 -- 4. A linked row's window: get_bank_reconciliation_items reads the anchor the

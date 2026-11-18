@@ -38,8 +38,8 @@ SELECT set_config('lock_timeout', '5s', true);
 --
 -- A reading the model provider did not answer (a 5xx, a throttle, a call
 -- ended by its time limit) is not stamped: the document is fine and is tried
--- again (stamping those left 75 documents unread for good, prod
--- 2026-10-19..26). Tried again without end, though: a scan too long to read
+-- again (stamping those left documents unread for good). Tried again
+-- without end, though: a scan too long to read
 -- inside one run was read from the start every five minutes, for as long as
 -- it existed, and before the calls had a time limit each of those runs ended
 -- in the 300 s kill. Nothing counted the tries.

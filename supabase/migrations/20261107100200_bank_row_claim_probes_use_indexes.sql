@@ -36,10 +36,10 @@
 --     2026-11-07).
 --   * The GIN index stops collecting a pending list (fastupdate = off) and
 --     the list it holds is merged now. A lookup scans the whole pending list
---     (up to gin_pending_list_limit, 4 MB) before the index proper: in
---     production a probe that matched nothing read 164 pages, 3 ms, about the
---     cost of the scan it replaces. With the list gone a probe reads a few
---     pages. Inserts of posted verifikat write the index directly instead.
+--     (up to gin_pending_list_limit, 4 MB) before the index proper: a probe
+--     that matched nothing then costs about as much as the scan it
+--     replaces. With the list gone a probe reads a few pages. Inserts of
+--     posted verifikat write the index directly instead.
 --
 -- pg-test: covered-by tests/pg/bank-row-claim-probes.pg.test.ts
 

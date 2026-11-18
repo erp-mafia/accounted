@@ -1,5 +1,5 @@
 -- Owner reopens a fiscal year closed with a year-end run in Accounted
--- (crm#1290, PH 186; founder decision 2026-10-18, supersedes 2026-08-27).
+-- (crm#1290, PH 186).
 --
 -- Until now only support could undo an executed bokslut
 -- (scripts/undo-year-end-closing.ts). This adds the guarded owner door. The

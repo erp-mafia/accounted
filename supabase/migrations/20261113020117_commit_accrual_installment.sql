@@ -8,10 +8,10 @@
 -- no month points at and the month still pending, so the next run booked the
 -- same month again. Two overlapping runs both posted, and the one whose flip
 -- matched nothing stornoed its own verifikat (two numbers for nothing, and a
--- standing duplicate when that storno failed). Read in production on
--- 2026-11-12: 199 posted unreversed periodiseringsverifikat, each pointed at
--- by a month, so nothing has been booked twice yet and nothing is repaired
--- here; this closes the gap.
+-- standing duplicate when that storno failed). Every posted unreversed
+-- periodiseringsverifikat was pointed at by a month when this was written,
+-- so nothing has been booked twice yet and nothing is repaired here; this
+-- closes the gap.
 --
 -- commit_accrual_installment is the shape of commit_asset_depreciation
 -- (20260920190200, the same gap on the anläggningsregister): it locks the

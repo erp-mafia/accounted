@@ -2,10 +2,8 @@
 -- pg-test: tests/pg/cron-runs.pg.test.ts
 --
 -- A scheduled job that the platform kills at its maxDuration leaves nothing
--- behind: no result, no log line, no alert. The payment status cron hit its
--- 300 s limit on 2026-11-10, and in the 30 days to 2026-11-12 five other
--- jobs were killed 51 times (arcim-migration/register-repair 27,
--- documents/classify 18, cloud-backup 3, skattekonto 2, documents/read 1).
+-- behind: no result, no log line, no alert. Jobs have been killed that way
+-- (the payment status cron at its 300 s limit, and several others).
 -- Each was found by reading the platform's request metrics afterwards, which
 -- keep 30 days and nothing about what the run did. A job that stops being
 -- called at all looks the same from the inside: nothing.

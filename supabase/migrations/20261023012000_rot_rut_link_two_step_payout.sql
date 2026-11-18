@@ -1,8 +1,7 @@
 -- Rot & rut: link a begäran to a payout verifikat booked by hand the
 -- kontantmetod two-step way (#93).
 --
--- Under kontantmetoden a ROT/RUT invoice is booked in two steps (!773,
--- docs/decisions/2026-10/2026-10-22-rot-rut-moms-two-steps.md; ML 2023:200
+-- Under kontantmetoden a ROT/RUT invoice is booked in two steps (ML 2023:200
 -- 7 kap. 16 §; Skatteverket, "Så fungerar rotavdraget"): the customer's
 -- payment books the customer's share, and Skatteverket's share is booked as
 -- försäljning and utgående moms when its payout arrives. 1513 holds nothing

@@ -9,7 +9,7 @@
 -- against 2099, stayed in, and the year's resultaträkning read about 0 kr on
 -- every row while the balance sheet was right. 'exclude-final' has recognised
 -- such an entry by shape since 20260924202408 (result_closing_entry_ids); the
--- operational mode never did. Prod, 2026-10-24: four live years.
+-- operational mode never did.
 --
 -- The set now also holds every entry of result_closing_entry_ids (last day,
 -- result accounts against 2099/2019/2069 only, not a storno) that

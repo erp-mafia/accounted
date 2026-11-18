@@ -1,5 +1,5 @@
 -- Who accepted which legal document, the user's analytics consent, and the
--- company's data choices (founder decisions 2026-10-21, legal docs review).
+-- company's data choices.
 --
 -- 1. legal_acceptances: one row per person, document and version accepted in
 --    the acceptance prompt (src/lib/legal/documents.ts holds the versions).

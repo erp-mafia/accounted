@@ -33,8 +33,8 @@
 --      outstanding cannot be replaced, and a plain asset written down cannot
 --      be split into components afterwards.
 --
--- Uppskrivning (ÅRL 4:6) is not part of this migration: see
--- docs/decisions/2026-10/2026-10-26-uppskrivning-not-built.md.
+-- Uppskrivning (ÅRL 4:6) is not part of this migration: revaluation
+-- upwards is not built.
 --
 -- pg-test: tests/pg/asset-impairment.pg.test.ts
 

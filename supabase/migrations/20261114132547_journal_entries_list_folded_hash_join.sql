@@ -1,19 +1,19 @@
 -- Verifikationslista: the correction fold is one hash join, not a lookup per row.
 --
--- 20261112100013 made the list carry keys through its count and sort. Live,
--- it took 340 to 370 ms a page for the largest company in production (79 121
--- verifikat in the open year), against 190 ms for the same query run with its
--- values written in. The difference is the correction fold. Inside the
--- function the parameters are not known when the query is planned, and the
--- fold was written as `NOT p_collapse_corrections OR NOT EXISTS (...)`: an
--- EXISTS under an OR cannot become a join, so Postgres ran the subquery once
--- per verifikat, 79 121 index lookups (about 155 ms; read from the plan with
--- plan_cache_mode = force_generic_plan, as the company's user, 2026-11-14).
+-- 20261112100013 made the list carry keys through its count and sort. For a
+-- company with a very large open year a page was still almost twice as slow
+-- as the same query run with its values written in. The difference is the
+-- correction fold. Inside the function the parameters are not known when the
+-- query is planned, and the fold was written as
+-- `NOT p_collapse_corrections OR NOT EXISTS (...)`: an EXISTS under an OR
+-- cannot become a join, so Postgres ran the subquery once per verifikat, one
+-- index lookup each (read from the plan with
+-- plan_cache_mode = force_generic_plan).
 --
 -- Now the posted corrections of the company are collected once (`folded`,
 -- empty when the caller does not collapse) and the list anti-joins against
 -- that set, which Postgres runs as one hash join whatever the parameters.
--- The same generic plan: 415 ms before, 258 ms after.
+-- The same generic plan takes about a third less time.
 --
 -- Same rows. `p_collapse_corrections IS NOT FALSE` keeps the old meaning for
 -- all three values: false folds nothing; true folds what it folded; NULL

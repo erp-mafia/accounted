@@ -21,9 +21,9 @@
 --
 -- Both functions are restated whole under their existing names; CREATE OR
 -- REPLACE keeps owner, ACL, SECURITY DEFINER and search_path, and the grants
--- are restated so the file stands alone. Production on 2026-10-18: 71 resets,
--- none from a company that ever had a sending domain, so no row needs a
--- backfill. Pinned in tests/pg/company-migration-reset.pg.test.ts and
+-- are restated so the file stands alone. No reset so far came from a company
+-- that ever had a sending domain, so no row needs a backfill. Pinned in
+-- tests/pg/company-migration-reset.pg.test.ts and
 -- src/extensions/general/email/__tests__/company-sending-domains.pg.test.ts.
 
 -- 1. Tenant guard: admit the recorded migration-reset move ------------------

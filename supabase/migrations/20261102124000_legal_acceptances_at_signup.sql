@@ -2,8 +2,8 @@
 --
 -- The register page says that creating an account accepts the terms and the
 -- DPA. Until now nothing recorded that: the only writer was the acceptance
--- prompt, which is switched off (LegalAcceptanceGate PROMPT_ENABLED = false,
--- founder decision 2026-10-22). POST /api/auth/signup and the BankID signup
+-- prompt, which is switched off (LegalAcceptanceGate PROMPT_ENABLED = false).
+-- POST /api/auth/signup and the BankID signup
 -- completion now write one row per accepted document at its current version
 -- (src/lib/legal/documents.ts) with method 'signup', company_id NULL, through
 -- the service role: the new person has no session before the confirmation

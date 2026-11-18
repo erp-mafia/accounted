@@ -6,8 +6,8 @@
 -- them, in the same count: a mid-month start takes its month in full.
 --
 -- It looks at a new year and at new dates only. A year already stored is never
--- re-judged, so an edit that leaves its dates alone goes through: prod holds
--- one year of 36 months and one enskild firma on broken years, and rows stay.
+-- re-judged, so an edit that leaves its dates alone goes through: stored
+-- years that break the rule (too long, an enskild firma on broken years) stay.
 
 CREATE OR REPLACE FUNCTION public.enforce_fiscal_year_law()
 RETURNS trigger

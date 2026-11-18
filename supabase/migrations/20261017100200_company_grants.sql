@@ -2,8 +2,8 @@
 -- bank lines unattended, within limits, and that a person reviews after.
 --
 -- Profiles and Suggestions, step 4 (grants as suggestions, the autonomy half
--- of Phase 3). Founder decisions: autonomy "within company policies" (agents
--- post inside the company's rules; humans review exceptions after the fact);
+-- of Phase 3). The rules: autonomy "within company policies" (agents post
+-- inside the company's rules; humans review exceptions after the fact);
 -- every grant starts switched off and a company turns each one on from a
 -- suggestion; every grant is a dated processing rule (BFNAR 2013:2 p. 9.16:
 -- changes to automatkonteringar are dated in behandlingshistorik).

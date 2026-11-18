@@ -8,13 +8,13 @@
 -- PendingOperationType), and the new value appended.
 --
 -- Add and validate in one migration, unlike the usual two: one version was
--- reserved for this change, and the scan is small (about 46 000 rows on
--- production, 2026-10-11), so the short ACCESS EXCLUSIVE window is accepted.
+-- reserved for this change, and the table is small enough that the short
+-- ACCESS EXCLUSIVE window of the scan is accepted.
 --
--- Coordination: the unmerged Kravia collections series (feat/collections-*)
--- and feat/pos-daily-sales re-state the same constraint with their own types.
--- Whichever merges after this one must re-state the UNION of the lists in a
--- new migration, or the earlier branch's types are dropped.
+-- Coordination: other pending changes (collections, daily POS sales)
+-- re-state the same constraint with their own types. Whichever lands after
+-- this one must re-state the UNION of the lists in a new migration, or the
+-- earlier one's types are dropped.
 --
 -- pg-test: tests/pg/pending-operations-op-type-audit.pg.test.ts.
 ALTER TABLE public.pending_operations

@@ -3,9 +3,9 @@
 -- idx_inbox_items_correlation_id (20260420180000_inbox_smart_match) was
 -- added "for correlation-id audit queries" that were never written: no code
 -- path, RPC or cron filters invoice_inbox_items by correlation_id (readers
--- only select the column next to the row id). Production since the last
--- stats reset (2026-09-11): idx_scan = 0, while every inbox item written
--- with a correlation id still pays for an index entry.
+-- only select the column next to the row id). The index statistics show no
+-- scan (idx_scan = 0), while every inbox item written with a correlation id
+-- still pays for an index entry.
 --
 -- It backs no constraint and no foreign key. The column itself stays.
 --

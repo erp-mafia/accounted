@@ -11,20 +11,20 @@
 --   Date order: walk the global idx_journal_entries_entry_date backwards
 --   over every tenant's rows, fetch each heap row, and keep the ones whose
 --   company_id matches, hoping to find N early. The fewer (or older) the
---   company's verifikat, the further the walk: on production (read-only
---   EXPLAIN as the requesting user, 2026-10-29) a company with 23 entries
---   walks 340 000 rows to fill a page of 20, one with 260 walks 527 000, and
---   a company with no entries walks all 2.43 M. That hits the 8 s statement
---   timeout: six 503s for four users in four days (PostHog "Journal
---   entries: canceling statement due to statement timeout"), every one of
---   them this shape, all from companies with at most 260 verifikat.
+--   company's verifikat, the further the walk: a company with a few dozen
+--   entries walks a large part of the table to fill one page, and a company
+--   with no entries walks all of it. The cost of a page then follows the
+--   whole table, every tenant's rows included, and on a large table it
+--   passes the 8 s statement timeout ("Journal entries: canceling
+--   statement due to statement timeout"). The smallest companies are hit
+--   hardest.
 --
 --   Voucher order: aggregate the lines of every one of the company's
 --   entries (the embedded lines are a lateral join below the sort), then
---   sort and keep N. Cost grows with the company: on the largest company
---   (34 000 entries, 148 000 lines) the plan aggregates all of them for a
---   page of 50. Since 2026-09-11 that shape ran 902 times, mean 294 ms,
---   max 7.5 s, half a second short of the timeout.
+--   sort and keep N. Cost grows with the company: for a large company the
+--   plan aggregates the lines of all its entries to return one page, and
+--   the call comes close to the timeout. Here the companies with the most
+--   entries are hit hardest.
 --
 -- With these indexes both orders are a range scan of the company's own
 -- entries, already in order (a btree scans both ways, so one index serves
@@ -47,10 +47,10 @@
 -- Plain CREATE INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
 -- migration transaction (precedent 20260710101000, 20261027060517). Each
 -- build holds a SHARE lock on journal_entries: reads go on, writes to
--- journal_entries wait for the build. 2.43 M rows on production;
--- idx_journal_entries_posted_needs_doc on the same table took 4.7 s on
--- 2026-10-23 (per 20261027060517), so expect writes to pause for roughly
--- 10 to 20 s for the two.
+-- journal_entries wait for the build. Each build scans the table once and
+-- sorts it, so how long writes pause follows the size of journal_entries:
+-- on a large table expect writes to pause for some seconds while the two
+-- are built.
 CREATE INDEX IF NOT EXISTS idx_journal_entries_company_date_voucher
   ON public.journal_entries (company_id, entry_date, voucher_series, voucher_number, id);
 
