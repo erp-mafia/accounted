@@ -242,7 +242,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       html += '<tr class="' + cls + '" data-idx="' + i + '">';
       html += '<td class="date">' + esc((op.created_at || '').slice(0, 10)) + '</td>';
       html += '<td><span class="title" data-toggle="' + i + '">' + esc(op.title || op.operation_type || '') + '</span>' +
-        '<div class="op-type">' + esc(op.operation_type || '') + (proposer(op) ? ' \\u00b7 ' + esc(proposer(op)) : '') + '</div>' +
+        '<div class="op-type">' + numberLabel(op) + esc(op.operation_type || '') + (proposer(op) ? ' \\u00b7 ' + esc(proposer(op)) : '') + '</div>' +
         (op._error ? '<div class="error-msg">' + esc(op._error) + '</div>' : '') +
         '</td>';
       html += '<td>' + riskChip(op.risk_level) + '</td>';
@@ -271,6 +271,16 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     document.querySelectorAll('button[data-reject]').forEach(function(b) {
       b.addEventListener('click', function() { reject(parseInt(b.dataset.reject)); });
     });
+  }
+
+  // The proposal's number in its company, as Accounted shows it
+  // ("F\\u00f6rslag 128"), so the widget and the app name the same proposal.
+  // Nothing for a row without one (an older server, or a proposal decided
+  // before numbers).
+  function numberLabel(op) {
+    return Number.isInteger(op.operation_number) && op.operation_number > 0
+      ? 'F\\u00f6rslag ' + op.operation_number + ' \\u00b7 '
+      : '';
   }
 
   // Who staged it, as the list tool names it ("Claude \\u00e5t Jonas Ek");

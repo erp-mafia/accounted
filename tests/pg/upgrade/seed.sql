@@ -164,6 +164,33 @@ VALUES
   ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
    'customer.created', '77777777-7777-7777-7777-777777777702', '{"customer": {}}'::jsonb);
 
+-- Agent proposals (pending_operations) as they stood before a later column or
+-- rule: two that are decided, which pending_operations_immutability refuses
+-- to change, and three that still wait, two of them created in the same
+-- instant. On production 98 % of the rows are decided (2026-11-17), so a
+-- migration that touches every proposal fails there and passes on an empty
+-- table. Listed in creation order, ties by id: a merge-base that already
+-- numbers proposals at insert (20261117192101) gives them the numbers the
+-- backfill gives. Only columns the table has had since 2026-03.
+INSERT INTO public.pending_operations
+  (id, user_id, company_id, operation_type, title, params, status, created_at, resolved_at, updated_at)
+VALUES
+  ('55555555-5555-5555-5555-555555555501', '11111111-1111-1111-1111-111111111111',
+   '22222222-2222-2222-2222-222222222222', 'create_customer', 'Skapa kund: Uppgraderingskund AB', '{}'::jsonb,
+   'committed', '2026-05-04 08:00:00+00', '2026-05-04 09:00:00+00', '2026-05-04 09:00:00+00'),
+  ('55555555-5555-5555-5555-555555555502', '11111111-1111-1111-1111-111111111111',
+   '22222222-2222-2222-2222-222222222222', 'create_customer', 'Skapa kund: Uppgraderingskund AB', '{}'::jsonb,
+   'pending', '2026-05-05 08:00:00+00', NULL, '2026-05-05 08:00:00+00'),
+  ('55555555-5555-5555-5555-555555555503', '11111111-1111-1111-1111-111111111111',
+   '22222222-2222-2222-2222-222222222222', 'create_customer', 'Skapa kund: Uppgraderingskund AB', '{}'::jsonb,
+   'rejected', '2026-05-06 08:00:00+00', '2026-05-06 10:00:00+00', '2026-05-06 10:00:00+00'),
+  ('55555555-5555-5555-5555-555555555504', '11111111-1111-1111-1111-111111111111',
+   '22222222-2222-2222-2222-222222222222', 'create_customer', 'Skapa kund: Uppgraderingskund AB', '{}'::jsonb,
+   'pending', '2026-05-07 08:00:00+00', NULL, '2026-05-07 08:00:00+00'),
+  ('55555555-5555-5555-5555-555555555505', '11111111-1111-1111-1111-111111111111',
+   '22222222-2222-2222-2222-222222222222', 'create_customer', 'Skapa kund: Uppgraderingskund AB', '{}'::jsonb,
+   'pending', '2026-05-07 08:00:00+00', NULL, '2026-05-07 08:00:00+00');
+
 -- Guarded: company_migration_resets arrived 2026-08-18 and a merge-base older
 -- than that lacks the table. Then the archived company simply is not seeded.
 DO $$

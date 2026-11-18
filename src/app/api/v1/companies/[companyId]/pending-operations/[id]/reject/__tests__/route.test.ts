@@ -188,7 +188,7 @@ describe('POST .../pending-operations/:id/reject', () => {
     for (const [payload] of findCalls('pending_operations', 'update')) expect(payload).not.toHaveProperty('agent_reason')
   })
 
-  it('answers the rejected operation without agent_reason while that column is not there yet', async () => {
+  it('answers the rejected operation without operation_number while that column is not there yet', async () => {
     const state = { row: operationRow() as Row }
     let viewReads = 0
     const mock = createTableMockSupabase({
@@ -202,7 +202,7 @@ describe('POST .../pending-operations/:id/reject', () => {
         if (calls.some((c) => c.method === 'in')) return { data: [{ ...state.row }] }
         viewReads += 1
         const select = calls.find((c) => c.method === 'select')?.args[0] as string
-        if (select.includes('agent_reason')) return { data: null, error: { code: '42703', message: 'no agent_reason' } }
+        if (select.includes('operation_number')) return { data: null, error: { code: '42703', message: 'no operation_number' } }
         return { data: { ...state.row } }
       },
     })
@@ -211,7 +211,7 @@ describe('POST .../pending-operations/:id/reject', () => {
     const res = await POST(request({ category: 'wrong_amount' }), params)
 
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toMatchObject({ status: 'rejected', agent_reason: null })
+    expect((await res.json()).data).toMatchObject({ status: 'rejected', operation_number: null })
     expect(viewReads).toBe(2)
   })
 

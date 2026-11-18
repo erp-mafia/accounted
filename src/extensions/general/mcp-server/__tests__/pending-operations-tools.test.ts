@@ -148,22 +148,7 @@ describe('gnubok_list_pending_operations', () => {
     expect(String(findCalls('pending_operations', 'select')[0]?.[0])).not.toContain('params')
   })
 
-  it('lists without agent_reason while that column is not there yet', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.agent_reason does not exist' }, count: null })
-    enqueue({ data: [{ id: 'op-1', status: 'pending' }], error: null, count: 1 })
-
-    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
-      operations: Array<{ id: string }>
-    }
-
-    expect(result.operations.map((op) => op.id)).toEqual(['op-1'])
-    const selects = findCalls('pending_operations', 'select').map((args) => String(args[0]))
-    expect(selects).toHaveLength(2)
-    expect(selects[1]).not.toContain('agent_reason')
-  })
-
-  it("returns each operation's trace_id, the request that staged it, and lists without it while the column is not there yet", async () => {
+  it("returns each operation's trace_id, the request that staged it", async () => {
     const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
     const first = createQueuedMockSupabase()
     first.enqueue({ data: [{ id: 'op-1', status: 'pending', trace_id: traceId }, { id: 'op-2', status: 'pending', trace_id: null }], error: null, count: 2 })
@@ -172,17 +157,57 @@ describe('gnubok_list_pending_operations', () => {
     }
     expect(listed.operations.map((op) => op.trace_id)).toEqual([traceId, null])
     expect(String(first.findCalls('pending_operations', 'select')[0]?.[0])).toContain('trace_id')
+  })
 
-    const before = createQueuedMockSupabase()
-    before.enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.trace_id does not exist' }, count: null })
-    before.enqueue({ data: [{ id: 'op-1', status: 'pending' }], error: null, count: 1 })
-    const fallback = (await listTool.execute({}, 'company-1', 'user-1', before.supabase as never, { type: 'api_key' })) as {
-      operations: Array<{ id: string }>
+  it("returns each operation's operation_number, the number the person sees, null on a proposal decided before numbers", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-2', status: 'pending', operation_number: 129 },
+        { id: 'op-1', status: 'pending', operation_number: 128 },
+        { id: 'op-0', status: 'pending', operation_number: null },
+      ],
+      error: null,
+      count: 3,
+    })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; operation_number: number | null }>
     }
-    expect(fallback.operations.map((op) => op.id)).toEqual(['op-1'])
-    const selects = before.findCalls('pending_operations', 'select').map((args) => String(args[0]))
+
+    expect(result.operations.map((op) => op.operation_number)).toEqual([129, 128, null])
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).toContain('operation_number')
+  })
+
+  // The code is live before the migration that adds the column runs. The
+  // retry drops that one column: agent_reason and trace_id are long applied,
+  // and a list without them for the length of the window would lose the why.
+  it('lists without operation_number while that column is not there yet, and keeps the rest', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.operation_number does not exist' }, count: null })
+    enqueue({ data: [{ id: 'op-1', status: 'pending', agent_reason: 'Telia every month on 6212.' }], error: null, count: 1 })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<Record<string, unknown>>
+    }
+
+    expect(result.operations.map((op) => op.id)).toEqual(['op-1'])
+    expect(result.operations[0]).not.toHaveProperty('operation_number')
+    expect(result.operations[0]?.agent_reason).toBe('Telia every month on 6212.')
+    const selects = findCalls('pending_operations', 'select').map((args) => String(args[0]))
     expect(selects).toHaveLength(2)
-    expect(selects[1]).not.toContain('trace_id')
+    expect(selects[1]).not.toContain('operation_number')
+    expect(selects[1]?.replace(/\s/g, '')).toBe(selects[0]?.replace(/\s/g, '').replace('operation_number,', ''))
+  })
+
+  it('does not retry a failure that is not a missing column', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' }, count: null })
+
+    await expect(listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })).rejects.toThrow(
+      /Failed to list pending operations/,
+    )
+    expect(findCalls('pending_operations', 'select')).toHaveLength(1)
   })
 
   // Issue #3408: approve is never pre-ticked on consent, so the default

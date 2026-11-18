@@ -90,6 +90,9 @@ interface MemoryEvent {
 interface StagedOperation {
   tool_use_id: string
   operation_id?: string
+  // The proposal's number in its company ("Förslag 128"), from the staged
+  // envelope or the stored row; none before the column exists.
+  operation_number?: number | null
   risk_level: 'low' | 'medium' | 'high'
   message: string
   // The originating tool name (e.g. 'gnubok_categorize_transaction'), as
@@ -699,6 +702,7 @@ export default function AgentChat({
       case 'staged_operation': {
         const stagedRaw = ev.staged as {
           operation_id?: string
+          operation_number?: number
           risk_level: 'low' | 'medium' | 'high'
           message: string
           preview?: unknown
@@ -718,6 +722,7 @@ export default function AgentChat({
                 tool_name: (ev.tool_name as string | undefined) ?? undefined,
                 params: (ev.params as Record<string, unknown> | undefined) ?? undefined,
                 operation_id: stagedRaw.operation_id,
+                operation_number: stagedRaw.operation_number,
                 risk_level: stagedRaw.risk_level,
                 message: stagedRaw.message,
                 preview: stagedRaw.preview,
@@ -1060,6 +1065,7 @@ function MessageBubble({
               <ApprovalCard
                 key={s.tool_use_id}
                 operationId={s.operation_id}
+                operationNumber={s.operation_number}
                 riskLevel={s.risk_level}
                 message={s.message}
                 toolName={s.tool_name}
@@ -1367,6 +1373,7 @@ export function attachStagedOperations(
     // operation id is the stable key and the only thing commit/reject need.
     tool_use_id: `hydrated:${op.id}`,
     operation_id: op.id,
+    operation_number: op.operation_number,
     risk_level:
       op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
     message: op.title ?? 'Förslag väntar på granskning.',

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { rejectPendingForConversation } from '@/lib/agent/pending/reject-conversation-pending'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 
 // GET /api/agent/conversations/[id]
 //
@@ -77,13 +78,24 @@ export const GET = withRouteContext(
     // its full 30 days with nothing in the conversation pointing at it.
     // run-turn stamps agent_metadata.conversation_id on every staged row, so
     // the still-open ones can be re-attached here.
-    const { data: staged, error: stagedErr } = await supabase
-      .from('pending_operations')
-      .select('id, operation_type, title, risk_level, preview_data, created_at')
-      .eq('company_id', conv.company_id)
-      .eq('status', 'pending')
-      .eq('agent_metadata->>conversation_id', id)
-      .order('created_at', { ascending: true })
+    // operation_number: the proposal's number ("Förslag 128"), read without
+    // it while the column is not there yet.
+    const { data: staged, error: stagedErr } = await readWithOperationNumber((withOperationNumber) => {
+      const numbered = () =>
+        supabase
+          .from('pending_operations')
+          .select('id, operation_number, operation_type, title, risk_level, preview_data, created_at')
+      const query = withOperationNumber
+        ? numbered()
+        : (supabase
+            .from('pending_operations')
+            .select('id, operation_type, title, risk_level, preview_data, created_at') as unknown as ReturnType<typeof numbered>)
+      return query
+        .eq('company_id', conv.company_id)
+        .eq('status', 'pending')
+        .eq('agent_metadata->>conversation_id', id)
+        .order('created_at', { ascending: true })
+    })
     // Do not swallow this: silently returning an empty list would drop the very
     // proposals this query exists to restore, and the thread would look like it
     // never staged anything. Same handling as the message query above.

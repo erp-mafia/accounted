@@ -3180,6 +3180,11 @@ export interface PendingOperation {
   // Why the stager proposes it, as given when staging (migration
   // 20261028210000). Optional: absent on a row read before the column exists.
   agent_reason?: string | null
+  // The proposal's number in its company, assigned by the database at insert
+  // and never changed (migration 20261117192101). Absent on a row read before
+  // the column exists, null on a proposal decided before it: read it through
+  // operationNumberOf (lib/pending-operations/operation-number.ts).
+  operation_number?: number | null
   created_at: string
   resolved_at: string | null
   updated_at: string
@@ -5359,6 +5364,8 @@ export interface SalaryLineItem {
  */
 export interface StoredStagedOperation {
   id: string
+  /** The proposal's number (PendingOperation.operation_number); absent before the column exists. */
+  operation_number?: number | null
   operation_type: string
   title?: string | null
   risk_level?: string | null

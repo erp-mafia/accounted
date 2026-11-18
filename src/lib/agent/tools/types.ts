@@ -50,6 +50,8 @@ export interface AgentTool {
 export interface StagedOperationResult {
   staged: true
   operation_id?: string
+  /** The proposal's number in its company ("Förslag 128"); none while the column is not there yet. */
+  operation_number?: number
   risk_level: 'low' | 'medium' | 'high'
   actor: { type: string; id?: string; label?: string }
   message: string

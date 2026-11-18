@@ -9,6 +9,7 @@ import { ClipboardDocumentCheckIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { dayKindOf, mergeLatest } from './need-model'
 import { formatDate } from '@/lib/utils'
+import { ProposalNumber } from '@/components/pending-operations/ProposalNumber'
 import type { PendingOperation } from '@/types'
 
 /**
@@ -23,7 +24,10 @@ import type { PendingOperation } from '@/types'
 
 const PAGE = 50
 
-type Row = Pick<PendingOperation, 'id' | 'title' | 'status' | 'resolved_at' | 'created_at' | 'actor_type' | 'actor_label'>
+type Row = Pick<
+  PendingOperation,
+  'id' | 'operation_number' | 'title' | 'status' | 'resolved_at' | 'created_at' | 'actor_type' | 'actor_label'
+>
 
 async function load(status: 'committed' | 'rejected'): Promise<{ rows: Row[]; total: number | null }> {
   const res = await fetch(`/api/pending-operations?status=${status}&order=desc&limit=${PAGE}`)
@@ -146,6 +150,7 @@ export function HemDone() {
               {rows.map((row) => (
                 <li key={row.id} className="flex min-h-11 items-center gap-3 border-b-hairline px-2 py-2">
                   <span className="w-12 shrink-0 text-xs tabular-nums text-muted-foreground">{timeOf(whenOf(row))}</span>
+                  <ProposalNumber op={row} className="text-xs" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-strong" data-ph-mask="">
                     {row.title}
                   </span>

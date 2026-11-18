@@ -156,19 +156,28 @@ describe('GET .../pending-operations', () => {
     expect(mock.payloads('pending_operations', 'select')[0]).toContain('agent_reason')
   })
 
-  it('lists without agent_reason while that column is not there yet', async () => {
+  it("answers each operation's operation_number, the number a person sees", async () => {
+    const mock = client({ data: [row(2, { operation_number: 129 }), row(1, { operation_number: 128 })] })
+    const body = await (await LIST(get(BASE), listParams)).json()
+    expect(body.data.map((op: { operation_number: number | null }) => op.operation_number)).toEqual([129, 128])
+    expect(mock.payloads('pending_operations', 'select')[0]).toContain('operation_number')
+  })
+
+  it('lists without operation_number while that column is not there yet, and keeps agent_reason', async () => {
     const mock = client([
-      { data: null, error: { code: '42703', message: 'column pending_operations.agent_reason does not exist' } },
-      { data: [row(1)] },
+      { data: null, error: { code: '42703', message: 'column pending_operations.operation_number does not exist' } },
+      { data: [row(1, { agent_reason: 'Acme AB is on three invoices in the inbox.' })] },
     ])
     const res = await LIST(get(BASE), listParams)
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toHaveLength(1)
-    expect(body.data[0].agent_reason).toBeNull()
+    expect(body.data[0].operation_number).toBeNull()
+    expect(body.data[0].agent_reason).toBe('Acme AB is on three invoices in the inbox.')
     const selects = mock.payloads('pending_operations', 'select') as string[]
     expect(selects).toHaveLength(2)
-    expect(selects[1]).not.toContain('agent_reason')
+    expect(selects[1]).not.toContain('operation_number')
+    expect(selects[1]).toContain('agent_reason')
     // The retry keeps every filter of the first read.
     expect(mock.findCalls('pending_operations', 'eq').filter(([column]) => column === 'status')).toHaveLength(2)
   })
@@ -215,14 +224,17 @@ describe('GET .../pending-operations/:id', () => {
     expect(mock.findCalls('pending_operations', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY_ID]]))
   })
 
-  it('200 with agent_reason, read without it while the column is not there yet', async () => {
-    client({ data: row(1, { agent_reason: 'Same supplier as the last eleven.' }) })
-    expect((await (await DETAIL(get(`${BASE}/${id}`), detailParams)).json()).data.agent_reason).toBe('Same supplier as the last eleven.')
+  it('200 with agent_reason and operation_number, read without the number while that column is not there yet', async () => {
+    client({ data: row(1, { agent_reason: 'Same supplier as the last eleven.', operation_number: 128 }) })
+    expect((await (await DETAIL(get(`${BASE}/${id}`), detailParams)).json()).data).toMatchObject({
+      agent_reason: 'Same supplier as the last eleven.',
+      operation_number: 128,
+    })
 
-    const mock = client([{ data: null, error: { code: '42703', message: 'no agent_reason' } }, { data: row(1) }])
+    const mock = client([{ data: null, error: { code: '42703', message: 'no operation_number' } }, { data: row(1) }])
     const res = await DETAIL(get(`${BASE}/${id}`), detailParams)
     expect(res.status).toBe(200)
-    expect((await res.json()).data).toMatchObject({ pending_operation_id: id, agent_reason: null })
+    expect((await res.json()).data).toMatchObject({ pending_operation_id: id, operation_number: null })
     expect(mock.payloads('pending_operations', 'select')).toHaveLength(2)
   })
 

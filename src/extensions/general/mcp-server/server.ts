@@ -457,6 +457,8 @@ import {
   writeWithAgentReason,
   type AgentReasonArg,
 } from '@/lib/pending-operations/agent-reason'
+import { operationNumberField, operationNumberOf } from '@/lib/pending-operations/operation-number'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 import { getTraceId, parseTraceparent, traceIdFromRequest } from '@/lib/observability/trace-context'
 import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
@@ -2517,6 +2519,8 @@ async function stagePendingOperation(
   dry_run?: boolean
   idempotency_replay?: boolean
   operation_id?: string
+  /** The proposal's number in its company ("Förslag 128"); none while the column is not there yet. */
+  operation_number?: number
   /** Older proposals of this stager for the same bank rows (crm#1264), or identical ones, rejected as superseded. */
   superseded_operation_ids?: string[]
   /** A dry run's: the proposals staging would supersede. */
@@ -2670,6 +2674,7 @@ async function stagePendingOperation(
       staged: true,
       idempotency_replay: true,
       operation_id: existing.id,
+      ...operationNumberField(existing),
       risk_level: existingRisk,
       actor,
       message: `Already staged: pending_operation ${existing.id} (staged ${existing.created_at}) holds exactly this proposal for these bank rows, so nothing new was staged. ${buildApprovalGuidance(existing.id, existingRisk, actor.canApprove)}`,
@@ -2734,6 +2739,13 @@ async function stagePendingOperation(
     { stager, actorLabel: actor.label, channel: 'mcp' },
   )
 
+  // The proposal's number in its company, as the database assigned it: what
+  // the person sees as "Förslag 128" (lib/pending-operations/
+  // operation-number.ts). None while the column is not there yet. Not in
+  // STAGED_OPERATION_SCHEMA, like superseded_operation_ids: every listed
+  // staging tool repeats that schema in tools/list, whose budget is frozen.
+  const operationNumber = operationNumberOf(data)
+
   // approve.args carries only the operation_id. For high-risk operations the
   // LLM must supply confirmed=true itself after surfacing the BFL 5 kap 5§
   // irreversibility implications to the user: pre-filling it server-side
@@ -2743,9 +2755,10 @@ async function stagePendingOperation(
   const response = {
     staged: true,
     operation_id: data.id,
+    ...operationNumberField(data),
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${periodLockNote ? ` ${periodLockNote}` : ''}${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${complianceNote ? ` WARNING: ${complianceNote}` : ''}`,
+    message: `Staged as ${operationNumber ? `proposal ${operationNumber}, ` : ''}pending_operation ${data.id} (risk: ${riskLevel}).${periodLockNote ? ` ${periodLockNote}` : ''}${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${complianceNote ? ` WARNING: ${complianceNote}` : ''}`,
     ...(superseded.length + supersededTwins.length > 0 ? { superseded_operation_ids: [...superseded, ...supersededTwins] } : {}),
     ...approveHint(data.id, companyId, actor),
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
@@ -2756,7 +2769,7 @@ async function stagePendingOperation(
   if (options.idempotencyKey && requestHash) {
     await storeIdempotencyResponse(
       supabase, userId, companyId, options.idempotencyKey, requestHash,
-      'success', { staged: true, operation_id: data.id, preview: previewData }
+      'success', { staged: true, operation_id: data.id, ...operationNumberField(data), preview: previewData }
     )
   }
   return response
@@ -28598,25 +28611,28 @@ export const tools: McpTool[] = [
       // satisfy data-minimisation (GDPR Art. 5(1)(b)). Use preview_data for
       // a redacted, human-readable summary, or call the underlying entity
       // endpoint when the agent needs the full payload.
-      // agent_reason: why the stager proposes it; trace_id: the request that
-      // staged it. Read without them while a column is not there yet (the
-      // migration runs after the deploy).
-      const selectWithReason = () =>
+      // operation_number: the proposal's number in its company, what the
+      // person sees as "Förslag 128" (lib/pending-operations/
+      // operation-number.ts); agent_reason: why the stager proposes it;
+      // trace_id: the request that staged it. Read without operation_number
+      // while that column is not there yet (its migration runs after the
+      // deploy; the other two have been applied since their own).
+      const selectWithNumber = () =>
         supabase
           .from('pending_operations')
           .select(
-            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, trace_id, created_at, resolved_at, result_data, rejection_category',
+            'id, operation_number, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, trace_id, created_at, resolved_at, result_data, rejection_category',
             { count: 'exact' }
           )
-      const listQuery = (withAgentReason: boolean) => {
-        let query = withAgentReason
-          ? selectWithReason()
+      const listQuery = (withOperationNumber: boolean) => {
+        let query = withOperationNumber
+          ? selectWithNumber()
           : (supabase
               .from('pending_operations')
               .select(
-                'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, created_at, resolved_at, result_data, rejection_category',
+                'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, trace_id, created_at, resolved_at, result_data, rejection_category',
                 { count: 'exact' }
-              ) as unknown as ReturnType<typeof selectWithReason>)
+              ) as unknown as ReturnType<typeof selectWithNumber>)
         query = query.eq('status', status)
         query = acrossCompanies ? query.in('company_id', accessibleIds) : query.eq('company_id', companyId)
         if (batchId) query = query.eq('batch_id', batchId)
@@ -28624,9 +28640,7 @@ export const tools: McpTool[] = [
         if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
         return query.order('created_at', { ascending: false }).range(offset, offset + limit - 1)
       }
-      let listed = await listQuery(true)
-      if (isMissingColumnError(listed.error)) listed = await listQuery(false)
-      const { data, error, count } = listed
+      const { data, error, count } = await readWithOperationNumber(listQuery)
       if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
 
       // task_state: the status in the MCP Tasks / A2A vocabulary, as the v1

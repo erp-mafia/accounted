@@ -23,6 +23,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
 import { REJECTION_CATEGORY_LABELS } from '@/components/pending-operations/vocabulary'
+import { proposalNumberLabel } from '@/components/pending-operations/ProposalNumber'
 import { operationTypeFromToolName } from '@/lib/pending-operations/tool-name'
 
 // Inline approval card for an agent-staged pending_operation.
@@ -55,6 +56,9 @@ interface PeriodStatus {
 
 interface Props {
   operationId: string
+  // pending_operations.operation_number: which proposal this is, as Rutin
+  // names it ("Förslag 128"). None before the column exists.
+  operationNumber?: number | null
   riskLevel: 'low' | 'medium' | 'high'
   message: string
   toolName?: string
@@ -93,6 +97,7 @@ interface CommitResultData {
 
 export default function ApprovalCard({
   operationId,
+  operationNumber,
   riskLevel,
   message,
   toolName,
@@ -357,7 +362,7 @@ export default function ApprovalCard({
     >
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs text-muted-foreground">
-          Förslag · risk {translateRisk(riskLevel)}
+          {proposalNumberLabel({ operation_number: operationNumber }, t) ?? 'Förslag'} · risk {translateRisk(riskLevel)}
         </p>
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>

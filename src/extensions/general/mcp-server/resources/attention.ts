@@ -21,6 +21,7 @@ import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 import { addDaysIso, todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
 import { formatActorAttribution } from '@/lib/attribution/format-actor'
 import { resolvePersonNames } from '@/lib/attribution/person-names'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -118,13 +119,20 @@ export const attentionResource: McpResource = {
         .order('due_date', { ascending: true })
         .limit(SAMPLE_LIMIT),
       countPendingOperations(supabase, companyId),
-      supabase
-        .from('pending_operations')
-        .select('id, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at')
-        .eq('company_id', companyId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(SAMPLE_LIMIT),
+      // operation_number: the number the person sees ("Förslag 128"); read
+      // without it while the column is not there yet.
+      readWithOperationNumber((withOperationNumber) => {
+        const numbered = () =>
+          supabase
+            .from('pending_operations')
+            .select('id, operation_number, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at')
+        const samples = withOperationNumber
+          ? numbered()
+          : (supabase
+              .from('pending_operations')
+              .select('id, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at') as unknown as ReturnType<typeof numbered>)
+        return samples.eq('company_id', companyId).eq('status', 'pending').order('created_at', { ascending: false }).limit(SAMPLE_LIMIT)
+      }),
       supabase
         .from('receipts')
         .select('id', { count: 'exact', head: true })

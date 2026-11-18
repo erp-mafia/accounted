@@ -3,6 +3,7 @@ import { getTranslations } from 'next-intl/server'
 import ChatConversationView from '@/components/agent/ChatConversationView'
 import { intentLabelKey } from '@/components/agent/intent-label-keys'
 import type { StoredStagedOperation } from '@/types'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
 import { leaveWhenChatSwitchedOff } from '../chat-switch'
 
@@ -47,13 +48,24 @@ export default async function ChatConversationPage({ params }: PageProps) {
     // Proposals this thread staged that are still unanswered, so the approval
     // card comes back on resume rather than the proposal quietly waiting out
     // its expiry in Granskning with nothing here pointing at it.
-    supabase
-      .from('pending_operations')
-      .select('id, operation_type, title, risk_level, preview_data, params, created_at')
-      .eq('company_id', companyId)
-      .eq('status', 'pending')
-      .eq('agent_metadata->>conversation_id', id)
-      .order('created_at', { ascending: true }),
+    // operation_number: the proposal's number ("Förslag 128"), read without
+    // it while the column is not there yet.
+    readWithOperationNumber((withOperationNumber) => {
+      const numbered = () =>
+        supabase
+          .from('pending_operations')
+          .select('id, operation_number, operation_type, title, risk_level, preview_data, params, created_at')
+      const query = withOperationNumber
+        ? numbered()
+        : (supabase
+            .from('pending_operations')
+            .select('id, operation_type, title, risk_level, preview_data, params, created_at') as unknown as ReturnType<typeof numbered>)
+      return query
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .eq('agent_metadata->>conversation_id', id)
+        .order('created_at', { ascending: true })
+    }),
   ])
 
   if (!conversation) notFound()

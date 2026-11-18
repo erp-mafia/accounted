@@ -6,6 +6,14 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { tools } from '../server'
 import { findUnknownArgKeys } from '../arg-guard'
 
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts). A new
+// customer is never judged by it, so the stub answers what the real one
+// does (none) until a test gives it a note.
+const filedVat = vi.hoisted(() => ({ note: null as string | null }))
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async () => filedVat.note,
+}))
+
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_create_customer')!
 
 describe('gnubok_create_customer: customer_number input', () => {
@@ -48,6 +56,74 @@ describe('gnubok_create_customer: customer_number input', () => {
       params: Record<string, unknown>
     }
     expect(inserted.params).toMatchObject({ customer_number: 'K-1001' })
+  })
+
+  // Every staging tool answers through the one staging helper, so this is
+  // the staged answer of all of them (lib/pending-operations/operation-number.ts).
+  it('answers the number the database gave the proposal, in the envelope and in the message', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-3', operation_number: 128 } })
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; operation_id?: string; operation_number?: number; message: string }
+
+    expect(result.staged).toBe(true)
+    expect(result.operation_id).toBe('op-create-customer-3')
+    expect(result.operation_number).toBe(128)
+    expect(result.message).toMatch(/^Staged as proposal 128, pending_operation op-create-customer-3 \(risk: /)
+  })
+
+  // The staged message is one line that two changes meet in: it opens with
+  // the proposal's number and closes with the advisory note (the tool's own
+  // and the filed-momsperiod one). Neither may push the other out.
+  it('names the proposal first and still closes with the advisory note', async () => {
+    const note = 'Momsdeklarationen för 2026-Q3 är redan inlämnad (2026-11-11). Godkänns förslaget kan deklarationen behöva rättas.'
+    filedVat.note = note
+    try {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: null }) // company_settings read (payment-terms default)
+      enqueue({ data: { id: 'op-create-customer-5', operation_number: 129 } })
+
+      const result = (await tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as { staged: boolean; operation_number?: number; message: string; preview: Record<string, unknown> }
+
+      expect(result.staged).toBe(true)
+      expect(result.operation_number).toBe(129)
+      expect(result.message).toMatch(/^Staged as proposal 129, pending_operation op-create-customer-5 \(risk: /)
+      expect(result.message.endsWith(` WARNING: ${note}`)).toBe(true)
+      // The approver reads the same note on the stored proposal.
+      expect(result.preview.compliance_warning).toBe(note)
+      const [inserted] = findCall('pending_operations', 'insert') as [{ preview_data: Record<string, unknown> }]
+      expect(inserted.preview_data.compliance_warning).toBe(note)
+    } finally {
+      filedVat.note = null
+    }
+  })
+
+  it('answers without a number while the column is not there yet', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-4' } })
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; message: string }
+
+    expect(result.staged).toBe(true)
+    expect(result).not.toHaveProperty('operation_number')
+    expect(result.message).toMatch(/^Staged as pending_operation op-create-customer-4 \(risk: /)
   })
 
   it('rejects a customer_number longer than 32 characters before staging', async () => {

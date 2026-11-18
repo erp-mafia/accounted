@@ -92,6 +92,7 @@ import {
   type ReviewPrimary,
 } from '@/components/pending-operations/ProposalReview'
 import { headlineAmount, isAutoExpired, missingFields, stepAfterLeaving, stepPosition } from '@/components/pending-operations/review-model'
+import { ProposalNumber, proposalNumberLabel } from '@/components/pending-operations/ProposalNumber'
 import { factLabelText } from '@/components/pending-operations/preview-parts'
 import {
   NO_APPROVAL_RESULTS,
@@ -1086,7 +1087,8 @@ export default function PendingOperationsPage() {
             .map((r) => ({ id: r.id, failure: { kind: 'refused' as const, message: r.error as string } })),
         ),
       )
-      const titles = new Map(operations.map((op) => [op.id, op.title]))
+      // Look-alike titles are told apart by the proposal's number.
+      const titles = new Map(operations.map((op) => [op.id, [proposalNumberLabel(op, t), op.title].filter(Boolean).join(' · ')]))
       setBulkOutcome({
         summary: parts.join(', '),
         items: undone.map((r) => ({ id: r.id, title: titles.get(r.id) ?? r.id, reason: r.error ?? null })),
@@ -1361,10 +1363,12 @@ export default function PendingOperationsPage() {
     return key && tSkills.has(key) ? tSkills(key) : item.kind === 'knowledge' ? item.id.split('/')[1] : item.slug
   }))].join(', ')
 
-  // Source/kicker line for a row and the detail panel: operation type,
-  // origin (when an agent staged it) and relative age.
+  // Source/kicker line for a row and the detail panel: the proposal's own
+  // number (which one it is), operation type, origin (when an agent staged
+  // it) and relative age.
   const sourceLine = (op: PendingOperation) =>
     [
+      proposalNumberLabel(op, t),
       operationLabel(op.operation_type, t, op.params),
       stagerOf(op),
       op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: retrievedNames(op.agent_metadata.skills_loaded) }) : null,
@@ -1827,6 +1831,7 @@ export default function PendingOperationsPage() {
                 // Historik row (concept k-row): status chip + text + sub line.
                 const resolvedAt = op.resolved_at ?? op.created_at
                 const sub = [
+                  proposalNumberLabel(op, t),
                   formatRelativeTime(resolvedAt, t),
                   operationLabel(op.operation_type, t, op.params),
                   originLabel(op, t, attribute),
@@ -2021,6 +2026,9 @@ export default function PendingOperationsPage() {
                       title={runRow?.detail ?? `${op.title} · ${formatRelativeTime(op.created_at, t)}`}
                       data-ph-mask=""
                     >
+                      {/* Which proposal this is: its own number, the same
+                          before and after the ones around it are approved. */}
+                      <ProposalNumber op={op} />
                       {!runRow && rowTitle.type && (
                         <span className="min-w-0 shrink-[100] truncate text-muted-foreground max-sm:hidden">{rowTitle.type}</span>
                       )}

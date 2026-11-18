@@ -13,24 +13,25 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
-import { isMissingColumnError } from './agent-reason'
+import { operationNumberOf } from './operation-number'
+import { readWithOperationNumber } from './operation-number-read'
 import { pendingOperationTaskState, PENDING_OPERATION_TASK_STATES } from './task-state'
 
 export const PENDING_OPERATION_STATUSES = ['pending', 'committing', 'committed', 'rejected', 'failed_partial', 'unknown'] as const
 
 /** The columns the view reads; never `params`. */
 export const PENDING_OPERATION_VIEW_COLUMNS =
-  'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at'
+  'id, company_id, operation_number, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at'
 
-/** The same, without agent_reason: the read while that column is not there yet. */
-export const PENDING_OPERATION_VIEW_COLUMNS_WITHOUT_AGENT_REASON =
-  'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, rejection_category, rejection_reason, result_data, created_at, resolved_at'
+/** The same, without operation_number: the read while that column is not there yet. */
+export const PENDING_OPERATION_VIEW_COLUMNS_WITHOUT_OPERATION_NUMBER =
+  'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at'
 
 function selectViewColumns(supabase: SupabaseClient) {
   return supabase
     .from('pending_operations')
     .select(
-      'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at',
+      'id, company_id, operation_number, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at',
     )
 }
 
@@ -38,36 +39,38 @@ function selectViewColumns(supabase: SupabaseClient) {
  * The pending_operations read every v1 door starts from, with the column
  * list spelled as a literal so the schema guard (tests/schema) can check each
  * column: a select built from a constant counts as unresolvable. Must stay
- * equal to PENDING_OPERATION_VIEW_COLUMNS (pinned by view.test.ts), or to
- * the list without agent_reason for `{ withAgentReason: false }`.
+ * equal to PENDING_OPERATION_VIEW_COLUMNS (pinned by view-select.test.ts), or
+ * to the list without operation_number for `{ withOperationNumber: false }`.
  */
 export function selectPendingOperationView(
   supabase: SupabaseClient,
-  options: { withAgentReason?: boolean } = {},
+  options: { withOperationNumber?: boolean } = {},
 ): ReturnType<typeof selectViewColumns> {
-  if (options.withAgentReason !== false) return selectViewColumns(supabase)
+  if (options.withOperationNumber !== false) return selectViewColumns(supabase)
   return supabase
     .from('pending_operations')
     .select(
-      'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, rejection_category, rejection_reason, result_data, created_at, resolved_at',
+      'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at',
     ) as unknown as ReturnType<typeof selectViewColumns>
 }
 
 /**
- * Run a view read, and once more without agent_reason when the column is
- * not there yet: the code is live a few minutes before the migration that
- * adds it (20261028210000) runs. `run` builds the whole query.
+ * Run a view read, and once more without operation_number while that column
+ * is not there yet (./operation-number-read.ts). `run` builds the whole
+ * query. The retry drops the newest column only: agent_reason
+ * (20261028210000) has been in every database since its own window closed.
  */
-export async function readPendingOperationView<T extends { error: { code?: string } | null }>(
-  run: (options: { withAgentReason: boolean }) => PromiseLike<T>,
+export function readPendingOperationView<T extends { error: { code?: string } | null }>(
+  run: (options: { withOperationNumber: boolean }) => PromiseLike<T>,
 ): Promise<T> {
-  const first = await run({ withAgentReason: true })
-  return isMissingColumnError(first.error) ? run({ withAgentReason: false }) : first
+  return readWithOperationNumber((withOperationNumber) => run({ withOperationNumber }))
 }
 
 export interface PendingOperationViewRow {
   id: string
   company_id: string
+  /** Absent on a row read before the column exists, null on a proposal decided before it. */
+  operation_number?: number | null
   batch_id?: string | null
   operation_type: string
   title: string
@@ -89,6 +92,13 @@ export interface PendingOperationViewRow {
 export const PendingOperationView = z.object({
   pending_operation_id: z.string().uuid(),
   company_id: z.string().uuid(),
+  operation_number: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      'The number of the proposal in its company: counts up in the order proposals are staged, set when it is staged and never changed. What a person sees in Accounted as "Förslag 128", so it is the way to name a proposal to a person; requests still take pending_operation_id. null on a proposal decided before numbers were introduced.',
+    ),
   operation_type: z.string().describe('What approving it does, e.g. create_invoice, categorize_transaction.'),
   title: z.string().describe('The one line the approver sees, in Swedish.'),
   status: z
@@ -139,6 +149,7 @@ export function toPendingOperationView(row: PendingOperationViewRow): PendingOpe
   return {
     pending_operation_id: row.id,
     company_id: row.company_id,
+    operation_number: operationNumberOf(row),
     operation_type: row.operation_type,
     title: row.title,
     status: row.status as PendingOperationViewOut['status'],
@@ -167,6 +178,7 @@ const EXAMPLE_SELF = pendingOperationPath(EXAMPLE_COMPANY, EXAMPLE_ID)
 export const PENDING_OPERATION_VIEW_EXAMPLE: PendingOperationViewOut = {
   pending_operation_id: EXAMPLE_ID,
   company_id: EXAMPLE_COMPANY,
+  operation_number: 128,
   operation_type: 'create_supplier',
   title: 'Skapa leverantör Clas Ohlson AB',
   status: 'pending',

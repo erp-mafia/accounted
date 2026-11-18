@@ -1695,6 +1695,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   operations: 'staged-operation workflow state',
   payment_match_log: 'derived matching log',
   pending_operations: 'staged-operation workflow state',
+  pending_operation_sequences:
+    'the last proposal number handed out per company (a counter); each proposal carries its own number in pending_operations.operation_number',
   collection_batch_removals:
     'staged-operation workflow state: items taken out of a pending collections batch; each removal is in audit_log, and what was sent is in collection_cases',
   processing_history: 'internal processing log; behandlingshistorik exports from audit_log',

@@ -20,9 +20,11 @@ import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { CheckIcon, ChevronRightIcon, DocumentTextIcon } from '@/components/icons'
 import { cn, formatAmount, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { operationNumberOf } from '@/lib/pending-operations/operation-number'
 import type { PendingOperation } from '@/types'
 import { OperationPreview, useComplianceWarningText } from './OperationPreview'
 import { ProposalDocument } from './ProposalDocument'
+import { ProposalNumber, proposalNumberLabel } from './ProposalNumber'
 import { bankRowDocumentRef, type ProposalDocumentRef } from './proposal-document'
 import { Fact, FactList, MissingLabelsContext, MissingMark, PreviewDensityContext, ReviewTitleContext, factLabelText } from './preview-parts'
 import {
@@ -736,12 +738,17 @@ export function ReviewWalk({
   }
 
   const attention = reviewReason(op).attention
+  // The place in this walk ("3 av 12") moves as proposals are approved; the
+  // proposal's own number does not. Both are said, each as what it is.
+  const number = operationNumberOf(op)
 
   return (
     <div className={WALK_GRID_CLASS}>
       {/* Says which proposal is on screen when it changes (an approval moves on by itself). */}
       <p className="sr-only" role="status" aria-live="polite" data-ph-mask="">
-        {t('review_live_position', { index: position.index + 1, count: position.count, title: op.title })}
+        {number === null
+          ? t('review_live_position', { index: position.index + 1, count: position.count, title: op.title })
+          : t('review_live_position_numbered', { index: position.index + 1, count: position.count, number: String(number), title: op.title })}
       </p>
 
       {/* The queue: where you are and what comes next. Beside the step on a
@@ -769,7 +776,7 @@ export function ReviewWalk({
                   ref={on ? currentRef : undefined}
                   type="button"
                   aria-current={on ? 'step' : undefined}
-                  aria-label={mark ? `${item.title}, ${mark}` : item.title}
+                  aria-label={[proposalNumberLabel(item, t), item.title, mark].filter(Boolean).join(', ')}
                   title={item.title}
                   onClick={() => onStep(item.id)}
                   className={cn(
@@ -777,6 +784,7 @@ export function ReviewWalk({
                     on ? 'bg-secondary font-medium text-strong' : 'hover:bg-secondary/60',
                   )}
                 >
+                  <ProposalNumber op={item} className="text-xs" />
                   <span className="min-w-0 flex-1 truncate" data-ph-mask="">
                     {queueName(item.title)}
                   </span>

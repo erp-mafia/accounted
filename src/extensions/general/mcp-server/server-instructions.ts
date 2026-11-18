@@ -128,6 +128,7 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
       : [
           '• Reviewing agent proposals: gnubok_list_pending_operations shows the queue (each write tool stages a pending_operation, an agent proposal). A proposal you staged by mistake (a duplicate, a wrong amount) you take back yourself, before staging the corrected one: gnubok_stage_tool({tool: "gnubok_withdraw_pending_operation", arguments: {operation_id, reason}}). Only your own, only while pending.',
         ]),
+    '• Naming a proposal: a staged answer and each row of gnubok_list_pending_operations carry operation_number, the proposal\'s number in its company (counts up, never changes). The user sees it in Accounted as "Förslag 128", so say the number when you talk about a proposal and read it as operation_number when the user names one; tools take operation_id. A proposal decided before numbers were introduced has none.',
     'A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
     toolNamespace === 'gnubok'
       ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'

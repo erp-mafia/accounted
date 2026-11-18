@@ -106,6 +106,14 @@ describe('server instructions survive a client that cuts at 4096 characters', ()
     expect(reference).toContain('A bridge your client does not show means it kept an older copy of tools/list')
   })
 
+  it.each(variants)('%s: says how the user names a proposal, and that tools still take the id', (_name, o) => {
+    const { reference } = render(o)
+    const p = o.toolNamespace === 'accounted' ? 'accounted_' : 'gnubok_'
+    expect(reference).toContain(`each row of ${p}list_pending_operations carry operation_number`)
+    expect(reference).toContain('"Förslag 128"')
+    expect(reference).toContain('tools take operation_id')
+  })
+
   it('names only the cross-company tools on a multi-company connection', () => {
     const multi = render({ toolNamespace: 'gnubok', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES['multi, default company'] }).full
     const simple = render({ toolNamespace: 'gnubok', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES['simple, one company'] }).full

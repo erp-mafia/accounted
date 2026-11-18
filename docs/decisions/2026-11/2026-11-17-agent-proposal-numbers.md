@@ -1,0 +1,1 @@
+[2026-11-17] Every agent proposal has a number per company ("Förslag 128", pending_operations.operation_number), set by the database at insert and never changed; ids stay the key, proposals decided earlier have none: look-alike proposals could not be told apart, and the place in the queue moves.

@@ -109,6 +109,19 @@ describe('Pending operations widget', () => {
       expect(widget.html).toContain('clearTimeout(timer)')
     })
 
+    it('names a proposal by its number as Accounted does, and says nothing for a row without one', () => {
+      const widget = findUiWidget('ui://pending-operations/app.html')!
+      const source = widget.html.match(/function numberLabel\(op\) \{[\s\S]*?\n {2}\}/)?.[0]
+      expect(source).toBeDefined()
+      const numberLabel = new Function(`${source}; return numberLabel`)() as (op: unknown) => string
+      expect(numberLabel({ operation_number: 128 })).toBe('Förslag 128 · ')
+      expect(numberLabel({})).toBe('')
+      expect(numberLabel({ operation_number: null })).toBe('')
+      expect(numberLabel({ operation_number: '128' })).toBe('')
+      // In the row's second line, before the type and who proposed it.
+      expect(widget.html).toContain(`'<div class="op-type">' + numberLabel(op) + esc(op.operation_type || '')`)
+    })
+
     it('the widget calls the approve and reject tools and arms confirmed=true for high risk', () => {
       const widget = findUiWidget('ui://pending-operations/app.html')!
       expect(widget.html).toContain('gnubok_approve_pending_operation')
