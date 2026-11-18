@@ -17,7 +17,9 @@ import path from 'node:path'
  * 2. The duplicate-email screen linked to `/login?email=...`, which
  *    app/(auth)/login/page.tsx never reads. The address rode along in the URL,
  *    the browser history, the Referer header and every proxy access log, and
- *    arrived nowhere.
+ *    arrived nowhere. Since issue #209 the address does arrive, filled in on
+ *    the login form, but through the tab's sessionStorage
+ *    (lib/auth/login-email-handoff.ts), still never the URL.
  *
  * The page is a client component and this repo deliberately has no component
  * test harness (CLAUDE.md: scope is lib/ + app/api/), so these assert on the
@@ -130,22 +132,55 @@ describe('a signup that did not come from an invitation', () => {
 })
 
 describe('the duplicate-email screen', () => {
-  it('sends the user to /login, carrying only the sanitized destination', () => {
-    // loginHref is /login, or /login?next=… when the signup started from the
-    // MCP consent page (issue #1814). Nothing else may ride on that link.
-    expect(duplicateScreen()).toContain('<Link href={loginHref}>')
-    expect(CODE).toContain(
-      "const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`",
+  it('opens the e-mail form on /login, carrying only the method and the sanitized destination', () => {
+    // buildLoginHref writes `method` and `next` (re-vetted through
+    // safeReturnTo; /login?next=… when the signup started from the MCP
+    // consent page, issue #1814) and nothing else.
+    expect(duplicateScreen()).toContain("href={buildLoginHref({ method: 'password', next: nextPath })}")
+    expect(CODE).toContain('const loginHref = buildLoginHref({ next: nextPath })')
+  })
+
+  it('hands the address to the login form through the tab, not the URL', () => {
+    expect(duplicateScreen()).toContain('onClick={() => handOffLoginEmail(duplicateEmail)}')
+    expect(duplicateScreen()).not.toMatch(/\/login\?/)
+    expect(CODE).not.toMatch(/encodeURIComponent\((duplicateEmail|emailValue|bankIdEmail|email)\)/)
+  })
+
+  it('still shows the address on screen', () => {
+    expect(duplicateScreen()).toContain('{duplicateEmail}')
+  })
+})
+
+describe('"Logga in" when the signup finds an existing account (issue #209)', () => {
+  /** One setFormError({...}) call, located by the message key it shows. */
+  function formErrorFor(messageKey: string, from = 0): string {
+    const anchor = CODE.indexOf(`message: t('${messageKey}')`, from)
+    expect(anchor, `no setFormError for ${messageKey}`).toBeGreaterThan(-1)
+    return CODE.slice(CODE.lastIndexOf('setFormError({', anchor), CODE.indexOf('})', anchor) + 2)
+  }
+
+  it('sends a BankID signup whose address has a password account to the e-mail form, with that address', () => {
+    // BankID on /login would answer "no account": this BankID has none.
+    const call = formErrorFor('account_exists_description')
+    expect(call).toContain("signIn: { method: 'password', email: emailValue }")
+  })
+
+  it('sends a BankID that already has an account to BankID', () => {
+    expect(formErrorFor('bankid_already_linked_description')).toContain("signIn: { method: 'bankid' }")
+  })
+
+  it('sends an e-mail signup for a taken address to the e-mail form, with that address', () => {
+    expect(CODE).toMatch(
+      /kind === 'email_exists'\s*\?\s*\{ signIn: \{ method: 'password' as const, email: emailValue \} \}/,
     )
   })
 
-  it('does not put the address in the URL of a page that never reads it', () => {
-    expect(duplicateScreen()).not.toMatch(/\/login\?/)
-    expect(CODE).not.toContain('encodeURIComponent(duplicateEmail)')
-  })
-
-  it('still shows the address, so nothing is lost by dropping the parameter', () => {
-    expect(duplicateScreen()).toContain('{duplicateEmail}')
+  it('renders the alert link from that choice, handing over the address on click', () => {
+    const start = CODE.indexOf('formError.signIn ? (')
+    expect(start).toBeGreaterThan(-1)
+    const link = CODE.slice(start, CODE.indexOf('</Link>', start))
+    expect(link).toContain('href={buildLoginHref({ method: formError.signIn.method, next: nextPath })}')
+    expect(link).toContain('handOffLoginEmail(formError.signIn.email)')
   })
 })
 

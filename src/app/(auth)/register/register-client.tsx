@@ -47,7 +47,9 @@ import {
   captchaTokenOptions,
   isTurnstileSubmissionBlocked,
 } from '@/lib/auth/turnstile'
-import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { buildLoginHref, persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { handOffLoginEmail } from '@/lib/auth/login-email-handoff'
+import type { SessionAuthMethod } from '@/lib/auth/session-timeout-shared'
 import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
@@ -76,7 +78,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   // nothing else may ever be forwarded here.
   const searchParams = useSearchParams()
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
-  const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`
+  const loginHref = buildLoginHref({ next: nextPath })
   const inviteToken = searchParams.get('invite')
 
   // When password login is not available, self-service registration is not
@@ -104,8 +106,14 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   const [bankIdEmail, setBankIdEmail] = useState('')
   // Signup failures render inline next to the form (see AuthFormError), never
   // as a toast. Field-level problems attach to their field; everything else
-  // goes to the form-level alert above the form.
-  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
+  // goes to the form-level alert above the form. `signIn` is the way out when
+  // an account already exists: the method that will work, and for an
+  // address that has the account, that address (filled in on /login).
+  const [formError, setFormError] = useState<{
+    kind: AuthErrorKind | 'bankid' | 'oauth'
+    message: string
+    signIn?: { method: SessionAuthMethod; email?: string }
+  } | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
@@ -245,13 +253,24 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           return
         }
         if (json.error === 'already_linked') {
-          // email_exists kind: the alert renders a sign-in link, which is the
-          // recovery path for both "BankID taken" and "email taken".
-          setFormError({ kind: 'email_exists', message: t('bankid_already_linked_description') })
+          // The alert renders a sign-in link: this BankID has an account, so
+          // the link opens /login on BankID.
+          setFormError({
+            kind: 'email_exists',
+            message: t('bankid_already_linked_description'),
+            signIn: { method: 'bankid' },
+          })
         } else if (json.error === 'account_exists') {
           // Inline with a sign-in link instead of yanking the user to /login
-          // mid-read: they keep the context and choose when to leave.
-          setFormError({ kind: 'email_exists', message: t('account_exists_description') })
+          // mid-read: they keep the context and choose when to leave. The
+          // address has a password account and this BankID has none, so the
+          // link opens the e-mail form with the address filled in (issue
+          // #209): BankID on /login would only answer "no account".
+          setFormError({
+            kind: 'email_exists',
+            message: t('account_exists_description'),
+            signIn: { method: 'password', email: emailValue },
+          })
         } else {
           setFormError({
             kind: 'unknown',
@@ -432,6 +451,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             message:
               messageByKind[kind] ??
               getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+            ...(kind === 'email_exists'
+              ? { signIn: { method: 'password' as const, email: emailValue } }
+              : {}),
           })
         }
         return
@@ -535,14 +557,18 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         <StandaloneStack>
           <p className="text-sm text-foreground">{t('duplicate_hint')}</p>
           {/*
-            Plain /login, no `email` parameter: app/(auth)/login/page.tsx
-            reads only `error`, `flow` and `next`, so the address was
-            travelling in the URL (browser history, Referer, every proxy
-            access log) and arriving nowhere. The address is already on
-            screen above, so nothing is lost by dropping it.
+            The e-mail form on /login, with the address filled in. The
+            address never goes in the URL (browser history, Referer, every
+            proxy access log): it travels in this tab's sessionStorage
+            (lib/auth/login-email-handoff.ts).
           */}
           <Button size="lg" className="w-full" asChild>
-            <Link href={loginHref}>{t('sign_in')}</Link>
+            <Link
+              href={buildLoginHref({ method: 'password', next: nextPath })}
+              onClick={() => handOffLoginEmail(duplicateEmail)}
+            >
+              {t('sign_in')}
+            </Link>
           </Button>
           <Button variant="ghost" size="lg" className="w-full" onClick={() => setDuplicateEmail(null)}>
             {t('back')}
@@ -630,9 +656,12 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               <AuthFormError
                 message={formError.message}
                 action={
-                  formError.kind === 'email_exists' ? (
+                  formError.signIn ? (
                     <Link
-                      href={loginHref}
+                      href={buildLoginHref({ method: formError.signIn.method, next: nextPath })}
+                      onClick={() => {
+                        if (formError.signIn?.email) handOffLoginEmail(formError.signIn.email)
+                      }}
                       className="font-medium underline underline-offset-2"
                     >
                       {t('sign_in')}

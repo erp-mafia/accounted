@@ -50,9 +50,15 @@ import {
 } from '@/lib/auth/turnstile'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
-import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import {
-  isSessionAuthMethod,
+  LOGIN_METHOD_PARAM,
+  loginMethodFromParam,
+  persistLoginMethodHint,
+  resolveInitialLoginMethod,
+  type LoginMethod,
+} from '@/lib/auth/login-method'
+import { takeLoginEmailHandoff } from '@/lib/auth/login-email-handoff'
+import {
   SESSION_ENDED_REASON,
   SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON,
   type SessionTimeoutReason,
@@ -123,8 +129,10 @@ export function LoginClient({
   const sessionEnded = reasonParam === SESSION_ENDED_REASON
   // "Logga ut från alla enheter" that the auth server did not confirm.
   const everywhereUnconfirmed = reasonParam === SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON
-  const methodParam = searchParams.get('method')
-  const requestedMethod = isSessionAuthMethod(methodParam) ? methodParam : 'password'
+  // The panel a link asked for: the timeout redirect, or a page that knows
+  // which method will work (the signup page's "Logga in" for an address that
+  // already has an account opens the e-mail form).
+  const requestedMethod = loginMethodFromParam(searchParams.get(LOGIN_METHOD_PARAM))
   // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
@@ -141,16 +149,31 @@ export function LoginClient({
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
 
-  // Which method owns the panel. A session-timeout re-login follows the method
-  // that timed out; otherwise the cookie hint wins; a fresh visitor starts on
-  // BankID (the Swedish default) when it is enabled.
-  const [method, setMethod] = useState<LoginMethod>(() => {
-    if (!bankIdEnabled) return 'email'
-    if (timeoutReason) return requestedMethod === 'bankid' ? 'bankid' : 'email'
-    if (initialMethod) return initialMethod
-    return 'bankid'
-  })
+  // Which method owns the panel: a session-timeout re-login follows the
+  // method that timed out; otherwise a requested method, then the cookie
+  // hint; a fresh visitor starts on BankID (the Swedish default) when it is
+  // enabled. Only the first panel: each method's sign-in is unchanged.
+  const [method, setMethod] = useState<LoginMethod>(() =>
+    resolveInitialLoginMethod({
+      bankIdEnabled,
+      passwordLoginEnabled,
+      timedOut: timeoutReason !== null,
+      requested: requestedMethod,
+      remembered: initialMethod,
+    }),
+  )
   const prevMethodRef = useRef(method)
+
+  // An address the signup page left for this form (it already has an
+  // account): filled in, with the caret in the password field. A prefill
+  // only, never submitted. Read after mount because it lives in the tab's
+  // sessionStorage, which the server render cannot see.
+  useEffect(() => {
+    const handedOff = takeLoginEmailHandoff()
+    if (!handedOff) return
+    setEmail((current) => current || handedOff)
+    passwordInputRef.current?.focus()
+  }, [])
 
   // An ended session is a sign-out the user did not make here: the previous
   // identity goes, as after a timeout, so a shared device starts clean.
