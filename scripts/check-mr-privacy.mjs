@@ -36,6 +36,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import zlib from 'node:zlib'
 
 // ---------------------------------------------------------------------------
 // personnummer
@@ -238,7 +239,11 @@ export function parseCustomerNames(value) {
   return { names, skipped }
 }
 
-/** The list from the environment: plain, a File variable's path, or base64. */
+/**
+ * The list from the environment: plain, a File variable's path, or base64.
+ * The base64 value may be gzipped first, which keeps a long list under a
+ * secret store's size limit.
+ */
 export function readCustomerNames(env = process.env) {
   const plain = env.MR_PRIVACY_CUSTOMER_NAMES
   if (plain && plain.trim()) {
@@ -248,7 +253,9 @@ export function readCustomerNames(env = process.env) {
   }
   const encoded = env.MR_PRIVACY_CUSTOMER_NAMES_B64
   if (encoded && encoded.trim()) {
-    const decoded = Buffer.from(encoded.trim(), 'base64').toString('utf8')
+    const bytes = Buffer.from(encoded.trim(), 'base64')
+    const gzipped = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b
+    const decoded = (gzipped ? zlib.gunzipSync(bytes) : bytes).toString('utf8')
     return { source: 'MR_PRIVACY_CUSTOMER_NAMES_B64', ...parseCustomerNames(decoded) }
   }
   return { source: null, names: [], skipped: 0 }

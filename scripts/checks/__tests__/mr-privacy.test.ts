@@ -7,6 +7,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import {
   emailAllowed,
@@ -187,7 +188,7 @@ describe('customer names', () => {
     expect(found).toEqual([{ rule: 'customer_name', line: 1, masked: '[name 1 of the list]' }])
   })
 
-  it('reads the list from the variable, a File variable path, base64 or a JSON array', () => {
+  it('reads the list from the variable, a File variable path, base64, gzipped base64 or a JSON array', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mr-privacy-'))
     tempDirs.push(dir)
     const file = path.join(dir, 'names')
@@ -196,6 +197,8 @@ describe('customer names', () => {
     expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES: file })).names).toHaveLength(2)
     const encoded = Buffer.from('Acme Havsbad AB\nNordvik Snickeri').toString('base64')
     expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES_B64: encoded }))).toMatchObject({ source: 'MR_PRIVACY_CUSTOMER_NAMES_B64' })
+    const gzipped = zlib.gzipSync('Acme Havsbad AB\nNordvik Snickeri').toString('base64')
+    expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES_B64: gzipped })).names).toHaveLength(2)
     expect(readCustomerNames(env({ MR_PRIVACY_CUSTOMER_NAMES: '["Acme Havsbad AB"]' })).names).toHaveLength(1)
     expect(readCustomerNames(env())).toEqual({ source: null, names: [], skipped: 0 })
   })
