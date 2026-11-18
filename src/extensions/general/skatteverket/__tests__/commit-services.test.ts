@@ -141,19 +141,107 @@ describe('commitSubmitAgi', () => {
     consoleError.mockRestore()
   })
 
-  it('a call Skatteverket never answered says so in Swedish', async () => {
+  // Skatteverket's service being down says nothing about the AGI: the
+  // operation waits and the same approval can be given again, as an approved
+  // momsdeklaration does (#212). Until then the proposal was consumed.
+  it.each([
+    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'Skatteverket svarade inte i tid. Försök igen om en stund.'],
+    ['no connection', new TypeError('fetch failed'), 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'],
+  ])('%s → recoverable, in Swedish, the operation is kept', async (_label, thrown, sentence) => {
     const { supabase } = createQueuedMockSupabase()
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    mockAgiPostUnderlag.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    mockAgiPostUnderlag.mockRejectedValue(thrown)
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toEqual({
+      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true, error: sentence,
+    })
+  })
+
+  it('no answer at the signing link, after the underlag was taken, keeps the operation too', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiSkapaGranskningsunderlag.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true })
+  })
+
+  // What the client hands on for a gateway's 503 is not a sentence
+  // (agi-client readErrorBody): the approver reads ours.
+  it.each([
+    [502, 'Skatteverket svarade med 502'],
+    [503, '{"error":"Service Unavailable"}'],
+    [504, 'Tekniskt fel'],
+  ])('Skatteverket answering %i to the underlag → recoverable, the operation is kept', async (status, answer) => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiPostUnderlag.mockResolvedValue({ ok: false, status, error: answer })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toEqual({
+      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: status, recoverable: true,
+      error: 'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.',
+    })
+  })
+
+  it('Skatteverket answering 503 to the kontrollresultat, after the underlag was taken, keeps the operation', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiGetKontrollresultat.mockResolvedValue({ ok: false, status: 503, error: 'Skatteverket svarade med 503' })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 503, recoverable: true })
+    expect(mockAgiSkapaGranskningsunderlag).not.toHaveBeenCalled()
+  })
+
+  it('Skatteverket answering 503 to the signing link → recoverable, the operation is kept', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiSkapaGranskningsunderlag.mockResolvedValue({ ok: false, status: 503, error: 'Skatteverket svarade med 503' })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 503, recoverable: true })
+  })
+
+  it.each([400, 500])('a %i from Skatteverket is still a refusal, in its own words: the operation is consumed', async (status) => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiPostUnderlag.mockResolvedValue({ ok: false, status, error: 'Skatteverket tog inte emot underlaget.' })
 
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
     expect(result).toMatchObject({
-      ok: false,
-      code: 'SKATTEVERKET_INTERNAL_ERROR',
-      error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+      ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: status, recoverable: false,
+      error: 'Skatteverket tog inte emot underlaget.',
     })
-    consoleError.mockRestore()
+  })
+
+  // Only a refused Skatteverket call carries Skatteverket's status. A step of
+  // our own that answers 503 is a verdict on the run and consumes the proposal.
+  it('a 503 that is not Skatteverket\'s (a refused regeneration) is not read as service down', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockRefreshAgiUnderlag.mockResolvedValue({
+      ok: false, code: 'AGI_GENERATION_FAILED', httpStatus: 503, error: 'AGI-underlaget kunde inte skapas.',
+    })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({
+      ok: false, code: 'AGI_GENERATION_FAILED', http_status: 503, recoverable: false,
+      error: 'AGI-underlaget kunde inte skapas.',
+    })
+    expect(mockAgiPostUnderlag).not.toHaveBeenCalled()
+  })
+
+  it('a lost Skatteverket connection stays recoverable: the user reconnects and approves again', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockAgiPostUnderlag.mockRejectedValue(new SkatteverketAuthError('Ingen anslutning till Skatteverket.', 'NOT_CONNECTED'))
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({
+      ok: false, code: 'SKATTEVERKET_NOT_CONNECTED', recoverable: true, error: 'Ingen anslutning till Skatteverket.',
+    })
   })
 
   it('a refused regeneration is non-recoverable and posts nothing', async () => {

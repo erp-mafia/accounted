@@ -167,8 +167,14 @@ export function describeKontrollErrors(kontrollresultat: unknown): string | null
   return `Skatteverkets kontroll visade ${errors.length} fel: ${shown.join('; ')}${hidden > 0 ? ` (och ${hidden} till)` : ''}.`
 }
 
+/**
+ * What a person reads when Skatteverket's own service is failing: nothing is
+ * wrong with what was sent. One sentence for every declaration's door.
+ */
+export const SKV_SERVICE_FAILING_SV = 'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.'
+
 function nextStep(step: VatRefusalStep, status: number): string {
-  if (status >= 500) return 'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.'
+  if (status >= 500) return SKV_SERVICE_FAILING_SV
   if (status === 409 && (step === 'draft' || step === 'draft_delete')) {
     return 'Det finns redan ett utkast som är låst för signering hos Skatteverket. Signera det där, eller lås upp det under Fler åtgärder på momsdeklarationen och skicka igen.'
   }

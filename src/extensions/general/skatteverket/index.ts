@@ -41,7 +41,7 @@ import {
   type VatDeclarationPrep,
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain, vatDeclarationIncompleteFailure } from './lib/vat-submit'
-import { readVatRefusal, type VatRefusal, type VatRefusalStep } from './lib/vat-refusal'
+import { readVatRefusal, SKV_SERVICE_FAILING_SV, type VatRefusal, type VatRefusalStep } from './lib/vat-refusal'
 import { awaitingSignatureOf } from './lib/submission-state'
 import { vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import {
@@ -2940,10 +2940,10 @@ function handleSkvError(err: unknown): NextResponse {
 // (app/api/extensions/ext/[...path]/route.ts), so each service checks the flag
 // itself and returns a recoverable EXTENSION_DISABLED result (the op stays
 // reviewable). SkatteverketAuthError (no connection / scope / quota) is
-// likewise recoverable, and so is Skatteverket's service being down for a
-// momsdeklaration (its 502/503/504, or no answer at all). SKV business
-// rejections are non-recoverable → the op is consumed and the user
-// regenerates + re-stages.
+// likewise recoverable, and so is Skatteverket's service being down (its
+// 502/503/504, or no answer at all), for a momsdeklaration and an AGI alike.
+// SKV business rejections are non-recoverable → the op is consumed and the
+// user regenerates + re-stages.
 
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,
@@ -3031,18 +3031,39 @@ async function commitBookSkattekontoRows(
 }
 
 /**
- * Translate a thrown error inside a commit service to a SkvSubmitResult.
- * SkatteverketAuthError (connection / scope / quota) is recoverable: the op
- * stays reviewable so the user reconnects and re-approves. Anything else is a
- * non-recoverable internal error → the op is rejected.
+ * Translate a thrown error inside a submit commit service to a SkvSubmitResult.
+ *
+ * Recoverable, so the op stays reviewable and the same approval can be given
+ * again:
+ *   - SkatteverketAuthError (connection / scope / quota): the user reconnects;
+ *   - no answer from Skatteverket at all (the transport's time limit, or no
+ *     connection): as little a verdict on the declaration as its own 503.
+ *     Approving again runs the calls a re-staged operation would run, and
+ *     nothing is filed before the BankID signature, so consuming the
+ *     operation would prevent no call, only add the re-staging.
+ * Anything else is a non-recoverable internal error → the op is rejected.
  *
  * Writes no audit row: a failed outbound call was already recorded by the
  * transport under its own label, and a failure before any call made none.
  */
-function mapServiceError(err: unknown): Extract<SkvSubmitResult, { ok: false }> {
+function mapServiceError(
+  err: unknown,
+  companyId: string,
+  declaration: 'momsdeklaration' | 'AGI',
+): Extract<SkvSubmitResult, { ok: false }> {
   if (err instanceof SkatteverketAuthError) {
     const mapped = skvAuthCodeToStructured(err.code)
     return { ok: false, code: mapped.code, http_status: mapped.httpStatus, recoverable: true, error: err.message }
+  }
+  if (skvUnreachable(err)) {
+    log.warn(`skatteverket did not answer the ${declaration} submit`, {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return {
+      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504,
+      recoverable: true, error: skvUnexpectedFailureMessage(err),
+    }
   }
   // The thrown text is for the log, and this is its only record: the approver
   // (a person in the app, or an agent) reads a sentence.
@@ -3122,19 +3143,7 @@ async function commitSubmitVatDeclaration(
       kontrollresultat: result.kontrollresultat,
     }
   } catch (err) {
-    // No answer from Skatteverket at all: as little a verdict on the
-    // declaration as a 503, so the operation waits here too.
-    if (skvUnreachable(err)) {
-      log.warn('skatteverket did not answer the momsdeklaration submit', {
-        companyId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return {
-        ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504,
-        recoverable: true, error: skvUnexpectedFailureMessage(err),
-      }
-    }
-    return mapServiceError(err)
+    return mapServiceError(err, companyId, 'momsdeklaration')
   }
 }
 
@@ -3158,6 +3167,23 @@ async function commitSubmitAgi(
     // The chain the AGI panel's one-click route runs too (lib/agi-submit.ts).
     const result = await submitAgiChain(supabase, userId, companyId, ctx.settings, salaryRunId)
     if (!result.ok) {
+      // Skatteverket's service down (its own 502, 503 or 504 on a refused
+      // call, whose status the step carries) says nothing about the AGI: the
+      // operation waits, as an approved momsdeklaration does. What a gateway
+      // answers then is its own page or JSON, so the approver reads our
+      // sentence and the answer goes to the log. Every other refusal keeps
+      // the step's own verdict and words.
+      if (result.code === 'SKATTEVERKET_SUBMIT_REJECTED' && SERVICE_DOWN_STATUSES.has(result.httpStatus)) {
+        log.warn("skatteverket's service was down for the AGI submit", {
+          companyId,
+          status: result.httpStatus,
+          answer: result.error,
+        })
+        return {
+          ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: result.httpStatus,
+          recoverable: true, error: SKV_SERVICE_FAILING_SV,
+        }
+      }
       return {
         ok: false,
         code: result.code,
@@ -3176,6 +3202,6 @@ async function commitSubmitAgi(
       tillstand: result.tillstand,
     }
   } catch (err) {
-    return mapServiceError(err)
+    return mapServiceError(err, companyId, 'AGI')
   }
 }
