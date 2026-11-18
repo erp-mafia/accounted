@@ -1,1 +1,0 @@
-[2026-10-17] Sale-first books nothing when the payment lines or the linked verifikat credit no 151x account: such lines book the revenue themselves (the hand-made Dr 1930 / Cr 30xx the duplicate dialog links to), and booking the sale as well would double revenue and moms.

@@ -1,1 +1,0 @@
-[2026-10-30] Peppol carries invoice attachments as embedded PDFs only, at most 5 MB of file data per e-faktura (skill: inline under 10 MB despite AS4's 100 MB; base64 and the stored delivery XML need the room). Other types and the XML download stay out (crm#1545).

@@ -235,7 +235,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         // we wrap it in our request-id header for traceability. The
         // company id and role resolved above are handed over so the helper
         // repeats neither the resolve_active_company round trip (measured
-        // ~40 ms p50 on prod) nor the company_members role read; it reads
+        // ~40 ms p50 in production) nor the company_members role read; it reads
         // the role itself only when the resolution could not report it.
         const writeCheck = await requireWritePermission(supabase, user.id, {
           companyId,
@@ -328,7 +328,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       return response
     } catch (err) {
       // Resolve the envelope first so the log level can follow the mapped
-      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // status - thrown 4xx domain errors are expected outcomes (warn), only
       // 5xx are runtime errors. errorResponse logs the error itself at the
       // same threshold.
       const response = errorResponse(err, errLog, { requestId })

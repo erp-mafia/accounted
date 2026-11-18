@@ -29,13 +29,13 @@ describe('isGrounded', () => {
   })
 
   it('rejects a name borrowed from elsewhere', () => {
-    expect(isGrounded('Sofia Carter', '+46730731501')).toBe(false)
+    expect(isGrounded('Anna Exempel', '+46701740605')).toBe(false)
   })
 })
 
 describe('parseReading', () => {
   it('drops an ungrounded name and lowers the confidence', () => {
-    const r = parseReading({ i: 1, pick: null, counterpart: 'Sofia Carter', kind: 'person', rail: null, country: null, what: null, confidence: 'medium' }, line({ text: '+46730731501' }), 'm')
+    const r = parseReading({ i: 1, pick: null, counterpart: 'Anna Exempel', kind: 'person', rail: null, country: null, what: null, confidence: 'medium' }, line({ text: '+46701740605' }), 'm')
     expect(r).toMatchObject({ counterpart: null, grounded: false, confidence: 'low', kind: 'unsure' })
   })
 

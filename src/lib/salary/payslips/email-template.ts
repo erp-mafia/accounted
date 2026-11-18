@@ -1,6 +1,6 @@
 /**
- * Payslip link email — Swedish-only (employee-facing, same rationale as
- * customer emails in .claude/rules/i18n.md).
+ * Payslip link email - Swedish-only (employee-facing, same rationale as
+ * customer emails).
  *
  * The email deliberately carries NO salary data and NO attachment: just the
  * secure link. Names are user-authored input and get escaped.

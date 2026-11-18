@@ -1,1 +1,0 @@
-[2026-11-01] Automatic article numbers walk to the first free number from the counter, not max numeric + 1: prod holds 10+ digit EAN-like numbers that would overflow the counter; the fix sits in the RPC, so callers need no retry (accounted#58).

@@ -23,7 +23,7 @@ describe('assistant chat switch (ASSISTANT_CHAT_ENABLED)', () => {
 })
 
 describe('the onboarding interview under the switch', () => {
-  // Founder decision 2026-11-18: the interview goes with the rest. The module
+  // The interview goes with the rest. The module
   // answers one question for every caller, so no door can ask it per intent.
   it('has no exemption: the switch is the one thing the module exports', () => {
     expect(Object.keys(chatSwitch)).toEqual(['assistantChatEnabled'])

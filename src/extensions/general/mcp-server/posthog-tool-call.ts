@@ -15,7 +15,7 @@
  *  - the session id only when it is a UUID (the server mints UUIDs; a client
  *    may send anything else, which is dropped).
  *
- * Who the event is about (founder decision 2026-11-13: every call is
+ * Who the event is about (product decision 2026-11-13: every call is
  * counted, and the person's choice decides whether it is tied to them):
  *  1. getPostHogServer() is null when isAnalyticsEnabled() is false:
  *     self-hosted, or no project token. Nothing is sent, nothing is read.
@@ -212,7 +212,7 @@ export async function mayMirrorToolCall(
   ])
   if (prefs.error || settings.error) return 'none'
   if ((settings.data as { is_sandbox?: boolean | null } | null)?.is_sandbox === true) return 'none'
-  // Null (never asked) is on, as in the browser: founder decision 2026-10-22.
+  // Null (never asked) is on, as in the browser.
   if ((prefs.data as { analytics_consent?: boolean | null } | null)?.analytics_consent === false) return 'anonymous'
   return 'person'
 }

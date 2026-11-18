@@ -25,7 +25,7 @@ import {
  * about whether a column exists. That blind spot kept article delete broken for
  * ten days, hid sixteen more phantom-column sites, two phantom CHECK values
  * (`source_type = 'transaction'` against a real `bank_transaction`: 0 rows where
- * prod has 3 917) and one `onConflict` naming a dropped unique constraint, which
+ * thousands exist) and one `onConflict` naming a dropped unique constraint, which
  * raised 42P10 on every call. Mocked tests provably cannot catch that class.
  *
  * This test compares two things that cannot lie to each other: the schema
@@ -269,7 +269,7 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // CARD_PAYEE_COLUMNS and the MCP supplier invoice read; then
 // lib/payments/orders/invoice-document.ts INVOICE_DOCUMENT_COLUMNS, read on
 // its own and embedded in the payment order list of
-// app/api/payments/orders/route.ts. Each MR fitted alone; together they are
+// app/api/payments/orders/route.ts. Each change fitted alone; together they are
 // one over, so the ceiling rises by exactly that one site.
 // 433 (2026-10-15): +1 for the v1 pending-operations list's keyset cursor,
 // the same (created_at, id) .or() predicate every v1 list builds at runtime.
@@ -481,7 +481,7 @@ describe('schema replay (parser fidelity)', () => {
     expect(sourceType, 'journal_entries.source_type should be a closed value set').toBeDefined()
     expect(sourceType!.has('bank_transaction')).toBe(true)
     expect(sourceType!.has('stripe_payout')).toBe(true)
-    // The phantom value that read 0 rows where prod had 3 917.
+    // The phantom value that read 0 rows where thousands existed.
     expect(sourceType!.has('transaction')).toBe(false)
   })
 })

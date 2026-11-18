@@ -1,1 +1,0 @@
-[2026-10-18] Crediting an invoice stornoes the live correction of an accrual dissolution that a rättelse replaced, found by walking correction_of_id (liveEntryOf), not only the installment's stored voucher id: a credit otherwise leaves the corrected months on the interim and cost accounts. No migration.

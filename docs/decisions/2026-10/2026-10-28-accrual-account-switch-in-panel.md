@@ -1,1 +1,0 @@
-[2026-10-28] The periodisering panel re-suggests its balance account (1790/2970, 17xx/29xx) against the value it rendered and parents only write the result, not a snapshot per editor as #112 proposed: react-hook-form hands out live rows. Tested as a pure function, no DOM setup.

@@ -234,7 +234,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   // script hides it), so the consent click is the self-attestation
   // (ASVS V16.1.1 / SOC 2 CC6.1). Only the scopes
   // actually granted count, after the role cap: approve is never pre-ticked
-  // (founder decision 2026-10-03, issue #3408), so a default one-click
+  // (product decision 2026-10-03, issue #3408), so a default one-click
   // consent records nothing here.
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null

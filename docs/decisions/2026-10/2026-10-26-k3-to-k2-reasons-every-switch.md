@@ -1,1 +1,0 @@
-[2026-10-26] Every K3 to K2 switch requires stated reasons, not only when särskilda skäl apply: BFNAR 2012:4 punkt 3 requires the note on the reasons for any such switch. Earlier K2 is derived from an elected earlier year, else asked; särskilda skäl are confirmed then.

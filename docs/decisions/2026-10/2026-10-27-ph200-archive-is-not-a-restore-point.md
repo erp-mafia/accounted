@@ -1,1 +1,0 @@
-[2026-10-27] PH 200: no restore feature tonight; the Komplett arkiv dialog now says the archive is a copy to keep, not a restore point, and names Gör om migrering as the way to start a migration over.

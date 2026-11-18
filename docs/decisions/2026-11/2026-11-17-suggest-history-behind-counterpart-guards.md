@@ -1,1 +1,0 @@
-[2026-11-17] suggest_categories history keys only on a text that names a counterparty, counts only rows a live verifikat books, and is left out beside a learned counterpart, not rebuilt on the journal's dominant account as reported: the learned counterpart is that read already (crm#1920).

@@ -1,1 +1,0 @@
-[2026-10-27] The vacation liability method is frozen into a run's calculation_params at :calculate, like the policy: the journal preview the run is approved on and the booking agree; a run calculated before a switch keeps the accrual until recalculated.

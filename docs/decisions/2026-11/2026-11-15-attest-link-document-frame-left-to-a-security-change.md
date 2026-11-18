@@ -1,1 +1,0 @@
-[2026-11-15] The attest link's embedded invoice stays blocked by the page policy (frame-ancestors 'none' on /api/attest/:token/document) in the style pass: opening it is a security-header change, not a restyle; the row above it still opens the file.

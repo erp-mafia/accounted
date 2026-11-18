@@ -1,1 +1,0 @@
-[2026-10-15] suggestion_log.rule_version is <pipeline>.<revision>+<program version> (the commit SHA app_releases dates): the hand-bumped revision says when the rules changed on purpose, the program version pins the exact code, so a forgotten bump cannot misstate the rules.

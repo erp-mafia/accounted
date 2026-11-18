@@ -12,7 +12,7 @@ import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number
  * (invoices.deduction_personnummer_encrypted): it may belong to another
  * buyer, or to two.
  *
- * Founder decision 2026-10-04 (the provider's answer): a private customer
+ * Product decision 2026-10-04 (the provider's answer): a private customer
  * WITHOUT a personnummer is handed over with name and full postal address,
  * and the provider finds the person; a missing number is a hint, never a
  * block. An invalid one is not sent either, and is shown so it can be fixed.

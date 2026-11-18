@@ -1,1 +1,0 @@
-[2026-10-16] Grants apply at the MCP dispatcher's door after the staging tool returned, not inside gnubok_categorize_transaction: staging tools still only stage, and the company's rule is decided once for every tool a grant covers.

@@ -1,7 +1,7 @@
 name: Production migrations
 
 # Applies supabase/migrations to the production database on every push to
-# main: the migrations-production job of .gitlab-ci.yml. --include-all applies
+# main. --include-all applies
 # out-of-order versions too. The applied versions are listed before and after,
 # so the log shows exactly what changed.
 #
@@ -15,7 +15,7 @@ name: Production migrations
 # branches restricted to main, no job on another ref can read them. This
 # workflow has no pull_request trigger.
 #
-# It runs on its own, as on GitLab: it does not wait for CI or for the Vercel
+# It runs on its own: it does not wait for CI or for the Vercel
 # deployment of the same commit.
 
 on:

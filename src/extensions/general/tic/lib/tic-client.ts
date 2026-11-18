@@ -172,7 +172,7 @@ function toLensQueryNumber(cleaned: string): string {
  * because Lens stores an enskild firma under a 16-digit registration number
  * that embeds the 10-digit personnummer (e.g. request `0201011236` →
  * Lens `2002010112360001`). Requiring exact equality would wrongly reject
- * every correctly-resolved sole trader. A genuine mismatch (Björn's case)
+ * every correctly-resolved sole trader. A genuine mismatch
  * has neither number containing the other, so it is still discarded and the
  * caller sees a clean "not found" instead of a stranger's company.
  *

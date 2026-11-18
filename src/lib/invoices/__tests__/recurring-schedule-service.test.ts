@@ -1493,7 +1493,7 @@ describe('executeRecurringSchedule dimension propagation', () => {
       // Given back by the caller, so the next run retries.
       expect(failure).not.toBeInstanceOf(RecurringInvoiceKeptError)
       expect((failure as Error).message).toBe('failed to insert invoice from schedule: refused')
-      // Read back first, whatever the code (review of !1529).
+      // Read back first, whatever the code.
       expect(findCalls('invoices', 'maybeSingle')).toHaveLength(1)
     })
 

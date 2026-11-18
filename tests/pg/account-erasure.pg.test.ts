@@ -129,7 +129,7 @@ const RETAINED = new Set([
   'cash_forecast_rows.created_by', // Who added a row to the liquidity forecast; company planning data, the company keeps it.
   'company_portals.created_by', // Who added a supplier portal link; company configuration, the company keeps it.
   'bank_payment_allowance_requests.requested_by', // Who asked for more included bank payments a month; the company keeps the request.
-  'company_bank_payment_allowances.granted_by', // The founder who set a company's monthly bank payment allowance; the company keeps the record.
+  'company_bank_payment_allowances.granted_by', // The operator who set a company's monthly bank payment allowance; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
   'contract_revenue_contracts.user_id',

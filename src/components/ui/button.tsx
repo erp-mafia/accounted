@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { SpinnerIcon } from '@/components/icons'
 import { cn } from "@/lib/utils"
 
-// Stil v3 (founder decisions 2026-10-29): buttons are 6px rectangles, never
+// Stil v3 (product decisions 2026-10-29): buttons are 6px rectangles, never
 // pills. A raised button is the control surface with the hairline lift
 // (shadow-raised), the primary is translucent ink, and every button answers
 // the pointer with the one press motion (scale .97 over 100ms). Change the

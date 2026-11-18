@@ -19,7 +19,7 @@
  *      because a UUID's hex runs can otherwise look like a 10/12-digit
  *      personnummer and would nuke useful ids. A hit replaces the WHOLE string:
  *      the digits around a personnummer are usually themselves identifying.
- *   3. Substring patterns for emails, Swedish IBANs and gnubok API keys,
+ *   3. Substring patterns for emails, Swedish IBANs and API keys,
  *      replaced in place with a placeholder naming what was removed. These are
  *      self-delimiting secrets, so the rest of the string (a log line, a stack
  *      trace) stays useful.

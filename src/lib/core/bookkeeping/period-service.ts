@@ -871,7 +871,7 @@ export async function findNextPeriod(
 
   // The chain is only trusted when it is date-adjacent. SIE import used to
   // point previous_period_id at the NEAREST later period regardless of the
-  // gap (40 such rows on prod as of 2026-08-24), and year-end then seeded a
+  // gap (40 such rows in production as of 2026-08-24), and year-end then seeded a
   // whole missing year's opening balances into a period two years out
   // because this returned the chained row unchecked (feedback seq 249297).
   // A non-adjacent link means the true next period is missing or unlinked:

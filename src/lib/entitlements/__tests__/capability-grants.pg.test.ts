@@ -7,7 +7,7 @@ import { TRIAL_CAPABILITIES } from '../keys'
 // pg-real coverage for migrations 20260628140000 (capability_grants /
 // company_capability_config + RLS), 20260629120000
 // (trial-grant trigger) and 20260925081321 (company_capability_grant_rows).
-// Required by .claude/rules/database.md for any RPC/RLS/trigger change.
+// Required (CLAUDE.md, Definition of Done) for any RPC/RLS/trigger change.
 //
 // The capability gate (lib/entitlements/has-capability.ts) reads grant rows
 // through company_capability_grant_rows and decides expiry and enablement in

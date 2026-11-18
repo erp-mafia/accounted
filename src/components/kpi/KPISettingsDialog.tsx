@@ -107,7 +107,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger asChild>
-        {/* Same height as the year picker beside it (founder review 2026-09-07). */}
+        {/* Same height as the year picker beside it (review 2026-09-07). */}
         <Button variant="outline" className="gap-1.5">
           <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
           {t('customize')}

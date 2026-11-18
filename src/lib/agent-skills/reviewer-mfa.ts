@@ -17,7 +17,7 @@ import { isCommunityReviewer } from '@/lib/agent-skills/reviewers'
  * lib/auth/mfa.ts uses). Unlike the product-wide gate this applies on every
  * deployment and ignores the time-boxed mfa_exempt_until exemption, which
  * exists for Google's OAuth reviewers and never for an operator. MFA stays
- * optional for everyone else (founder decision: CASA asks for it on admin
+ * optional for everyone else (product decision: CASA asks for it on admin
  * interfaces only).
  *
  * bankid_linked is read from a fresh getUser() rather than the token's

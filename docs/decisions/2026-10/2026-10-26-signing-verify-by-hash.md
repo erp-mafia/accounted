@@ -1,1 +1,0 @@
-[2026-10-26] A signed copy is checked on a public /verifiera page by its SHA-256, hashed in the browser, instead of a PAdES seal for now: no new dependency or certificate, and each BankID signature already binds the signer to the document. A seal can come later.

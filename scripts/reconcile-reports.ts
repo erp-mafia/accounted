@@ -85,14 +85,14 @@ import type { TrialBalanceRow, VatPeriodType } from '../src/types'
 
 // ── Read-only client ──────────────────────────────────────────────────────
 
-/** The report RPCs this run may call. All STABLE + SECURITY INVOKER on prod. */
+/** The report RPCs this run may call. All STABLE + SECURITY INVOKER in production. */
 const READ_RPCS = new Set([
   'get_trial_balance_aggregates',
   'compute_prior_opening_balances',
   'get_vat_declaration_totals',
   'result_closing_entry_ids',
   'year_end_chain_entry_ids',
-  // The huvudbok and the Balansrapport header read through these since !822.
+  // The huvudbok and the Balansrapport header read through these.
   'get_ledger_line_counts',
   'get_general_ledger_lines',
   'get_general_ledger_account_page',

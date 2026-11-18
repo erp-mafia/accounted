@@ -18,7 +18,7 @@ import type { EntitlementState } from '@/lib/entitlements/has-capability'
 /**
  * One-time on-entry invitation after the trial (or a cancelled subscription)
  * has lapsed, with the path to Abonnemang. Phrased as a question, never as a
- * verdict (founder decision 2026-09-10, issue #2494): nothing is taken away
+ * verdict (product decision 2026-09-10, issue #2494): nothing is taken away
  * from the books, so the copy must not read as a deadline, a pause, or a
  * bill. Shown once per user AND company: the acknowledgement persists in
  * user_preferences.ui_state (trial_expired_ack[companyId]), read server-side

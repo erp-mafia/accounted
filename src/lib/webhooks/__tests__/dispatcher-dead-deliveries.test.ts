@@ -5,7 +5,7 @@
  * while the streak goes on, so an endpoint that stays down is one error per
  * streak, not one per event. A cycle that disables a webhook (410, unsafe
  * URL) is always an error. A webhook is never disabled for dead deliveries
- * (that is the founders' decision); the HTTP 410 and unsafe-URL auto-disable
+ * (that is the operators' decision); the HTTP 410 and unsafe-URL auto-disable
  * stays as it was.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

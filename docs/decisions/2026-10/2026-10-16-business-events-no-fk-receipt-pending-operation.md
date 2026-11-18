@@ -1,1 +1,0 @@
-[2026-10-16] business_events.receipt_id and pending_operation_id carry no foreign key: a SET NULL cascade would update an append-only row and RESTRICT would block the deletes suggestion_log and pending_operations allow.

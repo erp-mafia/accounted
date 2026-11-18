@@ -746,7 +746,7 @@ export interface CompanySettings {
   sector_slug: string | null
 
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
-  // load-bearing for correctness. Free tier (founder decision 2026-07-02).
+  // load-bearing for correctness. Free tier (product decision 2026-07-02).
   dimensions_enabled: boolean
 
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
@@ -777,7 +777,7 @@ export interface CompanySettings {
   next_sales_order_number?: number
 
   // Salary payments (migration 20260508120000 + 20260703190000).
-  // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
+  // preferred_payment_format defaults to 'pain001' - Bankgirot Lön is
   // retired by the banks during 2026.
   preferred_payment_format: 'bg_lb' | 'pain001'
   salary_pay_day: number

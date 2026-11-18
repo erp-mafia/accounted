@@ -1,1 +1,0 @@
-[2026-10-15] Route tests that read 'no rpc call' as 'wrote nothing' now leave out the idempotency claim (isIdempotencyClaim, routeRpcCalls in tests/helpers.ts) rather than hiding the claim from mocks: it is withApiV1's key bookkeeping, not the route's write.

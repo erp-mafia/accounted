@@ -1,1 +1,0 @@
-[2026-10-16] winding_down is reserved, not computed, in step 1: no package can be switched off yet, so an obligations query could never change a result; the resolver takes openObligations as an input for the step that adds switching.

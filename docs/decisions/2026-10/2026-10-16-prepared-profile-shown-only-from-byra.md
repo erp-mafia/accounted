@@ -1,1 +1,0 @@
-[2026-10-16] /invite/[token] says "Din byrå har förberett" only when the company is on a byrå team, has a stored profile and the invitation was sent by a member of that team, so it never names a profile the client's own people or a signup flag set.

@@ -1,1 +1,0 @@
-[2026-10-07] MCP OAuth refresh (crm#1043): the predecessor of the current refresh token gets the same derived successor however late; only a token shown after its successor was used revokes. Rejected: a longer grace window (still a clock), storing the successor encrypted (reversible creds at rest).

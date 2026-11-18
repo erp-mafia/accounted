@@ -173,7 +173,7 @@ function FocusedReportInner({
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
   // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
-  // link, no shell fiscal-year selector — the view owns its period controls.
+  // link, no shell fiscal-year selector - the view owns its period controls.
   const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
   const menuLabelKey = MENU_REPORT_LABEL_KEYS[slug]

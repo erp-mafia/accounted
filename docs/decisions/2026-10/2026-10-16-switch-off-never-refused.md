@@ -1,1 +1,0 @@
-[2026-10-16] set_company_package_choice no longer refuses switching a package off while something is open in it (20261016230000): the package winds down instead. Founder rule: refusals only for plan, country and legal form, checked in the enable dry run.

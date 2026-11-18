@@ -13,8 +13,7 @@ import { seedCompany } from './fixtures'
  * risk tier but without the constraint-expansion migration: the staging
  * INSERT then fails with check_violation on every real call while dry_run
  * (which skips the INSERT) previews clean. That exact gap shipped with
- * gnubok_link_document_to_voucher and went unnoticed until agent feedback
- * (dev_docs/mcp_optimization_plan.md P0-1). It also catches the inverse
+ * gnubok_link_document_to_voucher and went unnoticed until agent feedback. It also catches the inverse
  * hazard: expand-types migrations hand-copy the full list, so one authored on
  * a stale branch can silently drop a type added in between.
  *

@@ -1,1 +1,0 @@
-[2026-10-16] The verified principal is stamped by a BEFORE trigger on draft to posted, not inside commit_journal_entry: four SQL functions post verifikat (the RPC, the SIE writer, two SIE undo chunks); one trigger covers them and any later path, and no function is restated.

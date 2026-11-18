@@ -1,1 +1,0 @@
-[2026-10-16] A service account's name and sponsor are fixed; the only change is its final revocation, which revokes its keys: changing the sponsor would mean re-keying user_id on live keys, so it is revoke and create instead.

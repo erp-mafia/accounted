@@ -720,7 +720,7 @@ export function replacedCopyUnderlagOffer(
   return { consentId: consent.id, provider: consent.provider, count, reconnect: note?.kind === 'reconnect' }
 }
 
-/** Visma has no logo on purpose (founder, 2026-10-29): ProviderMark shows its initial. */
+/** Visma has no logo on purpose (2026-10-29): ProviderMark shows its initial. */
 const PROVIDER_LOGOS: Partial<Record<ArcimProvider, string>> = {
   fortnox: '/logos/fortnox.svg',
   bokio: '/logos/bokio.png',

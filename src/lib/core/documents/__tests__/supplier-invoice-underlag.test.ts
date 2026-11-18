@@ -250,7 +250,7 @@ describe('anchorSupplierInvoiceDocument', () => {
   })
 
   it('reports a zero-row update as null: a write that never happened is not an anchor', async () => {
-    // Prod case 2026-08-28 (faktura 118776): every static condition passed yet
+    // A case seen 2026-08-28: every static condition passed yet
     // the document stayed floating. The guarded update can match nothing (a
     // concurrent writer, or RLS filtering the row); claiming success then hides
     // the miss from both callers and the reconcile cron.

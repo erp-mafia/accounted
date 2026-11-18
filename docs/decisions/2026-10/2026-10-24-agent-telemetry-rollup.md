@@ -1,1 +1,0 @@
-[2026-10-24] Agent telemetry is rolled into anonymous daily counts kept indefinitely, and the cleanup cron skips the 180-day purge when the rollup fails: otherwise every six months erases the record of how agents use the system, and keeping raw rows longer needs a new legal basis.

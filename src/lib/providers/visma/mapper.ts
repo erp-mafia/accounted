@@ -75,8 +75,8 @@ function readRemaining(raw: Record<string, unknown>): number | null {
  * The open balance the DTO reports. Two independent signals arrive: the
  * PaymentStatus enum and the remaining amount. With the enum present and
  * saying NOT settled, a present-but-zero RemainingAmount (or its
- * *InvoiceCurrency twin) is a payload artefact, not a settlement: company
- * 5208b894 (2026-09-10) imported all 53 of its unpaid supplier invoices as
+ * *InvoiceCurrency twin) is a payload artefact, not a settlement: one company
+ * (2026-09-10) imported all 53 of its unpaid supplier invoices as
  * paid because that zero was read as the balance. The open balance is then
  * the positive remaining amount when one is stated, otherwise the total;
  * never 0. Without the enum, or when it says settled, the amount keeps its

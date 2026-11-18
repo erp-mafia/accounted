@@ -52,7 +52,7 @@ const YEAR_END = 'horizontal/swedish-year-end-closing'
  * items are reviewed by Accounted and published through the public MIT repo
  * erp-mafia/accounted-skills (community-repo.ts, community-sync.ts).
  *
- * Open since 2026-09-27 (founder): withdrawing returns an item to private and
+ * Open since 2026-09-27: withdrawing returns an item to private and
  * hides a published text from every AI at once (migration 20260926172514);
  * the reviewer is emailed about each share, and the author when the item's
  * page is live on accounted.se (community-notify.ts).

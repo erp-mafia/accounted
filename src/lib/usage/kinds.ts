@@ -33,11 +33,11 @@ export interface UsagePrice {
  * Bank payments, Peppol sends and live bank accounts carry the prices
  * published on accounted.se/priser (2026-10-30); Kivra sends and signed
  * documents the prices set 2026-11-02, with a company's first 3 signed
- * documents included in all, not 3 a month (founder decision 2026-11-04).
+ * documents included in all, not 3 a month.
  * Billo is included. An annual report's
  * signing is not counted (counters.ts), so it is always included. Documents
- * our AI read are counted against the published 25 a month but not billed
- * (founder decision 2026-11-02): no price here until that changes.
+ * our AI read are counted against the published 25 a month but not billed:
+ * no price here.
  *
  * The bank payments figure is BANK_PAYMENTS_INCLUDED_PER_MONTH: written out
  * here because lib/payments/usage.ts reads this file, and a test pins the two
@@ -77,7 +77,7 @@ export const USAGE_UNITS_SV: Readonly<Record<UsageKind, string>> = Object.freeze
 
 /**
  * The kinds whose paid action stops at the included amount until the
- * company asks for more and a founder opens the charge for it
+ * company asks for more and an operator opens the charge for it
  * (lib/usage/gate.ts and requests.ts; bank payments in
  * lib/payments/allowance.ts; bank accounts where accounts are switched on).
  * A kind gets a price only once its action is here: a test fails on a priced
@@ -136,7 +136,7 @@ export function includedThisMonth(kind: UsageKind, usedBefore: number): number |
 /**
  * The line for `used` units of a kind in a month. `includedOverride`
  * replaces the registry's included amount for one company: a bank payments
- * allowance a founder set plus bought packs, or what is left of an amount
+ * allowance an operator set plus bought packs, or what is left of an amount
  * included once (includedThisMonth). Without it a kind included once counts
  * the whole amount as left. Integer arithmetic only: öre never pass through
  * a float.

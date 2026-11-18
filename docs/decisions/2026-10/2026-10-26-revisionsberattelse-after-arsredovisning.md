@@ -1,1 +1,0 @@
-[2026-10-26] A revisionsberättelse is uploaded only after its årsredovisning went up as kompletteras and is open at Bolagsverket (uploaded, inkommen, förelagd, komplettering), never after an uncertain upload: conservative pairing until Bolagsverket confirms another order works.

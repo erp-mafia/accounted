@@ -19,8 +19,7 @@
  * by it.
  *
  * Only a booked row counts. A possible duplicate (same day, same amount on
- * another row) is a person's call and is never closed here
- * (docs/decisions/2026-10/2026-10-26-no-pending-recheck-on-commit.md). A row
+ * another row) is a person's call and is never closed here. A row
  * that is missing, ignored or unreadable leaves its proposal alone too.
  *
  * Runs where the queue is read, not where rows are booked: there are many

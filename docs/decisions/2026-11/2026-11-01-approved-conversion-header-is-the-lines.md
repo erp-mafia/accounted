@@ -1,1 +1,0 @@
-[2026-11-01] An approved conversion's total is its lines plus VAT, as on the other doors, so the reskontra equals the 2440 credit: staging carries a document's rounding as a 3740 line, and a total the lines miss past rounding is still refused. 0 of 278 approvals since 2026-10-12 differ.

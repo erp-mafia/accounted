@@ -324,7 +324,7 @@ export function isAuditorRole(role: string | null | undefined): boolean {
 
 /**
  * Who may sign the fastställelseintyg: a board member or the verkställande
- * direktör (founder decision 2026-10-15, following
+ * direktör (product decision 2026-10-15, following
  * .claude/skills/swedish-financial-reporting references/bolagsverket-filing.md
  * § 5: "Styrelseledamot or VD" signs it; the intyg is filed with the
  * årsredovisning under ÅRL 8 kap. 3 §). Every board role qualifies; the

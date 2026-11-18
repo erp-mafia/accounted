@@ -1,1 +1,0 @@
-[2026-10-18] Kunder and Leverantörer drop the Typ column; a row shows its type as a muted suffix only when it differs from the register's most common type (ties go to business): the column said the same thing on nearly every row.

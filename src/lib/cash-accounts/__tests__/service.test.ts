@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-// syncMappedAccounts is exercised by its own suite — here it only needs to be
+// syncMappedAccounts is exercised by its own suite - here it only needs to be
 // observable so allocatePsd2LedgerAccount's chart-ensure call can be asserted.
 const { mockSyncMappedAccounts } = vi.hoisted(() => ({
   mockSyncMappedAccounts: vi.fn(),
@@ -168,7 +168,7 @@ describe('findFreeLedgerAccount', () => {
   })
 
   it('returns the default when only a MANUAL row holds it (seed promotion)', async () => {
-    // The seeded 1930 row has no bank connection — upsertFromPsd2 promotes it
+    // The seeded 1930 row has no bank connection - upsertFromPsd2 promotes it
     // in place, so the slot counts as free.
     const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: null, currency: 'SEK' }])
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1930')
@@ -223,14 +223,14 @@ describe('findFreeLedgerAccount', () => {
       { ledger_account: '1930', bank_connection_id: 'conn-1' },
       { ledger_account: '1931', bank_connection_id: 'conn-1' },
     ])
-    // 1932/1933/1934 are reserved for EUR/USD/GBP — next free is 1935.
+    // 1932/1933/1934 are reserved for EUR/USD/GBP - next free is 1935.
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1935')
   })
 
   it('does not steal a manual account on an overflow slot', async () => {
     const supabase = makeSupabase([
       { ledger_account: '1930', bank_connection_id: 'conn-1' },
-      // Manual (e.g. SIE-imported) account on 1931 — promoting it would
+      // Manual (e.g. SIE-imported) account on 1931 - promoting it would
       // silently repoint an unrelated account.
       { ledger_account: '1931', bank_connection_id: null },
     ])

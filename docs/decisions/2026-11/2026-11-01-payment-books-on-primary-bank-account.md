@@ -1,1 +1,0 @@
-[2026-11-01] A payment with no bank row books on the primary bank account when nothing names one, on every door including v1 (replaces explicit > 1930 of 2026-09-13): 129 companies have no enabled 1930. Line builders take no default, so a door must name its account.

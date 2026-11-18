@@ -10,7 +10,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { BankFileAccountIdentity } from '@/lib/import/bank-file/types'
 
 // Invented numbers throughout. Swedish IBAN = SE + 2 check digits + 3-digit
-// bank code + a 17-digit account part, which ends with the BBAN (on prod every
+// bank code + a 17-digit account part, which ends with the BBAN (in production every
 // stored Swedish IBAN ends with its stored BBAN). The matcher never checks the
 // check digits, so they are arbitrary here.
 // Swedbank 8327-9, account 123 456 789-0: BBAN 83279 1234567890.

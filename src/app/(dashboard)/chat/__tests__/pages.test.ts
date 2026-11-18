@@ -5,8 +5,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 // pages. Switched off, every one of them sends its visitor to Koppla en agent
 // (/settings/api): the start page, a new conversation, a stored conversation
 // and the onboarding interview, which starts on /chat/intake and continues as
-// an ordinary conversation on /chat/[id] (founder decision 2026-11-18: the
-// interview goes with the rest). Unset or on, nothing here redirects.
+// an ordinary conversation on /chat/[id] (the interview goes with the rest).
+// Unset or on, nothing here redirects.
 
 const redirect = vi.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT:${url}`)

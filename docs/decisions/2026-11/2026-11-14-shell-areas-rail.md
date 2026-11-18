@@ -1,1 +1,0 @@
-[2026-11-14] The shell is an icon rail of areas plus one sidebar per area (nav-v3.ts; the V7/V8 prototype), replacing the v2 section tree; routes and gates unchanged. Avstämning and Ägare get no row: /reconciliation and the owners tab already are Konton and Aktiebok.

@@ -85,8 +85,8 @@ export async function anchorSupplierInvoiceDocument(
     if (!entryId) {
       // The invoice HAS a floating retained document but no verifikat that can
       // take it. In the payment routes (which call this right after posting)
-      // that is an anomaly worth a log line: prod case 2026-08-28 (Anders,
-      // faktura 118776) stayed "Underlag saknas" through exactly this kind of
+      // that is an anomaly worth a log line: a case seen 2026-08-28 stayed
+      // "Underlag saknas" through exactly this kind of
       // silent bail, and nothing recorded which branch gave up.
       log.warn('supplier invoice document is floating but no verifikat can anchor it', {
         companyId,
@@ -284,7 +284,7 @@ export interface FloatingDocumentSweepResult {
  * already committed), so a transient failure there strands the document until
  * something retries. Historically that "something" was a hand-written repair
  * migration (20260727180000, 20260824150000); this makes the retry a standing
- * daily cron instead. Prod case 2026-08-28 (Anders, faktura 118776): payment
+ * daily cron instead. A case seen 2026-08-28: payment
  * verifikat posted, invoice document eligible on every static condition, yet
  * the inline anchor did nothing and no log recorded why, so the verifikat
  * showed "Underlag saknas" until the user re-uploaded the PDF by hand.

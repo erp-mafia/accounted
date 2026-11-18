@@ -1,1 +1,0 @@
-[2026-10-22] MCP inbox supplier invoice, Swedish supplier: the treatment comes from the line rates (the dashboard's inferVatTreatment); a VAT-free document without a stated treatment is refused for a VAT-registered company (accounted#58 P1.2): exempt and omvänd betalningsskyldighet read alike.

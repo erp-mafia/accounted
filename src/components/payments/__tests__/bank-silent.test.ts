@@ -17,7 +17,7 @@ describe('a payment the bank has not answered about for a day says so on its Bet
   })
 
   it('names the last answer of a payment the bank still holds, once it is more than a day old', () => {
-    // Production, 2026-10-30: a status read refused every 15 minutes for a week.
+    // Seen 2026-10-30: a status read refused every 15 minutes for a week.
     const lastAnswer = '2026-10-30T01:31:56.463Z'
     for (const status of ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted'] as const) {
       expect(bankSilentSince(row(status, lastAnswer), NOW)).toBe(lastAnswer)

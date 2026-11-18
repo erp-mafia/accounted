@@ -55,7 +55,7 @@ const SOURCE_SIE = [
   '#DIM 1 "Kostnadsställe"',
   '#DIM 6 "Projekt"',
   '#UNDERDIM 2 "Kostnadsbärare" 1',
-  // Custom dimension + custom child — exactly what PR10's "Ny dimension"
+  // Custom dimension + custom child - exactly what PR10's "Ny dimension"
   // (SIE 20+, optional parent) produces. Proves the round-trip covers
   // user-created dims, not just the reserved 1/2/6 set.
   '#DIM 20 "Avdelning"',

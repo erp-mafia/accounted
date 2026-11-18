@@ -1,1 +1,0 @@
-[2026-10-27] PATC copy names the online bank and the payment date, not a second signatory: at SEB a basket answers PATC 2 s after start with no BankID, so a sole signer waited for nobody; changing the PATC mapping waits on SEB's semantics.

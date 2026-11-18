@@ -1,1 +1,0 @@
-[2026-11-03] gnubok_get_invoice_pdf serves the archived delivery when Accounted emailed the invoice, else a render stored at {userId}/invoice-pdfs/{invoiceId}.pdf with upsert and signed for an hour: a URL instead of bytes in the context, one object per invoice instead of one per call (crm#1593).

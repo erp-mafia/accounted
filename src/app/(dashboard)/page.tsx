@@ -33,7 +33,7 @@ import { getTranslations } from 'next-intl/server'
 export const dynamic = 'force-dynamic'
 
 // Home route = Hem (concept scene 14): greeting + Att göra + Fortsätt.
-// The KPI/revenue/deadline widgets left the page (founder direction),
+// The KPI/revenue/deadline widgets left the page (product direction),
 // which also pruned their fetches:
 // the journal-line YTD aggregation, unpaid-invoice totals and deadline
 // queries are gone and the page got faster.

@@ -1,1 +1,0 @@
-[2026-10-15] The partner door answers 201 only when it filed a new inbox item; a repeated external_ref or a file already in the Inkorg answers 200 with deduplicated=true, matching the 200 an Idempotency-Key replay already returns.

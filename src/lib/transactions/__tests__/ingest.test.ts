@@ -1763,7 +1763,7 @@ describe('ingestTransactions', () => {
 
   // -----------------------------------------------------------------------
   // 2h. No date-drift dedup. Every dedup layer buckets on EXACT (date, öre),
-  //     so a twin one day away always imports. Measured on prod (2026-10-12):
+  //     so a twin one day away always imports. Measured in production (2026-10-12):
   //     a ±1-day rule matched recurring same-text charges far more often than
   //     re-imports, and dropping a real charge loses bookkeeping while a
   //     visible duplicate can be ignored. These pin that decision.
@@ -2066,15 +2066,15 @@ describe('ingestTransactions', () => {
   //     link. Regression: a high-confidence hit used to set
   //     supplier_invoice_id directly (with no payment voucher booked) which
   //     then BLOCKED the match route (MATCH_SI_TX_ALREADY_LINKED), stranding
-  //     the bank line with no path to a payment booking (June 2026 incident:
-  //     RosholmDell 18299).
+  //     the bank line with no path to a payment booking (June 2026
+  //     incident).
   // -----------------------------------------------------------------------
   it('demotes a high-confidence supplier-invoice match to potential_supplier_invoice_id', async () => {
     const { supabase, enqueue, updates } = createQueueMockSupabase()
     const raw = makeRaw({
       date: '2026-06-08',
       amount: -29890,
-      description: 'RosholmDell Advo BG 0000007746514 Bg-bet. via internet',
+      description: 'Nordljus Advo BG 0000001234567 Bg-bet. via internet',
     })
     const inserted = makeTransaction({
       id: 'tx-rd',
@@ -2092,7 +2092,7 @@ describe('ingestTransactions', () => {
       invoice_date: '2026-06-05',
       due_date: '2026-07-05',
       payment_reference: null,
-      supplier: { name: 'RosholmDell Advokatbyrå AB' },
+      supplier: { name: 'Nordljus Advokatbyrå AB' },
     }
 
     enqueue({ data: [], error: null }) // booked map
@@ -2442,7 +2442,7 @@ describe('ingestTransactions', () => {
   // -----------------------------------------------------------------------
   // Imports never auto-link to existing journal entries.
   // Reconciliation must be an explicit user action (manualLink / runReconciliation).
-  // Regression: viktor@frnzn.com, bank txns from 2026 were silently linked
+  // Regression: bank txns from 2026 were silently linked
   // to SIE-imported vouchers, surfacing them as "bokförda" without action.
   // -----------------------------------------------------------------------
   it('never auto-reconciles imported transactions to existing GL lines', async () => {

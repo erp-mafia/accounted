@@ -9,7 +9,7 @@ import type { ProviderName } from './types'
  * register or detail the token may not read: Bokio and Visma answer both
  * alike, and Fortnox names only some refusals with a code it documents. A
  * token that still answers is alive, so the 403 refused that resource
- * (DECISIONS.md 2026-10-11, crm#1081), and the error comes back as
+ * (crm#1081), and the error comes back as
  * PROVIDER_RESOURCE_FORBIDDEN. Anything else (not a 403, a token that no
  * longer answers, a failed call) returns the error unchanged. Running out of
  * time throws ExecutionBudgetExceeded. The caller decides which 403 needs

@@ -10,7 +10,7 @@ import { AGENT_FAB_CLEARANCE_CLASS } from '@/components/ui/fab-clearance'
 import { cn } from '@/lib/utils'
 
 /**
- * The padded canvas (founder decision 2026-09-07, PR #2390): no max-width,
+ * The padded canvas (product decision 2026-09-07, PR #2390): no max-width,
  * 24px side padding, and PageHeader restyled into the panel's top bar by the
  * .page-header rules in globals.css. The 16px top padding is what the sticky
  * top bar pulls itself back over (negative margin), so the numbers must stay

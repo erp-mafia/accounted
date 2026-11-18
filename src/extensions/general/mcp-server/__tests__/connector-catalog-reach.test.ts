@@ -211,7 +211,7 @@ const UNREACHABLE_SEARCH_ONLY_WRITES: Record<string, string> = {
   // bookkeeping, so they commit directly (DIRECT_WRITE_SCOPES) instead of
   // staging, and search-only because tools/list is at its ceiling. Reachable
   // over v1 REST and a raw tools/call; for a client that only calls listed
-  // tools, the founder picks between listing the upsert and a bridge for
+  // tools, the operator picks between listing the upsert and a bridge for
   // direct writes.
   gnubok_upsert_cash_forecast_rows: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows carries it.',
   gnubok_cancel_cash_forecast_row: 'Direct forecast-row write (not bookkeeping), search-only by the tools/list ceiling; v1 POST /cash-forecast-rows/cancel carries it.',

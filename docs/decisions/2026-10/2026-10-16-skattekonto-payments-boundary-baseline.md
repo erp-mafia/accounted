@@ -1,1 +1,0 @@
-[2026-10-16] The skattekonto bank payment's payments -> skatteverket import (the OCR resolver) is recorded in the module boundary baseline rather than added to payments' dependsOn: dependsOn feeds the capabilities report, where it would make every supplier payment depend on the Skatteverket module, while only the skattekonto payment needs its OCR.

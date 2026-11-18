@@ -1,1 +1,0 @@
-[2026-10-21] Agent and v1 invoice reads return external_invoice_number and is_self_billed as their own fields instead of folding the customer's number into invoice_number: invoice_number is our F-series number that credit and send tools act on, and a received self-bill has none (crm#1367).

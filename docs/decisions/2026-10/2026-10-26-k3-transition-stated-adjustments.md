@@ -1,1 +1,0 @@
-[2026-10-26] Transition adjustments other than deferred tax are stated by the user as a balance sheet account and amount against balanserat resultat (35.11): Accounted computes only what its register knows (components, buildings' deferred tax), never guesses other policy effects.

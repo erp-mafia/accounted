@@ -1,1 +1,0 @@
-[2026-10-27] gnubok_get_supplier_invoice is a new search-only read, not a record kind on gnubok_get_record: agents of every client guess this exact name (the top unknown tool in production), tools/call resolves any registered name, and search-only leaves the tools/list budget untouched.

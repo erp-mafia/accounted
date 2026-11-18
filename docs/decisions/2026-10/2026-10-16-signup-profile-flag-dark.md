@@ -1,1 +1,0 @@
-[2026-10-16] PROFILES_APPLY_ON_SIGNUP (off unless true or 1) decides whether public signup applies the derived profile; it is always recorded as a suggestion. MCP and v1 creation record it and never apply it, and a byrå client never takes it: the flag covers what Jakob confirms, nothing more.

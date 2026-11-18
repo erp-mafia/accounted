@@ -44,7 +44,7 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * hourly skattekonto sync, which picks a grant recorded here up on its next
  * run; the appoint button's own register check records one at once. Hourly because
  * Skatteverket takes from minutes to over an hour to list a fresh grant
- * (prod, 2026-11-08: 3, 18 and 52 minutes, one past the old nightly run), and
+ * (seen 2026-11-08: 3, 18 and 52 minutes, one past the old nightly run), and
  * the settings card, Hem and Kom igång promise a check every hour while they
  * say "Väntar på Skatteverket". A run is one register call plus a write per
  * row that changed, and the guards below hold per run whatever the cadence.

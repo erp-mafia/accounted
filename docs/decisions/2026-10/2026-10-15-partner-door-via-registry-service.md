@@ -1,1 +1,0 @@
-[2026-10-15] The v1 partner door reaches uploadAndExtract through the invoice-inbox extension's registry service (fileInboxDelivery), not by moving the pipeline into core: core may not import extensions, and the bank-sync and Skatteverket routes already use this channel.

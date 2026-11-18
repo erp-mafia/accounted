@@ -561,7 +561,7 @@ const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
   counterparty_name: 'Motpart',
   // counterparty_aliases deliberately absent: aliases grow in the same
   // learning write as occurrence_count (migration 20260901200000 stopped
-  // logging them), and the pre-fix audit rows already in prod are alias-only
+  // logging them), and the pre-fix audit rows already in production are alias-only
   // noise that must render as no-ops, not as rule changes.
   debit_account: 'Debetkonto',
   credit_account: 'Kreditkonto',

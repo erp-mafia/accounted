@@ -157,7 +157,7 @@ export interface MatchPairsInput {
    * (proposals with vouchers, 1:N) below this confidence. The matcher's 1:1
    * proposals are not affected. The page's "Koppla N föreslagna" sends 0.9:
    * one click links same-date sums (0.95), while 7-day window sums (0.85)
-   * stay for a per-row look (founder decision 2026-11-07, crm#1668).
+   * stay for a per-row look (product decision 2026-11-07, crm#1668).
    */
   set_confidence_threshold?: number
 }

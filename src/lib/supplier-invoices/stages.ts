@@ -1,7 +1,7 @@
 /**
  * Supplier-invoice lifecycle stages (UI v2 PR 6).
  *
- * Founder decision 2026-09-07: Inköp shows the invoice as a flow, Inkommen →
+ * Product decision 2026-09-07: Inköp shows the invoice as a flow, Inkommen →
  * Registrerad → Attesterad → I betalfil → Betald → Avstämd. The stage is
  * DERIVED from what already exists (status, approved_at, an open payment
  * batch, the paying bank row and the account's sign-off) instead of adding

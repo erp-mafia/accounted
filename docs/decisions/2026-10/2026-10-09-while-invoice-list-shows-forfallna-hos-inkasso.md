@@ -1,1 +1,0 @@
-[2026-10-09] While the invoice list shows Förfallna and Hos inkasso as a segmented control, the status picker leaves those two views out (one door each) and reads "Status" with nothing checked while one of them is active; with collections not in play the picker keeps every view as before.

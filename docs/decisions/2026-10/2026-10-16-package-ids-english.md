@@ -1,1 +1,0 @@
-[2026-10-16] Package ids are English kebab-case (bookkeeping, customer-invoices, pos-and-webshop) with the Swedish name beside each: the design calls package ids country-neutral, and a single-module package shares its module's id (payroll, assets, expenses).

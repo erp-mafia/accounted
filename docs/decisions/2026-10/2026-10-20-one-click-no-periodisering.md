@@ -1,1 +1,0 @@
-[2026-10-20] No periodisering in a one-click booking, and the supplier form opens it only at or above K2's limit, 7 000 kr for a fiscal year starting 2026 or later (BFNAR 2025:2), else 5 000 kr; K1 keeps 5 000 kr, which BFNAR 2025:2 did not change: accruals are bokslutstransaktioner.

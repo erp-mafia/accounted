@@ -54,7 +54,7 @@ export type GoogleOAuthEnv = GoogleOAuthClient
 
 /**
  * Deliberately distinct from cloud-backup's GOOGLE_CLIENT_ID: that is a
- * different OAuth client, in a different project, owned by a different founder,
+ * different OAuth client, in a different project, under a different owner,
  * and sharing the pair would let one integration's credential rotation break
  * the other.
  */

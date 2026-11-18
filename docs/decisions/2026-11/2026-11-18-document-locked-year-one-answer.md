@@ -1,1 +1,0 @@
-[2026-11-18] A document refused on a verifikat in a locked or closed year gets one answer, with the way forward, at every door (DOC_UPLOAD_PERIOD_LOCKED); v1 doors that publish PERIOD_LOCKED for it keep that code and speak that answer: changing a v1 code breaks a dated version.

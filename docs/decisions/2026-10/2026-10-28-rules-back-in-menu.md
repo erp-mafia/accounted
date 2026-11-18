@@ -1,1 +1,0 @@
-[2026-10-28] Regler is back in the menu under Transaktioner (founder decision, reversing the 2026-09-07 call): it is where a rule is set to always ask, and where Ett klick shows which rules book without a review.

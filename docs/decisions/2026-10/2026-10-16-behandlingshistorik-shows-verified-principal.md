@@ -1,1 +1,0 @@
-[2026-10-16] Behandlingshistorik shows the verified principal under the asserted actor (view, PDF, xlsx/csv Utförd av cell) only for verifikat that carry it; older rows render unchanged: the BFNAR 2013:2 p. 9.16 history should show what the system itself verified.

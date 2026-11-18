@@ -6,7 +6,7 @@
  * something only a person can say is missing, the plan says what to ask
  * instead of guessing.
  *
- * The rules (docs/decisions/2026-10/2026-10-20-*):
+ * The rules:
  *
  *   Form. Paid at purchase is ONE verifikat against the bank row's
  *   settlement account, no 2440 and no supplier invoice (BFL 5 kap 4 §: a

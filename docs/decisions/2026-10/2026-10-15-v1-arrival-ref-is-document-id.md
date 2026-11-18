@@ -1,1 +1,0 @@
-[2026-10-15] A v1 document upload's arrival uses the document id as source_ref, with the Idempotency-Key in source_meta: the v1 layer already replays a repeated key, and a key reused after it expires would otherwise fold a new file into an old arrival.

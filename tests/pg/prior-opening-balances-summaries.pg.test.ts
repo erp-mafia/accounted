@@ -143,7 +143,7 @@ async function storno(w: World, original: { id: string }, lines: Line[], date: s
 
 /**
  * FY2023-FY2026 without any linked IB verifikat (the shape of the large
- * companies on prod), every rule of prior_opening_balance_lines exercised.
+ * companies in production), every rule of prior_opening_balance_lines exercised.
  */
 async function world(): Promise<World> {
   const { userId, companyId, fiscalPeriodId } = await seedCompany()

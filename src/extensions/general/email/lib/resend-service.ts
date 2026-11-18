@@ -41,7 +41,7 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
  * Otherwise the platform default: "<fromName> <RESEND_FROM_EMAIL>" or
  * "<App> <RESEND_FROM_EMAIL>". A fromName WITHOUT an explicit address (a
  * brand or company riding the platform address) shows the name ALONE
- * (founder call 2026-08-05: no "via <platform>" in the display name; the
+ * (product call 2026-08-05: no "via <platform>" in the display name; the
  * platform stays visible in the actual From address until a sender domain
  * is verified).
  *

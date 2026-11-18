@@ -12,7 +12,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
 /**
  * Covers 20261031220000_delete_last_voucher_reanchors_bank_row.
  *
- * The sequence on prod: a bank row is booked (verifikat A1), un-booked
+ * The sequence in production: a bank row is booked (verifikat A1), un-booked
  * (storno A2, row released by the uncategorize route), and the user then
  * deletes A2 as the last voucher to undo the un-booking. A1 comes back as
  * posted; before this migration its row stayed released and asked to be

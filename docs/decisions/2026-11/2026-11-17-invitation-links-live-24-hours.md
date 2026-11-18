@@ -1,1 +1,0 @@
-[2026-11-17] Company and team invitation links live 24 hours, not 7 days (INVITE_TTL_HOURS: one constant behind expires_at, the mails and the invite cookie): CASA 1.1.2 failed 7 days as too long for an activation code. An expired one is renewed by re-send. The bank signatory link is unchanged.

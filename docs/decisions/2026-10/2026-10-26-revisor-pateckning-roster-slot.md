@@ -1,1 +1,0 @@
-[2026-10-26] The revisor is a roster slot (Auktoriserad, Godkänd or Huvudansvarig revisor) whose signature is the revisorspåteckning, recorded by hand, never in the board's BankID request: the revisor signs weeks later on the audit, and the version is signed once the påteckning is in.

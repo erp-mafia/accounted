@@ -1,1 +1,0 @@
-[2026-10-26] Plain assets that are land, start later than acquired or carry a write-down are planned by the unit engine (asset-units.ts), not the asset-level path P0 is making prospective in !898, so each path stays one set of functions and the MRs merge cleanly.

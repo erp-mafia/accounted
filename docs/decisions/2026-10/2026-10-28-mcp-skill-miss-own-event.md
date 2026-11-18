@@ -1,1 +1,0 @@
-[2026-10-28] A load_skill miss is its own event, mcp.skill_not_found, not mcp.skill_loaded with found=false: skill_loaded rows are read back as retrieval evidence (staged-operation skill provenance, Skills page usage, community load counts), and a miss retrieved nothing.

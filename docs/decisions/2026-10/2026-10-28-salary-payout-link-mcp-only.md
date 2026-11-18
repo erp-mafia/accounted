@@ -1,1 +1,0 @@
-[2026-10-28] The salary-run payout link is offered in MCP suggest_categories only, not as a proposeForTransactions source: the app already reaches these links (sweep suggestion, duplicate dialog) and a new source touches every ProposalSource switch (crm#1462).

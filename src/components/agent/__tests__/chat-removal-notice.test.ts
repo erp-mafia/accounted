@@ -2,9 +2,8 @@ import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderInLocale, visibleText } from '@/tests/i18n-render'
 
-// The built-in chat's own line about its removal (founder decisions
-// 2026-11-17 and 2026-11-18): what it says in each language and where its
-// link leads.
+// The built-in chat's own line about its removal: what it says in each
+// language and where its link leads.
 
 const { enabledExtensions } = vi.hoisted(() => ({ enabledExtensions: new Set<string>(['mcp-server']) }))
 vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({ ENABLED_EXTENSION_IDS: enabledExtensions }))

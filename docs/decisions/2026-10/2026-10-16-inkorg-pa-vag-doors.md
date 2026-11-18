@@ -1,1 +1,0 @@
-[2026-10-16] Only Peppol and the intake address make a purchase På väg, and only within the median measured delay after the bank row plus two days (five when never measured): those doors deliver without a person, and a late document must fall back to Behöver dig without a notice.

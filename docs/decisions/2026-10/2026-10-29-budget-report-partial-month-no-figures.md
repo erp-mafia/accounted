@@ -1,1 +1,0 @@
-[2026-10-29] A report window that cuts a month gets no Budget figures and says why (budget.applied false), never a prorated budget: the 2026-10-28 whole-month rule, kept at the resultatrapport whose default window (hittills i år) ends today (accounted#134).

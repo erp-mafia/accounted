@@ -10,7 +10,7 @@ describe('viaCanonicalOrigin', () => {
   })
 
   it('sends a brand host return through the hop on the canonical origin, the real target named', () => {
-    const target = 'https://app.ziffr.se/settings/connections?bank_connect=c1'
+    const target = 'https://app.testbrand.example/settings/connections?bank_connect=c1'
     const hop = new URL(viaCanonicalOrigin(target, CANONICAL))
     expect(hop.origin).toBe(CANONICAL)
     expect(hop.pathname).toBe(RETURN_BOUNCE_PATH)

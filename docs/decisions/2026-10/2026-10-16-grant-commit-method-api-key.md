@@ -1,1 +1,0 @@
-[2026-10-16] Postings under a grant keep commit_method api_key and the staging key as committed actor, so the journal_entries CHECK stays untouched; the grant is named on the receipt, the use row and result_data.

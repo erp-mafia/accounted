@@ -495,7 +495,7 @@ export async function registerExpenseClaim(
     if (booking.state === 'missing') return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
     if (booking.state === 'booked') return { ok: false, code: 'INBOX_ITEM_BOOKED' }
     replacesEntryId = booking.replaces
-    // The other half of this purchase is booked already (SofClo booked one Anthropic purchase twice as
+    // The other half of this purchase is booked already (one purchase was booked twice, as
     // utlägg, from the invoice and from the receipt of the same mail): refused before anything is written.
     const pairBooked = await refuseWhenPairBooked(supabase, companyId, input.inbox_item_id)
     if (pairBooked) return { ok: false, code: 'INBOX_ITEM_PAIR_BOOKED', detail: pairBooked.messageSv }

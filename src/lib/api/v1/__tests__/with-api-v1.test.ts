@@ -534,7 +534,7 @@ describe('withApiV1: company membership', () => {
 })
 
 describe('withApiV1: typed path ids that are not UUIDs', () => {
-  // Production, 2026-10-21: a client sent the OpenAPI placeholder "string" as
+  // Seen 2026-10-21: a client sent the OpenAPI placeholder "string" as
   // companyId. Postgres refused it (22P02) inside the company gate, which
   // answered a logged 500 nine times in five minutes.
   const COMPANY = 'c0ffee01-0000-4000-8000-000000000001'

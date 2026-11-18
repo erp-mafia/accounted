@@ -1,1 +1,0 @@
-[2026-10-30] The reminder preview sample, the reminder overview and the ICS invoice feed read the shared overdue/owed rule (lib/invoices/overdue.ts): a sent credit note is never sampled, offered or shown as a due date (crm#1435).

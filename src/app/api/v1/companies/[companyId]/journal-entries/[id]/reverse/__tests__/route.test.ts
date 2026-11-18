@@ -3,7 +3,7 @@
  *
  * The storno is numbered in the original's series and booked into the
  * original's fiscal year, so it is dated inside that year too: by default on
- * the original's date (founder decision 2026-10-13, as the app and MCP do),
+ * the original's date (product decision 2026-10-13, as the app and MCP do),
  * never today. A date outside the year is 400; a locked or closed year is
  * PERIOD_LOCKED before any voucher number is drawn, and a dry run gives the
  * same verdict (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18).

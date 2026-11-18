@@ -1,1 +1,0 @@
-[2026-11-01] The supplier bank match reads a foreign remainder at the payment-day rate: over 2 % short is a part payment, above it settles up to 10 % and is refused past that. The customer's 2 % above would have refused 36 of 57 matches: a card rate runs 2-8.8 % over the mid rate.

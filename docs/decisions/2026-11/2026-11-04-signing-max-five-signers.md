@@ -1,1 +1,0 @@
-[2026-11-04] A document sent for signing has at most 5 signers (SIGNING_MAX_SIGNERS), on every door (app, v1, MCP); an årsredovisning keeps its own cap of 20 signer slots (SIGNING_MAX_ANNUAL_REPORT_SIGNERS) for the board, VD and auditor.

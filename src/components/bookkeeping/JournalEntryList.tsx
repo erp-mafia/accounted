@@ -815,7 +815,7 @@ export default function JournalEntryList({
 
   // Imported verifikat missing underlag: the rows that used to carry the
   // per-row "Underlag saknas" chip, counted once in the line above the table
-  // instead (founder 2026-10-18: a migrated year was a wall of chips). Same
+  // instead (2026-10-18: a migrated year was a wall of chips). Same
   // population as the chip: posted, import, no attachment, not
   // invoice-referenced, not marked "Inget underlag krävs". Counted over the
   // loaded rows, so the line says "på den här sidan" unless the whole scope

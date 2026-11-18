@@ -1,1 +1,0 @@
-[2026-10-27] A card statement's sign is flipped in the import wizard right after parsing, not in the parse route: the generic CSV path parses on the client and never reaches it. Execute stores the sign it is sent, as for every bank file, so the preview is what lands.

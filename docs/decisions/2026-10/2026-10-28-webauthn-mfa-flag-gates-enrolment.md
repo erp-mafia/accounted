@@ -1,1 +1,0 @@
-[2026-10-28] NEXT_PUBLIC_WEBAUTHN_MFA_ENABLED gates adding a security key only; signing in with a key that already exists works with the flag off, so switching it off never strands a key holder at /mfa/verify (crm#1448).

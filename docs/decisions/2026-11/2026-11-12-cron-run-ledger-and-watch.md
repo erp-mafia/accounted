@@ -1,1 +1,0 @@
-[2026-11-12] Every scheduled job runs through withCronContext, declares maxDuration, and has its runs recorded in cron_runs; a watch job mails the team about a killed, failed or missed run (pg_cron included): six jobs were killed at their limit 56 times in 30 days and nothing recorded one.

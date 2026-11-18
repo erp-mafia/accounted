@@ -1,1 +1,0 @@
-[2026-10-26] extractCode accepts application codes with a digit inside a word (INVALID_K3_COMPONENTS, K3_TRANSITION_BLOCKED) but not a bare SQLSTATE: K3 codes classified as UNKNOWN_ERROR and answered 500 on every door that did not map them by hand.

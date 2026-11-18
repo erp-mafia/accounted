@@ -228,7 +228,7 @@ export async function sendInvoiceToDigitalMailbox(
     return { ok: false, code: 'DIGITAL_MAILBOX_SENDING_NOT_ACTIVE' }
   }
   const tenantRef = connection.tenant_ref
-  // Every send is a unit the provider prices, a resend too: past what the
+  // Every send is a billable unit, a resend too: past what the
   // month includes it waits for a subscription and an admin's acceptance.
   const usageGate = await usageGateRefusal(ctx.service, ctx.companyId, `${providerId}_send`)
   if (usageGate) return usageGate

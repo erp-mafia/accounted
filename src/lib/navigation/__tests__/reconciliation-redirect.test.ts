@@ -4,7 +4,7 @@ import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboa
 import { NAV_V3_AREAS, areaItems, resolveNavPlace } from '@/components/dashboard/nav-v3'
 
 /**
- * Konton is the one account list (founder decision 2026-10-18): the
+ * Konton is the one account list (product decision 2026-10-18): the
  * Avstämning list left the menu, and its address keeps working for the
  * bookmarks, Att göra rows, notices and checklist links that carry it. The
  * bare /reconciliation lands on Konton with its query string; with ?account=

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 const ToastProvider = ToastPrimitives.Provider
 
 // Toasts open just under the 48px top bar, never on it: the page's primary
-// action sits top-right in that bar (design.md conventions 2 and 9), and a
+// action sits top-right in that bar, and a
 // toast in the same corner covered it until it faded (crm#245). From md up
 // the dashboard panel starts 10px down and ends --agent-dock-w from the right
 // (MAIN_PANEL_CLASS in app/(dashboard)/layout.tsx), so the viewport follows

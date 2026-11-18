@@ -2669,7 +2669,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   // Every company's own sending domain is registered in the platform's one
   // Resend account, and that account has used every domain its plan includes
-  // (crm#1288). Nothing the company can fix: the founders grow the plan or
+  // (crm#1288). Nothing the company can fix: the operators grow the plan or
   // remove unused domains. Invoice mail keeps leaving from the platform address.
   SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT: {
     httpStatus: 503,
@@ -4988,7 +4988,7 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'SRU-filen kan inte laddas ner förrän bokföringen är rättad. Orsaken står i NE-bilagans varningar.',
     message_en: 'The NE-bilaga SRU file is refused until the books are corrected. details.reason and the NE-bilaga warnings name the cause.',
   },
-  // INK3 underlag for ideell förening (lib/reports/ink3, founder decisions on #47).
+  // INK3 underlag for ideell förening (lib/reports/ink3, product decisions on #47).
   TAX_DECL_INK3_WRONG_LEGAL_FORM: {
     httpStatus: 400,
     message_sv: 'INK3-underlaget gäller bara ideella föreningar.',
@@ -5770,9 +5770,9 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
   OB_COMPANY_LOCK_DATE: {
     httpStatus: 409,
     message_sv:
-      'Bokföringen är låst t.o.m. ett låsdatum som täcker periodens start — ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.',
+      'Bokföringen är låst t.o.m. ett låsdatum som täcker periodens start: ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.',
     message_en:
-      'The company-wide bookkeeping lock date covers the period start — opening balances cannot be corrected. Remove or move the lock date under Settings → Bookkeeping and try again.',
+      'The company-wide bookkeeping lock date covers the period start: opening balances cannot be corrected. Remove or move the lock date under Settings → Bookkeeping and try again.',
     remediation: {
       description:
         'Clear or move the bookkeeping lock date (company_settings.bookkeeping_locked_through) to a date before the period start, then retry the correction.',
@@ -6685,7 +6685,7 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // receipt that fits more than one invoice.
   // The other half of the purchase (the invoice or the receipt this one came
   // with, lib/inkorg/pairs.ts) is booked already: booking this one too books
-  // the purchase twice (SofClo, 2026-10-15). The doors name the verifikat in
+  // the purchase twice (reported 2026-10-15). The doors name the verifikat in
   // the message; this is the fallback for an envelope without one.
   INBOX_ITEM_PAIR_ALREADY_BOOKED: {
     httpStatus: 409,

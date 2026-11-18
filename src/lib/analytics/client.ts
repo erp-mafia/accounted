@@ -6,8 +6,7 @@ import { replayMaskText } from './replay-masking'
 /**
  * Browser PostHog, started only for a signed-in person.
  *
- * Founder decision 2026-10-22 (superseding the consent prompt of 2026-10-21):
- * product analytics in the browser (PostHog analytics, masked session replay,
+ * Product analytics in the browser (PostHog analytics, masked session replay,
  * surveys) is on for a signed-in person unless they switched it off under
  * Inställningar, Konto (user_preferences.analytics_consent = false; null, never
  * asked, is on). Switched off, nothing here runs: no posthog.init, so no
@@ -37,7 +36,7 @@ import { replayMaskText } from './replay-masking'
  *    flags and Support its `ph_conv_*` ticket id to localStorage: both only
  *    after consent, since nothing here starts before it.
  *
- * 3. Deny-by-default replay masking (founder-approved 2026-08-17). Replays
+ * 3. Deny-by-default replay masking. Replays
  *    exist so support can see WHERE a user gets stuck: layout, clicks and
  *    static chrome (headers, nav, labels, placeholders), never what the user
  *    typed or what their books say.

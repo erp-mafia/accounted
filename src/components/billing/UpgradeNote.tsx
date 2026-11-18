@@ -5,8 +5,7 @@ import { isSelfHosted } from '@/lib/env/public-flags'
 
 /**
  * Inline paywall note for a feature that is visible but not entitled.
- * The feature stays on screen (conversion surface: never hide, disable
- * with an upsell), this note explains why it's disabled and links to
+ * The feature stays on screen, disabled; this note explains why and links to
  * /settings/billing. Copy mirrors CAPABILITY_BLOCKED_MESSAGE_SV.
  *
  * On a SELF-HOST the note never mentions a subscription or links to the

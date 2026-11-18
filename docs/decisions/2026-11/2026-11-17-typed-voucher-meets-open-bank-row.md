@@ -1,1 +1,0 @@
-[2026-11-17] A hand-typed verifikat links the open bank row it books when it is posted (same account, date and amount; a date a few days off leaves a suggestion): the matcher ran only when bank rows or SIE came in, so the row stayed under Att bokföra beside its verifikat (crm#1958).

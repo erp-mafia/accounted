@@ -1,1 +1,0 @@
-[2026-10-16] Staging a bank row an open categorize/bulk-book proposal holds (crm#1264): same params replay it; the same stager's newer proposal covering all its rows supersedes it (reject path); else TRANSACTION_ALREADY_STAGED, force or not.

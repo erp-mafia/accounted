@@ -15,7 +15,7 @@ import { getPool } from '@/tests/pg/setup'
  *     fk = $1 FOR KEY SHARE`); a foreign key with no index leading on its
  *     columns turns every probe into a seq scan.
  *
- * Several dropped names exist only on prod (created outside the migration
+ * Several dropped names exist only in production (created outside the migration
  * history). On a database built from migrations they never existed, so their
  * absence is trivially true here; the kept-index and foreign-key assertions
  * still run for their tables.

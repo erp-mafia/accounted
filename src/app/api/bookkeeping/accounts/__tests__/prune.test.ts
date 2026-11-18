@@ -4,7 +4,7 @@
  * The prune execute phase is the safety-critical part: the client's
  * account_numbers list is a selection, not an authority. The tests assert
  * that used accounts, system accounts, and unknown numbers sent by the
- * client are skipped/reported — only freshly re-verified unused accounts
+ * client are skipped/reported - only freshly re-verified unused accounts
  * reach the DELETE.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

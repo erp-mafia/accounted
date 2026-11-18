@@ -2610,7 +2610,7 @@ describe('negative item rows (öresavrundning, rabatt) keep one non-negative sid
     mockedFindFiscalPeriod.mockResolvedValue('period-1')
   })
 
-  // Prod case: 16 000 + 45 at 25 % = 20 056,25; the supplier bills 20 056,00
+  // A real case: 16 000 + 45 at 25 % = 20 056,25; the supplier bills 20 056,00
   // and the user adds a -0,25 avrundning row on 3740. The old generator
   // booked 3740 as debit -0,25, which the verifikat page hid.
   const roundingItems = [

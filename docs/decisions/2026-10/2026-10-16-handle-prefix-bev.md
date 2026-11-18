@@ -1,1 +1,0 @@
-[2026-10-16] New permanent handle prefix bev for business event, field base business_event (business_event_id); reserved now so the first v1 or MCP surface that returns an event needs no new decision.

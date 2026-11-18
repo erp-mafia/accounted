@@ -114,7 +114,7 @@ describe('submitSIEJob: the file\'s #ORGNR against the company', () => {
   })
 
   // companies.org_number is empty for companies whose number lives only in
-  // company_settings (in prod, every company that took a SIE import without
+  // company_settings (in production, every company that took a SIE import without
   // companies.org_number had one there): the gate must not go blind for them.
   it('refuses another organisation\'s file against company_settings when companies has no number', async () => {
     vi.stubEnv('SIE_IMPORT_JOBS', 'true')

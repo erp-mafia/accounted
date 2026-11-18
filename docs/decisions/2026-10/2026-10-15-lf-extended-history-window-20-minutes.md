@@ -1,1 +1,0 @@
-[2026-10-15] Länsförsäkringar's extended-history window is capped at 20 minutes by BIC (EXTENDED_HISTORY_WINDOW_CAP_MINUTES in src/lib/bank-feed/feed.ts), over the bank details or the 60-minute default: Open Payments support said so on 2026-10-15 and the shorter window only ever makes a late first import ask for the ordinary 89 days instead of being refused first.

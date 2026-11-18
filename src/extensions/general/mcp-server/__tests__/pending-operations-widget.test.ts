@@ -173,7 +173,7 @@ describe('Pending operations widget', () => {
     })
   })
 
-  // Issue #3408, founder decision 2026-10-03: approve is never pre-ticked on
+  // Issue #3408, product decision 2026-10-03: approve is never pre-ticked on
   // the consent page, so the default one-click connection cannot approve or
   // reject. Neither the widget nor the instructions may promise it can.
   describe('a key without pending_operations:approve', () => {

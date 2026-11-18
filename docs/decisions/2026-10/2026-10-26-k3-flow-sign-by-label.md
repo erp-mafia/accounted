@@ -1,1 +1,0 @@
-[2026-10-26] K3 flow facts take their sign from the concept label: "Minskning av ..." concepts carry a decrease as a positive value with a presentational minus (as the official K3 example tags ErlagdRanta); all others carry the signed amount, negatives with sign="-".

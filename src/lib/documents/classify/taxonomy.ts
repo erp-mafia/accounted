@@ -1,5 +1,5 @@
 /**
- * Taxonomy v1 (dev_docs/arkiv_plan.md, section 3). Flat at the top and
+ * Taxonomy v1. Flat at the top and
  * finance-native. `other` is a first-class outcome: it carries a free-text
  * suggested type so new classes are mined from what actually arrives.
  * Labels live in messages/{sv,en}.json under `arkiv.types`.

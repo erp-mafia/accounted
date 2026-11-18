@@ -1,8 +1,8 @@
 import type { SalesOrderProgress, SalesOrderStatus } from '@/types'
 
 /**
- * Presentation maps for kundorder status and progress. Chips mark exceptions
- * (design.md convention 5): a draft and a cancelled order deviate from the
+ * Presentation maps for kundorder status and progress. Chips mark exceptions:
+ * a draft and a cancelled order deviate from the
  * normal flow and get a Badge; confirmed and completed render as muted text.
  */
 export const STATUS_LABEL_KEY: Record<SalesOrderStatus, string> = {

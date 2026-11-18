@@ -1,5 +1,5 @@
 /**
- * Konstaterad kundförlust (build spec 4.2 G, founder decision F3).
+ * Konstaterad kundförlust (build spec 4.2 G, product decision F3).
  *
  * The claim leaves the books: Dr 6351 for the open part net of VAT, Dr the
  * output VAT accounts for the open VAT per account (ML 8 kap 16 § lowers the

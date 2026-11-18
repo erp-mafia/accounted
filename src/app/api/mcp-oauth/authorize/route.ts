@@ -387,8 +387,8 @@ export async function GET(request: Request) {
   //     the same bound server-side.
   //   - Pre-checked, built-in client (Claude, ChatGPT, localhost): the whole
   //     ceiling EXCEPT pending_operations:approve. One-click consent came from
-  //     the founder decision of 2026-08-26 (the read-only default killed the
-  //     agent flow with an insufficient-scope dead-end mid-chat); the founder
+  //     the product decision of 2026-08-26 (the read-only default killed the
+  //     agent flow with an insufficient-scope dead-end mid-chat); the operator
   //     decision of 2026-10-03 (issue #3408, option B) took approve out of
   //     that default, so a default connection always leaves the final approval
   //     with a human. Every write is STAGED as an agent proposal that the user

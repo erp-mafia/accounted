@@ -1,1 +1,0 @@
-[2026-10-09] New collections connections default automatic booking on for collected payments and payouts (set on the consent insert; the column defaults stay false, so existing connections keep their choice); what the planner cannot place still waits in Att göra and Avräkningar. Accountant sign-off item before switch-on.

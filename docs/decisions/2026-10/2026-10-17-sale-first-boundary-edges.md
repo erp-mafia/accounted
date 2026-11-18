@@ -1,1 +1,0 @@
-[2026-10-17] The samlingsbetalning and the bank-row link (lib/transactions) import lib/invoices/sale-first, two new boundary edges: an injected booking step instead would let a door forget it, which is the bug this fixes.

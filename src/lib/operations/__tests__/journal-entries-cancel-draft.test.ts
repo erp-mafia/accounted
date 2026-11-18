@@ -180,7 +180,7 @@ describe('journal-entries.cancel-draft: run', () => {
     expect(outcome).toMatchObject({ ok: false, code: 'CANNOT_CANCEL_NON_DRAFT' })
   })
 
-  // Agent review of !38: a draft can hold underlag, and once cancelled its
+  // Review: a draft can hold underlag, and once cancelled its
   // documents can never be re-pointed (enforce_document_journal_entry_
   // immutability), so the cancel is refused and the documents are named.
   it('refuses a draft that holds documents with DRAFT_HAS_DOCUMENTS, on the staging dry run and on commit', async () => {

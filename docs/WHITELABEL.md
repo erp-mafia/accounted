@@ -78,7 +78,7 @@ Resolution order (last wins): **defaults → env vars → extension override**.
 | `WHATSAPP_VERIFY_TOKEN` | Shared secret for the GET subscription handshake (also entered in the Meta app dashboard) |
 | `WHATSAPP_PHONE_HASH_KEY` | Random pepper for phone lookup hashes (`openssl rand -hex 32`) |
 | `WHATSAPP_PHONE_ENCRYPTION_KEY` | 32-byte hex AES-256-GCM key for phone numbers at rest (`openssl rand -hex 32`) |
-| `WHATSAPP_PUBLIC_NUMBER` | Optional: the public number as E.164 digits (e.g. `46766867041`) for the wa.me deep link in settings; unset = resolved from the Graph API |
+| `WHATSAPP_PUBLIC_NUMBER` | Optional: the public number as E.164 digits (e.g. `46701234567`) for the wa.me deep link in settings; unset = resolved from the Graph API |
 
 ## Things you MUST NOT change
 

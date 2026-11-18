@@ -292,7 +292,7 @@ export function clearBrowserSessionState(): void {
  * browser's session; 'global' ends every session of the user, on every
  * device (Säkerhet's "Logga ut från alla enheter"). A sign-out on the phone
  * used to end the laptop's session too: supabase-js signOut() defaults to
- * global, and every button took that default (founder decision 2026-11-13).
+ * global, and every button took that default (product decision 2026-11-13).
  * Returns an error only when the server could not be asked at all; a 401
  * means the session was already gone, which is the goal. `revoked` is the
  * server's word that the auth server ended the session(s): false when it

@@ -1,1 +1,0 @@
-[2026-11-08] BANK_PROVIDER_REFUSED answers 422, not 502: it is the non-retryable branch (retryable is BANK_PROVIDER_UNAVAILABLE 503), and as a 5xx the BankID poll retried a final refusal 10 times and then told the user the bank did not answer.

@@ -746,7 +746,7 @@ export default function QuickReviewDialog({
       })
 
       // Calibration telemetry: what the model proposed vs what was actually
-      // booked. Best-effort and fire-and-forget — never blocks the booking.
+      // booked. Best-effort and fire-and-forget - never blocks the booking.
       if (journalEntryId && aiProposal) {
         void fetch('/api/agent/categorize/outcome', {
           method: 'POST',

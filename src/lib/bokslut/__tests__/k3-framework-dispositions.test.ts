@@ -1,7 +1,7 @@
 /**
  * K3 framework integration test for the dispositions builder.
  *
- * Since 2026-08-05 (founder decision, K3 29.37) the builder books NO
+ * Since 2026-08-05 (product decision, K3 29.37) the builder books NO
  * uppskjuten skatt on obeskattade reserver: in juridisk person the reserves
  * stay at gross and the 79.4/20.6 split belongs to koncernredovisning.
  * These tests pin that the proposal chain is framework-independent and that

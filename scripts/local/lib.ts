@@ -18,7 +18,7 @@ export const ENV_FILE = '.env.development.local'
 /** First line of ENV_FILE as local:up writes it: local:up and local:down only ever overwrite or delete a file that starts with it. */
 export const ENV_MARKER = '# Written by npm run local:up for the local stack only. npm run local:down deletes it.'
 
-/** Postgres major version of production (select version() on prod: 17.6, 2026-10-28). */
+/** Postgres major version of production (select version() in production: 17.6, 2026-10-28). */
 export const PROD_PG_MAJOR = 17
 
 /** The seeded login: one user, one aktiebolag. The password is random per stack. */

@@ -1,1 +1,0 @@
-[2026-11-01] Invoice Bilagor picks archived documents through its own small picker over the Arkiv list, not a new mode of InboxDocumentPicker: that picker links to a verifikat (copy confirm, inbox stamp) and an invoice only references the document (accounted#42).

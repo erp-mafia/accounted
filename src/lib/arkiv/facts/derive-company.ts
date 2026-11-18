@@ -9,7 +9,7 @@ import { listLiveFacts, recordFact, revertFact } from './store'
  * Company facts from the sources of record that need no document: the
  * ledger (what was paid and earned, what stands on the balance sheet), the
  * registers (employees, bank connections, the company settings) and the
- * Bolagsverket snapshot. The brain (dev_docs/arkiv_plan.md, the company
+ * Bolagsverket snapshot. The brain (the company
  * profile plan of 2026-09-21) reads facts, not prose, and most companies
  * have a ledger long before they upload an agreement.
  *

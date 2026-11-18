@@ -1,1 +1,0 @@
-[2026-11-10] A document classification that misses the schema is normalised first (off-list type to other, relevance to ask), and a miss left after that settles the job as skipped like a period lock, not one retry with the error fed back: the same prompt got the same answer five paid times.

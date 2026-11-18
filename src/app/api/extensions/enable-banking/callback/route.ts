@@ -460,7 +460,7 @@ async function finalizeConnection(
 
   const userId = pendingConnection.user_id
 
-  console.log('[enable-banking] Exchanging code for session', {
+  log.info('Exchanging code for session', {
     connectionId: pendingConnection.id,
     userId,
     codeLength: code.length,
@@ -489,7 +489,7 @@ async function persistBankSession(
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
-  console.log('[enable-banking] Session created successfully', {
+  log.info('Session created successfully', {
     connectionId: pendingConnection.id,
     sessionId: '[REDACTED]',
     accountCount: accounts.length,

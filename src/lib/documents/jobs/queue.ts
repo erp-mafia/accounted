@@ -135,7 +135,7 @@ async function runClaimed(
       return { kind: job.kind, result: 'skipped: period_locked' }
     }
     const fields = { job: job.id, kind: job.kind, doc: job.document_id, company: job.company_id, attempt: job.attempts, reason }
-    // The same prompt gets the same answer: four more attempts only spend calls (prod 2026-11-09). Settled at once,
+    // The same prompt gets the same answer: four more attempts only spend calls (seen 2026-11-09). Settled at once,
     // and reported once, since the document stays untyped until it is read again or a person types it.
     if (job.kind === 'classify' && reason.startsWith(SCHEMA_MISMATCH)) {
       await settleJob(supabase, job, { status: 'done', result: SCHEMA_MISS_RESULT, last_error: reason })

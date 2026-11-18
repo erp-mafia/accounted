@@ -49,7 +49,7 @@ const TONE_ICON_CLASS: Record<StateTone, string> = {
  * could not load. The shell, title bar and toolbar stay where they are. One
  * sentence as the title, at most one more sentence, at most one primary and
  * one quiet link; a 20px line icon or none. Centered in the space the rows
- * would fill (founder call 2026-11-02).
+ * would fill (product call 2026-11-02).
  */
 export function EmptyState({
   icon: Icon,

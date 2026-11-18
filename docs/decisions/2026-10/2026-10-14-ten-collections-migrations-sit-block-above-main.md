@@ -1,1 +1,0 @@
-[2026-10-14] The ten collections migrations sit in one block above main's newest version and above the newest version seen on any local branch, rather than the suggested 150000 block (renumbered 2026-10-15 to 20261015200000..20261015200900, see that entry).

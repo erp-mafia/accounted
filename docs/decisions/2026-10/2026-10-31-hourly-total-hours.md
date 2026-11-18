@@ -1,1 +1,0 @@
-[2026-10-31] An hourly employee's total hours are stored on the run row (hours_worked, the existing MCP path), not spread over invented calendar days; calendar days still win, and the calendar takes no day hours while a total is set (accounted#1). Fake days would feed absence and OB.

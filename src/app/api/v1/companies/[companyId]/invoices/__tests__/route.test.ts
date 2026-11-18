@@ -1703,7 +1703,7 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
   })
 })
 
-// GitLab accounted #33: the delivery-note branch ignored the RPC error and
+// accounted#33: the delivery-note branch ignored the RPC error and
 // inserted a note with a null number.
 describe('POST /api/v1/companies/:companyId/invoices: delivery note numbering (#33)', () => {
   function deliveryNoteBody() {

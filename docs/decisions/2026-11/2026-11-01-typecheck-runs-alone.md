@@ -1,1 +1,0 @@
-[2026-11-01] The typecheck jobs run only on the autoscaler, one job per instance (tag single-job, capacity_per_instance 1): a cold tsc of main needs 12.5 GB of heap and was SIGKILLed whenever it shared a 16 GB host. Costs two parallel autoscaler slots.

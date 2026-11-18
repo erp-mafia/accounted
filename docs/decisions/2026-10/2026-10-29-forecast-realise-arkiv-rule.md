@@ -1,1 +1,0 @@
-[2026-10-29] Forecast rows are realised by Arkiv's findMatch, reused not copied, on transaction.synced: a lone exact-amount hit within 10 days counts like a named one, as for agreement obligations. A wrong guess only drops one row early; a missed early payment would count twice.

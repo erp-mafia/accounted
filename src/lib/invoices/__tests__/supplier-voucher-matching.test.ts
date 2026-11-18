@@ -961,7 +961,7 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
   // Desk crm#64 (2026-09-16): the substring test read ankomstnummer 14
   // inside "(1814)" and auto-linked a Tele2 payment of 859 kr as a partial
   // payment on a Postronic invoice of 3 156 kr at "99 % säkerhet". All 31
-  // arrival-number auto-links in prod were of that kind.
+  // arrival-number auto-links in production were of that kind.
   // ============================================================
 
   describe('reference matching', () => {

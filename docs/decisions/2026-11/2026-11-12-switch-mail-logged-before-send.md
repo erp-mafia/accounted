@@ -1,1 +1,0 @@
-[2026-11-12] A bank switch mail is logged before it is sent; an unclear answer is asked once more with the same key, then kept as sent, except the last-day reminder, the sunset mail and a byrå nudge, which go again: a duplicate costs less than a company never told. No unique index added.

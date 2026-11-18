@@ -1,1 +1,0 @@
-[2026-11-04] An allowlist row with a team_role makes the confirmed address a member of the brand's byrå team; NULL (every cockpit row) only opens signup: membership was a manual insert and owners waited up to six days. Only ops sets the role, so a byrå admin cannot mint an owner.

@@ -1,1 +1,0 @@
-[2026-10-26] The K3 note on väsentliga händelser efter balansdagen is answered, never a default "Inga" (ÅRL 5:22): an unanswered question blocks the lock; a text a user wrote for the old note stands as the answer until the question is answered.

@@ -121,7 +121,7 @@ function totalBytes(files: File[]): number {
 
 /**
  * The support dialog. Since 2026-09-14 the conversation lives in PostHog
- * Support and the founders answer there, so this is a thread the user can
+ * Support and the operators answer there, so this is a thread the user can
  * come back to, not a one-way form. A message with attachments still goes by
  * mail (the conversation API is text) and the mail form remains the fallback
  * for installs without PostHog.

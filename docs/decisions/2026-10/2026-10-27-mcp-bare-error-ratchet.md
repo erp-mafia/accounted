@@ -1,1 +1,0 @@
-[2026-10-27] check:guards counts bare throw new Error( in the MCP server and fails when the count rises: a plain Error reaches the agent as UNKNOWN_ERROR, "Något gick fel. Försök igen.", for a call that fails the same way again; 303 agent sessions in 30 days were refused like that.

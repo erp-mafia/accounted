@@ -1,1 +1,0 @@
-[2026-11-09] Every bank-row booking door retries its claim under CASH_ACCOUNT_OPERATION_BUSY before its storno (#205). The definer probe posted_entries_naming_bank_rows that lets the booking gate read the bank-context half waits on branch fix/205-bank-context-probe until the #203 gate fix lands: shipped alone it would be an unused SECURITY DEFINER function.

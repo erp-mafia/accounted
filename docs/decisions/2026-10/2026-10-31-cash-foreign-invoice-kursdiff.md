@@ -1,1 +1,0 @@
-[2026-10-31] A kontantmetoden bank match of a foreign invoice keeps revenue and moms at the invoice's rate and books bank minus that on 3960/7960 (crm#1551): same as the 1510 clearing, VAT locked at the taxable event's rate; the supplier cash entry's payment-date rate stays as is.

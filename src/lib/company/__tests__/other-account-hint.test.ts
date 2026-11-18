@@ -168,7 +168,7 @@ describe('shouldShowOtherAccountHint', () => {
 
   it("reads the caller's companies through their memberships, never companies by RLS alone", async () => {
     // A bare select on companies leaves the scoping to RLS, which Postgres
-    // applies as a filter on a scan of every active company (prod 2026-11-12:
+    // applies as a filter on a scan of every active company (seen 2026-11-12:
     // 3 194 rows walked for 24, on each Hem render).
     const supabase = buildClient({
       company_members: { data: [membership(OWN_COMPANY)] },

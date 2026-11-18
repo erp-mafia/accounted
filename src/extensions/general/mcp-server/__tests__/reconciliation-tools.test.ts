@@ -104,7 +104,7 @@ describe('reconciliation MCP tools', () => {
   })
 
   it('status for skattekonto with no Skatteverket token says so instead of "unknown"', async () => {
-    // Easy Online Stores brief 2026-09-16, F6: "Unknown account_key" before
+    // An agent evaluation brief 2026-09-16, F6: "Unknown account_key" before
     // Skatteverket is connected cost the evaluator time. No token row is
     // queued, so the lookup resolves to null and the key is "not connected".
     const { supabase } = createQueuedMockSupabase()
@@ -129,7 +129,7 @@ describe('reconciliation MCP tools', () => {
     ).rejects.toThrow(/Unknown account_key "manual:1510"/)
   })
 
-  // Replays the 15 calls (12 companies, 2026-10-29..11-12) that sent no
+  // Replays the 15 calls (2026-10-29..11-12) that sent no
   // account_key: the engine finds no account for it, and the tool answered
   // Unknown account_key "undefined".
   it('items and match without account_key say it is required, never "undefined"', async () => {

@@ -1,1 +1,0 @@
-[2026-10-17] The daily events cleanup cron prunes the event outbox whatever EVENT_OUTBOX_MODE is: rows written while shadow was on hold raw payloads and must age out after it is switched off; with the mode never on it deletes nothing.

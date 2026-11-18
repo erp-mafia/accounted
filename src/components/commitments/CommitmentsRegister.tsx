@@ -43,7 +43,7 @@ interface UpcomingRow {
 }
 
 const H2_CLASS = 'text-[15px] font-medium leading-[22px] text-strong'
-// A kind is a quiet label over its rows, not a band (founder call 2026-10-30).
+// A kind is a quiet label over its rows, not a band (product call 2026-10-30).
 const GROUP_LABEL_CLASS = 'px-2 pb-1 pt-4 text-xs font-medium text-muted-foreground'
 // The agreement's name takes the width that is left and truncates; the
 // figures and dates beside it never wrap (no horizontal scroll on a laptop).

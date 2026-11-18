@@ -1,1 +1,0 @@
-[2026-10-16] engine.ts imports the reversal hook list statically from lib/composition, not via lib/init, the bus or a reverseEntry parameter: every runtime that can storno has every hook, and no caller can pass [] to skip the tax mirror.

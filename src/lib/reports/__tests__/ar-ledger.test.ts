@@ -737,7 +737,7 @@ describe('generateARLedger: migrated credit notes', () => {
   // with nothing paid or remaining; Accounted's own credit notes are 'sent'.
   const base = {
     customer_id: 'cust-a',
-    customer: { id: 'cust-a', name: 'Callidus Tech AB' },
+    customer: { id: 'cust-a', name: 'Kundbolaget AB' },
     invoice_date: '2026-02-13',
     due_date: '2026-03-15',
     currency: 'SEK',

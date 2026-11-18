@@ -1,1 +1,0 @@
-[2026-10-29] Bolaget doors split: ownership and signatory registers are owner/admin (SETTINGS, requireAdmin); meetings, capital records, K10, owner loans and commitments any writer (BOOK_RECORD on every door): Jakob's decision via the rights-model session.

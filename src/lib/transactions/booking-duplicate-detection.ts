@@ -983,7 +983,7 @@ async function withSettlementAccount(
  * another payment. A payment provider's account (1686 Stripe, a card
  * clearing account) is booked per week or per month instead, by hand or in
  * the old system, and dated at the period's end or early in the next month
- * (prod: "Stripe försäljning augusti" dated 4 September), so a verifikat up
+ * (seen: "Stripe försäljning augusti" dated 4 September), so a verifikat up
  * to the end of the month after the row's month can hold it. Löpande
  * bokföring of a non-cash event is due in the month after it (BFL 5 kap.
  * 2 §), which bounds the window.
@@ -1001,7 +1001,7 @@ export function coveringVoucherWindowEnd(rowDate: string, settlementAccount: str
  * bank account only a hand-entered one: an imported (SIE) verifikat on 1930
  * is the old system's booking of one movement, and counting it flagged 20
  * legitimate bookings in 60 days of prod. On a payment provider's account an
- * imported verifikat is the old system's period summary (prod: monthly
+ * imported verifikat is the old system's period summary (seen: monthly
  * Stripe sales on 1686) and counts too.
  */
 export function coveringVoucherSourceTypes(settlementAccount: string): readonly string[] {
@@ -1078,7 +1078,7 @@ export function pickCoveringVoucher(
  * direction and still has at least the row's amount that no transaction is
  * linked to (the voucher-bank-leg holders: pointers and bank_line slices).
  * A verifikat whose part is fully held by linked rows does not hold this row
- * (prod: an agent bulk-booked each day's Stripe rows into one verifikat and
+ * (seen: an agent bulk-booked each day's Stripe rows into one verifikat and
  * booked the other rows of the same days separately; none of those was a
  * double booking). The candidate is a warning like the other halves: the
  * user links the row to it, ignores the row, or books anyway with force

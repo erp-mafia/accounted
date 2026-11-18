@@ -1,1 +1,0 @@
-[2026-10-24] 'exclude-all-year-end' also drops a resultatavslut booked in a previous system or by hand that leaves the result accounts it books (outside 8990-8999) at zero: the operational resultaträkning read 0 kr for those years. Öre roundings and pure 8999 omföringar stay (#2455).

@@ -1,1 +1,0 @@
-[2026-10-28] Kvittojakten reads a posted verifikat's lines: with no line on a purchase account (10-14, 17, 18, 244x, 4-8, debited 264x) it bought nothing and gets no mail search; a VAT note ("omvänd skattskyldighet", "0% moms") no longer reads as tax. Words alone missed both in a trial run.

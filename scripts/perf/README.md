@@ -1,20 +1,20 @@
 # Request latency measurement (auth proxy + route wrapper)
 
-Why this exists: a customer reported that "it takes time before all fields load when clicking around" (2026-08-26). The API handlers themselves are fast (p50 38 ms); the cost is the number of sequential calls a page makes and the fixed per-request tax in front of each one (auth proxy + route wrapper). This page is the protocol for measuring that tax before and after every change in the responsiveness plan, so no PR claims a win without a number.
+Why this exists: pages can feel slow even when the API handlers are fast; the cost is the number of sequential calls a page makes and the fixed per-request tax in front of each one (auth proxy + route wrapper). This page is the protocol for measuring that tax before and after a change, so no PR claims a win without a number.
 
 ## What is instrumented
 
 | Surface | Where | Header | Log line |
 |---|---|---|---|
-| Auth proxy (every page, RSC, prefetch, `/api` request) | `lib/supabase/middleware.ts` via `lib/supabase/proxy-timing.ts` | `Server-Timing: mw-auth, mw-session, mw-company, mw-mfa, mw-total` on page/RSC/prefetch responses; `X-Proxy-Timing` (same value) on `/api` responses | `proxy completed` (not for an `/api` call without a session cookie: Bearer, cron, webhook; the route's own line covers those) with `kind` (`page`, `rsc`, `prefetch`, `api`), `route` (ids and tokens collapsed), `status`, `authMs`, `sessionMs`, `companyMs`, `mfaMs`, `totalMs` |
-| Route wrapper (`withRouteContext`, 367 of 529 routes) | `lib/api/with-route-context.ts` | `Server-Timing: auth, company, handler` | `op completed` with `operation`, `status`, `durationMs`, `authMs`, `companyMs`, `handlerMs` |
-| Browser | `@vercel/speed-insights` mounted in `app/layout.tsx` | n/a | Vercel dashboard > Speed Insights > Routes (p75 TTFB, FCP, LCP, INP, CLS per route) |
+| Auth proxy (every page, RSC, prefetch, `/api` request) | `src/lib/supabase/middleware.ts` via `src/lib/supabase/proxy-timing.ts` | `Server-Timing: mw-auth, mw-session, mw-company, mw-mfa, mw-total` on page/RSC/prefetch responses; `X-Proxy-Timing` (same value) on `/api` responses | `proxy completed` (not for an `/api` call without a session cookie: Bearer, cron, webhook; the route's own line covers those) with `kind` (`page`, `rsc`, `prefetch`, `api`), `route` (ids and tokens collapsed), `status`, `authMs`, `sessionMs`, `companyMs`, `mfaMs`, `totalMs` |
+| Route wrapper (`withRouteContext`, 367 of 529 routes) | `src/lib/api/with-route-context.ts` | `Server-Timing: auth, company, handler` | `op completed` with `operation`, `status`, `durationMs`, `authMs`, `companyMs`, `handlerMs` |
+| Browser | `@vercel/speed-insights` mounted in `src/app/layout.tsx` | n/a | Vercel dashboard > Speed Insights > Routes (p75 TTFB, FCP, LCP, INP, CLS per route) |
 
 Phase meanings for the proxy: `authMs` = `supabase.auth.getUser()` (a network call to Supabase Auth); `sessionMs` = session-timeout cookie state (`getClaims`, HMAC verify, `auto_logout` read when re-minting); `companyMs` = `resolve_active_company` RPC including the write-back on fallback; `mfaMs` = assurance-level check plus `listFactors()` (a second network call) on the enforced-MFA path.
 
 ## Reading the numbers
 
-Percentiles per route from production logs (the `vercel` CLI is linked to the project; `--limit` defaults to 100, raise it):
+Percentiles per route from the logs of a Vercel deployment (with the `vercel` CLI linked to the project; `--limit` defaults to 100, raise it):
 
 ```bash
 # route wrapper, grouped by operation
@@ -56,26 +56,13 @@ Interactions to record every time: `/transactions` soft navigation; open Bokför
 | INP | < 200 ms | The metric "clicking around" maps to |
 | Reference-data requests per form open | 0 blocking | Seeded and cached client-side |
 
-## Protocol per PR
-
-1. Before merging: record the current numbers for the interactions above on a production build, and the last 24 h of `proxy completed` / `op completed` percentiles, in the PR description.
-2. 24 h after the production deploy: re-run the same three commands and the same interactions; append one row per PR to the table below.
-3. A PR that claims a latency win without a before/after row is not done.
-
-## Baseline and results
-
-| Date | Change | Proxy page p50/p90 | Proxy api p50/p90 | Route auth+company p50 | Notes |
-|---|---|---|---|---|---|
-| 2026-08-26 | Route wrapper only (proxy unmeasured) | n/a | n/a | 44 ms (auth 3, company 41) | 100-call sample; handler p50 38 ms, total p50 96 ms, p90 274 ms |
-| 2026-10-24 | Reports on the ledger summaries (!821, !822), opening balances on them (!845), huvudbok page boundary (!848) | ~52/75 ms (100-line sample) | 35/83 ms (n=62, /api/reports) | 30 ms (auth 3, company 27; document.counts n=94) | Prod EXPLAIN as the largest company's user (154 000 verifikat): compute_prior_opening_balances 7 310 ms before, 32 ms warm / 225 ms cold after; a huvudbok page of 2440 2 613 ms cold before, 23 ms warm after. Vercel function p50 the week before: trial-balance 167, kpi 284, balansrapport 315, resultatrapport 341 ms; Hem (/index) 47 ms, p95 904. Speed Insights p75 LCP: Hem 1.8 s, /reports/[slug] 2.5 s. Posting (commit_journal_entry, edge logs) p50 20 -> 22, p95 35 -> 44 ms. |
-
 ## Page budgets (the ten most visited pages)
 
-Why this exists: on 2026-11-12 the ten most visited pages were measured for the largest company in production (154 000 verifikat, 464 000 lines, 31 600 invoices, 44 000 customers) against one goal: usable within two seconds. The invoice list took about 90 seconds there, and nothing would have said so: the report benchmark timed report RPCs, and no check looked at a page. This section is the instrument and the checks that came out of it.
+Why this exists: the report benchmark times report RPCs, and nothing looked at a page. The goal is that the ten most visited pages are usable within two seconds for a large company (150 000 verifikat, 450 000 lines, 30 000 invoices, 40 000 customers). This section is the instrument and the checks.
 
 ### The pages
 
-Ranked from a week of production traffic (5 to 12 November): API calls by the page they came from (`vercel metrics vercel.function_invocation.count --group-by referrerUrl -f 'requestPath:/api/*'`), which counts use and not prefetches. Requests per route alone do not rank pages: a default `<Link>` prefetches its route on sight, so `/bookkeeping/[id]` had 94 000 requests that week against a few thousand views.
+Ranked from a week of traffic: API calls by the page they came from (`vercel metrics vercel.function_invocation.count --group-by referrerUrl -f 'requestPath:/api/*'`), which counts use and not prefetches. Requests per route alone do not rank pages: a default `<Link>` prefetches its route on sight, so a detail route can show many times more requests than views.
 
 | Page | What its first view waits on |
 |---|---|
@@ -90,76 +77,6 @@ Ranked from a week of production traffic (5 to 12 November): API calls by the pa
 | `/invoices/[id]` | session token, then the invoice row and five side reads in one wave |
 | `/supplier-invoices` | `GET /api/supplier-invoices?status=all` |
 
-### Measuring a page for a large company, read-only
-
-There is no way to load a page as a customer, and there should not be. What can be measured in production without a session:
-
-1. **The page's queries, as the company's user.** Run each read the first view waits on through the Supabase SQL editor or MCP inside a read-only transaction, with the role and claims PostgREST would set, so RLS applies and nothing can be written. Time with `clock_timestamp()` rather than `EXPLAIN` when only the number is wanted; wrap the read in `json_agg` so serialising the answer is included, as PostgREST does:
-
-   ```sql
-   begin transaction read only;
-   set local role authenticated;
-   select set_config('request.jwt.claims', '{"sub":"<a member's user id>","role":"authenticated","aal":"aal2"}', true);
-   select set_config('perf.t0', clock_timestamp()::text, true);
-   select set_config('perf.r1', (select count(*)::text || ' rows ' || length(coalesce(json_agg(t), '[]')::text) from (<the read>) t), true);
-   select set_config('perf.t1', clock_timestamp()::text, true);
-   select round(extract(epoch from current_setting('perf.t1')::timestamptz - current_setting('perf.t0')::timestamptz) * 1000) as ms, current_setting('perf.r1') as answer;
-   rollback;
-   ```
-
-   Write the read the way PostgREST writes it (an embed is a `LEFT JOIN LATERAL`, the order and limit are the call site's): the planner's choice depends on the shape. `pg_stat_statements` holds the exact text of what PostgREST sent.
-2. **Server time per route, all companies**: `vercel metrics vercel.function_invocation.function_duration_ms -a p75 --prod --group-by route --since 7d`, and with `-f 'referrerUrl:"https://app.accounted.se/<page>"'` the API routes a page calls and how often.
-3. **Requests before content**: read off the page's code (which fetches fire on mount, and which wait for another), not off a browser.
-4. **JavaScript shipped**: `node scripts/perf/page-js.mjs --next-dir <a production build>`.
-
-### What 2026-11-12 found (the largest company unless stated)
-
-| Page | Slowest read | Reads before content | JavaScript, brotli (raw) |
-|---|---|---|---|
-| `/` | 228 ms: an exact count of every verifikat, used only while the setup checklist is open | 1 document | 869 kB (3 550) |
-| `/transactions` | 199 ms: the ignored rows, with `is_booked` per row | 4 in series | 913 kB (3 742) |
-| `/bookkeeping` | 782 ms: the list RPC, which counts and sorts the year's 79 000 verifikat to return 20 | 3 in series | 861 kB (3 520) |
-| `/pending` | 2 ms | 1 | 877 kB (3 597) |
-| `/inkorg` | no inbox items in this company | 1 | 889 kB (3 601) |
-| `/import` | none | 0 | 856 kB (3 495) |
-| `/reports/[slug]` | 435 ms cold, 45 ms warm: opening balances; the report RPCs 40 to 56 ms | 2 to 4 in series | 842 kB (3 443) |
-| `/invoices` | 2 788 ms a page, 32 pages in series: 89 s | 33 in series | 869 kB (3 538) |
-| `/invoices/[id]` | not timed: one row by id | 2 in series | 939 kB (3 803) |
-| `/supplier-invoices` | 32 ms (78 ms a page, 9 pages, for the company with 8 500 supplier invoices) | 1 | 844 kB (3 449) |
-
-Three causes covered most of it:
-
-- **A list that waits for its whole table.** `/invoices` read every invoice of the company, 1 000 at a time, before showing 100. Each page carried two embeds per invoice (the ROT/RUT begäran and the deduction lines) that Postgres evaluated for all 31 600 invoices before it sorted and cut the page.
-- **A page that waits for what it already holds.** The dashboard layout seeds fiscal periods, cash accounts and company settings into SWR, and SWR reports `isLoading` while it revalidates a seed. `/transactions`, `/bookkeeping`, the reports and the VAT view gated their first request on that flag: a session-token fetch and a PostgREST read in front of every list.
-- **A link that prefetches on sight.** Every row of the verifikat, invoice and supplier-invoice lists prefetched its detail page through the auth proxy.
-
-`/login` alone ships 479 kB (2 032 kB raw): a motion library pulled in with the icon set, the error-text registry and the PostHog SDK are in every page's first load. That floor is the largest fixed cost of a hard load and is not addressed here.
-
-### After, live (2026-11-14, the same company)
-
-!1430 and !1432 deployed on 2026-11-12 (the migration applied as 20261112100013, !1451). Read the same way as above, as the company's user, read-only:
-
-| Page | Before | After |
-|---|---|---|
-| `/invoices` | 33 reads in series: 32 pages at 2 788 ms, about 89 s before any row | 2 reads in series: the first 1 000 rows in 183 ms, the older ones behind them |
-| `/bookkeeping` | list RPC 610 to 840 ms a page; the list waited for a re-read of fiscal years first | 340 to 370 ms (warm), and the list request starts on mount |
-| `/transactions`, `/reports/*`, momsdeklaration | the first request waited for a session-token fetch and a re-read of seeded data | it starts on mount |
-| `/` | an exact count of every verifikat on each load: 228 ms warm, 968 ms cold | a one-row probe, only while the setup checklist is open |
-| Detail pages requested per list load (Vercel invocations; 10 to 12 Nov against 13 Nov) | `/bookkeeping/[id]` 3.95, `/invoices/[id]` 1.24, `/supplier-invoices/[id]` 0.88 | 0.79, 0.38, 0.19 |
-| JavaScript per page | 842 to 939 kB brotli | unchanged (within 1 kB) |
-
-The list RPC took about 150 ms more than its new body did when run as a plain query with the values written in (190 ms, 2026-11-12): the plan a function reuses for every company looked for corrections once per row. !1507 below finds them in one pass.
-
-### After, live (2026-11-15)
-
-| Change | Before | After |
-|---|---|---|
-| `/bookkeeping`: the list RPC finds corrections in one pass (!1507) | 415 ms in a read-only production test with the reused plan forced; nightly benchmark under load p50 330 ms | 258 ms in the same test; benchmark under load p50 249 ms (2026-11-15) and 299 ms (2026-11-16), idle unchanged. The deployed function has not been re-timed in production yet |
-| `/supplier-invoices`: the list draws its first 100 rows, more on request (!1509) | every row drawn at once: 8 500 for the company with the most supplier invoices | 100 rows drawn. The read still fetches every row with every column (13 MB for that company): the list works out which invoices wait for attest from those columns, so narrowing them is left |
-| `/login` first-load JavaScript, gzip as served (!1517) | 590 kB in 26 files, the PostHog SDK 74 kB (227 kB raw) of it | 518 kB in 25 files; the SDK loads once analytics starts. Signed-in pages followed with !1525, below |
-
-!1525 (2026-11-16) took the SDK out of the signed-in pages too: the Discord invite card was the last module importing `posthog-js` directly. In the CI build every signed-in page ships 60 to 61 kB brotli (about 220 kB raw) less, 550 to 763 kB instead of 611 to 824 kB. `page-budgets.json` was re-based on those numbers and on `/login`'s 428 kB, so the room the SDK left cannot quietly fill with another library.
-
 ### The checks
 
 - **JavaScript per page**: `node scripts/perf/page-js.mjs --check` in the `build` job of every merge request pipeline fails when a page ships more than its budget in `scripts/perf/page-budgets.json`, or has none. It counts every script the page's document references before any interaction; chunks behind `next/dynamic` are not counted, which is how a page gets back under its budget.
@@ -170,7 +87,7 @@ Not checked: the number of requests a page makes (no browser runs in CI), and an
 
 ## Report benchmark (`scripts/perf/bench`)
 
-Why this exists: the work that brought every report under 200 ms p95 for a company with 50 000 verifikat a year (!821, !822, !823, 2026-10-23) was measured with a harness that lived in a session scratchpad and was lost with it. This is that instrument in the repository, with budgets and a scheduled CI job, so a later change cannot make a report slow again without a red job saying which call.
+Why this exists: every report should stay under 200 ms p95 for a company with 50 000 verifikat a year. This is the instrument for that, with budgets and a scheduled CI job, so a later change cannot make a report slow again without a red job saying which call.
 
 It times the database side only: each report RPC the app calls, with the arguments the app passes (`cases.ts`, traced from the call sites), and the posting path (`commit_journal_entry` on a draft made the way `src/lib/bookkeeping/engine.ts` makes one). The auth proxy and the route wrapper add 50 to 90 ms per request in production (see above), and one report request can make several of these calls, so a DB budget of about 100 ms per call is what keeps a request under 200 ms.
 
@@ -182,7 +99,7 @@ It times the database side only: each report RPC the app calls, with the argumen
 |---|---|
 | Prestanda AB, the measured one | 2024 and 2025 closed and locked, 2026 open up to the bench day 2026-10-22; 50 000 verifikat a year (150 000), about 455 000 lines, about 225 accounts, dimension tags on about 26 % of the lines; invoices and payments, supplier invoices with documents, bank lines (booked, and an unbooked queue in September and October), receipts, payroll, storno chains, monthly VAT settlements, year-end closings, and the audit rows those leave. Like the largest companies in production, no year has a linked IB verifikat, so every report reads its IB through `compute_prior_opening_balances`. |
 | Bygget AB | The same generator at 7 000 a year: what mixed mode rebuilds onto the ledger summaries while the readers run. |
-| 6 background tenants | Copies of the measured company under other ids, so the measured company is about 14 % of the shared tables (the largest in production is about 7 %) and a query that loses its company filter reads other companies' rows. Not built onto the summaries: nothing reads them. |
+| 6 background tenants | Copies of the measured company under other ids, so the measured company is about 14 % of the shared tables and a query that loses its company filter reads other companies' rows. Not built onto the summaries: nothing reads them. |
 
 The seed is deterministic: ids are md5 of fixed keys and every `random()` follows `setseed()`. It writes posted rows directly with triggers off (only on a throwaway database; see the warning in `seed-company.sql`), builds the two companies onto the summaries with `build_ledger_account_days`, checks that every verifikat balances and that `ledger_account_days_drift` is empty, then runs `VACUUM (ANALYZE)`. Smaller runs: `BENCH_SEED_ARGS="-v per_year=5000 -v bg_tenants=0"`.
 
@@ -230,6 +147,6 @@ Absolute numbers depend on the machine: compare runs on the same host, and treat
 
 ### In CI
 
-The `perf-reports` job (`.gitlab-ci.yml`) does the same on the group's runner: the 17 image as a service with the same settings, `setup-db.sh`, then warm and mixed with `--check`, about 9 minutes (replay 75 s, seed 4 minutes, warm 95 s, mixed 50 s). It runs in a scheduled pipeline when `PERF_REPORTS` is `1`, and as a manual job in a pipeline started from Build > Pipelines > Run pipeline; never in merge request or main pipelines. The project allows no pipeline variables (Settings > CI/CD > Variables, minimum role `no_one_allowed`), so a schedule cannot set `PERF_REPORTS` itself: it is a project CI/CD variable, and deleting it pauses the scheduled benchmark. Both result files are kept as job artifacts for 90 days. Schedule it when the runner is otherwise idle, daily at 03:00 Europe/Stockholm (`0 3 * * *`): beside a whole merge request pipeline (build, four unit-test shards, pg-real) one call of the whole-year behandlingshistorik has stalled past the 8 s statement timeout.
+The `Report benchmark` job in `.github/workflows/nightly.yml` does the same: the 17 image with the same settings, `setup-db.sh`, then warm and mixed with `--check`, about 9 minutes (replay 75 s, seed 4 minutes, warm 95 s, mixed 50 s). It runs on a schedule and by hand (Run workflow), never on a pull request. Both result files are kept as artifacts.
 
 Not covered: reports with no RPC of their own (lönejournal, systemdokumentation, OSS-underlag), file exports (SIE, XLSX, PDF, the full archive), the reports of other legal forms (NE-bilaga, förenklat årsbokslut, INK3) and on-demand drill-downs other than the ones in `cases.ts`.

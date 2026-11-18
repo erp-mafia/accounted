@@ -1,1 +1,0 @@
-[2026-10-16] The briefing runs the queue inside a 2.5 s budget and the SIE import lease and carries counts plus the top three, or unavailable: a session start must never wait on, or fail with, the checks.

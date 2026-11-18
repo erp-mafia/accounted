@@ -162,7 +162,7 @@ export function AddAccountDialog({
 
   // Recovery for ACCOUNT_EXISTS_INACTIVE: flip the existing account back on
   // instead of trying to insert a second row. The values typed into this form
-  // are intentionally dropped — the account comes back exactly as it was, and
+  // are intentionally dropped - the account comes back exactly as it was, and
   // renaming it is the kontoplan's job, not a side effect of a failed create.
   async function handleReactivate() {
     setError('')

@@ -24,7 +24,7 @@ import type { CompanyUsage, CompanyUsageLine } from '@/lib/usage/summary'
  * the company.
  *
  * Below the table, each service on offer has its row: it stops at what is
- * included until the company asks for more (Begär fler) and a founder opens
+ * included until the company asks for more (Begär fler) and an operator opens
  * the charge, which then holds month after month.
  */
 export function UsagePanel() {

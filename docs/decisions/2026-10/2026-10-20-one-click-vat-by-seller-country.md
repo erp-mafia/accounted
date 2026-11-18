@@ -1,1 +1,0 @@
-[2026-10-20] Inkorg one click VAT: Swedish seller books the document's VAT on 2641; a foreign seller of a service with no VAT is reverse charge (ruta 21 EU, 22 outside, 25 %); goods, the ML 6 kap exceptions, unclear categories, foreign VAT and non-registered companies open the editor.

@@ -1,1 +1,0 @@
-[2026-10-16] Skatteverket payments get a fixed rule instead of learning: 1630 leads, a company's own 1630 rule keeps the lead; the moms stop is in the categorize path only, as manual lines may settle 26xx with the payment (crm#1275).

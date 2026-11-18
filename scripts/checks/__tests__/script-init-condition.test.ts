@@ -144,8 +144,6 @@ describe('script-init-condition on the real tree', () => {
     expect(initScripts).toEqual(
       expect.arrayContaining([
         'scripts/repair-result-appropriation.ts',
-        'scripts/sie-import/acceptance-staging.ts',
-        'scripts/sie-import/acceptance-worker.ts',
         'scripts/undo-year-end-closing.ts',
       ]),
     )

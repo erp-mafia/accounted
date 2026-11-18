@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /*
- * Layout guards for the sales and purchasing pages (UI scan t1108 U2). Each
+ * Layout guards for the sales and purchasing pages. Each
  * one is a phone or narrow-panel defect that rendered: a page that scrolled
  * sideways, actions that ran over the title, a table wider than its panel.
  */

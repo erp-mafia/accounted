@@ -281,9 +281,8 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
 
 // crm#1765: a foreign seller that wrongly charged its own country's VAT. The
 // buyer is still liable in Sweden on everything the seller was paid, and the
-// foreign VAT is never ingående moms (docs/decisions/2026-11/
-// 2026-11-12-reverse-charge-with-foreign-seller-vat.md). Refused unless the
-// caller states it with confirm_foreign_seller_vat.
+// foreign VAT is never ingående moms. Refused unless the caller states it
+// with confirm_foreign_seller_vat.
 describe('gnubok_categorize_transaction: reverse charge on an underlag with the seller\'s VAT', () => {
   // The bank row is what the seller was paid: 250 = 206.61 price + 43.39 VAT at 21 %.
   const dutchVat = { supplier: { vatNumber: 'NL123456789B01' }, totals: { total: 250, vatAmount: 43.39 }, invoice: { currency: 'SEK' } }

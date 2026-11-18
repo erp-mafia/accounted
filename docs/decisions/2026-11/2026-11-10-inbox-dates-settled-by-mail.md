@@ -1,1 +1,0 @@
-[2026-11-10] Inbox dates are turned day/month round in code only when the reading is impossible against the mail (invoice date after it arrived, due date before the invoice date), not toward the reading nearest the arrival: code cannot see an unambiguous print, the model with the mail can.

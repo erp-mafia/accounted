@@ -11,8 +11,8 @@ import { whereInboxItemFree } from '@/lib/documents/inbox-item-state'
  * Underlag (route-from-arkiv in the inbox extension), and the
  * document-extraction reader, which writes the reading onto the document
  * row. The classifier is a cheap call on the page text and usually wins, so
- * the item was filed unread and stayed that way: prod 2026-10-26, 29 open
- * items in 15 companies with AI reading, each queued seconds before its
+ * the item was filed unread and stayed that way: seen 2026-10-26, 29 open
+ * items in companies with AI reading, each queued seconds before its
  * reading landed, none with a supplier match. Whichever finishes second
  * fills the item: the queue copies a reading that is already there, and
  * this runs once the reading is there (from the reader, and from the

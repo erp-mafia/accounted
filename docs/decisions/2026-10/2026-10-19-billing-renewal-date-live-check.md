@@ -1,1 +1,0 @@
-[2026-10-19] Abonnemang shows an active subscription's next charge (current_period_end) only after a live Stripe check finds no pending cancellation, as the trial's first charge already did; any doubt shows no date, since the row keeps 'active' until a cancelled plan lapses.

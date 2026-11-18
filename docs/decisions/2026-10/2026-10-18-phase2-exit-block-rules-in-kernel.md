@@ -1,1 +1,0 @@
-[2026-10-18] Phase 2 exit: the rules the ledger's invoice and supplier invoice line builders read (gross split, line VAT treatment, ROT/RUT, shares, rounding) moved into the kernel, not the builders into the blocks: invoice-entries and the kontantmetod cut-off (kernel) build those lines.

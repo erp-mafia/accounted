@@ -1,1 +1,0 @@
-[2026-10-19] The bank-row link keeps main's settlement side (#3440) ahead of sale-first: a revenue-bearing verifikat for a deferring company's unbooked invoice is refused (LINK_TX_INVOICE_SETTLEMENT_SIDE), fail closed; loosening the side for that case is a founder call.

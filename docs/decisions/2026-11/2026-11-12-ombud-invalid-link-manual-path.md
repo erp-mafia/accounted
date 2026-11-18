@@ -1,1 +1,0 @@
-[2026-11-12] A Skatteverket ombud deep link that the e-service turns down ("Felaktig länk") gets a written way round (appoint by hand in Ombud och behörigheter, named in the waiting hint and the settings help) and no code change to the link: the link is minted fresh per click and passed on untouched, so the refusal can only be told from the audit rows or Skatteverket (crm#1814).

@@ -1,1 +1,0 @@
-[2026-10-16] A skattekonto payment from a momsdeklaration or AGI books nothing: the bank row to Skatteverket books once via the 1630 rule, the synced inbetalning links to that verifikat (LEDGER_TWIN_EXISTS refuses a second), the order skips supplier settlement; saldo shown, not netted (crm#1260).

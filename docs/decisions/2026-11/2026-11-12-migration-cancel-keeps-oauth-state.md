@@ -1,1 +1,0 @@
-[2026-11-12] Migration OAuth callback: a provider error with no code (cancel) reads the state and leaves it unspent, only a callback with a code consumes it: a repeated cancel got the session error and approve-after-Back was thrown away. Rejected: longer expiry, re-minting, a more specific sentence.

@@ -4,10 +4,8 @@
  *
  * Filing freezes nothing: while the period is open the verifikat posts, and
  * the declaration Skatteverket holds then differs from the books until a
- * corrected one is filed. An audit of prod (2026-10-26) found about one filed
- * declaration in eleven no longer matching the books, and nothing had said so
- * at the booking; the Moms page says it afterwards
- * (./filed-period-changes.ts). This says it before, through the
+ * corrected one is filed. Nothing said so at the booking; the Moms page says
+ * it afterwards (./filed-period-changes.ts). This says it before, through the
  * confirm-before-posting guard every typed door already runs
  * (lib/bookkeeping/voucher-warnings-guard.ts), so the person confirms it or
  * picks another date, and a booking past it leaves a record on the verifikat.

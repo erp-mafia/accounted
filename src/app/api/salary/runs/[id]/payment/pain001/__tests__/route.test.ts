@@ -28,7 +28,7 @@ vi.mock('@/lib/salary/payment/effective-net', () => ({
   effectiveNetPayout: vi.fn(() => 20000),
 }))
 vi.mock('@/lib/branding/service', () => ({
-  getBranding: vi.fn(() => ({ appName: 'gnubok' })),
+  getBranding: vi.fn(() => ({ appName: 'Accounted' })),
 }))
 
 import { GET, POST } from '../route'

@@ -1,1 +1,0 @@
-[2026-10-28] Budget against actual compares whole months only, also year to date (accounted#134): a budget is kept per month, so a window that cuts a month would compare part of an actual with a whole month's budget.

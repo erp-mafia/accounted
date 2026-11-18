@@ -1,1 +1,0 @@
-[2026-10-21] The set-off voucher is not added to the needs-underlag list: its payment rows on both invoices already back it by hänvisning in verifikat_without_documents, so listing it would never surface; the kvittningsavräkning is still archived on it (crm#1367).

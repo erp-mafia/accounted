@@ -1,1 +1,0 @@
-[2026-10-15] A WhatsApp arrival keeps only the masked sender and a pointer to the whatsapp_messages row, no message text and no original: both are chat transcript, which the RoPA purges after 90 days, and copying them into a seven-year append-only row would break that promise.

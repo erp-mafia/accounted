@@ -1,1 +1,0 @@
-[2026-11-01] Supplier match doors (dashboard, v1, Inkorg, payment-order debit) run the customer ledger duplicate guard, skipping vouchers an invoice or bank row already claims: 409 plus force bound to the verifikat; the debit never forces; detection failure fails open (accounted#58).

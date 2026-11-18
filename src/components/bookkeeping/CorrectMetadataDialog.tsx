@@ -34,8 +34,7 @@ interface Props {
  * Metadata rättelse (BFL 5 kap 9 §): correct the verifikationstext and/or
  * the date (within the same fiscal period) of a posted verifikat without an
  * ändringsverifikation. Who/when is recorded in the immutable rättelse log
- * and shown in the verifikat's history. Stays Swedish (verifikat surface,
- * .claude/rules/i18n.md).
+ * and shown in the verifikat's history. Stays Swedish (verifikat surface).
  */
 export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCorrected, filedVat }: Props) {
   const { toast } = useToast()

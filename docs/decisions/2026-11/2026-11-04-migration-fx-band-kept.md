@@ -1,1 +1,0 @@
-[2026-11-04] A migrated foreign invoice whose verifikat books over 10% from its Riksbanken SEK total stays in review even with a unique, same-dated ref: the crm#1039 band is a founder call. The review text now names Riksbanken's rate; using the source's own invoice rate awaits a founder decision.

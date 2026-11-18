@@ -8,7 +8,7 @@ import { creatorOf, resolveCreators, type Creator } from '@/lib/attribution/pers
  * briefing and the bundle a curated workflow starts with.
  *
  * All of them, newest first, instead of a ranked top few: a company holds a
- * handful (median 4 in prod, 2026-10; the largest about 48k characters), so a
+ * handful (median 4 in seen 2026-10; the largest about 48k characters), so a
  * cap only hid facts. Newest first so a later fact can settle an earlier one.
  * A fact retired by `replaces` (is_active false, superseded_by set) is left out.
  *

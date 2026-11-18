@@ -1,1 +1,0 @@
-[2026-10-26] The 35.18 transition split carries the accumulated depreciation at the transition into the component openings (dated the day before), spread over depreciated components by carrying amount: the split books nothing and the component engine continues prospectively.

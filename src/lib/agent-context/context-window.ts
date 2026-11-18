@@ -41,7 +41,7 @@ export const SECTION_FAMILY: Record<ContextSectionId, ContextFamily> = {
 
 /** Which part each briefing key belongs to. A key missing here goes to "other". */
 const KEY_SECTION: Readonly<Record<string, ContextSectionId>> = {
-  // Facts saved for the company's group (accounted MR !1326: group_memory).
+  // Facts saved for the company's group (group_memory).
   group_memory: 'group',
   memory: 'memory',
   memory_truncated: 'memory',
@@ -122,7 +122,7 @@ export interface ContextFactItem {
   origin: string | null
   /** The MCP client label of the connection that saved it; null outside MCP. */
   client: string | null
-  /** Who saved it, by name, once the briefing carries it (accounted MR !1243). */
+  /** Who saved it, by name, once the briefing carries it. */
   created_by: string | null
   created_by_deleted: boolean
 }
@@ -409,8 +409,7 @@ export function describeContextWindow(briefing: Json, memoryBudget: number): Con
 /**
  * The product name for a stored MCP client label (the vocabulary of the MCP
  * server's client-label.ts). null for a label it does not know: the page then
- * says "an AI connection". Accounted MR !1243 adds the shared mapping for the
- * Minne view; this one moves there when it lands.
+ * says "an AI connection".
  */
 export function clientDisplayName(client: string | null): string | null {
   switch (client) {

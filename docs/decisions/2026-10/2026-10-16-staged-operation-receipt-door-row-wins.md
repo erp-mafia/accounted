@@ -1,1 +1,0 @@
-[2026-10-16] When a door already recorded the decision for the same pending operation (categorize, inbox booking), the commit writes no second receipt for that voucher: the door's row carries the suggestions, and one receipt per voucher keeps a repeated call idempotent.

@@ -1,1 +1,0 @@
-[2026-10-29] Klart in the payment Bokföring card (bank match, supplier payment) keeps the user's edited rows, shows them read-only and books them; it waits until they validate. Återställ is the way back to the proposal; rows equal to the proposal drop back to the route's default (crm#1550).

@@ -3,7 +3,7 @@
  * (toToolError → getStructuredError): a stable code and an explicit
  * retryable, not UNKNOWN_ERROR.
  *
- * Production, 2026-09-23..28: MCP calls from dozens of companies came back as
+ * Seen 2026-09-23..28: MCP calls from dozens of companies came back as
  * UNKNOWN_ERROR, "Något gick fel. Försök igen.", for failures the agent could
  * only fix by changing its call (an ambiguous voucher ref, a closed period, an
  * unknown group_by, a missing document id). "Try again" was the wrong advice

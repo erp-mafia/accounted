@@ -186,7 +186,7 @@ export default function ChartOfAccountsManager() {
 
   const fetchAccounts = useCallback(async () => {
     // `?active=false` disables the filter entirely (active + inactive), it does
-    // not select inactive rows only — see list_company_accounts.
+    // not select inactive rows only - see list_company_accounts.
     try {
       const res = await fetch(
         showInactiveRef.current ? '/api/bookkeeping/accounts?active=false' : '/api/bookkeeping/accounts',
@@ -229,7 +229,7 @@ export default function ChartOfAccountsManager() {
     setReferenceAccounts(merged)
   }, [])
 
-  // Per-account posting counts — drives the "Verifikat" column. Non-fatal:
+  // Per-account posting counts - drives the "Verifikat" column. Non-fatal:
   // the page works without it, cells just show a dash.
   const fetchUsage = useCallback(async () => {
     try {
@@ -246,7 +246,7 @@ export default function ChartOfAccountsManager() {
       )
       setUsageLoaded(true)
     } catch {
-      // Leave the map empty — usage display is informational only.
+      // Leave the map empty - usage display is informational only.
     }
   }, [])
 

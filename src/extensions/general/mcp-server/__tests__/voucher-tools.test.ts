@@ -218,7 +218,7 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(findFiscalPeriod).not.toHaveBeenCalled()
   })
 
-  // Founder decision 2026-11-08: a year closed with a bokslut is never
+  // Product decision 2026-11-08: a year closed with a bokslut is never
   // unlocked, so its refusal no longer says "Lås upp perioden"; a period that
   // is only locked says it can be unlocked.
   describe('a supplied fiscal_period_id that takes no verifikat', () => {

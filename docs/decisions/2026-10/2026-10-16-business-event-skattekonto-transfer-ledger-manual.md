@@ -1,1 +1,0 @@
-[2026-10-16] The skattekonto account transfer draft records ledger.manual (its source type manual) under se.tax.settlement, no new kind: it moves a balance between two of the company's own accounts for the user to review and post, which is a manual voucher.

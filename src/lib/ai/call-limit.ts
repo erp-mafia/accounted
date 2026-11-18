@@ -7,7 +7,7 @@ import type { AiService } from './types'
  * own retries included, when the caller set no limit of its own. Without it
  * the only limit was the SDK's default: ten minutes a try, three tries, in
  * functions Vercel ends at 300 s. A call that hangs then takes its whole run
- * with it (prod, 30 days to 2026-11-12: documents/classify/cron killed at
+ * with it (seen over 30 days to 2026-11-12: documents/classify/cron killed at
  * 300 s 18 times, documents/read/cron once, documents/jobs/cron seen at
  * 242 s). Two minutes is far above a healthy call (a classification answers
  * in seconds, a dense scanned page in well under a minute) and leaves a

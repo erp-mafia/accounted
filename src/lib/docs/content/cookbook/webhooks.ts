@@ -21,7 +21,7 @@ curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks" \\
   -H "Content-Type: application/json" \\
   -d '{
     "event_type": "invoice.paid",
-    "webhook_url": "https://my-receiver.example.com/gnubok",
+    "webhook_url": "https://my-receiver.example.com/accounted",
     "name": "CRM sync: invoice paid"
   }'
 \`\`\`
@@ -34,7 +34,7 @@ Response:
     "id": "a8f1e4c2-3b5d-4e6f-8a90-1b2c3d4e5f60",
     "name": "CRM sync: invoice paid",
     "event_type": "invoice.paid",
-    "webhook_url": "https://my-receiver.example.com/gnubok",
+    "webhook_url": "https://my-receiver.example.com/accounted",
     "active": true,
     "api_version_pinned": "2026-05-12",
     "secret": "whsec_b3a7c9e2...",
@@ -46,7 +46,7 @@ Response:
 }
 \`\`\`
 
-> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, mint a fresh one with \`POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret\`: it re-issues the signing secret in place (returned exactly once, like creation) without deleting the webhook or its delivery history. Rotation invalidates the old secret immediately — there is no grace period — so stage the new value on the receiver first (or \`PATCH active=false\` to pause delivery while you swap), then re-deploy the receiver with the new value.
+> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, mint a fresh one with \`POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret\`: it re-issues the signing secret in place (returned exactly once, like creation) without deleting the webhook or its delivery history. Rotation invalidates the old secret immediately - there is no grace period - so stage the new value on the receiver first (or \`PATCH active=false\` to pause delivery while you swap), then re-deploy the receiver with the new value.
 
 **Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material: anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
 
@@ -96,7 +96,7 @@ Response:
 It normally arrives within a second or two; check the receiver logs. The delivery should arrive with:
 
 \`\`\`
-POST /gnubok HTTP/1.1
+POST /accounted HTTP/1.1
 Content-Type: application/json
 X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: webhook.test

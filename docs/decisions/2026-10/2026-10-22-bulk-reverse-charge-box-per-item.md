@@ -1,1 +1,0 @@
-[2026-10-22] Bulk-booked reverse charge from the Inkorg takes each item's box from its seller and the category (EU service 21, non-EU service 22, EU goods 20) and skips an item it cannot place (unknown country, Swedish seller, non-EU goods, unclear category): never ruta 21 by default.

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * The Inkorg's motion, in one place. Springs are critically damped (bounce
- * 0, design.md: no overshoot), so a thing settles without passing its place
+ * 0: no overshoot), so a thing settles without passing its place
  * and an interrupted one starts from where it is on screen. Reduced motion
  * gets a short cross-fade instead of any movement.
  */

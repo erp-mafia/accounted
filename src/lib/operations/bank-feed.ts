@@ -254,7 +254,7 @@ export const bankFeedSwitchProgress = defineOperation({
   docs: {
     summary: 'Where the company stands in the switch from Enable Banking to Open Payments.',
     description: 'The campaign (on, deadline, days left), the company\'s state (the Enable Banking connections still to switch, the ones at banks Open Payments does not reach) and, for an owner or admin, the totals across companies (counts per bank, no company identities). Null company when the campaign does not apply to it.',
-    useWhen: 'Rendering the switch deadline, the deep link to the switch, or the founders\' counter.',
+    useWhen: 'Rendering the switch deadline, the deep link to the switch, or the operators\' counter.',
     doNotUseFor: 'Starting the switch: that is bank-feed.start with replace_connection_id, and a person\'s BankID.',
     pitfalls: ['totals come from a service-role RPC and are null for members below admin.'],
     example: { response: { data: { campaign: { on: true, deadline: '2026-11-09', days_left: 20, passed: false }, company: null, totals: null } } },

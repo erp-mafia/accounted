@@ -78,7 +78,7 @@ export function eSigningCertificateNote(meeting: string): string {
 
 /**
  * Who signs the fastställelseintyg: a styrelseledamot or the verkställande
- * direktör (founder decision 2026-10-15, following the skill's
+ * direktör (product decision 2026-10-15, following the skill's
  * references/bolagsverket-filing.md § 5; the intyg is filed under ÅRL 8 kap.
  * 3 §). The same rule as CERTIFICATE_SIGNER_ROLES in workflow-schemas.ts.
  */

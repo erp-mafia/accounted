@@ -2,7 +2,7 @@
  * Tests for GET/PATCH /api/agent/profile and POST /api/agent/profile/verify.
  *
  * Covers the role model: reads allow any member, mutations (PATCH, verify)
- * refuse viewers — the same rule verify always had, now enforced on PATCH too.
+ * refuse viewers - the same rule verify always had, now enforced on PATCH too.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'

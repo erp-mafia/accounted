@@ -1,1 +1,0 @@
-[2026-11-12] First session: the bank step says what connecting gives and what skipping means, Klart opens its found list when bank rows wait, and an empty Att göra with no bank and nothing booked names the two ways in, not Klart. The checklist stays retired after the act (2026-09-13 call kept).

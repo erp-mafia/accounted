@@ -10,7 +10,7 @@ export interface SignedInAnalyticsInput {
   /**
    * False only when the person switched analytics off. The layouts pass
    * `user_preferences.analytics_consent !== false`, so a person never asked
-   * (null) is on: founder decision 2026-10-22, opt-out in Inställningar, Konto.
+   * (null) is on, with the opt-out in Inställningar, Konto.
    */
   analyticsOn: boolean
   user: AnalyticsUserInput

@@ -160,7 +160,7 @@ describe('gnubok_lookup_company', () => {
   })
 
   it('treats no-closed-period as first year up to 18 months after registration (extended first year)', async () => {
-    // The Arcim case: registered 13 months ago, no annual report filed, first
+    // A real case: registered 13 months ago, no annual report filed, first
     // räkenskapsår runs to 31 Dec under the BFL 3 kap 3 § 18-month cap.
     mocks.lookupCompanyByOrgNumber.mockResolvedValue(
       found({ fiscalYear: null, registrationDate: Date.now() - 396 * 24 * 60 * 60 * 1000 })

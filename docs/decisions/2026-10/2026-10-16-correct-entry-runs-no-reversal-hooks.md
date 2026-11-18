@@ -1,1 +1,0 @@
-[2026-10-16] correctEntry keeps running no reversal hooks, pinned by the R0 characterisation test: whether a rättelse of a payment or ROT/RUT voucher should mirror its sub-ledger is decided separately.

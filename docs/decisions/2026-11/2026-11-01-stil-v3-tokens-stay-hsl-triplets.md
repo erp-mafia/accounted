@@ -1,1 +1,0 @@
-[2026-11-01] Stil v3 tokens stay HSL triplets, washes and lines with their alpha inside ("38 36% 35% / 0.1"): palettes and white-label brands override tokens as triplets, and a translucent wash reads the same on panel, frame and floating layers. Raw CSS uses color-mix().

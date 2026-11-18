@@ -949,7 +949,7 @@ describe('Skatteverket read tools: a session that is gone', () => {
   })
 
   // Replays the 281 gnubok_vat_declaration_status refusals of 2026-10-29..
-  // 11-12 (113 companies): 36 in 100 went on to a call that answered whether
+  // 11-12: 36 in 100 went on to a call that answered whether
   // the period was filed. Connecting is the user's step, so the refusal now
   // also names the agent's own next call, and the description says up front
   // that this is a live read.

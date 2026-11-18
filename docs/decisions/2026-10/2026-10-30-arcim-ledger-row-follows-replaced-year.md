@@ -1,1 +1,0 @@
-[2026-10-30] Arcim options step: with every fetched year already imported, ticking a year to import again turns the Bokföringsdata (SIE) row on (still locked) and says "# räkenskapsår importeras om"; left off with "every year is already imported", the tick read as not taken (rage clicks).

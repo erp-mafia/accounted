@@ -1,1 +1,0 @@
-[2026-10-18] A deploy that reaches a database without the event-id migrations retries the SQL posting function without the two parameters in either mode, as a missing link table is skipped: the booking goes through unlinked, so the deploy order does not matter.

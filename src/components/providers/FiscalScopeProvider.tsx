@@ -26,7 +26,7 @@ interface FiscalScopeContextValue {
 const FiscalScopeContext = createContext<FiscalScopeContextValue | null>(null)
 
 /**
- * The fiscal year as app-wide context (Stil v3, founder decision
+ * The fiscal year as app-wide context (Stil v3, product decision
  * 2026-10-29): one choice beside the company name in the sidebar that every
  * page reads, instead of a year picker on each page. Persisted per company
  * under the same localStorage key the shared FyPicker scope used, so a

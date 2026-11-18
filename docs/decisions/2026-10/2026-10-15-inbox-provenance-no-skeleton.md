@@ -1,1 +1,0 @@
-[2026-10-15] The Inkorg rail shows its old provenance, not a skeleton, while the arrivals load: a skeleton would collapse again for every older item with no arrival, jumping the rail on each open; content that appears only where there is some is quieter.

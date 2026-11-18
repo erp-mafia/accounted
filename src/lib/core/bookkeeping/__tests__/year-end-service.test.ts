@@ -582,7 +582,7 @@ describe('validateYearEndReadiness', () => {
     expect(result.blockers.some((b) => b.code === 'PRIOR_RESULT_NOT_DISPOSED')).toBe(false)
   })
 
-  // A migrated aktiebolag's FY2022 (prod, 2026-09-29): 2021's result (IB 2099 C 151 986,05) moved off
+  // A migrated aktiebolag's FY2022 (seen 2026-09-29): 2021's result (IB 2099 C 151 986,05) moved off
   // by the omföring A181 AND the previous system's imported disposition A176
   // (+2 kr in A178). 2099 shows D 149 217,18, but 1 962,87 of that account is
   // 2022's result closed by hand through 8999 (A177/A178): the excess is

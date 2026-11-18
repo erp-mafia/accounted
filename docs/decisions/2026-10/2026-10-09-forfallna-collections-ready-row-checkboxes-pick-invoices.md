@@ -1,1 +1,0 @@
-[2026-10-09] In Förfallna with collections ready the row checkboxes pick invoices for "Skicka till inkasso (N)" instead of bulk Bokför (deferred-booking companies bulk book from Obetalda); the selection clears when the mode changes, so one action never runs on rows picked for the other.

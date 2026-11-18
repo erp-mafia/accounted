@@ -45,7 +45,7 @@ describe('openPaymentsDoor', () => {
     entitled.mockResolvedValueOnce(true)
     const open = await openPaymentsDoor({ supabase, companyId: COMPANY })
     expect(open.ok && open.provider).toBe(provider)
-    // Paid grants only: the provider charges per payment, so a cardless trial does not pay through the bank.
+    // Paid grants only: each payment carries a cost, so a cardless trial does not pay through the bank.
     expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
 
     entitled.mockResolvedValueOnce(false)

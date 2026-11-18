@@ -96,7 +96,7 @@ interface BeslutImportResult {
   results: Array<{ namn: string; status: string; error?: string }>
 }
 
-// Chips mark exceptions (design.md convention 5): a file not yet uploaded, a
+// Chips mark exceptions: a file not yet uploaded, a
 // partial grant and a rejection deviate; uploaded, granted and cancelled are
 // normal states and render as muted text.
 const EXCEPTION_VARIANT: Partial<Record<RequestStatus, 'warning' | 'destructive'>> = {

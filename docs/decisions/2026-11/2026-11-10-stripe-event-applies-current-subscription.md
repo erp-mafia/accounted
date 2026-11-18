@@ -1,1 +1,0 @@
-[2026-11-10] A Stripe subscription event is applied as the subscription Stripe holds now (re-read), not the event's copy: a failed write now answers 500 (crm#1736), so a redelivery can land after a later event, and the copy would roll access back.

@@ -6,7 +6,7 @@ import { inboxCompanionIds } from '@/lib/worklist/inbox-companions'
 /**
  * GET /api/worklist/badges: the sidebar's counts for the active company.
  *
- * Stil v3 (founder decision 2026-10-29): only the rows where waiting work is
+ * Stil v3 (product decision 2026-10-29): only the rows where waiting work is
  * the page's whole point carry a count, Agentförslag and Inkorg. Both use
  * the same predicates as the Att göra rows (lib/worklist), so the menu and
  * the home page never disagree; the inbox count needs the pairing read

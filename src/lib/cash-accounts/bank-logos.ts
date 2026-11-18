@@ -2,7 +2,7 @@
  * Bank logos for the reconciliation rail. Resolved by name (the connection's
  * bank_name from the connect flow, falling back to the account name) against
  * the brand icons committed under public/logos/banks/: the set covers every
- * bank with a live connection in prod as of 2026-08-24. No match (the small
+ * bank with a live connection in production as of 2026-08-24. No match (the small
  * sparbanker, file-imported accounts) falls back to the monogram; that is a
  * presentation default, never an error.
  */

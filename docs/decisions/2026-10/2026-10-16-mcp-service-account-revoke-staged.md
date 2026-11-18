@@ -1,1 +1,0 @@
-[2026-10-16] gnubok_revoke_service_account stages (revoke_service_account, high risk) instead of writing on confirm: search-only direct writes are unreachable from claude.ai, Cursor and Claude Code, staging is, and an owner or admin can approve it in Att göra.

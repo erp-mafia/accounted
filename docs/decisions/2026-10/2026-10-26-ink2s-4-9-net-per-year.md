@@ -1,1 +1,0 @@
-[2026-10-26] INK2S 4.9 is filed net per year (book charge on fast egendom added back, tax plan deducted, one of 7666/7765): the form has one row per sign. A write-down of mark is added back in full (mark is never deductible); a disposal only warns, 4.10 stays manual.

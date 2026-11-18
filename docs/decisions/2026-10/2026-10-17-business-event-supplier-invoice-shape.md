@@ -1,1 +1,0 @@
-[2026-10-17] A supplier invoice event has the invoice (a credit, its credit note) as subject, the supplier as party, total in its currency, total_sek, and its stated moms in SEK under its vat_treatment; no category: the rows carry none and an account is never read as one.

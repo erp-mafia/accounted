@@ -1,1 +1,0 @@
-[2026-10-16] A posting under a grant gets an operation receipt beside its bank-line receipt, policy grant.1;grant_id;grant_version, band direct: the bank-line row cannot carry a band without an acted-on suggestion.

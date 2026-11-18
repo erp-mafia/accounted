@@ -1,1 +1,0 @@
-[2026-10-18] SIE import jobs get the typed handle sie_<32 hex> (type sie_import), typing no v1 path or field yet: the job's ledger.history_import event names its job as subject (design call 1), and a subject must be a typed handle; prefixes are permanent.

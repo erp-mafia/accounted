@@ -1,1 +1,0 @@
-[2026-10-16] bank_balance sums the booked balances of the bank rows in the cash account register plus the bank role account: the role alone reads 0 for a company banking on another 19xx account, and the bank-reported balance is not a ledger figure.

@@ -1,1 +1,0 @@
-[2026-10-21] A signing start refused after its claim carries the signing as it stands (details.signing) when an order stayed in it; the flow signs that again or shows the stop, never the same start (crm#1357). Not a client re-read: the server already holds the rows.

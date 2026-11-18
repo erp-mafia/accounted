@@ -1,1 +1,0 @@
-[2026-11-07] Safari and iOS browsers get the invoice PDF previews drawn by pdf.js (crm#1689), not an <iframe> as triage proposed: that renderer already runs on those browsers on the signing page, while a blob: PDF in an iframe could not be verified in Safari.

@@ -40,7 +40,7 @@ describe('resolveCompanyCounterparts when the model batch fails (accounted#115)'
     mock.enqueue({
       data: [
         { id: 't1', original_description: 'FITTJA MATMA', description: null, amount: -476, currency: 'SEK', merchant_name: null },
-        { id: 't2', original_description: 'Lön Jakob Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
+        { id: 't2', original_description: 'Lön Anna Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
       ],
     })
     mock.enqueue({ data: [] }) // live aliases
@@ -58,7 +58,7 @@ describe('resolveCompanyCounterparts when the model batch fails (accounted#115)'
     // Only the salary line, which needed no model, gets its (nil) alias. The
     // card memo has none, so the next run reads it again.
     const inserted = mock.findCall('counterparty_aliases', 'insert')?.[0] as Array<Record<string, unknown>>
-    expect(inserted.map((row) => row.sample_text)).toEqual(['Lön Jakob Juni Överföring via internet'])
+    expect(inserted.map((row) => row.sample_text)).toEqual(['Lön Anna Juni Överföring via internet'])
     expect(logError).toHaveBeenCalledWith('counterpart model reading failed; the strings stay unresolved for the next run', {
       companyId: COMPANY,
       modelFailed: 1,

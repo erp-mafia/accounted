@@ -634,7 +634,7 @@ describe('generatePeppolBisBillingInvoice', () => {
     }
   })
 
-  // Founder decision 2026-09-29: with no valid bankgiro or plusgiro the
+  // Product decision 2026-09-29: with no valid bankgiro or plusgiro the
   // invoice is paid to the IBAN (with the BIC when there is one).
   describe('payee precedence: bankgiro, then plusgiro, then IBAN', () => {
     const IBAN = 'SE4550000000058398257466'
@@ -750,7 +750,7 @@ describe('generatePeppolBisBillingInvoice', () => {
     })
   })
 
-  // Founder decision 2026-09-29: every legal form with an organisationsnummer
+  // Product decision 2026-09-29: every legal form with an organisationsnummer
   // sends; only a form whose org number is the owner's personnummer waits for
   // a GLN. The gate reads that capability, never a list of forms.
   describe('sender legal form', () => {

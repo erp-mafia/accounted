@@ -489,7 +489,7 @@ describe('Fortnox supplier-invoice files (PH 176)', () => {
 
     const result = await importProviderDocuments({ supabase: supabaseWith(), companyId: COMPANY, userId: USER, consentId: 'c1' })
 
-    // Six attempts at the list, as in prod, then each invoice is asked on its own.
+    // Six attempts at the list, as in production, then each invoice is asked on its own.
     expect(requested().filter((path) => path === '/supplierinvoices?page=1&limit=100')).toHaveLength(6)
     // The files come in as with the list: 112 on D17 of 2024, 113 on D3 of
     // 2025. 114 (never booked) and 115 (cancelled) have no verifikat; without

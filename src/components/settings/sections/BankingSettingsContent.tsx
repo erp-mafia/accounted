@@ -103,7 +103,7 @@ export function BankingSettingsContent() {
         setIsAccessDenied(true)
       }
       // Handelsbanken refuses business connects when the company hasn't
-      // registered and linked the open banking fullmakt ("Internet Företag –
+      // registered and linked the open banking fullmakt ("Internet Företag:
       // tilläggstjänst API Företag"): as server_error, or since 2026-09-14
       // as access_denied "Invalid credentials". Surface the fix steps for both.
       if (

@@ -1,1 +1,0 @@
-[2026-10-17] The semesterårsavslut adjustment gets its own kind, payroll.vacation_liability_adjusted (add-only, no source type): its verifikat carries salary_payment though no salary is paid. No amount: the 2920 and 2940 drifts can move in opposite directions.

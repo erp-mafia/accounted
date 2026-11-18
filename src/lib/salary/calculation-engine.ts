@@ -544,8 +544,7 @@ export function calculateSalary(
   // Absence rows are signed and already consumed in Step 3. The derived
   // sick/VAB/parental rows also carry is_gross_deduction (it drives the
   // booking split), so they must be excluded here or the same day is
-  // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000
-  // (reported by Frey, 2026-09-18).
+  // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000.
   // Signed, as the booking reads the row (line-item-roles.ts payslipLineSign):
   // an absolute value turned a positive row into a deduction.
   const grossDeductionItems = input.lineItems.filter(

@@ -1,1 +1,0 @@
-[2026-10-20] crm#1279 a byrå's own customer number lives on companies.byra_client_number (one team per company), not unique, and is cleared when team_id changes so a new byrå never inherits the old one's number; the API and MCP read it (client_number) but only the cockpit writes it for now.

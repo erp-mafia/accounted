@@ -219,7 +219,7 @@ export async function getNeSruFile(ctx: OperationContext, periodId: string): Pro
 
 /**
  * The INK3 underlag the dashboard shows. No file: the user types the figures
- * into Skatteverket's e-tjänst (founder decision on #47, path (a)).
+ * into Skatteverket's e-tjänst (product decision on #47, path (a)).
  */
 export async function getInk3Underlag(
   ctx: OperationContext,

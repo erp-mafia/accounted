@@ -1,1 +1,0 @@
-[2026-10-16] Event detectors subscribe to the in-process bus in lib/init beside the event_log and webhook handlers, since event_log has no separate drain: one company per event, no scan; a lost event only means the suggestion comes on a later one.

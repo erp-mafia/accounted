@@ -1,1 +1,0 @@
-[2026-10-15] A rate-limited or fan-out-capped inbound mail gets no arrival and no stored .eml: nothing entered for that company, processing_history already records the drop, and storing the full mail would undo the cap that exists to bound flood cost.

@@ -1,1 +1,0 @@
-[2026-10-27] Periodisk sammanställning always reconciles against rutor 35/38/39 over its own dates, not only when the PS period equals the momsperiod: Skatteverket matches the list against the months it covers, and the gate left most companies (a monthly filer's quarterly list included) unreconciled (crm#1336).

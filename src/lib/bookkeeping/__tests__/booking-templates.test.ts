@@ -1182,7 +1182,7 @@ describe('reverse-charge software lands in the box of the supplier location', ()
 
   it('lets no new vendor from outside the EU onto an EU reverse-charge template', () => {
     // These keywords book ruta 21 today although the directory places the
-    // vendor outside the EU. Moving them to it_saas_non_eu waits on a founder
+    // vendor outside the EU. Moving them to it_saas_non_eu waits on an operator
     // call (crm#1028); remove an entry when its keyword moves, never add one.
     const awaitingFounderCall = ['anthropic', 'chatgpt', 'claude', 'cloudflare', 'digitalocean', 'godaddy', 'midjourney', 'openai', 'vercel']
     const outsideEu = new Set(

@@ -89,8 +89,7 @@ import type {
  * Deliberately emits no journal_entry.committed, unlike the other posting
  * RPC doors in this file: an import brings in history that was posted
  * elsewhere, often thousands of vouchers, and announcing each would flood
- * webhook subscribers. The same holds for the undo below (DECISIONS.md
- * 2026-10-08).
+ * webhook subscribers. The same holds for the undo below.
  */
 export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob, chunk: number, phase: 'vouchers' | 'finalize'): Promise<SIEChunkResult> {
   const { data, error } = await supabase.rpc('import_sie_chunk', {
@@ -440,10 +439,10 @@ export async function createDraftEntry(
   }
 
   // Account dimension rules (dimensions PR10): apply 'default'/'fixed'
-  // values onto the line bags before validation + insert. Zero rules —
-  // every company by default — returns the input untouched; a failed rule
+  // values onto the line bags before validation + insert. Zero rules:
+  // every company by default - returns the input untouched; a failed rule
   // fetch fails open like the soft validation below. System-generated and
-  // correction sources are exempt — policy governs new business events,
+  // correction sources are exempt - policy governs new business events,
   // never imported history or bokslut mechanics.
   const ruleExempt = isDimensionRuleExemptSource(input.source_type)
   const rules = ruleExempt ? [] : await fetchActiveDimensionRules(supabase, companyId)
@@ -961,7 +960,7 @@ async function postDraftEntry(
   if (overCeiling) throw overCeiling
 
   // Mandatory dimension rules (dimensions PR10): 'required' rules bite when
-  // the verifikat is about to become immutable — drafts may be incomplete,
+  // the verifikat is about to become immutable - drafts may be incomplete,
   // posting may not. Zero active rules (the default) skips the line fetch
   // entirely; a failed rule fetch fails open (transient DB errors must not
   // block bookkeeping). Reversal/correction paths never pass through
@@ -970,7 +969,7 @@ async function postDraftEntry(
   if (rules === null) {
     // Deliberate fail-open, but LOUD: a transient policy-table error must not
     // block month-end bookings company-wide, yet a silently skipped control
-    // is invisible — the warning makes the degradation observable.
+    // is invisible - the warning makes the degradation observable.
     log.warn('dimension rule fetch failed — mandatory enforcement skipped (fail-open)', {
       companyId,
       entityId: entryId,
@@ -1006,10 +1005,10 @@ async function postDraftEntry(
         entityId: entryId,
       })
     } else {
-      // System/correction sources are exempt — see
+      // System/correction sources are exempt - see
       // DIMENSION_RULE_EXEMPT_SOURCE_TYPES (imported history, bokslut
       // mechanics and credit instruments must never be blocked by policy).
-      // source_type is a HEADER column (journal_entries) — the join repeats
+      // source_type is a HEADER column (journal_entries) - the join repeats
       // the same value on every line, so reading lines[0] IS reading the
       // entry header; lines cannot mix source types.
       if (!isDimensionRuleExemptSource(typedLines[0]?.journal_entries?.source_type)) {

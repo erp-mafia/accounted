@@ -1,8 +1,7 @@
 /**
  * Core <-> Skatteverket-extension read boundary for filed VAT declarations.
  *
- * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard,
- * .gitlab-ci.yml checks job), so the v1 REST read endpoint reaches the Skatteverket
+ * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard), so the v1 REST read endpoint reaches the Skatteverket
  * extension only through the registry-resolved `services` channel: same
  * pattern as lib/pending-operations/skatteverket-commit.ts. This module
  * defines the SHARED shapes so the extension (which may import core freely)

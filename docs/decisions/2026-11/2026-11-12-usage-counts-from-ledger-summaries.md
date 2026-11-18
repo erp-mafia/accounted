@@ -1,1 +1,0 @@
-[2026-11-12] get_account_usage_counts reads ledger_account_days (drafts and cancelled still from lines): every line of the largest company took 5 s and timed out cold. Line path kept for a company whose summaries are not built.

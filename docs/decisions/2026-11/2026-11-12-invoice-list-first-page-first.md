@@ -1,1 +1,0 @@
-[2026-11-12] The invoice list shows its newest 1 000 rows after one read and loads older ones behind them, with a line saying so until counts and search cover all: waiting for the whole register took 90 s for the largest company. Not server-side paging: tabs, counts and search run on the client.

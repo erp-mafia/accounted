@@ -1,7 +1,7 @@
 /**
  * BOLAGET_COMPANY_IDS: the Bolaget registers (aktiebok, roles over time,
  * firmateckning, verkliga huvudmän) and their pages, API and MCP doors.
- * Unset = nobody, until the founders flip it.
+ * Unset = nobody, until the operators flip it.
  *
  * It rolls out per company, like SIGNING_ENABLED and ARKIV_COMPANY_IDS:
  * `*` opens it for every company, a comma-separated list of company ids for

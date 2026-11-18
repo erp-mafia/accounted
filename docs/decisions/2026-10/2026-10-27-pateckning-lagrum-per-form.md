@@ -1,1 +1,0 @@
-[2026-10-27] The PDF cites the påteckning provision of the company's own form (form capability revisorspateckningLagrum): ABL 9 kap. 28 § for an AB, 8 kap. 32 § lagen om ekonomiska föreningar for a förening, nothing for a form whose law has none.

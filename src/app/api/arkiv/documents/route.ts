@@ -232,7 +232,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         expected: agreement ? (expectedCount.get(agreement.id) ?? 0) : 0,
         held: d.admission_state === 'held',
         // A person is asked only about what the model read and could not name. A document with no type yet is
-        // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
+        // still being read and typed (seen 2026-09-25: most archives were untyped history, and every row asked).
         // Never for a booked document: the verifikat already says what it is, and nothing reads or types it in the background.
         unclassified: d.admission_state === 'admitted' && d.doc_type === 'other' && !d.journal_entry_id && !d.journal_entry_line_id,
         reading: d.admission_state === 'admitted' && d.doc_type == null && !d.journal_entry_id && !d.journal_entry_line_id,

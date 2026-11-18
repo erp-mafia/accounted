@@ -1,1 +1,0 @@
-[2026-10-16] A minted service-account key may only hold scopes the calling key holds: the sponsor is an owner or admin, so the role cap never bites; the caller's own grant is the cap that keeps delegation from widening access.

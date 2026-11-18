@@ -1,1 +1,0 @@
-[2026-10-16] rot-rut-payout-set answers none whenever one begäran equals the row, recomputed rather than signalled between matchers: the old code tried a set only when the 1:1 pass found no candidate, even one whose hint write failed.

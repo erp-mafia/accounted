@@ -1,1 +1,0 @@
-[2026-10-21] The Enable Banking to Open Payments handover is also read from the accounts (an EB row whose every read account the new connection reads is taken over), not only from replace_connection_id, which doors like Koppla bank, restarts and Svea's second consent drop.

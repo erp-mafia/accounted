@@ -1,1 +1,0 @@
-[2026-10-23] Balansrapport's beräknat resultat is read from the result accounts, as the Balansräkning reads årets resultat, and an unbalanced IB is reported as a separate differens (JSON, PDF, xlsx): assets + liabilities showed an earlier year's untransferred result as this year's.

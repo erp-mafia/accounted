@@ -1,1 +1,0 @@
-[2026-10-17] Decision files only for choices that change a rule, an invariant or something users see, or that go against a proposed approach: about 2,700 entries since August cost agent time on every MR, and the MR body holds the rest.

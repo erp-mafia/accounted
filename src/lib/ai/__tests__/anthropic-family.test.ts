@@ -463,7 +463,7 @@ describe('generateText read-only tool loop', () => {
     expect(toolResult.content).toContain('[avkortat: resultatet var')
   })
 
-  // B04 (prod 2026-10-17..23): Claude Sonnet 5 thinks adaptively when a request
+  // B04 (seen 2026-10-17..23): Claude Sonnet 5 thinks adaptively when a request
   // sends no `thinking` field, thinking blocks come back with empty text, and
   // max_tokens covers thinking and answer together. A turn that spent its whole
   // budget thinking returned [thinking] only, and the loop returned '' as the

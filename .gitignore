@@ -79,9 +79,7 @@ supabase/.branches/
 # Local-only SIE test fixtures: may contain real/scrubbed company data, never commit
 tests/fixtures/sie/
 
-# Local-only DESTRUCTIVE duplicate-cleanup tooling: one-off, run by hand against
-# real räkenskapsinformation. Deliberately NOT committed so it can never run in
-# CI/cron and so its logic isn't mistaken for a supported product feature.
+# Local-only maintainer tooling, never committed.
 scripts/delete-duplicate-transactions.ts
 
 # Diagnostic/cleanup tooling under /scripts is tracked, but the DATA those
@@ -89,10 +87,6 @@ scripts/delete-duplicate-transactions.ts
 # räkenskapsinformation: never commit it. Keep the .ts/.sql tooling, ignore the data.
 scripts/*.csv
 
-# Local-only DESTRUCTIVE support tool: reopens a closed räkenskapsår by deleting
-# only its bokslut layer (dispositioner + closing entry + next-year IB). Run by
-# hand against real räkenskapsinformation; bypasses BFL immutability triggers, so
-# it must never live in the repo / CI / cron.
 scripts/reopen-bokslut.sql
 
 .agents/*
@@ -104,3 +98,7 @@ scripts/reopen-bokslut.sql
 # part of the app. The integration itself lives in lib/analytics/ and
 # instrumentation-client.ts.
 .posthog/
+
+# Kept by the maintainers outside this repository
+/docs/decisions/
+/.compliance/

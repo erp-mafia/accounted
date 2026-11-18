@@ -190,7 +190,7 @@ export default function SupplierInvoicesPage() {
     return param && TABS.includes(param as never) ? (param as ListTab) : 'all'
   })
   // The flow (UI v2 PR 6) lives on each invoice as a strip; the list keeps
-  // the status picker (founder call 2026-09-07: a bar of stages over two
+  // the status picker (product call 2026-09-07: a bar of stages over two
   // invoices was chrome, not information).
   const { settings: companySettings } = useCompanySettings()
   // Kontantmetoden never attests: there 'registered' is the normal open

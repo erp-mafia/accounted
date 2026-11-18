@@ -1,1 +1,0 @@
-[2026-11-01] The board merges the Peppol/Kivra confirm into Skicka; the redesign keeps it as its own step (restyled to the v3 confirm anatomy): it is the consent point for sending outside e-mail, driven by the invoice editors, and merging it would change that flow.

@@ -1,1 +1,0 @@
-[2026-10-15] Därför bokades den så grades grounds from the acted-on source and recorded band, never a score: readings and guesses Trolig, a rule Stark unless its band says review, counterpart history Stark only with band direct, a person's own choice Ditt val; no door records an exact match yet.

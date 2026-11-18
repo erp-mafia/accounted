@@ -32,7 +32,7 @@ export function isStripeConfigured(): boolean {
 
 /**
  * Stripe Price id of the bank payments pack ("+100 betalningar/mån",
- * recurring monthly, quantity = packs), from env. Undefined until a founder
+ * recurring monthly, quantity = packs), from env. Undefined until an operator
  * creates the price: packs are then neither sold nor read off subscriptions,
  * and "Begär fler" stays the only way to more payments (self-host too).
  */

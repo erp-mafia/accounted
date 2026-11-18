@@ -1,1 +1,0 @@
-[2026-10-22] register_booked_invoice takes a foreign invoice only against a verifikat whose 151x line carries its currency and amount, at the rate that gives the booked kronor back (crm#1039 rule), never a caller-supplied rate; a kronor-only verifikat stays refused (#90, crm#1336).

@@ -1,1 +1,0 @@
-[2026-10-29] TIC Lens calls go through a central budget (reserve_external_call: purpose caps, total 3000 per cycle from the 22nd, onboarding lookup keeps a reserve) and a shared 24 h cache; a missing RPC fails open, a deny fails closed into the existing 429 degrade path.

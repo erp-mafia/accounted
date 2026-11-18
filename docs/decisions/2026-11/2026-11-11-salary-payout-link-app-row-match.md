@@ -1,1 +1,0 @@
-[2026-11-11] The app's bank rows get the salary-run payout link as a row match (suggest-categories returns salary_payouts from findSalaryRunPayouts; the primary opens the verifikat matcher with it picked), not a ProposalSource: rows with no salary text never reached it before (crm#1685).

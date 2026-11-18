@@ -1,1 +1,0 @@
-[2026-11-12] A Peppol page the access point marks read gets a row per document before any XML fetch or delivery, its listing waits until the run's end, not a fixed limit, and read documents are listed again (includeRead) after a failed listing and hourly: a consumed page that never arrived was lost.

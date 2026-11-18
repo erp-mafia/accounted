@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
-// FROZEN on 2026-11-06 (docs/decisions/2026-11/2026-11-06-mcp-instructions-head-and-catalog-freeze.md).
+// FROZEN on 2026-11-06.
 // These ceilings grew from 20K to 67.6K tokens, one justified raise at a time
 // (the history is in the cases below), and 140 tools are listed by default;
 // past a few dozen tool definitions models get worse at picking the right one.
 // Never raise any of the three. A new listed tool pays for itself: trim
 // descriptions, merge it into an existing tool, or give it
 // catalogVisibility: 'search'. The headroom left at the freeze is for wire
-// data on existing tools. A raise needs a founder decision under docs/decisions/.
+// data on existing tools. A raise needs a maintainer decision, stated in the PR.
 const FULL_CATALOG_CEILING = 67_600
 // Ceiling for the catalog a single-company key is served (see the second case).
 const SIMPLE_CATALOG_CEILING = 63_100
@@ -220,7 +220,7 @@ describe('tools/list payload size guard', () => {
     //   * 59.75K to 59.85K with personal_number on gnubok_create_customer: a
     //     private person's personnummer had no input at all on the MCP path,
     //     so agents put it in org_number, where nothing masks it (GDPR art.
-    //     5.1 c; 134 such rows across 10 companies on prod). The property is
+    //     5.1 c). The property is
     //     the contract; its description and the org_number/payment_terms
     //     descriptions were trimmed to one short sentence first; headroom
     //     before the change was ~11 tokens, so even the trimmed form crossed.
@@ -398,7 +398,7 @@ describe('tools/list payload size guard', () => {
     //   * 59.0K to 59.1K: second examples batch (2026-09-01, #2066), 7
     //     examples on 5 more tools for 80 tokens, spending under half the
     //     margin the envelope trim created. Picked by evidence: search_tools
-    //     was sent a nonexistent `offset` in prod the same day, the upload
+    //     was sent a nonexistent `offset` in production the same day, the upload
     //     pair's examples ARE the two-step flow, and
     //     list_uncategorized_transactions is the highest-traffic read.
     //
@@ -628,13 +628,13 @@ describe('tools/list payload size guard', () => {
     //     (list_sales_orders, list_articles, list_dimensions) sum to ~1 085,
     //     short of the ~1 233 overshoot, and the rest are seasonal, widgets,
     //     onboarding entries or Arkiv tools main put there on purpose.
-    //     FOUNDER CALL: keep this bump, or demote those three reads plus
+    //     PRODUCT CALL: keep this bump, or demote those three reads plus
     //     gnubok_client_overview to search-only and ratchet back to 63.5K.
     //   * 65K to 65.5K, 2026-09-28, folding #2752 and #2753 into #3169 on
     //     top of current main: main alone measures 63 497 (its own ceiling
     //     was 63.5K), the union 65 030. The simple company mode catalog
     //     measures 60 028 (next case), so a single-company session still
-    //     starts ~3 470 tokens lighter than on main. The founder call above
+    //     starts ~3 470 tokens lighter than on main. The product call above
     //     stands.
     //   * KPI report correctness (fix/mcp-kpi-report-correctness):
     //     gnubok_get_kpi_report gains from_date/to_date, a metrics filter and
@@ -761,7 +761,7 @@ describe('tools/list payload size guard', () => {
     //     direct write; its status read gnubok_list_feed_connections is
     //     search-only. One-sentence description, bare property types and a bare
     //     outputSchema (the answer's instructions say what it holds), about +175.
-    //     Measured 66 062. Ceiling unchanged. With the rest of run t1022
+    //     Measured 66 062. Ceiling unchanged. With the rest of that batch
     //     (landing branch): measured 66 055.
     //   * Märkning on the customer card (crm#1477, 2026-10-26):
     //     gnubok_create_customer and gnubok_update_customer gain
@@ -789,7 +789,7 @@ describe('tools/list payload size guard', () => {
     //     type would cost about 600 and say nothing. +1 431, measured 66 241
     //     (single-company 61 812). The ceiling moves by that cost, rounded
     //     up, so the headroom other branches count on stays where it was.
-    //     A founder call, as the 61 600 bump was.
+    //     A product call, as the 61 600 bump was.
     //   * Fee rows on gnubok_match_batch_allocate (issue #131, 2026-10-28):
     //     fees (account, amount, description; at most five) as bare
     //     properties, the rule in the tool description, which lost
@@ -826,7 +826,7 @@ describe('tools/list payload size guard', () => {
     // types), and gnubok_get_vat_report / gnubok_vat_review_widget declare every
     // SKV 4700 ruta the filing carries (no descriptions; the rutor `required`
     // list was dropped to pay for most of it). Measured about 60 256 with both
-    // plus the batch's other MRs, ~44 headroom.
+    // plus the batch's other changes, ~44 headroom.
     // 60 300 to 60 400 on 2026-10-10 (crm#1096): gnubok_create_voucher lines
     // gain vat_code (omvänd moms the server expands; kind and rate as enums
     // agents can validate against, and that its lines carry no dimensions)
@@ -887,7 +887,7 @@ describe('tools/list payload size guard', () => {
     // 2026-10-22 (#31): gnubok_update_employee gains
     // sammaloneregeln_kollektivavtal_confirmed, bare (no description: the
     // EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED refusal says when to send it),
-    // about +15. Landed with the rest of run t1021 (main 61 397, every
+    // about +15. Landed with the rest of the batch (main 61 397, every
     // component together 61 406): the "the XML holds personnummer" clause
     // the same run added to gnubok_generate_rot_rut_file (#58) was dropped
     // to pay for it. Measured 61 399 (full catalog 65 868). Ceiling unchanged.
@@ -897,18 +897,18 @@ describe('tools/list payload size guard', () => {
     // read-demotion rule as the ROT/RUT payout write: the 60-day
     // mcp.tool_called counts leave no zero-call read outside the seasonal
     // bokslut/NE tools and the pinned list_sales_orders, so the demotion is
-    // its own change. FOUNDER CALL: keep this bump, or demote
+    // its own change. PRODUCT CALL: keep this bump, or demote
     // gnubok_preview_ef_declaration (about 410 tokens, 8 calls in 60 days,
     // NE-bilaga season is spring) and ratchet back to 61 400. Measured 61 572.
     // 2026-10-23 (crm#1397): gnubok_correct_entry gains sides_swapped, bare
     // (the negates_original refusal says when to send it), paid for by
     // shortening its lines description to what the lines are (the verifikat
     // as it should be): one character less in all. Ceiling unchanged.
-    // Run t1022 landing (every component together): measured 61 565 (full
-    // catalog 66 055). The 61 600 bump stays the founder call above: the
+    // Batch landing (every component together): measured 61 565 (full
+    // catalog 66 055). The 61 600 bump stays the product call above: the
     // run's own additions hold no 166 tokens to trim back under 61 400
     // (gnubok_backfill_feed alone projects to about 173).
-    // Run t1026 landing (2026-10-26): gnubok_mark_salary_run_paid and
+    // Batch landing (2026-10-26): gnubok_mark_salary_run_paid and
     // gnubok_book_salary_run gain confirm_payment_date_ahead, bare (the
     // SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED refusal says when to send it).
     // The kreditfaktura refund through gnubok_mark_invoice_as_paid is told by

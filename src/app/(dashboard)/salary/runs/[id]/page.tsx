@@ -455,8 +455,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   }
 
   // Recall an approval (approved → review). Approval is only an internal
-  // control point, but side effects may already exist — a payment file that
-  // could be sitting at the bank, sent payslips, a generated AGI — so the
+  // control point, but side effects may already exist - a payment file that
+  // could be sitting at the bank, sent payslips, a generated AGI - so the
   // confirm spells out exactly the ones that apply to this run. The API
   // refuses outright once the AGI has been filed with Skatteverket.
   async function handleUnapprove() {
@@ -1036,7 +1036,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   // Bokför posts the run's vouchers at once, dated on the payment date (frozen
   // when the run left draft), the net pay out of the bank account. Confirm up
-  // front with that outcome (design.md convention 10), and say plainly when
+  // front with that outcome, and say plainly when
   // the date has not come yet: nothing else on the page told the user the
   // vouchers would be dated ahead of the payout (crm#1216).
   async function handleBook() {

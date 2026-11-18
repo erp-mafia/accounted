@@ -22,7 +22,7 @@
  * (propagateUnderlagForBookedTransaction), the match log and the events.
  *
  * A bank row that is already booked or ignored is refused, for every caller:
- * the founders chose refusal over silent replacement on the supplier side
+ * the operators chose refusal over silent replacement on the supplier side
  * (accounted#58, 2026-10-28), and matching such a row here posted a second
  * payment verifikat, so one 1500 kr row moved 1930 by 3000 kr, or reversed an
  * independent verifikat an approval never named. Nothing is reversed here:

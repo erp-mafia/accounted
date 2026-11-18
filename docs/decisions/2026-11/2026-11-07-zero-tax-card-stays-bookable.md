@@ -1,1 +1,0 @@
-[2026-11-07] The bolagsskatt card is offered at 0 kr when only skippable proposed dispositions zero the tax, so skipping them still books the tax (the POST recomputes it); a hand-booked tax is not unblocked by skipping, the warning says to storno it instead (crm#1688).

@@ -57,7 +57,7 @@ function toScope(row: CashAccountRow | null | undefined, accountNumber: string):
     // primary row this still pulls every booked NULL-cash_account_id transaction
     // into the bank total, including ones whose verifikat has no line on this
     // account at all (own-account transfers the cash_account_id backfill
-    // skipped). Measured on prod 2026-07-30 over all time, for the companies
+    // skipped). Measured 2026-07-30 over all time, for the companies
     // with >= 2 SEK cash accounts and a primary 1930: 294 booked
     // NULL-cash_account_id SEK rows, 22 of them on verifikat with no 1930 line,
     // across 4 companies, net -4170.31 kr but with monthly swings from
@@ -131,13 +131,13 @@ async function lookupPrimary(
  * - `accountNumber` omitted (the checks that just want "the company's bank"):
  *   try '1930', and if the company has no 1930 row fall back to its PRIMARY
  *   cash account. Without that fallback the caller compares the company's whole
- *   SEK bank volume against an empty 1930 GL side: measured on prod, 2 companies
+ *   SEK bank volume against an empty 1930 GL side: there are companies that
  *   have no 1930 row while running two SEK cash accounts each (1935+1936 and
  *   1932+1935) and zero journal_entry_lines on 1930, so they got a
  *   bank_unreconciled blocker worth their entire bank volume with 0 unmatched
  *   items. cash_accounts allows at most one primary row per company (partial
  *   unique index idx_cash_accounts_one_primary_per_company, migration
- *   20260519110000), so maybeSingle is exact here too. For the 1367 companies
+ *   20260519110000), so maybeSingle is exact here too. For the companies
  *   that do have a 1930 row the fallback never runs, so nothing changes for
  *   them, including the 5 whose 1930 row is not the primary one.
  *

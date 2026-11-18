@@ -15,7 +15,7 @@ import { describeNode, nodeLabel, nodeName, type NodePages, type NodeText } from
 
 /**
  * The context graph at the top of the wiki's context view: what the agent
- * receives about the company, as one web of linked things (founder brief
+ * receives about the company, as one web of linked things (brief
  * 2026-11-14, prototype canvas "Kontext").
  *
  * It reads the briefing text the page already holds, the same answer the

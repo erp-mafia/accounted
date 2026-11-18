@@ -221,7 +221,7 @@ export function buildOpenCaseRequest(input: {
     startStep: input.startStep,
     nextActionDate: null,
     reminderFeeAgreed: eligibility.reminderFeeAgreed,
-    // Founder decision 2026-10-04 (the provider's answer): the statutory rate
+    // Product decision 2026-10-04 (the provider's answer): the statutory rate
     // applies; a contractual rate is not sent in this version.
     lateInterest: null,
     priorPayments: input.priorPayments,

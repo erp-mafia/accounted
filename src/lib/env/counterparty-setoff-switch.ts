@@ -2,7 +2,7 @@
  * COUNTERPARTY_SETOFF_ENABLED: kvittning of a customer invoice against a
  * supplier invoice of the same counterparty (lib/invoices/counterparty-setoff):
  * the Kvitta action, its routes and the two operations (served to v1 and MCP
- * only while it is set). Unset = off, until the founder switches it on in
+ * only while it is set). Unset = off, until the operator switches it on in
  * Vercel.
  *
  * What the flag never stops: the dashboard's open items and net balance for a

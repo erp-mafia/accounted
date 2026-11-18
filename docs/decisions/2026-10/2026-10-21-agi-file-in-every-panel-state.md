@@ -1,1 +1,0 @@
-[2026-10-21] The AGI panel offers the XML download in every state, and the run header's menu item stays (crm#1345): the panel hides its actions once a declaration is signed, so the menu is the only way to fetch a filed copy. Download before Bokförd is not opened: no source on filing before payout.

@@ -1,1 +1,0 @@
-[2026-10-21] An operator's receiving grant now publishes the Peppol id from the inbound cron (3 a run, never-attempted companies only), mirroring the withdrawal: the grant alone left suppliers bouncing until someone in the company pressed register, and only prod holds the Connect key to do it.

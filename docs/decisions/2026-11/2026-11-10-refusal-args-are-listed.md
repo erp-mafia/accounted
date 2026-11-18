@@ -1,1 +1,0 @@
-[2026-11-10] An argument a refusal's remediation asks for is listed in the tool's inputSchema, never accepted unlisted: OperationMcpBinding.undeclaredInputs is removed, since a client validating against additionalProperties false could not send mismatch_reason after DOC_ROW_MISMATCH (crm#1742).

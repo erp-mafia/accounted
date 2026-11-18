@@ -4,7 +4,7 @@
     "Set on 2026-10-24 from the worst p95 of every run on the current code: eight warm runs (five local on a 2 CPU / 8 GB container, three in CI, two of those beside a full merge request pipeline) and six mixed (three local, three CI). For compute_prior_opening_balances and the huvudbok account page only the runs after !845 and the page-boundary change count.",
     "warm: twice the worst p95 (at least 10 ms) while that stays within the 100 ms DB target; 100 ms when 1.5 times the worst still fits under it; otherwise 1.5 times the worst, rounded up to 10 ms, and the case carries a note.",
     "mixed: twice the worst mixed p95, at least 20 ms, rounded up to 10 ms. Mixed has no absolute target: it catches calls that slow down under concurrent postings and builds.",
-    "The 100 ms DB target: 200 ms p95 end to end, less the auth proxy and route wrapper (50-90 ms in production).",
+    "The 100 ms DB target: 200 ms p95 end to end, less the auth proxy and route wrapper (50-90 ms).",
     "A change that makes a call legitimately slower raises its budget in the same merge request, with before and after numbers."
   ],
   "targetMs": 100,
@@ -46,7 +46,7 @@
     "page.bookkeeping.list": {
       "warm": 370,
       "mixed": 800,
-      "note": "Over the 100 ms target: the list counts the year's verifikat for its total (50 000 in the fixture year). Warm p95 244.8 ms, mixed 398.9 ms on the first run on main, 2026-11-14; production for the largest company (79 000 in the year) 340 to 370 ms the same day."
+      "note": "Over the 100 ms target: the list counts the year's verifikat for its total (50 000 in the fixture year). Warm p95 244.8 ms, mixed 398.9 ms on the first run on main, 2026-11-14."
     },
     "page.invoices.list": {
       "warm": 100,
@@ -61,7 +61,7 @@
     "page.invoices.deduction_lines": {
       "warm": 100,
       "mixed": 200,
-      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 59.3 ms, mixed 96.4 ms, for an empty answer: production answers the same read in 5 to 9 ms through the partial index on (company_id, deduction_total), so the fixture's plan differs. Look at that plan before raising this."
+      "note": "Set 2026-11-14 by the rule above from the first run on main (one warm, one mixed). Warm p95 59.3 ms, mixed 96.4 ms, for an empty answer: with the partial index on (company_id, deduction_total) the same read takes 5 to 9 ms, so the fixture's plan differs. Look at that plan before raising this."
     },
     "page.supplier_invoices.list": {
       "warm": 85,
@@ -154,12 +154,12 @@
     "dimension_cross.buckets": {
       "warm": 100,
       "mixed": 120,
-      "note": "Not yet measured on the bench (accounted#133, 2026-10-31): set to the 100 ms target and dimension_pnl.buckets' mixed budget. Production on 2026-10-31: the line path took 51 ms warm for the company with the most two-dimension lines and 431 ms for a 70 000-line year, hence ledger_tagset_days; its rows read like ledger_dimension_days (47 700 rows in about 80 ms). Replace with twice the first scheduled run's worst p95."
+      "note": "Not yet measured on the bench: set to the 100 ms target and dimension_pnl.buckets' mixed budget. The line path took 431 ms for a 70 000-line year, hence ledger_tagset_days; its rows read like ledger_dimension_days (47 700 rows in about 80 ms). Replace with twice the first scheduled run's worst p95."
     },
     "dimension_cross.cell_lines": {
       "warm": 100,
       "mixed": 120,
-      "note": "Not yet measured on the bench (accounted#133, 2026-10-31); same rule as dimension_cross.buckets. The cell is read through its first value's locator."
+      "note": "Not yet measured on the bench; same rule as dimension_cross.buckets. The cell is read through its first value's locator."
     },
     "huvudbok.line_counts": {
       "warm": 40,
@@ -236,12 +236,12 @@
     },
     "audit.sources.year": {
       "warm": 1560,
-      "note": "The whole-year behandlingshistorik, over the target by decision (the report opens on the month, docs/decisions/2026-10/2026-10-23-behandlingshistorik-opens-on-month.md)."
+      "note": "The whole-year behandlingshistorik, over the target by decision (the report opens on the month)."
     },
     "reconciliation.facts.month": {
       "warm": 270,
       "mixed": 670,
-      "note": "Over the 100 ms DB target (under 200 ms end to end in !822); kept from getting slower."
+      "note": "Over the 100 ms DB target (under 200 ms end to end); kept from getting slower."
     },
     "reconciliation.facts.ytd": {
       "warm": 380,

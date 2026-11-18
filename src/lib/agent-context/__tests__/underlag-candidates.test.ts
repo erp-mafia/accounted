@@ -163,7 +163,7 @@ describe('scoreUnderlagCandidates', () => {
   })
 
   it('proposes a non-invoice document via its prominent amounts', () => {
-    // The Robotministeriet case: an SEB account agreement (documentKind
+    // A reported case: a bank account agreement (documentKind
     // "other") has no "Att betala" total, only "Anslutnings-/Engångspris
     // 2 500". The bank charges AVGIFT -2500 the same day. Before the
     // prominentAmounts fallback this document was structurally unmatchable.

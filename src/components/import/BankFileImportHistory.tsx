@@ -41,7 +41,7 @@ const STATUS_LABEL_KEY: Record<string, string> = {
 }
 
 /**
- * Chips mark exceptions (design.md convention 5): the normal 'completed'
+ * Chips mark exceptions: the normal 'completed'
  * state renders as muted text; only deviating states get a Badge.
  */
 const STATUS_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'destructive'> = {

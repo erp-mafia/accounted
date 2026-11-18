@@ -3,7 +3,7 @@
  *
  * The connector relays the provider's own code (failureCode, providerCode) and
  * never prose; these texts are the Swedish meanings Open Payments publishes
- * for its response messages (dev_docs/open-payments/error_messages.md), with
+ * for its response messages, with
  * an English counterpart. The same table is published under the `bankFeed`
  * namespace of src/messages so the browser can localise a code itself
  * (failure-text.test.ts keeps the two in step).

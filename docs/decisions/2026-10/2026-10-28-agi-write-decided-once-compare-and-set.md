@@ -1,1 +1,0 @@
-[2026-10-28] AGI generation decides its write once (decideAgiWrite) and compares and sets on the row it read, instead of a locking RPC or a trigger on filed rows: the rules stay tested TypeScript, and a trigger would refuse the correction takeover (#58).

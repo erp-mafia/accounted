@@ -315,7 +315,7 @@ export function worthFetching(
    * one of those appeared in the mail or inside its attachment. It rescues the
    * case where the two names genuinely differ, which is common and not an
    * error: the bank writes "Kontorsplatser j BG" and the landlord's invoice
-   * says "Stockholm Innovation & Growth AB".
+   * says "Nordisk Kontorshub AB".
    */
   retrievedFor: readonly HuntTransaction[] = [],
 ): boolean {

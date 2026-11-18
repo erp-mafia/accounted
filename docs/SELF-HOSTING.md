@@ -19,8 +19,8 @@ This guide walks you through deploying Accounted on your own infrastructure usin
 
 In the Supabase dashboard under **Authentication > URL Configuration**:
 
-1. Set **Site URL** to your deployment URL (e.g., `https://gnubok.example.com`).
-2. Add `https://gnubok.example.com/auth/callback` to the **Redirect URLs** allowlist.
+1. Set **Site URL** to your deployment URL (e.g., `https://accounted.example.com`).
+2. Add `https://accounted.example.com/auth/callback` to the **Redirect URLs** allowlist.
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits. Keep **Secure email change** enabled (Authentication > Settings, on by default): a login-email change also removes social logins tied to the old address, so the old mailbox must confirm the change before it can lose its access.
 
@@ -61,12 +61,12 @@ The migrations automatically enable these extensions:
 
 | Extension | Migration | Purpose |
 |-----------|-----------|---------|
-| `uuid-ossp` | 001 | UUID generation |
-| `vector` (pgvector) | 033 | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
-| `btree_gist` | 042 | Fiscal period overlap prevention |
-| `pg_cron` | 048 | In-database scheduled jobs |
+| `uuid-ossp` | `20240101000001_core_schema` | UUID generation |
+| `vector` (pgvector) | `20240101000033_ai_chat_schema` | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
+| `btree_gist` | `20260224165254_prevent_overlapping_fiscal_periods` | Fiscal period overlap prevention |
+| `pg_cron` | `20260303145744_supplier_invoice_overdue_cron` | In-database scheduled jobs |
 
-These are all available on Supabase hosted. `pg_cron` requires a paid plan: if you are on the free tier, migration 048 will fail. You can safely skip it; the cron sidecar container handles the equivalent job via HTTP instead.
+These are all available on Supabase hosted. `pg_cron` is needed by two migrations: `20260303145744_supplier_invoice_overdue_cron` (marks overdue supplier invoices, 06:00 UTC) and `20260722150000_harden_invoice_delivery_history` (redacts invoice-delivery personal data after the retention period, 03:15 UTC). No cron sidecar route replaces either job, so enable `pg_cron` before applying the migrations.
 
 ## 4. Configure Environment
 
@@ -186,12 +186,7 @@ PORT=8080 docker compose up -d
 1. Open your deployment URL in a browser.
 2. Click "Skapa konto" (Create account) and register with email + password.
 3. Check your email and click the confirmation link.
-4. Complete the 5-step onboarding wizard:
-   - **Step 1**: Choose entity type (enskild firma or aktiebolag)
-   - **Step 2**: Company name and org number
-   - **Step 3**: Fiscal year, VAT registration, accounting method
-   - **Step 4**: Preliminary tax amount (optional, skip if unsure)
-   - **Step 5**: Bank details for invoices (optional)
+4. Follow the onboarding: create the company (legal form, name and org number, fiscal year, VAT registration, accounting method), then import earlier books, connect a bank, or skip both and start empty.
 
 There is no admin account: any email address can sign up (unless you turn public signup off, see the `AUTH_SIGNUPS_DISABLED` note under [Email](#email-invoice-sending-invitations-and-reminders)). You can also use the magic link option on the login page if preferred.
 
@@ -263,7 +258,7 @@ Extension endpoints are listed unconditionally: one whose extension is not enabl
 
 All cron endpoints are authenticated with `Authorization: Bearer <CRON_SECRET>`. The cron container calls the app over the internal Docker network (`http://app:3000`), so these endpoints are not exposed publicly.
 
-Additionally, migration 048 schedules a `pg_cron` job inside the database that marks overdue supplier invoices daily at 06:00 UTC.
+Additionally, two `pg_cron` jobs run inside the database: `20260303145744_supplier_invoice_overdue_cron` marks overdue supplier invoices daily at 06:00 UTC, and `20260722150000_harden_invoice_delivery_history` redacts expired invoice-delivery personal data daily at 03:15 UTC.
 
 ## Optional Features
 
@@ -407,7 +402,7 @@ Set this when you have turned public signup off in GoTrue (`disable_signup`). Th
 
 ### Connector subscription (self-hosted instances)
 
-Everything a self-hosted instance runs itself is free (AGPL). Six capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway) and reminders, debt collection and invoice delivery (a provider reached only through the connector service, see below). A **connector key** unlocks them for every company on the instance; it is priced per active company at parity with hosted and is issued manually by Accounted on request (self-serve later): write to support@accounted.se and we set it up with you.
+Everything a self-hosted instance runs itself is free (AGPL). Six capabilities depend on services only Accounted operates and are therefore gated on a self-host: bank sync (our PSD2/AISP credentials), Skatteverket API submission and skattekonto sync (our API client registration), Peppol e-invoicing (our contracted access point), company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén (the migration gateway) and reminders, debt collection and invoice delivery (a provider reached only through the connector service, see below). A **connector key** unlocks them for every company on the instance; it is priced per active company and issued by Accounted on request: write to support@accounted.se and we set it up with you.
 
 ```bash
 GNUBOK_CONNECTOR_KEY=gnubok_ck_...            # issued by Accounted, shown once
@@ -420,15 +415,15 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are issued manually on request (support@accounted.se), with scopes only for upstreams that carry traffic today: bank sync and Skatteverket. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
+The **bank** and **Skatteverket** connector proxies are live on the connector service (`connect.accounted.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration are not carried by the connector. The instance-side client wiring is merged for both upstreams: in connector mode (key set, no own credentials for that upstream) bank sync and Skatteverket carry traffic through the hosted proxy. Keys are issued manually on request (support@accounted.se), with scopes only for upstreams that carry traffic today: bank sync and Skatteverket. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
-**Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued only where Arcim's provider terms allow it.
+**Peppol** through the connector works the same way once your key carries the `peppol` scope: leave every `QVALIA_*` variable and `PEPPOL_TRANSPORT_PROVIDER` unset, and the instance sends and receives e-invoices through Arcim's contracted access point (`connect.accounted.se/api/connect/peppol/*`). The hosted side enforces one receiving registration per company (`peppol_connections_per_company` on the key), a shared cap on registrations at the access point, and ownership: an instance can only poll status, fetch evidence and receive documents for registrations and submissions made through its own key. Delivery status arrives by polling (`/api/peppol/outbound/status/cron`), not by webhook. Which participant identifiers (organisation numbers, GLNs) a key may register and send as is recorded on the key when Arcim issues it; the licensee's own organisation number is always allowed, anything else is refused with `CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED`. Setting `QVALIA_API_KEY` or `QVALIA_PARTNER_REG_NO` switches Peppol out of connector mode onto your own access-point account. Brokered Peppol registers your companies under Arcim's access point, so the `peppol` scope is issued on request.
 
 **Bank payments** (Betala via banken: paying supplier invoices from the company's bank account with BankID) run only through the connector, for hosted and self-hosted alike: the payment initiation provider's credentials and client certificate live in Connect and nowhere else, so there is no own-credentials form. Your key needs the `payments` scope; every company the key entitles to bank sync sees the feature. `OPENPAYMENTS_COMPANY_IDS` narrows it to a pilot (comma-separated company ids: only those) or opens it to everyone (`*`). Each paying company also completes the provider's company verification once (a BankID-signed form reached from Inställningar, Betalningar) before its first payment. A self-hosted key's `payments` scope comes with a monthly payment cap and the list of companies it may pay as, both set by Accounted when the key is issued and enforced by the connector service (a payment over the cap or for another company is refused before it reaches the bank); the instance's own monthly allowance applies on top. Bankgiro lookups (the payee name and OCR check) are not offered through a self-hosted key.
 
 **Reminders, debt collection and invoice delivery** run through a provider a company activates itself, and the provider integration lives only in the connector service: there is no own-credentials form. Two optional key scopes carry it, `collections` (reminders, collection cases, the provider's payouts) and `delivery` (sending an invoice by post, digital mailbox or e-invoice). They are not issued to self-hosted keys yet; until they are, the feature stays hidden on a self-host. Installation flags (`COLLECTIONS_ENABLED`, `COLLECTIONS_PILOT_COMPANIES`, see `.env.example`) only ever stop new work: duties toward a case already handed over keep running.
 
-With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show the connector upsell instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed.
+With this release the self-host image also ships the `enable-banking` and `skatteverket` extensions in its preset: without a key (or own credentials) they show a connector-key note instead of being absent, and `GET /api/connector/status` shows the operator how each upstream would be routed.
 
 #### Own credentials (no connector key)
 
@@ -736,7 +731,7 @@ portable base file alone.
 
 ### Notes
 
-- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migration succeeds (unlike on the Supabase free tier, see the standard self-hosting flow above).
+- **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migrations succeed.
 - **MFA**: as on the standard path, `NEXT_PUBLIC_SELF_HOSTED=true` disables enforcement; users may still enable TOTP voluntarily.
 
 ## Troubleshooting
@@ -754,7 +749,7 @@ Check the Supabase dashboard under **Authentication > Users** to verify the sign
 Ensure `https://your-domain.com/auth/callback` is in the Supabase **Redirect URLs** allowlist and that **Site URL** matches your `NEXT_PUBLIC_APP_URL`.
 
 **`pg_cron` migration fails:**
-`pg_cron` requires a paid Supabase plan. On the free tier, you can safely comment out migration 048 or let it fail: the overdue supplier invoice check is non-critical and can be triggered manually.
+`pg_cron` must be enabled before the migrations run. Skipping `20260303145744_supplier_invoice_overdue_cron` also breaks `20260722150000_harden_invoice_delivery_history`, which schedules the daily redaction of invoice-delivery personal data, so do not comment either one out.
 
 **SIE import answers that it is switched off or paused:**
 SIE import needs no configuration on a self-hosted install: the app runs the import and the cron sidecar's every-minute job (`/api/import/sie/worker/cron`) picks up one that was interrupted. It is refused only when `.env` holds `SIE_IMPORT_JOBS=false`; remove the line (or set it to `true`) and restart the app. An image from before this default existed refuses with "Nya SIE-importer är tillfälligt pausade" until `SIE_IMPORT_JOBS=true` is set, as does an install running with `NEXT_PUBLIC_SELF_HOSTED=false`.

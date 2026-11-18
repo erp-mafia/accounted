@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/select'
 
 /**
- * The Fönster settings language (founder-approved concept 2026-07-25,
+ * The Fönster settings language (approved concept 2026-07-25,
  * full-page grid 2026-09-24): flat hairline rows with the label on the left
  * and every control in ONE fixed-width column on the right, so fields,
  * selects and read-only values start on the same line and buttons and

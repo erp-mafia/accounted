@@ -1,1 +1,0 @@
-[2026-10-23] crm#1032 Shopify orders shipped abroad book through per-store country rules (country + VAT rate to sales and VAT account; OSS preset 3106/2670, export 3105) in the one line builder; bulk refuses a foreign order no rule covers; no VOEC VAT default until the accountant confirms.

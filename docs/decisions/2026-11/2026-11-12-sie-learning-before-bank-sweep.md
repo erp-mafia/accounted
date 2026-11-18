@@ -1,1 +1,0 @@
-[2026-11-12] After a completed SIE import the learning runs before the bank sweep and is skipped only past the worker's grace: nothing can rerun it (the file's vouchers are gone), while the cron reruns a skipped sweep within a minute. Proposed: skip both under 30 s.

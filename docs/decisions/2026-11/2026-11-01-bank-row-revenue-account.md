@@ -1,1 +1,0 @@
-[2026-11-01] A bank row's sale takes its revenue account from getRevenueAccount like an invoice: income_products books the goods accounts 3105 and 3108, and an exempt sale the form's own account. income_other stays on 3999.

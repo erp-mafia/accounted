@@ -14,8 +14,8 @@ describe('isMirrorCardAccount', () => {
   })
 
   it('never flags an account that has its own IBAN or BBAN, whatever its name', () => {
-    expect(isMirrorCardAccount({ name: 'BOKIO_Debit_Business', iban: 'SE5796600000096603145318' })).toBe(false)
-    expect(isMirrorCardAccount({ name: 'BOKIO_Debit_Business', bban: '96603145318' })).toBe(false)
+    expect(isMirrorCardAccount({ name: 'BOKIO_Debit_Business', iban: 'SE4550000000058398257466' })).toBe(false)
+    expect(isMirrorCardAccount({ name: 'BOKIO_Debit_Business', bban: '58398257466' })).toBe(false)
   })
 
   it('never flags an unknown account without identifiers', () => {

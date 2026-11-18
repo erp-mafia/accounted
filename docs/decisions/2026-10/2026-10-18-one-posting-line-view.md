@@ -1,1 +1,0 @@
-[2026-10-18] Every read-only posting preview renders VoucherLinesTable, fed by voucherLineView (lib/bookkeeping/voucher-line-view.ts), the one mapping from any line shape to a displayed row: surfaces had drawn five bespoke tables and mapped lines by hand ten times, so the same verifikat looked different per screen.

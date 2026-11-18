@@ -328,12 +328,12 @@ describe('gnubok_get_agent_briefing tool', () => {
     const supabase = mockSupabase({
       profile: null,
       company: { name: 'Piteå kyl & hushåll', org_number: '556677-8899', entity_type: 'aktiebolag' },
-      settingsCompanyName: 'StarkAiVision',
+      settingsCompanyName: 'Exempelbolaget',
     })
     const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
       company: { name: string | null }
     }
-    expect(result.company.name).toBe('StarkAiVision')
+    expect(result.company.name).toBe('Exempelbolaget')
   })
 
   it('always returns the company id even when the company/settings rows are missing', async () => {

@@ -1441,7 +1441,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'voucher_gap_explanations', file: 'voucher_gap_explanations.json', orderBy: 'created_at' },
   // Inline rättelse trail (BFL 5 kap 5 § / 9 §): holds the struck original
   // lines and the old description/date, i.e. the preserved side of every
-  // in-verifikat rättelse — räkenskapsinformation, not an operation log.
+  // in-verifikat rättelse - räkenskapsinformation, not an operation log.
   { name: 'journal_entry_rattelse_log', file: 'journal_entry_rattelse_log.json', orderBy: 'created_at' },
   // Posting port (src/lib/posting): what each posting meant in business
   // terms, the rule version that produced its lines, and which verifikat it

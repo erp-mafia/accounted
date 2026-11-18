@@ -1,1 +1,0 @@
-[2026-11-08] gnubok_create_voucher with a fiscal_period_id of a year closed with a bokslut answers TARGET_PERIOD_CLOSED (never unlock: reopen or correct in the open year), a locked one PERIOD_LOCKED; the old sentence told the user to unlock a closed year (founder decision, J18).

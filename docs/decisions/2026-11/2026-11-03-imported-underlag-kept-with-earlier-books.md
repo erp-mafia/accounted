@@ -1,1 +1,0 @@
-[2026-11-03] crm#1582: an SIE-imported verifikat stays on Verifikat utan underlag until the user confirms where its underlag is; Kvittojakten never mail-searches it and the agent may waive it. Not exempted by default: 247 companies attach underlag to imported verifikat.

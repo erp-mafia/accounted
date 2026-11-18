@@ -1,1 +1,0 @@
-[2026-10-26] Enable Banking switch dates (Emil): trials on Open Payments now, campaign and mails on Mon 2 Nov with OPENPAYMENTS_SWITCH_DEADLINE=2026-11-16, Enable Banking stops 17 Nov: two weeks so every 14/7/3/1-day reminder runs; late switchers lose no history within about 90 days.

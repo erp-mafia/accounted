@@ -1,5 +1,5 @@
 /**
- * GET /purchases — the purchases the page could never show.
+ * GET /purchases - the purchases the page could never show.
  *
  * The list has always been documents, so a purchase with no document at all
  * could not appear on it. This route supplies that half, and attaches the

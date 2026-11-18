@@ -21,17 +21,17 @@ beforeEach(() => {
 
 describe('GET /api/bank/return', () => {
   it('forwards to a trusted brand host with the bank\'s parameters', async () => {
-    trusted.resolve.mockResolvedValue('https://app.ziffr.se')
-    const response = await call('https://app.ziffr.se/settings/connections?bank_connect=c1', { state: 'c1', result: 'ok' })
+    trusted.resolve.mockResolvedValue('https://app.testbrand.example')
+    const response = await call('https://app.testbrand.example/settings/connections?bank_connect=c1', { state: 'c1', result: 'ok' })
     expect(response.status).toBe(303)
     const location = new URL(response.headers.get('location')!)
-    expect(location.origin).toBe('https://app.ziffr.se')
+    expect(location.origin).toBe('https://app.testbrand.example')
     expect(location.pathname).toBe('/settings/connections')
     expect(location.searchParams.get('bank_connect')).toBe('c1')
     expect(location.searchParams.get('state')).toBe('c1')
     expect(location.searchParams.get('result')).toBe('ok')
     expect(location.searchParams.has('to')).toBe(false)
-    expect(trusted.resolve).toHaveBeenCalledWith('app.ziffr.se', { onLookupFailure: 'canonical' })
+    expect(trusted.resolve).toHaveBeenCalledWith('app.testbrand.example', { onLookupFailure: 'canonical' })
   })
 
   it('forwards a payment signing return with the bank\'s error code', async () => {
@@ -49,8 +49,8 @@ describe('GET /api/bank/return', () => {
   })
 
   it('never forwards to a page that is not a signing page', async () => {
-    trusted.resolve.mockResolvedValue('https://app.ziffr.se')
-    const response = await call('https://app.ziffr.se/login?next=/x')
+    trusted.resolve.mockResolvedValue('https://app.testbrand.example')
+    const response = await call('https://app.testbrand.example/login?next=/x')
     expect(response.headers.get('location')).toBe('https://app.accounted.se/')
   })
 

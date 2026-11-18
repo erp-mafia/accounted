@@ -1,1 +1,0 @@
-[2026-10-16] Suggestions are staged with actor_type system (label Accounted), added to the pending_operations CHECK from the live list, rather than reusing cron: nobody asked for them, and the approval card says so.

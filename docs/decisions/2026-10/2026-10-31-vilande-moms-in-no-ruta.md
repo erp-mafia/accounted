@@ -1,1 +1,0 @@
-[2026-10-31] Vilande moms (2618/2628/2638/2648) feeds no ruta, superseding 2026-08-13: per BAS it is declared when moved to 2611/2621/2631/2641, and with both accounts in one ruta the move netted to zero, so the moms reached no declaration (crm#1562). Prod never posted a legacy cut-off.

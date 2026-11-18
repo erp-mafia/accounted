@@ -4,7 +4,7 @@
  * The migration imports the GL via SIE and the entity registers via the
  * provider API, but the receipts/underlag attached to each verifikat are not
  * carried by either. This step closes that gap for Bokio and Fortnox: it
- * resolves each receipt's target gnubok verifikat from the SIE-preserved
+ * resolves each receipt's target Accounted verifikat from the SIE-preserved
  * provider voucher number, and stores it through the document service
  * (storage + document_attachments), linked to the journal entry.
  *
@@ -243,7 +243,7 @@ export interface ImportDocumentsResult {
    * another path (left untouched).
    */
   skipped: number
-  /** Attachments whose provider voucher resolved to no gnubok verifikat. */
+  /** Attachments whose provider voucher resolved to no Accounted verifikat. */
   unmatched: number
   /** Receipts that failed to download/validate/store (counted, not thrown). */
   failed: number
@@ -932,7 +932,7 @@ export async function importProviderDocuments(
   const firstAfterCursor = startCursor ? attachments.findIndex((a) => a.id > startCursor) : 0
   const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
-  // Index gnubok verifikat by (period, series, number) for in-memory
+  // Index Accounted verifikat by (period, series, number) for in-memory
   // resolution, the live copies apart from the reversed ones (isLiveCopy).
   const voucherCopies = buildCopyIndexes(vouchers)
   const entryDateById = new Map(vouchers.map((v) => [v.id, v.entry_date]))

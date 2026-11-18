@@ -6,7 +6,7 @@ import type {
 } from '../types'
 
 // Fixtures inlined verbatim from Skatteverket's official Skattekonto v2.1.0
-// API examples (dev_docs/skattekonto(2.1.0)/examples/*.json). The dev_docs
+// API examples. The local docs
 // directory is gitignored, so the fixtures must live alongside the test.
 const saldoResponseExample = {
   nastaAvstamningsdatum: '2019-06-01',

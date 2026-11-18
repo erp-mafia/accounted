@@ -1,1 +1,0 @@
-[2026-10-26] Import: customers, suppliers and invoices are imported only by the background job, onboarding included; /migrate keeps company info and assets and refuses registers. Its 90-second detail pass saved large Fortnox registers from the short list (crm#1436).

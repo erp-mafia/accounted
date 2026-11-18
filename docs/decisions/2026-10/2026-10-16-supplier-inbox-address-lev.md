@@ -1,1 +1,0 @@
-[2026-10-16] Leverantörsfakturor shows the +lev inbox address, read through the invoice-inbox route by URL instead of a new core route: that route already gates extension, plan, domain and inbox, so one gate and no new endpoint; +lev tags mail as a supplier invoice.

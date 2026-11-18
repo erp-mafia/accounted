@@ -18,8 +18,7 @@
  * document's VAT, so every reader (the registration verifikat, the header,
  * credit notes, the reskontra) agrees without being taught anything.
  *
- * Invoices we issue ourselves keep the per-line rule (computeLineVat,
- * docs/decisions/2026-10/2026-10-21-one-invoice-line-vat-rule.md).
+ * Invoices we issue ourselves keep the per-line rule (computeLineVat).
  *
  * Every VAT figure comes from netVat, the one VAT-on-net rule, and the spread
  * ranks lines in integers (öre times basis points): 12 % and 6 % have no exact

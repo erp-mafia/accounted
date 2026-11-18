@@ -12,7 +12,7 @@ import { getBranding } from '@/lib/branding/service'
  * about to elapse) and the health probe cron (session found dead).
  * Guards with last_expiry_notification_at to avoid spamming (2-day cooldown).
  *
- * Paused by default (founder call 2026-07-29, after the probe backlog drain
+ * Paused by default (product call 2026-07-29, after the probe backlog drain
  * mass-emailed 24 users at once): the settings panel and attention surfaces
  * already flag a dead connection in-app. Set BANK_CONSENT_EXPIRY_EMAILS=true
  * to resume sending; the status transitions below run either way.

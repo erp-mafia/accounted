@@ -24,7 +24,7 @@ import { changeAccountingFramework } from '@/lib/company/accounting-framework-ch
  * authoritative value in user_preferences.
  *
  * Uses requireAuth() directly (not withRouteContext): a null companyId is a
- * valid answer here — the wrapper would short-circuit it into an error.
+ * valid answer here - the wrapper would short-circuit it into an error.
  */
 export async function GET() {
   const auth = await requireAuth()

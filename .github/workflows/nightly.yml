@@ -1,7 +1,7 @@
 name: Nightly
 
-# The two long runs that gate nothing: the sim-company and perf-reports jobs
-# of .gitlab-ci.yml. Both run on a schedule and by hand (Run workflow); the
+# The two long runs that gate nothing: the simulated company and the report
+# benchmark. Both run on a schedule and by hand (Run workflow); the
 # simulated company also runs on a pull request that changes the company
 # itself. Scheduled runs use the workflow on main.
 #

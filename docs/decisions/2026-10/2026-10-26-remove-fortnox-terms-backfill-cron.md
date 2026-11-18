@@ -1,1 +1,0 @@
-[2026-10-26] Removed the crm#1245 terms backfill cron and its code once every company had an outcome; kept fortnox_terms_backfill_progress as the only record of which cards it changed, since customers and suppliers have no audit trigger.

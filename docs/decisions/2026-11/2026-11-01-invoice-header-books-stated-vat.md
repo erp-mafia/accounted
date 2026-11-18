@@ -1,1 +1,0 @@
-[2026-11-01] An invoice booked from its header books the VAT it states, never subtotal x rate as proposed: stated VAT can be per-line roundings or several rates and 1510 takes the stated total, so a recomputed line can miss it. generateSalesVatLines lost its last caller and went.

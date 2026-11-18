@@ -139,7 +139,7 @@ describe('POST /api/billing/payment-packs', () => {
     expect(subscriptionsRetrieve).not.toHaveBeenCalled()
   })
 
-  it('refuses with 409 PAYMENT_PACKS_NOT_OFFERED while no pack price is set (self-host, or before the founder creates it)', async () => {
+  it('refuses with 409 PAYMENT_PACKS_NOT_OFFERED while no pack price is set (self-host, or before the operator creates it)', async () => {
     vi.stubEnv('STRIPE_PRICE_PAYMENTS_PACK', '')
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post({ packs: 1 }))
     expect(status).toBe(409)

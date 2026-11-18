@@ -1,1 +1,0 @@
-[2026-10-16] Sites without the company row resolve roles with PINNED_JURISDICTION, an explicit { jurisdiction: 'SE' } matching the companies CHECK: one searchable marker per site a later slice threads the company to, instead of a hidden default inside the resolver.

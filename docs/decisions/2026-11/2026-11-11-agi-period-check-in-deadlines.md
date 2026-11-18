@@ -1,1 +1,0 @@
-[2026-11-11] The AGI period check (the other live runs of a payout month, its refusal details, the reporting period) lives in the deadlines block, not payroll: payments must read it, payments importing payroll would close a cycle, and deadlines sits below both (crm#1768).

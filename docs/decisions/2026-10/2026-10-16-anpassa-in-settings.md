@@ -1,1 +1,0 @@
-[2026-10-16] Anpassa is a settings section under Företag, not a main menu row: a new menu row would change every existing company's menu. Its switches stage enable_package or disable_package and approve through /api/pending-operations/:id/commit.

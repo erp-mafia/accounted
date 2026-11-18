@@ -28,7 +28,7 @@ export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_not
 /**
  * A queue item stays in Underlag, whatever Arkiv typed its document, when the inbox reader saw a bill in it:
  * a receipt or supplier invoice, or an amount on a government letter or on a document Arkiv could only call
- * "other". Where the two readers disagree, a person decides, and a person only sees Underlag. Prod 2026-09-25:
+ * "other". Where the two readers disagree, a person decides, and a person only sees Underlag. Seen 2026-09-25:
  * congestion-tax bills typed as Skatteverket decisions, credit notes typed "other" and supplier invoices typed
  * as customer invoices left the queue for a section their companies could not open. The company's own sales
  * invoice stays too (crm#1830): Underlag is where it is linked to the payment it brought in, or dropped.
@@ -85,8 +85,8 @@ export function personsAnswer(
 
 /**
  * Only a document classified within a day of arriving is put in the queue as new work. The Arkiv backfill
- * types documents uploaded long before, and queueing those handed 30 companies 152 to-dos nobody asked for
- * overnight (prod 2026-09-25, 85 of them one company's upload from eight days earlier). An old document
+ * types documents uploaded long before, and queueing those handed companies to-dos nobody asked for
+ * overnight (seen 2026-09-25, 85 of them one company's upload from eight days earlier). An old document
  * a person wants booked is booked from Arkiv, not pushed into their queue by a background job.
  */
 export const QUEUE_NEW_WITHIN_MS = 24 * 60 * 60 * 1000

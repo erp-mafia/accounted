@@ -1,1 +1,0 @@
-[2026-11-01] A draft's Peppol XML downloads only as a marked preview (placeholder number UTKAST-00000, OCR from it, preview file name) that staging refuses on the flag and on the XML marker: finalize assigns the real number, so the preview can never be sent (accounted#44).

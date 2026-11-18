@@ -5,7 +5,7 @@
  * a receipt the way a person uploads one: through the invoice-inbox
  * extension's shared pipeline (content dedupe, extraction, Arkiv), among
  * the Inkorg's open items for a person or a granted agent to book. Nothing is booked
- * on arrival (founder decision 2026-10-15: every door goes through the
+ * on arrival (product decision 2026-10-15: every door goes through the
  * Inkorg; booking without a person comes back later as a grant).
  *
  * Core cannot import @/extensions (CI guard), so the v1 route reaches the

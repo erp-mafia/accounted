@@ -1,5 +1,5 @@
 /**
- * The Bolaget pages as one place (founder decision 2026-10-30). Since the
+ * The Bolaget pages as one place (product decision 2026-10-30). Since the
  * V7 shell (2026-11-15) each page is a row in the Företaget sidebar
  * (components/dashboard/nav-v3.ts) instead of a tab in a shared bar; the
  * list below stays the one definition of which page needs which half, and

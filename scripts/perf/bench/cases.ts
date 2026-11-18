@@ -644,7 +644,7 @@ export function buildCases(ctx: BenchContext): RpcCase[] {
         p_company_id: co, p_period_id: open.id, p_from: `${open.start}T00:00:00.000Z`,
         p_to: `${open.end}T23:59:59.999Z`, p_fiscal_year: true,
       },
-      usedBy: 'behandlingshistorik, the whole year (one choice away; a separate project per !822)',
+      usedBy: 'behandlingshistorik, the whole year (one choice away; a separate project)',
       heavy: true,
     },
 

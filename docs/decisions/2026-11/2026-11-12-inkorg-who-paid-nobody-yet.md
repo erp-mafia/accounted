@@ -1,1 +1,0 @@
-[2026-11-12] Inkorg "Vem betalade?" answers "nobody yet" with the invoice form (third answer unless read as a receipt, there a quiet link), and a supplier invoice gets a quiet "Ändra kontering"; per-row account proposals not built: the category proposal is per document (crm#1799).

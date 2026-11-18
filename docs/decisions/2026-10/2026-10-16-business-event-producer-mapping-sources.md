@@ -1,1 +1,0 @@
-[2026-10-16] mapping_version names four producer rule sources (se.expense-claim, se.mileage-allowance, se.pos-daily-takings, se.webshop-order-lines) at the build; utlägg booked on a person's own lines record none, as no automatic kontering made them.

@@ -1,1 +1,0 @@
-[2026-11-14] Amends 2026-10-21, 2026-11-07 and 2026-11-12 (to_pay stays status based, a founder decision): to pay is one population (lib/supplier-invoices/to-pay.ts) for Att betala, Att göra, byrå Redo att betala and to_pay; unattested counts unless the policy holds it (founder go 2026-11-14).

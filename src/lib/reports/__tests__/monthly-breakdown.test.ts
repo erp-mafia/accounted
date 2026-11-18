@@ -228,8 +228,8 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
   it("leaves out the period's 'exclude-all-year-end' set, read from year_end_chain_entry_ids", async () => {
     // Regression: the resultatavslut posts the mirror image of every P&L
     // account, so the fiscal-year-end month reported the whole year's revenue
-    // as negative income. Measured on production as 28 companies affected,
-    // worst case a month understated by 10 347 472 kr. The set holds the
+    // as negative income. Measured in real ledgers,
+    // worst case a month understated by millions. The set holds the
     // year_end entries, the storno chain of an undone bokslut and a
     // resultatavslut booked in a previous system or by hand (20261024140100).
     const filters: Array<{ method: string; args: unknown[] }> = []

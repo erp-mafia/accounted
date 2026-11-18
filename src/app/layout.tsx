@@ -57,7 +57,7 @@ void RootErrorBoundary;
 // uniformly. The layout used to carry a private copy of the function, which
 // silently skipped that override.
 
-// Stil v3 (founder decision 2026-10-29): Inter is the one face for text,
+// Stil v3 (product decision 2026-10-29): Inter is the one face for text,
 // Geist Mono stays for account numbers and code, Hedvig for headline numbers.
 const inter = Inter({
   variable: "--font-inter",
@@ -184,7 +184,7 @@ export default async function RootLayout({
   // already reads headers() above.
   const nonce = (await headers()).get(CSP_NONCE_HEADER) ?? undefined;
 
-  // Brand COLOR theming deliberately removed (founder call 2026-08-04):
+  // Brand COLOR theming deliberately removed (product call 2026-08-04):
   // white-label is logo + app name + domain only; every host renders the
   // standard editorial-monochrome theme. buildBrandVarsCss and the
   // brands.brand_color/chrome_color columns stay dormant for a future

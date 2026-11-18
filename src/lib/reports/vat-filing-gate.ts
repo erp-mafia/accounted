@@ -169,7 +169,7 @@ export interface RcGapDowngradeEvidence {
  * both the per-voucher scan and the aggregate basis/moms identity once, say, a
  * refund's basis reduction sits in reversed history. Blocking on that made the
  * red state unfixable: every correction the user (or support) booked joined
- * the blocklist it was meant to clear. (First hit in production 2026-08:
+ * the blocklist it was meant to clear. (First hit in seen 2026-08:
  * a 323 kr refund correction chain left a company permanently blocked.)
  *
  * So when the basis booked at each momssats matches the fiktiv moms declared
@@ -185,7 +185,7 @@ export interface RcGapDowngradeEvidence {
  * basis was added by one collective rättelseverifikat with no link to them. Neither carries a
  * link the scan could follow (no correction_of_id, no rättelse log row on the
  * correcting side), so the downgrade stays on the per-rate identity, the only
- * evidence that speaks to the rutor (DECISIONS.md 2026-10-15).
+ * evidence that speaks to the rutor.
  *
  * It stays a WARNING rather than going silent because the identity cannot
  * tell a basis that belongs to these purchases from two offsetting mistakes

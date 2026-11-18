@@ -1,7 +1,7 @@
 /**
  * Billo: the Partner and Mailbox APIs (creating a company's Billo business
  * mailbox and reading it) and the Sender API with SendEasy (sending as the
- * company). Reference: docs/integrations/billo.md. Partner and Mailbox are
+ * company). Reference: Billo's API documentation. Partner and Mailbox are
  * marked Draft by Billo.
  *
  * Two credentials:
@@ -532,7 +532,7 @@ export class BilloSenderClient implements MailboxSender {
    * Through SendEasy: a Billo user gets it in the mailbox, anyone else a
    * BankID or Freja protected link by email or SMS, so every employee is
    * reached. SendEasy takes the same sender token (its spec names no auth;
-   * the sandbox accepts the token, docs/integrations/billo.md).
+   * the sandbox accepts the token).
    */
   async sendPayslip(tenantRef: string, personnummer: string, payslip: OutgoingPayslip) {
     const res = await this.post(

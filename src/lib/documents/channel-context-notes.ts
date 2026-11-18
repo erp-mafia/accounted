@@ -19,8 +19,8 @@
  * posted (see ChannelContextNotesOptions.includeCaption).
  *
  * Core lib: must not import from @/extensions. Deliberately Swedish-only
- * output: the verifikat description is a regulatory surface (see
- * .claude/rules/i18n.md), not UI chrome.
+ * output: the verifikat description is a regulatory surface,
+ * not UI chrome.
  */
 import type { InboxChannelContext } from '@/types'
 

@@ -1,1 +1,0 @@
-[2026-11-10] A revoke of a removed connection's consent that the provider refuses as over (410) or unknown (404) counts as already ended, claim succeeded and id cleared, on the connect path and the daily retry: nothing live is left to hold the place or be billed (#97).

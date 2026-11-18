@@ -21,7 +21,7 @@ describe('agent_atom_registry.pg: seed + RLS', () => {
     // The generated seed migration (…_seed_agent_atom_bodies.sql) runs during replay.
     expect(rows.length).toBeGreaterThan(0)
     // Every active atom has a real body inlined: the production read path depends
-    // on this (no disk fallback in prod).
+    // on this (no disk fallback in production).
     for (const r of rows) {
       expect(r.body, `atom ${r.id} body should be non-empty`).toBeTruthy()
       expect(r.mcp_exposed).toBe(true)

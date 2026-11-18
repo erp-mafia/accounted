@@ -1,1 +1,0 @@
-[2026-11-07] Reversing a manual periodisering's origin verifikat cancels the plan and stornoes the months it posted (a journal_entry.reversed consumer), as an invoice credit does for its plans; a storno with rättelse keeps the plan, and the posting run books nothing for an origin gone.

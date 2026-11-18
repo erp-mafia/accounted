@@ -264,8 +264,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ambiguous: recon.ambiguous,
           unmatched: recon.unmatched,
         }
-        console.log(
-          `[migration] Reconcile: ${recon.autoLinked} auto-linked, ${recon.ambiguous} need review, ${recon.unmatched} unmatched (${recon.scanned} scanned)`,
+        log.info(
+          `Reconcile: ${recon.autoLinked} auto-linked, ${recon.ambiguous} need review, ${recon.unmatched} unmatched (${recon.scanned} scanned)`,
         )
       } catch (err) {
         console.error('Failed to reconcile supplier invoice payments:', err)
@@ -278,7 +278,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.suggestParties !== false) {
       try {
         const summary = await suggestPartiesForCompany(supabase, companyId, userId)
-        console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+        log.info(`party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
       } catch (err) {
         console.error('Failed to suggest parties after migration:', err)
       }

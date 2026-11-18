@@ -1,1 +1,0 @@
-[2026-10-28] A plain click on the nav link of the page already showing refreshes it from the server instead of a cached no-op, and agent proposals lead Att göra's Granska rows; no Hem block was hidden, since every block renders only when actionable.

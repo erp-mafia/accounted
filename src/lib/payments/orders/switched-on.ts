@@ -16,7 +16,7 @@
  *
  * OPENPAYMENTS_COMPANY_IDS is the pilot switch. Unset or empty (the normal
  * state): every company on a paid plan. A comma-separated list of company ids:
- * ONLY those companies, whatever their plan, so a founder can try the feature
+ * ONLY those companies, whatever their plan, so an operator can try the feature
  * with one company before opening it. `*`: every company, plan or not
  * (development, self-host). Read on every call so a redeploy with a new value
  * needs no restart of anything else.

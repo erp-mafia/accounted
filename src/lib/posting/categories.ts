@@ -15,8 +15,8 @@ import type { TransactionCategory } from '@/types'
  * share one key. Sweden-only keys carry the se. prefix.
  *
  * Governance: keys are only added, never renamed or removed (events are kept
- * seven years, BFL 7 kap.), each new key with a decision record
- * (docs/decisions). The database checks the shape only
+ * seven years, BFL 7 kap.), each new key with its reason in the pull
+ * request. The database checks the shape only
  * (business_events_category_check), so adding one needs no migration.
  *
  * A key has children: the inbox's purchase categories

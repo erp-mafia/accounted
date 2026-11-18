@@ -380,7 +380,7 @@ describe('bookedOnAccount', () => {
 })
 
 describe('focusDecision: an invoice its receipt says is paid', () => {
-  // The X subscription (prod, company Arcim): invoice and receipt in one mail.
+  // The X subscription (a real case): invoice and receipt in one mail.
   const invoice = makeItem({
     id: 'invoice',
     extracted_data: reading({

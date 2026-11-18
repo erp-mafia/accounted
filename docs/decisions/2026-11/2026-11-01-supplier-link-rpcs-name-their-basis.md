@@ -1,1 +1,0 @@
-[2026-11-01] link_supplier_invoice_to_voucher and attach_supplier_invoice_settlement_voucher take p_link_basis, replacing 2026-10-16's stay unstamped and no new parameter for these two: a call now tells a person from a rule or an import, so the basis is named, never guessed.

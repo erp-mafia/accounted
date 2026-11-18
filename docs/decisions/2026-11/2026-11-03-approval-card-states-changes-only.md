@@ -1,1 +1,0 @@
-[2026-11-03] An approval staged as its resulting record (settings, supplier) shows only its changes, and the settings payment clause only when an invoice payment account field changes; display toggles are not payment details: the record is the agent's dry run, not what is approved (crm#1605).

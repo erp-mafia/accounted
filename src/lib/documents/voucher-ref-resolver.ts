@@ -1,5 +1,5 @@
 /**
- * Resolve a SOURCE-system voucher reference to the gnubok verifikat it became.
+ * Resolve a SOURCE-system voucher reference to the Accounted verifikat it became.
  *
  * The SIE importer renumbers vouchers per target series (so source `A31` may
  * land as `A47` here), but it preserves the source identity on every entry:

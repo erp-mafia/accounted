@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { repairIndividualOrgNumbers } from '@/lib/customers/org-number-repair'
 
-// One-off, on the founders' go (2026-10-28): the personnummer repair of
+// One-off, on the operators' go (2026-10-28): the personnummer repair of
 // scripts/repair-customer-personal-number-in-org-number.ts needs the
 // production key, which only the deployed app holds. Remove this route and
 // its vercel.json entry once a run finds nothing left to write.

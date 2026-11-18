@@ -1,1 +1,0 @@
-[2026-11-02] The Stripe portal offers only the prices checkout sells, quantity fixed at 1, and a company on a pre-raise price that switches plan there moves to today's price: the Dashboard-kept default list still sold 1 999 a year after the 2026-10-22 raise.

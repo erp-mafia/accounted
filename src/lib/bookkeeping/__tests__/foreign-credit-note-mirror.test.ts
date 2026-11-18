@@ -10,7 +10,7 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
  * A full credit note of a foreign invoice cancels it to the öre on every
  * account. Its rows are the original's negated, so minus an amount must
  * convert to minus its SEK. roundOre takes a negative exact half toward zero
- * (a pinned founder decision about credit notes in kronor), which at a foreign
+ * (a pinned product decision about credit notes in kronor), which at a foreign
  * rate put the credit one öre beside the invoice: 56650 EUR at 11.1465, a
  * production row, left 0.01 on 1510 and on revenue.
  */

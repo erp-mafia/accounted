@@ -1,1 +1,0 @@
-[2026-10-26] A verifikat that moves equity against accounts that do not say what it is (a correction or a retroactive change booked to balanserat resultat) is shown as Övriga förändringar with a warning naming it, never guessed as utdelning or nyemission; the user classifies it.

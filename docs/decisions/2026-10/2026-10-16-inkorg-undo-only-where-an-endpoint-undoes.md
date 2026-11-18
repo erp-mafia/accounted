@@ -1,1 +1,0 @@
-[2026-10-16] Inkorg offers Ångra only after a match and its release (match-transaction and unmatch-transaction undo each other exactly); booking, a supplier invoice and an utlägg confirm in their own dialogs, and dropping an item confirms because the DELETE cannot be undone.

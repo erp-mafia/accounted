@@ -444,7 +444,7 @@ export const OMBUD_PROOF_WINDOW_DAYS = 30
 /**
  * Whether a register grant counts for a company's claim.
  *
- * Org-number proof (founder decisions 2026-10-02 and 2026-11-13): org numbers
+ * Org-number proof (product decisions 2026-10-02 and 2026-11-13): org numbers
  * are public and any tenant can type one, so a grant signed BEFORE the tenant
  * opted in may have been given for someone else's use of the number (a
  * former customer who left without withdrawing it) and is not inherited on

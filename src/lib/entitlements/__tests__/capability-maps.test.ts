@@ -101,7 +101,7 @@ describe('CONNECTOR_CAPABILITIES', () => {
 })
 
 describe('PAID_PLAN_ONLY_CAPABILITIES and TRIAL_CAPABILITIES', () => {
-  it('puts collections in the trial like every other paid key (founder decision 2026-10-22)', async () => {
+  it('puts collections in the trial like every other paid key (product decision 2026-10-22)', async () => {
     const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
     expect(PAID_PLAN_ONLY_CAPABILITIES).toEqual([])
     expect(PAID_CAPABILITIES).toContain('collections')

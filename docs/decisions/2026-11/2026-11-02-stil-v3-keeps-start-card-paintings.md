@@ -1,1 +1,0 @@
-[2026-11-02] Stil v3 keeps the painted start cards on the six first-time states (Bokföring, Kundfakturor, Löner, Skattekonto, Transaktioner, Underlag), brought to v3 type, buttons and radius: the founder missed the art in the text-only states; ongoing empty, done and error states stay plain.

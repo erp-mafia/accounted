@@ -273,7 +273,7 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(roll!.payload.last_run_warning).toContain('2026-08-05')
   })
 
-  it('the stale roll writes only while the schedule\'s last run is the one it read (review of !1529)', async () => {
+  it('the stale roll writes only while the schedule\'s last run is the one it read', async () => {
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, last_run_at: '2026-06-05T06:30:00.000Z' })], error: null })
     enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed

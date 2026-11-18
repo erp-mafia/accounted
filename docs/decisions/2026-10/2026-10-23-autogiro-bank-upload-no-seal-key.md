@@ -1,1 +1,0 @@
-[2026-10-23] Autogiro v1 stores no seal key and never sends to Bankgirot itself: the company uploads our files in its own bank, whose file transfer signs them (Nordea: förändringsskydd genom elektronisk signatur, ingen sigillnyckelhantering); the HMAC seal code from the file-format MR stays for a later direct channel.

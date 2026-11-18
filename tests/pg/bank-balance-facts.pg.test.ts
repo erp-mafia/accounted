@@ -181,7 +181,7 @@ describe('get_bank_balance_facts', () => {
   it('reads the open rows once, not once per bank row', async () => {
     // The function body runs on a generic plan. Joined to open_bank_rows, that
     // plan was a nested loop that ran the whole view again for every bank row
-    // (prod 2026-11-12: 1 071 rows took 1.5 s, 4 657 rows timed out). The rows
+    // (seen 2026-11-12: 1 071 rows took 1.5 s, 4 657 rows timed out). The rows
     // being summed must be scanned on their own, with no join above them.
     const b = await seeded()
     const plans = await nestedPlans(b.userId, `SELECT public.get_bank_balance_facts($1, $2, true, 'SEK', '2026-12-31'::date)`, [b.companyId, b.cash])

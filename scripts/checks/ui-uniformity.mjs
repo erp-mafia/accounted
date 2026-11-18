@@ -1,7 +1,6 @@
 /**
  * ui-uniformity guard: the design-system rules that drifted because nothing
- * checked them (.claude/rules/design.md, "Buttons", "Motion", "Popovers and
- * menus", "Details").
+ * checked them (buttons, motion, popovers and menus, details).
  *
  * A 2026-09-24 scan of main found that the one design rule CI enforced (the
  * radius ladder) had 9 strays, while the unenforced ones had drifted into

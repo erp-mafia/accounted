@@ -16,9 +16,8 @@ import { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS } from './dry-table-classes'
 // bleeds 8px past the gutter (LIST_BLEED_CLASS on the table's wrapper), so
 // the cell text sits on the 24px gutter while the hover tint and hairlines
 // reach past it, and columns stay 16px apart (boards Kundfakturor-v3,
-// Transaktioner-v3). Keep these
-// in sync with .claude/rules/design.md; page-specific tweaks belong at the
-// call site via cn(), not here.
+// Transaktioner-v3). Page-specific tweaks belong at the call site via cn(),
+// not here.
 export { LIST_BLEED_CLASS, TD_CLASS, TH_CLASS }
 export const VTH_CLASS =
   'h-8 pr-4 text-left align-middle text-[12px] font-medium leading-4 text-muted-foreground border-b-hairline'
@@ -39,7 +38,7 @@ export const QUIET_LINK_CLASS =
 export const HOVER_REVEAL_CLASS =
   'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100'
 
-// Row SELECTION checkboxes (Stil v3 polish P2, founder-approved
+// Row SELECTION checkboxes (Stil v3 polish P2, approved
 // 2026-10-31): hidden at rest, shown on row hover, on keyboard focus, on
 // coarse pointers, when checked, and on every row once any row is selected
 // (pass revealed). The column keeps its width, so nothing shifts. The hit

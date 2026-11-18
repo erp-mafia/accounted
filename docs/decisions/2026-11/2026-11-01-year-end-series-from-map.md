@@ -1,1 +1,0 @@
-[2026-11-01] Year-end, bokslut, IB and omföring verifikat take the company's series map instead of a hardcoded A: the map is what the systemdokumentation publishes (I for bokslut by default). Only new vouchers move; posted ones stay (accounted#58).

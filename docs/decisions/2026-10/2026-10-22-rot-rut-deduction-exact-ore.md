@@ -1,1 +1,0 @@
-[2026-10-22] ROT/RUT line deduction is computed as whole öre x basis points, then roundOre, not roundOre on the float product as #90 proposed: kronor x 0.3 still mis-rounded 10-30 % of half-öre ties; the exact product rounds every tie up, as computeLineVat does.

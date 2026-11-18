@@ -68,7 +68,7 @@ export async function shouldShowOtherAccountHint(
     // select on companies returns the same rows and is the expensive form:
     // the RLS qual (id IN user_company_ids()) is a filter on the scan, never
     // an index condition, so Postgres walked every active company to keep the
-    // caller's (prod 2026-11-12: 3 194 rows for 24, 3 329 buffers, on every
+    // caller's (seen 2026-11-12: 3 194 rows for 24, 3 329 buffers, on every
     // Hem render; 60 270 calls since 2026-09-11), and that grows with the
     // number of companies. By user_id it is one index probe of
     // company_members and one companies_pkey lookup per membership.
@@ -104,7 +104,7 @@ export async function shouldShowOtherAccountHint(
     // it. Leaving company_id out and letting RLS do the scoping reads as the
     // cheaper form and is the opposite: under the `authenticated` role the RLS
     // qual becomes a filter on the scan, so Postgres reads all of
-    // journal_entries (~900 ms measured on prod, 4.2 s worst observed) on the
+    // journal_entries (~900 ms measured in production, 4.2 s worst observed) on the
     // blocking Hem render instead of using idx_journal_entries_company_id
     // (~2 ms). Naming the ids cannot change the answer: user_company_ids(),
     // which journal_entries RLS uses, excludes archived companies, and so does

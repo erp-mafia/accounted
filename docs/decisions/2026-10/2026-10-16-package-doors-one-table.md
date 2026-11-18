@@ -1,1 +1,0 @@
-[2026-10-16] Start doors live in one classified table (lib/modules/package-doors.ts) read by withRouteContext, the extension dispatcher, withApiV1, the MCP dispatch and the commit path, not as per-route checks; guard tests prove every write door of a switchable package is classified.

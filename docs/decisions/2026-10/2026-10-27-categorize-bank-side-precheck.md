@@ -1,1 +1,0 @@
-[2026-10-27] O17 BANK_BOOKING_SETTLEMENT_CHANGED from categorize is not a race (all 6 failed drafts on prod put a non-bank account on the bank side), so it is refused before any draft with TRANSACTION_BOOK_BANK_LINE_DIRECTION naming the account and side, instead of a 409 'reload' message and a UI row refresh that could not help.

@@ -1,1 +1,0 @@
-[2026-11-17] Onboarding Tillbaka only goes one step back: the books act's first step and the journey's Klart screen show no Tillbaka. It opened the skip confirm on the first and the app (the next act) on the second, so back read as Hoppa över. Reverses the 2026-10-02 choice (confirm from Tillbaka).

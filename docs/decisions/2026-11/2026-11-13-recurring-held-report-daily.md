@@ -1,1 +1,0 @@
-[2026-11-13] A recurring schedule held for a person is logged as an error once a day for a week, at the UTC hour of its run's claim, not once at its Stockholm send hour the day after: a missed run or a DST day without that hour lost the only report (accounted#211).

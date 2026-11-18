@@ -121,7 +121,7 @@ const pendingYearRow = {
 }
 
 describe('a stale settings month against the recorded räkenskapsår', () => {
-  // Settings say January, the books say July-June: 9 helårsmoms filers on prod.
+  // Settings say January, the books say July-June, as some helårsmoms filers have it.
   const RECORDED = [
     { period_start: '2024-07-01', period_end: '2025-06-30' },
     { period_start: '2025-07-01', period_end: '2026-06-30' },

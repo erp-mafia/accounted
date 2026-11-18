@@ -1,1 +1,0 @@
-[2026-10-16] Match on arrival stores its proposal in new invoice_inbox_items.bank_match_* columns, not matched_transaction_id or suggestion_log: matched_transaction_id is a person's pairing that bulk booking books as is, and suggestion_log is append-only and records a decision already made.

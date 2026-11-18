@@ -354,8 +354,8 @@ function liabilityScenarios(): LiabilityScenario[] {
       sources: [SRC.seml16b, SRC.seml7, SRC.k2_1710],
       note:
         'Was an engine bug: the year close valued a procentregeln day from the CURRENT monthly_salary (15 × 2 419,20 instead of ' +
-        '15 × 2 304,00, 1 728 kr too much). Fixed on feat/salary-vacation-liability-trueup: procentregeln-liability.ts prices owed days ' +
-        'from the earning year\'s booked semesterunderlag, as the payout does (docs/decisions/2026-10/2026-10-27-semesterskuld-procentregeln-earning-year.md).',
+        '15 × 2 304,00, 1 728 kr too much). Fixed: procentregeln-liability.ts prices owed days ' +
+        'from the earning year\'s booked semesterunderlag, as the payout does.',
     })
     const savedDays = 3
     const savedRemaining = 7

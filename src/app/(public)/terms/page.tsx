@@ -10,11 +10,9 @@ export function generateMetadata(): Metadata {
 const link = 'text-primary underline underline-offset-4'
 
 /**
- * Terms, version 2 (published 2026-11-04, written against Fortnox's general
- * terms of 2026-03-03). It binds
+ * Terms, version 2 (published 2026-11-04). It binds
  * the customers who sign up from LEGAL_DOCUMENTS.terms.acceptanceVersion
- * (14.4); no notice e-mail goes out (founder decision 2026-11-02), so
- * customers who signed up earlier stay on the wording dated 2026-10-22,
+ * (14.4); customers who signed up earlier stay on the wording dated 2026-10-22,
  * published at /terms/2026-10-22, until a notice under 14.1 moves them.
  */
 export default function TermsPage() {

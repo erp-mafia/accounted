@@ -1,1 +1,0 @@
-[2026-10-28] A Swedish-moms (2641) proposal goes to review when the assistant's read names a reverse-charge box, as another box already did (accounted#37); the review opens on the read's box with Swedish moms one click away, since only the invoice shows Swedish moms (crm#1498).

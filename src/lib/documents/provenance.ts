@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
- * Provenance in the W3C PROV shape (dev_docs/arkiv_plan.md): an agent (a
+ * Provenance in the W3C PROV shape: an agent (a
  * person, or a software version) runs an activity that produces a record.
  * Every stored extraction points at the activity that produced it.
  */

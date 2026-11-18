@@ -1,1 +1,0 @@
-[2026-10-16] A service-account key reaches exactly its account's company, computed from service_accounts in validate_and_increment_api_key, not from api_key_companies: a settings edit of the key's allowlist can never widen it to the sponsor's other companies.

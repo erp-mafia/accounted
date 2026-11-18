@@ -173,7 +173,7 @@ describe('mapSupplierInvoice: status/paid consistency', () => {
 })
 
 /**
- * Company 5208b894 (Visma, 2026-09-10): 582 supplier invoices imported, 0
+ * A company migrated from Visma (2026-09-10): 582 supplier invoices imported, 0
  * open, although Visma reported 53 as unpaid. The mapper combined two
  * independent signals with OR (`paid || balance <= 0`), so a zero balance
  * beside an explicit unpaid enum forced 'paid'. When the flag came from the

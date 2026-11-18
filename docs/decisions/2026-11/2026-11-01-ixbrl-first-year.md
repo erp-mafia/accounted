@@ -1,1 +1,0 @@
-[2026-11-01] iXBRL's first year is the one no recorded year starts before, so a year behind a gap or with a failed comparison needs comparatives (3006/3007 fire). A lone year starting on the 1st stays first: the app cannot know of years kept elsewhere.

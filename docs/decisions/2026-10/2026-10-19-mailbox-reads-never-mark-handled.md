@@ -1,1 +1,0 @@
-[2026-10-19] Reading a Kivra or Billo mailbox never marks its documents handled or read at the provider: those labels are the company's own (shown in its app), so the arrival (source, provider id) is what keeps a document from being filed twice.

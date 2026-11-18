@@ -33,7 +33,7 @@ export const SCANNED_PAGE_MAX_CHARS = 16
 /**
  * A page that paints an image and has fewer text characters than this is read
  * by the model too: its text layer is only a heading or a stamp around the
- * picture (prod 2026-09-24: a shareholders' agreement's cap table was an image
+ * picture (seen 2026-09-24: a shareholders' agreement's cap table was an image
  * under "Schedule 1.2 - Cap Table" and a signing stamp, 166 characters, so the
  * table itself never reached an agent). A page of running text with a logo
  * or a signature seal is well above it.

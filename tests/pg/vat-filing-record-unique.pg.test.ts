@@ -86,7 +86,7 @@ describe('VAT filing period uniqueness', () => {
     const client = await getClient()
     try {
       await client.query('BEGIN')
-      // The state prod had before the index: two completed rows of one period.
+      // The state before the index: two completed rows of one period.
       await client.query('DROP INDEX public.idx_deadlines_vat_filing_period_unique')
       const insert = (status: string, createdAt: string, notes: string | null) =>
         client.query<{ id: string }>(

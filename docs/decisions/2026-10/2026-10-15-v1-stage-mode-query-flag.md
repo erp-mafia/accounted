@@ -1,1 +1,0 @@
-[2026-10-15] v1 stage mode is ?stage=true, not Prefer: stage: a query flag shows in logs and the spec like dry_run. withApiV1 reads only true/false and refuses it (STAGE_NOT_SUPPORTED) wherever the endpoint cannot stage, so no hand-written write commits a request sent to be staged.

@@ -1,1 +1,0 @@
-[2026-10-28] raw_page_index stays optional in the Connect contract (2026-10-12) so an older service still syncs; the ledger instead logs one error per sync whose rows name no page of the response, since Open Payments rows went unlinked for weeks without a word (accounted#87).

@@ -109,7 +109,7 @@ export async function readAndStoreDocument(
     const readerMissing = err instanceof ReaderUnavailableError
     if (readerMissing || classifyExtractionError(err) === 'provider_unavailable') {
       // Not stamped: the document is fine, the reader is missing or its model provider is down (a Bedrock 503
-      // stamped read_failed left 75 documents unread for good, prod 2026-10-19..26). It stays unread for the next run.
+      // stamped read_failed left 75 documents unread for good, seen 2026-10-19..26). It stays unread for the next run.
       // Counted, though, when it was the provider: see noteUnanswered. Not counted: a reader that could not be
       // loaded (the deployment's fault, the same for every document), and a reading the run's stop cut before it
       // had the time one model call gets (it started too late to say anything about the document). That time is
@@ -318,7 +318,7 @@ export async function readUnreadDocuments(
   if (!spentTime() && getAiStatus().configured) {
     const room = limit - counts.processed
     // Oldest stamp first, leaving out rows the stamp cannot land on: a gated document on a locked period was read
-    // again with the model every run and led the next batch (prod 2026-09-24: 19 rows took every run's budget).
+    // again with the model every run and led the next batch (seen 2026-09-24: 19 rows took every run's budget).
     const { data, error } = await supabase.rpc('document_retry_candidates', { p_reasons: RETRY_REASONS, p_limit: room * 4 })
     if (error) throw new Error(`fetch retry documents failed: ${error.message}`)
     // Vision pages already spent today per company, read once and kept as the pass spends more.
@@ -360,7 +360,7 @@ export async function readUnreadDocuments(
   if (spentTime()) return counts
   // Only documents the stamp can land on: a bank response is never read, and a row on a locked period or an
   // archived reset source refuses the update, so it stayed the newest unread and was read again every run
-  // (prod 2026-09-24: backlog reads down to 3 a day). Those are read when someone opens them.
+  // (seen 2026-09-24: backlog reads down to 3 a day). Those are read when someone opens them.
   const { data, error } = await supabase.rpc('document_backfill_candidates', { p_limit: limit - counts.processed })
   if (error) throw new Error(`fetch unread documents failed: ${error.message}`)
   await walkByPlan((data ?? []) as ReadableDocumentRow[])

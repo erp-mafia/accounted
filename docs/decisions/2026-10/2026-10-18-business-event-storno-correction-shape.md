@@ -1,1 +1,0 @@
-[2026-10-18] A storno records ledger.storno (role reversal), a rättelse's corrected verifikat ledger.correction (role correction), both of the verifikat corrected and dated the day made; the reopen's stornos are of the year, the sandbox seed's verifikat ledger.system.

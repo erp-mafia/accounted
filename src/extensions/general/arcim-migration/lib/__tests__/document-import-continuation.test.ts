@@ -46,7 +46,7 @@ import {
 const MINUTE = 60_000
 const iso = (ms: number) => new Date(ms).toISOString()
 
-/** Hreidur AB's run: 2 740 of 17 219, its tab silent for a day. */
+/** A reported run: 2 740 of 17 219, its tab silent for a day. */
 function stoppedRun(now: number, overrides: Partial<DocumentImportRunSummary> = {}): DocumentImportRunSummary {
   return {
     provider: 'fortnox',

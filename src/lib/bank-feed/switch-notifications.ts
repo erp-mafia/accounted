@@ -289,7 +289,7 @@ export interface BankSwitchCronResult {
   failed: number
   /** Pending companies the time budget did not reach; tomorrow's run sends what is then due. */
   not_reached: number
-  /** The founders' counter, when the RPC answered. */
+  /** The operators' counter, when the RPC answered. */
   totals: BankSwitchProgressTotals | null
 }
 

@@ -1,1 +1,0 @@
-[2026-10-15] Only an absent module (country unsupported, turned off) makes its dependents dependency_unavailable; plan and legal-form gates do not pass on: an enskild firma without payroll still records the owner's utlägg, and payment files need no bank feed.

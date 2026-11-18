@@ -18,7 +18,7 @@
  * The seal says "this is the copy Accounted made when everyone had signed,
  * unchanged since". It is not anyone's signature: those are the BankID
  * signatures, which stay in the evidence package (they carry each signer's
- * full personnummer, DECISIONS.md 2026-10-25).
+ * full personnummer).
  *
  * Off until SIGNING_SEAL_* is set (lib/env/signing-seal.ts). The certificate
  * comes as a PKCS#12 file today; a certificate whose key lives with its

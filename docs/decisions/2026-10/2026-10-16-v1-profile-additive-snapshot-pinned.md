@@ -1,1 +1,0 @@
-[2026-10-16] v1 capabilities gains one additive field, profile; module statuses stay what their gates say, since a module in a package the profile leaves off still works when called. The snapshot test pins profile beside an unchanged snapshot file, so every other field is proven identical.

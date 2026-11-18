@@ -8,7 +8,7 @@ import {
 } from '@/tests/helpers'
 
 // The route is wrapped in withRouteContext (auth via requireAuth, company via
-// getActiveCompanyId, write gate via requireWritePermission) — mock those.
+// getActiveCompanyId, write gate via requireWritePermission) - mock those.
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({

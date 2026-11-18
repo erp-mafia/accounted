@@ -27,9 +27,9 @@ const VAT_PICKS: { key: VatPick; label: string }[] = [
  * Imported years that ended before the latest one are NOT klarmarkerade
  * here: a closed year refuses further underlag linking (the period-lock
  * triggers), so closing is offered as an explicit step the user takes once
- * the old system's underlag are linked (founder decision on crm#104).
+ * the old system's underlag are linked (product decision on crm#104).
  *
- * `summary` (under the theater after an import, founder direction
+ * `summary` (under the theater after an import, product direction
  * 2026-09-14): one line with the headline numbers and how many things want
  * a look, plus "Visa importresultat", which opens the full verdict list and
  * the momskod picker in a dialog. The page stays short enough that the door

@@ -4,7 +4,7 @@ import { ledgerKey } from '../ledger-key'
 // Fixture pairs are shared with tests/pg/observed-parties-rpc.pg.test.ts,
 // which runs the same inputs through public.ledger_key() and asserts parity.
 export const LEDGER_KEY_CASES: [string, string][] = [
-  // Descriptions our own booking flows write (seen on prod 2026-09-03).
+  // Descriptions our own booking flows write (seen 2026-09-03).
   ['Utlägg Anthropic · Anthropic PBC, 206,12 EUR inkl. 41,22 EUR VAT-Sweden 25% via OSS.', 'utlägg anthropic'],
   ['1511768101 · Visma Spcs AB, faktura 2025-10-02, programvarulicens/abonnemang', 'visma spcs'],
   ['TIC identity     BG 0000005786439 Bg-bet. via internet · Faktura 20250746, The Intelligence Company AB (publ).', 'tic identity'],
@@ -15,7 +15,7 @@ export const LEDGER_KEY_CASES: [string, string][] = [
   ['Levfakt BEIJER BYGGMATERIAL AB (2089)', 'beijer byggmaterial'],
   ['Levfakt Beijer Byggmaterial AB, 097 (1001)', 'beijer byggmaterial'],
   ['Leverantörsfaktura från 18 Loopia, 1009146000', 'loopia'],
-  ['Levfakt Varsego Sverige AB (178)', 'varsego sverige'],
+  ['Levfakt Exempelgross Sverige AB (178)', 'exempelgross sverige'],
   ['Levfkt 1555 Telge Energi', 'telge energi'],
   ['Levbet. MiSUMi (2189107)', 'misumi'],
   ['Kvitto OpenAI', 'openai'],

@@ -32,7 +32,7 @@ export type SendingDomainResult<T> =
 /**
  * The shared Resend account has no domain left on its plan (crm#1288). Stable
  * code (structured-errors registry): the settings page keys its explanation on
- * it, and the founders' alert carries it.
+ * it, and the operators' alert carries it.
  */
 export const SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT = 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT'
 
@@ -84,7 +84,7 @@ function describeProviderError(error: unknown): {
 /**
  * A Resend failure as the customer sees it: the registry's sentence and status
  * under its code. The provider's own error is logged with the operation and
- * company; `alert` marks the ones the founders must act on.
+ * company; `alert` marks the ones the operators must act on.
  */
 function providerFailure(
   code: SendingDomainProviderCode,
@@ -316,7 +316,7 @@ export async function claimSendingDomain(
       if (refusal === 'plan_limit') {
         // Every company's domain lives in the one platform account, so this
         // refuses every claim until the plan grows or domains are removed:
-        // the founders have to act, the customer cannot.
+        // the operators have to act, the customer cannot.
         return providerFailure(
           SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT,
           'sending-domain claim refused: the Resend account has used every domain its plan includes',

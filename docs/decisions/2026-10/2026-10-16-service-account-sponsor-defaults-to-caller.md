@@ -1,1 +1,0 @@
-[2026-10-16] The sponsor defaults to the calling key's user (an owner or admin, the gate already checks it): v1 exposes no member listing, so requiring a sponsor id would make the endpoint hard to use; a named sponsor is checked by the database.

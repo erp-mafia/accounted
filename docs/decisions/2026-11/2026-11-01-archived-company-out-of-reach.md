@@ -1,1 +1,0 @@
-[2026-11-01] An archived company answers v1 404, reads and writes, as MCP and /api/events do (readLiveMembership): reset sources too. Their freeze is in the database and their statutory archive goes through the replacement owner's session route, not a key. 0 v1 calls named one in 7 days.

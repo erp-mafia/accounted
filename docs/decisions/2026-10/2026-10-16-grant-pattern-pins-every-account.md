@@ -1,1 +1,0 @@
-[2026-10-16] A grant pins direction, category, VAT treatment, the business account and every account the posting touches, bank account included: a line paid from another account, or with dimensions or a VAT amount, waits for a person.

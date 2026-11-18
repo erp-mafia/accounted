@@ -14,16 +14,13 @@
  * The SQL counter (bank_switch_progress) takes this same list as its
  * argument, so it is defined once.
  *
- * Svea is on it again (2026-10-25, crm#1424): since Open Payments' fix of
- * 2026-10-21 its named-account consent is accepted, but the shape their
- * support gave us ({ access: { accounts } }) grants no transactions, and
+ * Svea is on it (crm#1424): its named-account consent is accepted, but a
+ * consent in the { access: { accounts } } shape grants no transactions, and
  * every read answers 401 "Account(s) need to be defined in the consent
- * request to access details". Not one Svea connection through Open Payments
- * has synced. Until a Svea consent reads transactions, its rows keep Enable
- * Banking and the new flow points there. Connect now names the accounts for
- * balances and transactions too (Connect !26, 2026-10-26); Svea comes off
- * the list once a pilot company (door.ts reachesUncoveredBanks) has read
- * transactions through a consent signed after that.
+ * request to access details". Until a Svea consent reads transactions, its
+ * rows keep Enable Banking and the new flow points there. Svea comes off the
+ * list once a pilot company (door.ts reachesUncoveredBanks) has read
+ * transactions through Open Payments.
  */
 export const UNCOVERED_BANK_NEEDLES: readonly string[] = ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea']
 

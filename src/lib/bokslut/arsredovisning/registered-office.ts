@@ -7,7 +7,7 @@
  * The source is `company_settings.registered_office` (SCB Säteskommun at
  * creation, editable in Settings). Companies created before that column
  * existed have none yet, and the register value cannot be backfilled by a
- * migration. For them the founder's default (2026-10-03) is to fall back to
+ * migration. For them the operator's default (2026-10-03) is to fall back to
  * `city`, the postal town, with a warning asking the user to check it.
  *
  * To block the annual report until säte is filled instead, set

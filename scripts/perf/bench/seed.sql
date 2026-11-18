@@ -15,8 +15,8 @@
 --     company's ledger, registers and documents under their own ids, so a
 --     query that loses its company filter reads other companies' rows as it
 --     would in production, and the planner sees the measured company as one
---     tenant among several (about 14 % of the verifikat; the largest company
---     in production holds about 7 %).
+--     tenant among several (about 14 % of the verifikat, more than one company
+--     would hold in production).
 -- Then the two companies the benchmark reads are built onto the ledger
 -- summaries (build_ledger_account_days), every verifikat is checked to
 -- balance, and ledger_account_days_drift must be empty for both.

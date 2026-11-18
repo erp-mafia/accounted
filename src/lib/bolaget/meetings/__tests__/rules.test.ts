@@ -135,7 +135,7 @@ describe('elections change the roles', () => {
   const roles: RoleShape[] = [
     { id: 'r1', party_id: ANNA, role: 'styrelseledamot', valid_from: '2020-01-10', valid_to: null, name: 'Anna Ek' },
     { id: 'r2', party_id: BO, role: 'styrelsesuppleant', valid_from: '2020-01-10', valid_to: null, name: 'Bo Ek' },
-    { id: 'r3', party_id: CARL, role: 'revisor', valid_from: '2020-01-10', valid_to: null, name: 'Carl Revision AB' },
+    { id: 'r3', party_id: CARL, role: 'revisor', valid_from: '2020-01-10', valid_to: null, name: 'Exempel Revision AB' },
     { id: 'r4', party_id: CARL, role: 'styrelseledamot', valid_from: '2019-01-01', valid_to: '2019-12-31', name: 'Carl' },
   ]
 
@@ -178,7 +178,7 @@ describe('elections change the roles', () => {
     )
     expect(effects.map((e) => [e.action, e.name, e.role])).toEqual([
       ['add', 'Ny Revision AB', 'revisor'],
-      ['end', 'Carl Revision AB', 'revisor'],
+      ['end', 'Exempel Revision AB', 'revisor'],
     ])
   })
 })
@@ -264,7 +264,7 @@ describe('the årsstämma template', () => {
       fiscalPeriod: { id: FP, period_start: '2026-01-01', period_end: '2026-12-31' },
       annualReport: null,
       board: [],
-      auditors: [{ party_id: CARL, name: 'Carl Revision AB', kind: 'company', org_number: '5560000000', role: 'revisor' }],
+      auditors: [{ party_id: CARL, name: 'Exempel Revision AB', kind: 'company', org_number: '5560000000', role: 'revisor' }],
       discharge: [],
       totalShares: 0,
     })

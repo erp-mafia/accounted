@@ -1,1 +1,0 @@
-[2026-10-16] Link basis is shown read-only as links on v1 GET journal-entries/{id} and MCP get_record journal_entry, additions only, null or links_unavailable when unreadable: that is where agents already read a voucher and its links.

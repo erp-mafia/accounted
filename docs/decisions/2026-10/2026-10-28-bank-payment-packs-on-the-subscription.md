@@ -1,1 +1,0 @@
-[2026-10-28] Bank payment packs are a second Stripe item (quantity = packs) mirrored to purchased_packs by the webhook; fewer packs wait for the period end in a subscription schedule of ours, and only an active, non-cancelling subscription takes a change, so a trial never gets packs free (#132).

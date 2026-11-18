@@ -1,1 +1,0 @@
-[2026-10-26] buildAssetDisposalPlan passes the dated posted history to the depreciation engine (a few lines in a P2-owned file): with only the total, scrapping an asset after its trued-up final year was posted was refused as current_depreciation_mismatch.

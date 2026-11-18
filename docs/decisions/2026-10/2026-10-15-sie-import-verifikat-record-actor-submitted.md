@@ -1,1 +1,0 @@
-[2026-10-15] SIE import verifikat record the actor that submitted the job (sealed in the manifest as commit_actor), not the worker, with commit_method 'migration' (in the CHECK since 20260420120001, never written) instead of a new 'import' value: source_type already says import (20261015235000).

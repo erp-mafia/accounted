@@ -1,1 +1,0 @@
-[2026-10-27] A vat_code basis pair on a BAS basis number the company renamed to something without reverse-charge vocabulary goes to the company's own momskod-configured basis account for that box and rate, else the request is refused; name heuristic is negative-only (6 of 10 745 live basis-number accounts fail it, all genuinely repurposed) (crm#1453).

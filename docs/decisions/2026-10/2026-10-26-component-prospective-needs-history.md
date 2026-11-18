@@ -1,1 +1,0 @@
-[2026-10-26] Component depreciation is re-spread prospectively (and trued up) only when the register holds every year from the component's anchor; else the straight-line charge stands, capped: years booked outside Accounted must not be charged again (same rule as P0's plain path).

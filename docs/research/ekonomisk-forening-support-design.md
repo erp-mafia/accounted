@@ -1,6 +1,6 @@
 # Ekonomisk förening support - research and implementation design
 
-Status: design proposal, 2026-09-15; Phase 1 (legal-form spine behind a flag) implemented on `feat/ekonomisk-forening-foundation`, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
+Status: design proposal, 2026-09-15; Phase 1 (the legal-form spine) is implemented, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
 
 ## Executive decision
 
@@ -206,7 +206,6 @@ Exit: a Swedish accountant/auditor who works with economic associations signs of
 - Add type, DB constraints, central supported list, all creation RPCs, exact registry mapping and onboarding label.
 - Extend exhaustive entity policies; replace every material AB equality gate with a named capability.
 - Seed association chart and add form-specific templates.
-- Keep creation disabled in production until Phase 2 acceptance passes.
 
 Exit: compiler exhaustiveness, DB tests, create/onboard tests, chart snapshot, no AB/EF owner accounts, ordinary invoices/VAT/payroll/SIE round trips pass.
 

@@ -1,1 +1,0 @@
-[2026-10-27] The three Arkiv brain loaders (lint, derive-company, graph) keep their journal_entries!inner line reads, allowlisted in the new lines-inner-embed guard: the brain is off in production (ARKIV_BRAIN_COMPANY_IDS unset), so they move entry first before it rolls out, not in this perf fix.

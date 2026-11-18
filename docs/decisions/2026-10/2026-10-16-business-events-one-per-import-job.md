@@ -1,1 +1,0 @@
-[2026-10-16] Imports will record one business event per import job (ledger.history_import, idempotency key per job), not one per entry: about a million rows a month for nothing the projection cannot answer per entry. Not built in step 1.

@@ -1,1 +1,0 @@
-[2026-10-17] Autogiro v1 reads and writes only Bankgirot's new file layout and refuses an old-layout report: only the new layout carries complete information on file (Bg Autogiro Teknisk manual 3.3), Bankgirot recommends it, and the layout is a per-bankgiro choice in the bank agreement.

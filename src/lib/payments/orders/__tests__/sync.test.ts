@@ -311,7 +311,7 @@ describe('syncPaymentOrderStatuses', () => {
     })
 
     describe('whose payment status the bank refuses to give', () => {
-      // Production, 2026-10-30 to 2026-11-06: a SEB signing started before the
+      // Seen 2026-10-30 to 2026-11-06: a SEB signing started before the
       // signer's IP address was kept. Every 15 minutes the read was refused
       // ("FORMAT_ERROR: PSU-IP-Address is mandatory for payment"), the sweep
       // left the signing for the next run, and it never ended.
@@ -631,7 +631,7 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
     db.setTable('payment_match_log', { data: null })
   }
 
-  it("settles Arcim's executed order 4e42c482 with the Swedbank debit 7af13560 already in the feed, on the first run", async () => {
+  it("settles the executed order 40e40000 with the Swedbank debit 0d1d0000 already in the feed, on the first run", async () => {
     seedArcim()
 
     const result = await run()
@@ -857,7 +857,7 @@ describe('syncPaymentOrderStatuses: what bounds a run', () => {
     syncPaymentOrderStatuses(db.supabase as unknown as SupabaseClient, log, budget, sweeps)
 
   it('asks its budget before each bank read and leaves the rest, counted, for the next run', async () => {
-    // Production, 2026-11-10 04:30: twelve unanswered reads took the whole 300 s and the platform killed the run.
+    // Seen 2026-11-10 04:30: twelve unanswered reads took the whole 300 s and the platform killed the run.
     const getPaymentState = vi.fn().mockResolvedValue(RCVD)
     registerPaymentInitiationProvider(provider(getPaymentState))
     db.setTable('payment_orders', [{ data: [unsigned('o1'), unsigned('o2'), unsigned('o3')] }, { data: [{ id: 'o1' }] }])

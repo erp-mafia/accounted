@@ -1,1 +1,0 @@
-[2026-11-01] The årsredovisning PDF walks the iXBRL row lists (statements.ts, printedRows) instead of its own: K2 rows are unchanged, a K3 PDF takes the filing's order and the taxonomy's labels. An ekonomisk förening's equity is a transform of the same list.

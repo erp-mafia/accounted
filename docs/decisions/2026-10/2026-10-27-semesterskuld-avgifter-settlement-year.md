@@ -1,1 +1,0 @@
-[2026-10-27] Semesterlöneskuld avgifter use each employee's age tier for the calendar year of the day after the valuation date (K2 17.10: payout year's rates if known, else the balance-sheet date's); the youth discount stays unprovisioned, as the year close did.

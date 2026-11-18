@@ -1,5 +1,5 @@
 /**
- * Tests for /api/company/current — GET (cross-tab sync) and PATCH (K2/K3).
+ * Tests for /api/company/current - GET (cross-tab sync) and PATCH (K2/K3).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'

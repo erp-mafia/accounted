@@ -1,1 +1,0 @@
-[2026-10-26] The unit picker commits typed "Annan enhet" text on every close except Escape (outside click, Tab, trigger), Tab included as a close that returns focus to the trigger rather than moving on, and refuses text over 32 characters by keeping the list open instead of truncating: a typed unit is the user's intent, and losing it on a click away was the PH 180 trap.

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 /**
  * One section of the Autogiro page: the page's uppercase section heading
- * (design.md, "Section divider header inside a page"), an optional count and
+ * (the section divider header inside a page), an optional count and
  * "?" help, and the section's own action on the right.
  */
 export function AutogiroSection({

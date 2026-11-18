@@ -176,7 +176,7 @@ async function loadCashAccountTopology(
   const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
 
   // Two enabled rows on ONE active connection sharing (IBAN, currency) are
-  // deliberately BOTH live: no liveness signal has held up on prod (see
+  // deliberately BOTH live: no liveness signal has held up in production (see
   // DECISIONS.md, #1643), so nothing ranks them here.
   const isLive = (r: CashAccount): boolean =>
     r.enabled && r.bank_connection_id !== null && statuses.get(r.bank_connection_id) === 'active'
@@ -681,7 +681,7 @@ export async function getRevokedConnectionIds(
 /**
  * Find a free BAS class-19 slot for a new PSD2 cash account, respecting the
  * UNIQUE (company_id, ledger_account) constraint. A bank returning N
- * same-currency accounts must not map them all to the currency default —
+ * same-currency accounts must not map them all to the currency default:
  * that's exactly the collision this prevents.
  *
  * Rules:
@@ -700,9 +700,9 @@ export async function getRevokedConnectionIds(
  *     an account without one, which never takes over a holder that has one.
  *     A seeded row whose onboarding payment details name another account of
  *     the same consent (`options.consent`) is left to that account.
- *   - Overflow walks the free-use 1931–1959 sub-account slots, skipping the
+ *   - Overflow walks the free-use 1931-1959 sub-account slots, skipping the
  *     four currency defaults (reserved as suggestions for their currencies)
- *     and any slot held by ANY existing row — promoting an unrelated manual
+ *     and any slot held by ANY existing row - promoting an unrelated manual
  *     account (SIE-imported, kassa) would silently steal it.
  *   - Overflow ALSO skips 19xx numbers that already exist in the company's
  *     chart of accounts, even when no cash_accounts row holds them. A chart
@@ -715,7 +715,7 @@ export async function getRevokedConnectionIds(
  *   - `exclude` carries slots already assigned earlier in the caller's loop
  *     but not yet visible in the table.
  *
- * Returns null when no slot is free (or the lookup fails) — callers fall back
+ * Returns null when no slot is free (or the lookup fails) - callers fall back
  * to their previous behavior and surface the error.
  */
 export async function findFreeLedgerAccount(
@@ -814,7 +814,7 @@ export async function findFreeLedgerAccount(
 
 /**
  * Allocate a ledger slot for a new PSD2 account AND make sure that account
- * number exists in the company's chart of accounts — cash_accounts has no FK
+ * number exists in the company's chart of accounts - cash_accounts has no FK
  * to the chart, but booking (and the AccountPicker, which only lists chart
  * accounts) breaks on numbers the chart doesn't know. Sub-accounts outside
  * the BAS reference (1931, …) are created with metadata derived from the

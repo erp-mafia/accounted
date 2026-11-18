@@ -1,1 +1,0 @@
-[2026-10-28] Inkorg never drops an item without a word: a duplicate upload names the earlier copy (booked, in Dokument or in the inbox) and the list names what Arkiv moved to Dokument in the last 7 days: PH 225 saw both vanish silently.

@@ -360,7 +360,7 @@ export function setPaymentPacks(packs: number): Promise<PaymentPacksSet> {
   return send<PaymentPacksSet>('/api/billing/payment-packs', { method: 'POST', body: JSON.stringify({ packs }) })
 }
 
-/** Begär fler betalningar (POST /api/payments/allowance-requests): support is mailed, a founder answers. */
+/** Begär fler betalningar (POST /api/payments/allowance-requests): support is mailed, an operator answers. */
 export function requestMoreBankPayments(input: { monthlyPaymentsWanted: number; message: string | null }): Promise<{ request_id: string; created_at: string }> {
   return send<{ request_id: string; created_at: string }>('/api/payments/allowance-requests', {
     method: 'POST',

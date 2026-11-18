@@ -699,7 +699,7 @@ describe('POST /api/invoices (create invoice)', () => {
     expect(findCall('invoices', 'update')).toBeUndefined()
   })
 
-  // GitLab accounted #33: the delivery-note branch ignored the RPC error and
+  // accounted#33: the delivery-note branch ignored the RPC error and
   // inserted a note with a null number.
   describe('delivery note numbering (#33)', () => {
     function deliveryNoteRequest() {

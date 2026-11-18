@@ -1,1 +1,0 @@
-[2026-11-17] A payment reference on one other live invoice of the supplier is acknowledged in the editor's review step (Registrera ändå; enskild firma and the Inkorg's one click open it for this); on two or more it is the supplier's normal. v1 and MCP never refuse it: a fakturaservice has one OCR.

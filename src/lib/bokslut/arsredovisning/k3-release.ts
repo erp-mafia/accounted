@@ -4,7 +4,7 @@ import { hasK3ArsredovisningDocument, isEntityType } from '@/lib/company/entity-
 /**
  * Whether a K3 årsredovisning for a mindre aktiebolag may be locked, signed
  * and filed on paper. Off by default: until an accountant has reviewed the
- * document (docs/review/k3-arsredovisning-mindre-ab.md) every K3 report is a
+ * document every K3 report is a
  * granskningsutkast (AR-K3-DRAFT-ONLY), watermarked, and the paper package
  * is not offered.
  *

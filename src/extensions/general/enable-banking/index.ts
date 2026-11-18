@@ -1408,7 +1408,7 @@ export const enableBankingExtension: Extension = {
             .filter(r => r.bank_connection_id === connection.id && r.external_uid)
             .map(r => [r.external_uid as string, r.ledger_account])
         )
-        // Slots held by OTHER connections' PSD2 accounts — an explicit mapping
+        // Slots held by OTHER connections' PSD2 accounts - an explicit mapping
         // onto one of those would violate the unique constraint. Manual rows
         // are not foreign: upsertFromPsd2 promotes them in place. Rows held by
         // a REVOKED connection are not foreign either: those are orphaned

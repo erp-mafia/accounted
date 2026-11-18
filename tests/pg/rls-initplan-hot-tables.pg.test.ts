@@ -3,8 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany, setActiveCompany } from './fixtures'
 
-// pg-real coverage for 20261027060817_rls_initplan_hot_tables (O08, run
-// t1027). The migration only wraps auth.uid() as (SELECT auth.uid()) so the
+// pg-real coverage for 20261027060817_rls_initplan_hot_tables. The migration only wraps auth.uid() as (SELECT auth.uid()) so the
 // planner evaluates it once per statement instead of once per row. These
 // tests pin that (1) every rewritten policy now has the initplan form and
 // kept its command and roles, and (2) access is unchanged on a sample of

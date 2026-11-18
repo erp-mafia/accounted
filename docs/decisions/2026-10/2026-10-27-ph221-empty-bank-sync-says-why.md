@@ -1,1 +1,0 @@
-[2026-10-27] PH 221: an Enable Banking sync that imports nothing now says why (bank sent only unbooked entries, or nothing) and points at the bank file import, instead of importing unbooked entries: the raw rows could not be inspected read-only, so widening the booked rule for every bank was not justified.

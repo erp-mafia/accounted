@@ -1,1 +1,0 @@
-[2026-10-21] The batch dialog also takes Skatteverket's beslutsfil, read in the browser so personnummer never leave it; ärenden on one invoice add up (ROT plus RUT), 0 kr is listed as avslag, and the schema got its own module so the dialog ships no API schemas (#75, crm#1297).

@@ -17,7 +17,7 @@ const ROOT = path.resolve(__dirname, '../../..')
 const messages = (locale: 'sv' | 'en') =>
   (JSON.parse(fs.readFileSync(path.join(ROOT, 'messages', `${locale}.json`), 'utf8')) as { bank_payments: Record<string, string> }).bank_payments
 
-/** Payment refusals from the provider's error table (dev_docs/open-payments/error_messages.md). */
+/** Payment refusals from the provider's error table. */
 const DOCUMENTED_REFUSALS = [
   'FUNDS_NOT_AVAILABLE',
   'CREDITOR_ACCOUNT_INVALID',

@@ -1,1 +1,0 @@
-[2026-10-23] The community review queue requires MFA (AAL2 or BankID-linked) on every deployment, ignoring mfa_exempt_until (CASA 3.3.1): it is the one operator interface and publishes text to every company's AI; MFA stays optional for everyone else.

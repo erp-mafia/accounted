@@ -35,7 +35,7 @@ import { resolveStartStep, startStepsFor } from './start-step'
  * This module only reads and stages. It never calls the provider's case
  * operations (openCase, caseAction): the items are sent by the commit
  * (batch-commit.ts), after a person approved them in the web UI, and every
- * item is checked again there. There is no fully automatic mode (founder
+ * item is checked again there. There is no fully automatic mode (product
  * decision F5) and every collection notice needs its approval (F16).
  *
  * Selection, per item kind:

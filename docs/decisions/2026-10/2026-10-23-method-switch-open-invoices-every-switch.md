@@ -1,1 +1,0 @@
-[2026-10-23] #93: the open-invoice guard of an accounting-method switch (!763) now runs on every switch, also with nothing posted in the year and with no fiscal year, before the free/correction split: the double or missing booking at payment does not depend on what the year holds; same code ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES, no new override.

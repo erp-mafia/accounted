@@ -34,7 +34,7 @@ import { toHandle } from '@/lib/handles'
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-const USER_ID = '930abb54-c5ef-4ae0-b274-30fb16e9a295'
+const USER_ID = '0d1d0000-0000-4000-8000-000000000003'
 const COMPANY_A = '8fd5b1f4-0000-4000-8000-00000000000a'
 const COMPANY_B = '8fd5b1f4-0000-4000-8000-00000000000b'
 const COMPANY_C = '8fd5b1f4-0000-4000-8000-00000000000c'

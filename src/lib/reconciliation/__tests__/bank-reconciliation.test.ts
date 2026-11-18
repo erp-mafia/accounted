@@ -309,7 +309,7 @@ describe('tryReconcileTransaction', () => {
     expect(result!.confidence).toBe(0.90)
   })
 
-  // Regression: viktor@frnzn.com: recurring monthly bank fee from 2026 was
+  // Regression: recurring monthly bank fee from 2026 was
   // wrongly reconciled to a 2024 SIE-imported voucher because description +
   // amount collided. auto_reference must require a real OCR token AND a
   // bounded date window: description alone, no date check, is not enough.

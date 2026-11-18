@@ -35,7 +35,7 @@
  * the only place it shows), but an error per dead delivery, or per cycle,
  * would be an alert per event for an endpoint that stays down. An endpoint
  * that stays down is NOT disabled here: that changes what API users see and
- * is the founders' decision.
+ * is the operators' decision.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -854,7 +854,7 @@ async function disableWebhook(
     // see the classification in migration 20260515170000), so a dropped
     // row here is an operational audit-integrity gap, not a legal one,
     // and the dispatch cycle must not abort over it. But warn is
-    // suppressed in prod-adjacent noise filters and never reaches the
+    // suppressed in production-adjacent noise filters and never reaches the
     // observability sink, which made this a silent gap; error always
     // forwards (lib/logger.ts) so the missing SECURITY_EVENT is alertable
     // (CC7.2).

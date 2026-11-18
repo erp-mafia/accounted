@@ -1,1 +1,0 @@
-[2026-11-17] A recurring header insert that answers an error is read back by its own id whatever the code, and the run goes on when found; absent after a refusal by the database itself it is given back and retried; anything else holds the schedule (accounted#213).

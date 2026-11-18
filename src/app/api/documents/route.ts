@@ -58,7 +58,7 @@ export const POST = withRouteContext(
     const opLog = log.child({ filename: file.name, sizeBytes: file.size })
 
     try {
-      // Whitelist the source — arbitrary strings from formData would otherwise
+      // Whitelist the source - arbitrary strings from formData would otherwise
       // land in the upload_source column; unknown values fall back to the
       // default rather than 400ing an otherwise-valid upload.
       const VALID_SOURCES: DocumentUploadSource[] = [
@@ -173,7 +173,7 @@ export const GET = withRouteContext(
     const { searchParams } = new URL(request.url)
     const journalEntryId = searchParams.get('journal_entry_id')
     const currentOnly = searchParams.get('current_only') !== 'false'
-    // Clamp pagination — parseInt('abc') is NaN and unbounded limits let a
+    // Clamp pagination - parseInt('abc') is NaN and unbounded limits let a
     // caller demand the whole table in one page.
     const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 50

@@ -1,1 +1,0 @@
-[2026-10-28] The Bokio company id must hold exactly one GUID, checked before Bokio is asked; a pasted Bokio address is accepted for its GUID. 83 of 84 stored Bokio ids are GUIDs (the other is a pasted token from before the probe); Bokio 400s stay unmapped, as decided earlier.

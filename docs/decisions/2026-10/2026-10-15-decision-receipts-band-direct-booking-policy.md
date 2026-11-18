@@ -1,1 +1,0 @@
-[2026-10-15] Decision receipts record confidence_band as the acted-on suggestion's booksWithoutReview band (direct/review) under DIRECT_BOOKING_POLICY_VERSION, not calibration.ts bandFor: bandFor is wired nowhere, so its band would describe a policy nobody applies.

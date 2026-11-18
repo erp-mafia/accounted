@@ -1,1 +1,0 @@
-[2026-11-07] An SIE file without #RAR whose verifikat span more than one fiscal year is refused as a partial export (export full SIE typ 4 per year), never split into existing years: in prod the books already held those verifikat, so inferring years double-books.

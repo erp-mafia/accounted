@@ -1,1 +1,0 @@
-[2026-10-20] Inkorg one click supplier: matched by org number, VAT number, then name before anything is created; else created silently from the reading with the type of its seller country, and the answer says so (ny leverantör). The form's Ny leverantör takes the same type, not swedish_business.

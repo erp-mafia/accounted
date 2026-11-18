@@ -1,1 +1,0 @@
-[2026-11-03] A Skatteverket connect link may name its company (company_id, membership-checked in /authorize) and the BankID session is stored for it; the active company is never switched and the landing says which company got it: the triage's signed state adds a secret for no gain (crm#1622).

@@ -107,7 +107,7 @@ describe('describeRecord: journal_entry', () => {
     expect(plain.links_unavailable).toBe(true)
   })
 
-  it('reads links written as record_refs (the shape accounted MR !1324 returns)', () => {
+  it('reads links written as record_refs (the shape the briefing returns)', () => {
     const v = describeRecord('journal_entry', JE, {
       journal_entry: { voucher: 'A1', documents: [], links: [{ relation: 'pays', record_ref: `supplier_invoice:${INV}`, basis: 'rule_ocr_reference' }], books: [{ relation: 'books', record_ref: `invoice:${INV}` }] },
     })

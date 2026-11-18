@@ -28,7 +28,10 @@ import { WintClient } from './wint/client';
 import { WINT_RESOURCE_CONFIGS } from './wint/config';
 import { ResourceType } from './dto';
 import type { MigrationResource } from './migration-contract';
+import { createLogger } from '@/lib/logger';
 import { isProviderRefusal } from './with-provider-call';
+
+const log = createLogger('providers/provider-data-fetcher');
 
 // Singleton clients (they hold rate limiters)
 const fortnoxClient = new FortnoxClient();
@@ -227,7 +230,7 @@ async function bokioPaginate<T>(
     page++;
   } while (page <= totalPages);
 
-  console.log(`[bokio-paginate] ${path}: fetched ${allItems.length} total items across ${totalPages} page(s)`);
+  log.info(`${path}: fetched ${allItems.length} total items across ${totalPages} page(s)`);
   return allItems;
 }
 
@@ -258,7 +261,7 @@ async function fetchBokioCreditNotes(
     );
   } catch (err) {
     if (err instanceof BokioApiError && err.statusCode === 404) {
-      console.log('[provider-data-fetcher] Bokio credit-notes endpoint not available (404), skipping');
+      log.info('Bokio credit-notes endpoint not available (404), skipping');
       return [];
     }
     throw err;
@@ -441,8 +444,8 @@ export async function fetchSalesInvoicesDirect(
     const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId);
     const items = mergeBokioSalesDocuments(creditNotes, invoices);
     if (items.length > 0) {
-      console.log(
-        `[provider-data-fetcher] Bokio invoices: ${invoices.length} invoices, ${creditNotes.length} credit notes; `
+      log.info(
+        `Bokio invoices: ${invoices.length} invoices, ${creditNotes.length} credit notes; `
         + `first item keys: ${Object.keys(items[0]).join(', ')}`,
       );
     }
@@ -501,7 +504,7 @@ export async function fetchSupplierInvoicesDirect(
       return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio supplier-invoices endpoint not available (404), skipping');
+        log.info('Bokio supplier-invoices endpoint not available (404), skipping');
         return [];
       }
       throw err;
@@ -951,8 +954,8 @@ async function hydrateRegister<T extends { id: string }>(
 
   if (aborted) report.abortedBy = aborted;
 
-  console.log(
-    `[provider-data-fetcher] ${label} hydration: ${report.hydrated}/${report.needed} hydrated, `
+  log.info(
+    `${label} hydration: ${report.hydrated}/${report.needed} hydrated, `
     + `${report.failed} failed, ${report.skippedForBudget} not attempted`
     + (aborted ? ` (stopped early: ${aborted})` : ''),
   );

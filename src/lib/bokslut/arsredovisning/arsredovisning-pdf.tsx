@@ -365,7 +365,7 @@ export function ArsredovisningPDF({
         ))}
       </Page>
 
-      {/* Resultaträkning — ÅRL post level, no account numbers. */}
+      {/* Resultaträkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} mode={mode} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
@@ -377,7 +377,7 @@ export function ArsredovisningPDF({
         <StatementTable rows={data.resultatrakning} hasPrevious={data.previous_period !== null} />
       </Page>
 
-      {/* Balansräkning — ÅRL post level, no account numbers. */}
+      {/* Balansräkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} mode={mode} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>
@@ -430,7 +430,7 @@ export function ArsredovisningPDF({
         that lack the intyg.
 
         The intyg is signed by a styrelseledamot or the verkställande
-        direktör (founder decision 2026-10-15, following the
+        direktör (product decision 2026-10-15, following the
         swedish-financial-reporting skill, bolagsverket-filing.md § 5;
         ÅRL 8 kap. 3 §): CERTIFICATE_SIGNER in signature-pages.ts.
 

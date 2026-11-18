@@ -1,1 +1,0 @@
-[2026-10-31] Resultat per två dimensioner reads ledger_tagset_days (sums per line tag set) and keeps its own generator: lines took 431 ms for a 70 000-line year against the 100 ms budget, and one generator with dimension-pnl would rewrite its budget view for nothing users see (#133).

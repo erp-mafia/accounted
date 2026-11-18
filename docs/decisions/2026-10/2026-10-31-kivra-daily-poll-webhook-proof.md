@@ -1,1 +1,0 @@
-[2026-10-31] A Kivra mailbox drops to one sweep read a day only once the webhook proves it carries it (newest Kivra arrival filed by the webhook), not when KIVRA_WEBHOOK_SECRET is set: Kivra hands over the secret before it sends any webhook, so the flag alone would cut polling with none (crm#1524).

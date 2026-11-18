@@ -1,1 +1,0 @@
-[2026-10-26] An EU-prefixed seller VAT number that fails its member state's format (a VAT-code label like SESL000D, SE plus an org number) names no VAT number and no country: the reading drops it and the seller country falls to IBAN, org number or address, so an unknown seller asks the person instead of defaulting to Swedish input VAT (crm#1411).

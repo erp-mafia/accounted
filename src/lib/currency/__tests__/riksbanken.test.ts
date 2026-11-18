@@ -748,7 +748,7 @@ describe('fetchExchangeRate', () => {
     it.each(['ALL', 'UAH'])(
       'answers %s, a real currency without a Riksbanken series, with null and no error: no request, no cache read',
       async (currency) => {
-        // Albanian lek receipts in the inbox (prod 2026-10-21): every bank
+        // Albanian lek receipts in the inbox (seen 2026-10-21): every bank
         // match check of one logged an error that paged, for an answer.
         log.error.mockClear()
         log.info.mockClear()

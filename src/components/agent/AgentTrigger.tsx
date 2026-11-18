@@ -19,7 +19,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 // Floating trigger sits above the page bottom-right, opens the AgentSheet when
 // clicked. Hidden when the sheet is already open so the icon doesn't double up.
 //
-// Desktop-only for a FRESH open (founder call 2026-08-06). On mobile the pill
+// Desktop-only for a FRESH open (product call 2026-08-06). On mobile the pill
 // landed on top of the bottom nav and covered page content, and the bottom nav
 // already carries an "Assistent" tab to /chat, so the pill was pure
 // redundancy. A
@@ -41,11 +41,11 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 // Bokföring (verifikation.draft) and the "Fråga assistenten" buttons in
 // Underlag (transaction.categorization with a transaction_id, inbox.bulk-book
 // with the marked items), which the pathname-only FAB can't know.
-// Session-scoped dismissal flag for the non-payer upsell pill. sessionStorage
-// on purpose: "close" means gone for THIS browser session, and the pill comes
-// back full-size next session. Anything permanent (localStorage or
-// user_preferences) would let a non-payer silence the conversion surface
-// forever with one click (founder call 2026-08-09).
+// Session-scoped dismissal flag for the pill shown without the ai capability.
+// sessionStorage on purpose: "close" means gone for THIS browser session, and
+// the pill comes back full-size next session. A permanent dismissal
+// (localStorage or user_preferences) would hide the pill for good with one
+// click.
 const UPSELL_DISMISSED_KEY = 'agent-upsell-dismissed'
 
 export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
@@ -175,11 +175,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // assistant right now.
   if (effectiveHidden && !collapsed) return null
 
-  // Dismissed upsell (non-payer clicked the pill's X, or closed the paywalled
-  // sheet): render nothing at all for the rest of the browser session. A
-  // collapsed session still shows its handle even then: it is the only way
-  // back to the minimized conversation, and its label is a resume action
-  // ("Fortsätt med ..."), not the upsell.
+  // Dismissed pill (no ai capability; the user clicked the pill's X, or closed
+  // the paywalled sheet): render nothing at all for the rest of the browser
+  // session. A collapsed session still shows its handle even then: it is the
+  // only way back to the minimized conversation, and its label is a resume
+  // action ("Fortsätt med ..."), not the billing prompt.
   if (!hasAi && upsellDismissed && !collapsed) return null
 
   // Sheet open AND visible → hide the FAB so the icon doesn't double up. When
@@ -232,7 +232,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   const dispatch = routeToIntent(pathname, { assistantAvailable })
   // AI assistant runs on a paid cloud service. Without the capability, opening
   // the sheet would land the user in a chat whose send is dead. Keep the FAB
-  // visible (it's the conversion surface) but route it to billing instead.
+  // visible but route it to billing instead.
   // A minimized session used to be silent: the agent could be three tool calls
   // into a booking, or finished ten minutes ago, and the pill said "Fortsätt
   // med Anna" either way. While hidden, the status channel does the talking.
@@ -287,9 +287,9 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   const visibilityClass = collapsed ? 'flex' : 'hidden md:flex'
 
   // Every fresh pill carries an X; a collapsed handle never does (it is the way
-  // back to a live session). A non-payer's X dismisses the upsell for this
-  // browser session, so a non-payer is never stuck with an undismissable ad in
-  // the corner. A payer's X sets the persistent opt-out above, with an undo.
+  // back to a live session). Without the ai capability the X dismisses the
+  // pill for this browser session, so it is never stuck undismissable in the
+  // corner. With it, the X sets the persistent opt-out above, with an undo.
   const dismissible = !collapsed
 
   return (

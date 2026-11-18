@@ -1,8 +1,7 @@
 import { cn } from '@/lib/utils'
 
 /**
- * The look of a row in the area sidebar (the prototype's row, kit/board.py
- * _sidebar): 30px, 6px radius, 13px in the strong ink, a 10px gap after the
+ * The look of a row in the area sidebar: 30px, 6px radius, 13px in the strong ink, a 10px gap after the
  * icon, the active row on the selected wash. Shared by the area
  * rows (AreaSidebar) and the Inställningar area's section rows (SettingsRail),
  * so the two cannot drift apart.

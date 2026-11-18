@@ -40,7 +40,7 @@ const CEILINGS: Record<string, number> = {
   'lib/bokslut/readiness-aggregator.ts': 1,
   'app/(dashboard)/invoices/page.tsx': 1,
   'components/invoices/SendInvoiceDialog.tsx': 1,
-  // The settings form and the mid-year change guard (!763 owns both).
+  // The settings form and the mid-year change guard.
   'components/settings/sections/BookkeepingSettingsContent.tsx': 5,
   'lib/operations/company-settings.ts': 1,
   'lib/company/accounting-method-change.ts': 1,

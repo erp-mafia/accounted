@@ -91,7 +91,7 @@ export function buildErrorReferenceMd(): string {
   lines.push('}')
   lines.push('```')
   lines.push('')
-  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs). \`recovery_hint\` (when present) is a one-line description of the canonical fix. \`request_id\` echoes the request for support and log correlation — note it lives inside \`error\` on failures (there is no top-level \`meta\` block on an error response, unlike the success envelope). \`docs_url\` is built from the code (\`…/docs/api/errors/<CODE>\`).`)
+  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs). \`recovery_hint\` (when present) is a one-line description of the canonical fix. \`request_id\` echoes the request for support and log correlation - note it lives inside \`error\` on failures (there is no top-level \`meta\` block on an error response, unlike the success envelope). \`docs_url\` is built from the code (\`…/docs/api/errors/<CODE>\`).`)
   lines.push('')
 
   for (const label of orderedLabels) {

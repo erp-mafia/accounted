@@ -217,7 +217,7 @@ export const POST = withRouteContext(
       || (bodyResult.data.additional_bcc?.length ?? 0) > 0
     // Fixed recipients are owner/admin-approved company routing and apply to
     // every writable sender. Only a new per-send disclosure needs this fresh
-    // role check. See .compliance/authorization-policy.md.
+    // role check.
     if (hasAdditionalRecipients) {
       const { data: membership, error: membershipError } = await supabase
         .from('company_members')

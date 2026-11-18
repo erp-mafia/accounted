@@ -1,1 +1,0 @@
-[2026-10-16] Invoice email attachments (crm#1269) are separate files on the invoice, frozen at issue by a trigger, not a merged PDF and not linked to the revenue verifikat: a forwarded receipt keeps its own expense verifikat, and retention needs no voucher.

@@ -1,1 +1,0 @@
-[2026-11-11] AGI generation refuses every write while another live run is paid out in the same month, the first one included: one run alone files a declaration missing the other pay. Runs are still not combined; a filed declaration is still answered as filed (crm#1768).

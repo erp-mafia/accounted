@@ -26,8 +26,8 @@ describe('normalizeSupplierName', () => {
   it('lowercases, strips punctuation and legal-form suffixes', () => {
     expect(normalizeSupplierName('Polarn O. Pyret AB')).toBe('polarn o pyret')
     expect(normalizeSupplierName('polarn o pyret')).toBe('polarn o pyret')
-    expect(normalizeSupplierName('ECAB Bygg & VVS AB')).toBe('ecab bygg & vvs')
-    expect(normalizeSupplierName('Städarna i Uppsala Aktiebolag')).toBe('städarna i uppsala')
+    expect(normalizeSupplierName('Exempel Bygg & VVS AB')).toBe('exempel bygg & vvs')
+    expect(normalizeSupplierName('Städarna i Exempelstad Aktiebolag')).toBe('städarna i exempelstad')
   })
 
   it('only strips the suffix at the end, not inside the name', () => {
@@ -46,7 +46,7 @@ describe('scoreSupplierName', () => {
   })
 
   it('scores partial token overlap below containment', () => {
-    const s = scoreSupplierName('Bygg & VVS Norr', 'ECAB Bygg & VVS AB')
+    const s = scoreSupplierName('Bygg & VVS Norr', 'Exempel Bygg & VVS AB')
     expect(s).toBeGreaterThan(0)
     expect(s).toBeLessThan(0.9)
   })
@@ -60,7 +60,7 @@ describe('findSupplierCandidates', () => {
   const suppliers = [
     { id: 'sup-polarn', name: 'Polarn O. Pyret AB', org_number: '556235-8797' },
     { id: 'sup-dnb', name: 'DNB Bank AB', org_number: '5169077454' },
-    { id: 'sup-ecab', name: 'ECAB Bygg & VVS AB', org_number: null },
+    { id: 'sup-ecab', name: 'Exempel Bygg & VVS AB', org_number: null },
   ]
 
   it('matches org numbers across formatting variants at score 1', () => {

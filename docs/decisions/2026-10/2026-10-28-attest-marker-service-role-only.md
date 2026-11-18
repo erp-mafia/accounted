@@ -1,1 +1,0 @@
-[2026-10-28] supplier_invoices.approved_at/approved_by are written only by the service role (a trigger refuses sessions) instead of a SECURITY DEFINER attest RPC (accounted#124): the rules stay in attest-policy.ts, one place, and the service checks the attester keeps the books, as RLS did.

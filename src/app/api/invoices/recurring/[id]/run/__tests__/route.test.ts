@@ -232,7 +232,7 @@ describe('POST /api/invoices/recurring/[id]/run: the run is recorded before the 
     await POST(req(), params)
 
     // A run that claimed after this record (another tab) has written a held
-    // warning this one must not erase (review of !1529).
+    // warning this one must not erase.
     const record = scheduleWrites()[1]!
     expect(filtersOfWrite(2)).toEqual([
       ['id', 's-1'],

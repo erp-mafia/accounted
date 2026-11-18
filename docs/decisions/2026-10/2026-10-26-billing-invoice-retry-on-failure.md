@@ -1,1 +1,0 @@
-[2026-10-26] A failed delivery of our paid invoice into the Inkorg (Stripe read, PDF download, archive, insert) fails the webhook with 500 so Stripe delivers invoice.paid again, instead of being swallowed like the customer identity sync: the delivery is the only thing that event does, and a redelivery finds the item it filed (PH 191).

@@ -1,1 +1,0 @@
-[2026-10-20] A company's own supplier portal stores a link only, https without userinfo or query string, never a login: the query is where sessions and one-time tokens ride, and holding supplier passwords stays out of scope (portal-directory.ts).

@@ -1,1 +1,0 @@
-[2026-10-26] Icons move from Lucide to animated Heroicons (@heroicons-animated/react, MIT) behind one module, src/components/icons: the founder found Lucide generic. One set, lint-enforced; no honest Heroicon means no icon; its div wrapper keeps icons out of <p>.

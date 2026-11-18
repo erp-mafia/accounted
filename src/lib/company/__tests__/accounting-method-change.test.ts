@@ -54,7 +54,7 @@ describe('checkAccountingMethodChange', () => {
     expect(client.from).not.toHaveBeenCalledWith('journal_entries')
   })
 
-  // #93: !763 asked only before a correction, so a year with nothing posted
+  // #93: the guard asked only before a correction, so a year with nothing posted
   // let an open invoice without a verifikat through: booked twice after a
   // switch to kontantmetoden, never after one to faktureringsmetoden.
   it.each([

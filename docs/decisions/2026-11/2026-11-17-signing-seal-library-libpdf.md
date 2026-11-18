@@ -1,1 +1,0 @@
-[2026-11-17] The seal is made with @libpdf/core, pinned at 0.5.3 (MIT, beta; Jakob approved it): pdf-lib cannot sign and @signpdf has no timestamp or long-term validation. Two independent validators accepted its output before it was added.

@@ -2,9 +2,8 @@
 /**
  * Guards: Swedish jurisdiction welded into code that every country will run.
  *
- * Accounted is going multi-country (docs/decisions/2026-09.md, 2026-09-30): jurisdiction
- * becomes a per-company pack, with Sweden as pack number one. Until that seam
- * exists, three kinds of weld must stop growing. Each is a per-file ratchet
+ * Jurisdiction is a per-company pack, with Sweden as pack number one. Until
+ * that seam exists, three kinds of weld must stop growing. Each is a per-file ratchet
  * with its baseline in antipatterns-baseline.json, wired into
  * `npm run check:guards` (scripts/checks/no-new-antipatterns.mjs):
  *

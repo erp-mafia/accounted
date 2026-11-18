@@ -1,1 +1,0 @@
-[2026-11-01] Massbokföring's category is picked, then booked with the dialog's one primary, instead of booking every selected row on the click: same call and arguments, but a mass write no longer happens on a single chip click (Stil v3 dialog anatomy, board Dlg-Massbokforing-v3).

@@ -2,7 +2,7 @@
  * K2 AB årsredovisning → iXBRL 1.1 XHTML document (entry point risbs).
  *
  * Layout and tagging follow the official example
- * dev_docs/bokslut/exempel/k2/faststalld-arsredovisning-exempel-1-*.xhtml and
+ * docs/reference/bokslut/exempel/k2/faststalld-arsredovisning-exempel-1-*.xhtml and
  * TILLAMPNINGSANVISNING v1.8:
  *   - XHTML + UTF-8, no scripts/external refs, inline CSS gathered in <head>
  *   - contexts period0/period1/…, balans0/balans1/…; unit SEK

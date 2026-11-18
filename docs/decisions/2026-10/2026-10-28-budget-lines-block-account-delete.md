@@ -1,1 +1,0 @@
-[2026-10-28] Account delete and prune read budget lines through get_account_budget_line_counts, not get_account_usage_counts (accounted#134): that count is the kontoplan's Verifikat column and the OSS account check, which must keep counting journal lines only.

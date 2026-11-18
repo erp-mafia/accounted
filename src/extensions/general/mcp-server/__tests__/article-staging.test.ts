@@ -11,7 +11,7 @@ import { tools } from '../server'
 
 vi.mock('@/lib/currency/riksbanken', () => ({ fetchExchangeRate: vi.fn(), convertToSEK: vi.fn() }))
 
-const ARTICLE_ID = '3a9ac4d2-163a-4d43-8fa3-1b32827505fa'
+const ARTICLE_ID = '0d1d0000-0000-4000-8000-000000000002'
 const actor = { kind: 'api_key', apiKeyId: 'ak_1' } as never
 const create = () => tools.find((t) => t.name === 'gnubok_create_article')!
 const update = () => tools.find((t) => t.name === 'gnubok_update_article')!

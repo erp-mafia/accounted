@@ -1348,7 +1348,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // A thrown failure wrote nothing to replay: give the key back.
       if (heldClaim) await heldClaim.release()
       // Resolve the envelope first so the log level can follow the mapped
-      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // status - thrown 4xx domain errors are expected outcomes (warn), only
       // 5xx are runtime errors. v1ErrorResponse logs the error itself at the
       // same threshold.
       const response = await v1ErrorResponse(err, log, { requestId })

@@ -1,1 +1,0 @@
-[2026-11-01] A verifikat balances on what it stores: lineBalance rounds each line with roundOre before summing, every door calls it and the engine stores through the same function, so three decimals get a refusal at the door instead of a failed commit. The trigger stays the floor.

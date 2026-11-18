@@ -1,1 +1,0 @@
-[2026-10-20] Inkorg one click: an invoice paid more than 7 days after its date is registered and settled in the same click while Leverantörsfakturor is on (off: booked like a receipt); an unpaid one is registered, or the form opens without its number or due date: the reskontra stays true.

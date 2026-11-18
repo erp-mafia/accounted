@@ -1,1 +1,0 @@
-[2026-10-27] Pågående arbeten book their adjustment on one class 3 account pinned outside every momsruta: no momskod, no momsruta, momssats 0, held by a chart_of_accounts trigger and kept once it carries a line; chosen over excluding the verifikat inside get_vat_declaration_totals.

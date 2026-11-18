@@ -1,6 +1,6 @@
 /**
  * The Skatteverket transport writes exactly one skatteverket_api_audit_log row
- * per outbound call (founder decision D4: every call, reads included), and no
+ * per outbound call (product decision D4: every call, reads included), and no
  * route writes one on top. The routes run here against the REAL transport and
  * AGI client; only fetch, the token store and the audit insert are stubbed,
  * so "one row per call" is counted, not assumed.

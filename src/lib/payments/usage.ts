@@ -7,9 +7,8 @@
  * (countsAsUsedBankPayment). The counter is read from the orders the ledger
  * already keeps: no second ledger of usage.
  *
- * Payments are capped (founder decision 2026-10-14, while the provider
- * prices per payment and our own pricing is not set): a company may send
- * BANK_PAYMENTS_INCLUDED_PER_MONTH a month, or the number a founder set for
+ * Payments are capped: a company may send
+ * BANK_PAYMENTS_INCLUDED_PER_MONTH a month, or the number an operator set for
  * it in company_bank_payment_allowances, plus BANK_PAYMENTS_PER_PACK for every
  * pack its owner bought on the subscription (issue #132), and a signing that
  * would pass it is refused (lib/payments/allowance.ts). Accounts are counted
@@ -18,7 +17,7 @@
  * Once bank payments are billed per unit (USAGE_BILLING_KINDS lists
  * bank_payment, lib/usage/kinds.ts), more than what is included is offered:
  * the signing still stops at the included amount until the company asks for
- * more and a founder opens the charge (lib/usage/consent.ts). After that,
+ * more and an operator opens the charge (lib/usage/consent.ts). After that,
  * payments above it cost the unit price, billed in arrears, and the hard stop
  * moves up to BANK_PAYMENTS_SAFETY_CEILING; packs are not sold.
  * Payment files (betalfil) never reach the provider and are not counted.
@@ -66,7 +65,7 @@ export interface BankPaymentsUsage {
   included_accounts: number
   /** The hard stop: included_payments, or BANK_PAYMENTS_SAFETY_CEILING once extra payments are accepted. */
   cap_payments: number
-  /** Whether payments above included_payments can be asked for at unit_price_ore (Begär fler; a founder opens the charge). */
+  /** Whether payments above included_payments can be asked for at unit_price_ore (Begär fler; an operator opens the charge). */
   extra_offered: boolean
   /** Whether the charge is open: payments above included_payments are then billed instead of refused. */
   billed_above_included: boolean
@@ -151,7 +150,7 @@ export const BANK_PAYMENTS_PER_PACK = 100
 
 /** What a company may send a month, and what it is made of. */
 export interface BankPaymentsAllowance {
-  /** The base: the number a founder set for the company, else the default. */
+  /** The base: the number an operator set for the company, else the default. */
   base: number
   /** Packs on the company's Stripe subscription (the webhook keeps purchased_packs). */
   packs: number
@@ -178,7 +177,7 @@ export async function readBankPaymentsAllowance(supabase: SupabaseClient, compan
   return allowanceOf(data as { monthly_payments?: number | null; purchased_packs?: number | null } | null)
 }
 
-/** The payments a company may send a month: the base (a founder's override, else the default) plus the packs it bought. */
+/** The payments a company may send a month: the base (an operator's override, else the default) plus the packs it bought. */
 export async function includedBankPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
   return (await readBankPaymentsAllowance(supabase, companyId)).included
 }

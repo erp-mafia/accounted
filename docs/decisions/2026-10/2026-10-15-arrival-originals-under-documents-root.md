@@ -1,1 +1,0 @@
-[2026-10-15] Arrival originals are stored at documents/{companyId}/arrivals/{arrivalId}/{name} in the documents bucket, not {companyId}/arrivals/...: the bucket's company-scoped policies only match keys under the documents/ root, and the WORM rules then cover the originals like the underlag.

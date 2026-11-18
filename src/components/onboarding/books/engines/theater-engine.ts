@@ -7,7 +7,7 @@
  * to. A register stage lets a provider join as a source node whose
  * invoices ride to the accounts they were matched to.
  *
- * Ported from the founder-approved prototype (artifact 325788b7). Canvas
+ * Ported from the approved prototype. Canvas
  * only, no React: the component owns the element and calls the api.
  * Colours and the font come from the app's tokens at start, so dark mode
  * and the brand font follow without configuration.

@@ -1,1 +1,0 @@
-[2026-11-01] A 4xx answer about the company or year (only an ideell förening files förenklat årsbokslut, only byrå teams have a brand) shows as the answer in an EmptyState; only a network error, 5xx, 408 or 429 gets LoadError with Försök igen and "check your connection".

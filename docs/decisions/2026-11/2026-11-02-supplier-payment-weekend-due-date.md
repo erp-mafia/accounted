@@ -1,1 +1,0 @@
-[2026-11-02] A supplier invoice due on a weekend or holiday defaults to paying on the last banking day before it, in payment orders and payment files alike, as salary and skattekonto do: a bank pays a non-banking day on the next one, after the due date (crm#1595).

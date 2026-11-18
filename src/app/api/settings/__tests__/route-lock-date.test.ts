@@ -3,8 +3,8 @@
  *
  * Moving the lock date back over a momsperiod whose declaration is filed
  * reopens that period for writes. The API and MCP doors have asked before
- * doing that since 2026-09-26; the settings page did not (the decision of
- * that day left it out until the founder decided). It asks now: the save is
+ * doing that since 2026-09-26; the settings page did not. It asks now: the
+ * save is
  * refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT naming the periods, the
  * page shows them, and the save comes again with
  * acknowledge_filed_vat_periods. A move that reopens no filed period, and

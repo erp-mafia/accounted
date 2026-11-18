@@ -1,1 +1,0 @@
-[2026-11-09] The bank-row booking gate also refuses a row a posted verifikat was booked from (source_type bank_transaction, source_id; a corrected one through its standing correction) while no anchor names it: claims that never landed let 22 rows be booked twice.

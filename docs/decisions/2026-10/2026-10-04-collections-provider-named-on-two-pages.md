@@ -1,1 +1,0 @@
-[2026-10-04] /dpa and /privacy name the collections provider (name and org.nr) only in recipient prose, scoped to påminnelser och inkasso, with its controller role taken from its own privacy policy; the tests read the name from the pages, so these two pages stay the only files naming it.

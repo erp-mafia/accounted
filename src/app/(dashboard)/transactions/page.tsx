@@ -4711,7 +4711,7 @@ export default function TransactionsPage() {
         // Only while the person is looking at Skatteverket's rows. The dead
         // connection has its own channel on the Skattekonto page and the
         // Konton row (lib/notices predicate), so a line on every visit to the
-        // bank list was noise (founder feedback 2026-09-09). The line still
+        // bank list was noise (feedback 2026-09-09). The line still
         // renders only while the connection is actually broken.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/skatteverket' }}>
           {t('skv_reconnect_body')}

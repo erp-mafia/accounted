@@ -1,1 +1,0 @@
-[2026-11-07] A header-only supplier invoice (Bokio migration) is named in the kontantmetod cut-off, not carried, and its company is not auto-enrolled in Bokio completion: completion changed 1 of 3,459 invoices in prod, and a carry would guess cost and moms.

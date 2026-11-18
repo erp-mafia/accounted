@@ -1,1 +1,0 @@
-[2026-10-18] ROT/RUT postings record the existing se.rot_rut.payout_received, reclaimed and reclassified, not new se.household_deduction kinds: the add-only list already names the acts. Payout and reclaim carry no subject (a begäran has no handle) and no party.

@@ -1,1 +1,0 @@
-[2026-11-07] Stripe Checkout shows the company identity already on the customer (custom_text beside the pay button) instead of asking for business name and VAT ID again: Stripe hides tax ID collection for a customer with a tax ID, so the prefill (PH 191) was invisible.

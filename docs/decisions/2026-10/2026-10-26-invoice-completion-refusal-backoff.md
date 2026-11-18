@@ -1,1 +1,0 @@
-[2026-10-26] Invoice completion waits a day (not an hour) after a 403 or a refused credential from Visma, Bokio and other non-Fortnox providers and logs it as a warning, without a migration: block_invoice_completion_work takes Fortnox consents only, and extending blocks and their reconnect-clearing trigger to every provider is a larger change than the noise warrants (B11).

@@ -1,1 +1,0 @@
-[2026-10-22] Kontantmetoden books ROT/RUT moms in two steps: the customer payment books revenue and moms on the customer's share only, Skatteverket's share at its payout or in the year-end carry: Skatteverket, Så fungerar rotavdraget; ML 2023:200 7 kap. 16 §.

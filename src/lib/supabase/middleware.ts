@@ -624,7 +624,7 @@ async function updateSessionInner(
     return bounceToAuth(request, supabaseResponse, '/login', broughtSession ? SESSION_ENDED_REASON : null)
   }
 
-  // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
+  // ── Home-domain affinity (WL, product call 2026-08-05) ──────────────────
   // Every signed-in user has a home domain: byrå team members home on their
   // brand's domain, everyone else on the platform app URL, except a byrå's
   // client users, whose home is the byrå domain their companies live under.
@@ -1159,7 +1159,7 @@ function isAffinityExemptHost(host: string): boolean {
 /**
  * Decide whether this signed-in request sits on the user's home domain.
  *
- * Rules (founder call 2026-08-05):
+ * Rules (product call 2026-08-05):
  *   1. A byrå team member's home is their brand's domain: any other product
  *      host (a foreign byrå domain OR the platform domain) redirects there,
  *      EXCEPT on the canonical platform host when the member also has a

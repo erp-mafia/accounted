@@ -113,7 +113,7 @@ async function insertJournalEntry(params: {
   }
 
   const id = randomUUID()
-  // Insert directly, bypassing commit_journal_entry's voucher sequencing —
+  // Insert directly, bypassing commit_journal_entry's voucher sequencing:
   // fine for a read-side RPC that only aggregates line/account references.
   await getPool().query(
     `INSERT INTO public.journal_entries

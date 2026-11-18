@@ -324,8 +324,7 @@ describe('POST /api/agent/invoke', () => {
 
 // ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off, the
 // route runs no turn and says where the person's own assistant connects, for
-// every intent: the onboarding interview goes with the rest (founder decision
-// 2026-11-18).
+// every intent: the onboarding interview goes with the rest.
 describe('POST /api/agent/invoke with the chat switched off', () => {
   const OFF_SV = 'Chatten är avstängd. Koppla din egen assistent, till exempel Claude, under Agenter > Koppla en agent.'
   const OFF_EN = 'The chat is switched off. Connect your own assistant, for example Claude, under Agents > Connect an agent.'

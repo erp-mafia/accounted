@@ -1,1 +1,0 @@
-[2026-10-26] Typed verifikat are checked at booking for VAT above 25 % of its base, VAT on the wrong account kind, one-sided reverse charge, revenue debited in a purchase and duplicates: warnings a person confirms, never refusals, as every shape has a lawful exception.

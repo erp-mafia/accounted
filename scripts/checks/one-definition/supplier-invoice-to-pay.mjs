@@ -2,7 +2,7 @@ export default {
   rule: 'supplier-invoice-to-pay',
   says: 'Which supplier invoices wait to be paid has one answer: the Att betala tab, the Att göra Betala row and status=to_pay all ask waitsToBePaid.',
   home: 'src/lib/supplier-invoices/to-pay.ts: waitsToBePaid',
-  why: 'The tab counted every payable status, the Att göra row only attested invoices and the API the statuses Markera som betald is offered for: Att göra said Betala 1 and the tab it opens showed 3 (296 companies).',
+  why: 'The tab counted every payable status, the Att göra row only attested invoices and the API the statuses Markera som betald is offered for: Att göra said Betala 1 and the tab it opens showed 3.',
   match: [
     // .in('status', [...payableSupplierInvoiceStatuses(method)]): the old to_pay filter.
     /\.in\(\s*'status'\s*,\s*\[\s*\.\.\.payableSupplierInvoiceStatuses\(/,

@@ -5,7 +5,7 @@
  *
  * Open Payments gives the form
  * https://app.bankid.com/?autostarttoken={token}&redirect={uri} and says to
- * set the redirect for mobile (dev_docs/open-payments/authorisations.md).
+ * set the redirect for mobile.
  *
  *   - Desktop: the bankid:/// scheme with redirect=null. The BankID app on a
  *     computer sits beside the browser; the page keeps polling.

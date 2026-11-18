@@ -22,8 +22,7 @@ import { analyticsReady, loadedAnalytics } from './client'
  * What it does NOT clear: `seenSurvey_<id>`. No PostHog bundle enumerates
  * localStorage, so the SDK cannot find those keys to delete them. That is
  * accepted, and desirable: clearing them would re-prompt every survey to the
- * next person on the device. See the client-side storage inventory in
- * .compliance/Data_Classification_Handling.md.
+ * next person on the device.
  */
 export function resetAnalyticsIdentity(): void {
   if (typeof window === 'undefined') return

@@ -31,7 +31,7 @@ export function usageMonthName(period: string, locale: string): string {
 
 /**
  * Begär fler betalningar: how many payments a month the company needs and an
- * optional message. The request is mailed to support and a founder raises
+ * optional message. The request is mailed to support and an operator raises
  * the cap by hand; the dialog then thanks the person and closes on their word.
  */
 export function RequestMorePaymentsDialog({ included, onOpenChange }: { included?: number | null; onOpenChange: (open: boolean) => void }) {

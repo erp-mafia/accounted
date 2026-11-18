@@ -1,1 +1,0 @@
-[2026-10-18] For companies that never attest supplier invoices (kontantmetoden), an open registered invoice reads as muted Att betala on list, supplier page and detail; the Registrerad chip stays where attest is the real gate.

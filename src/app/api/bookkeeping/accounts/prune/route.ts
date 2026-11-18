@@ -6,7 +6,7 @@ import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// POST /api/bookkeeping/accounts/prune — bulk cleanup of unused accounts
+// POST /api/bookkeeping/accounts/prune - bulk cleanup of unused accounts
 // ("Rensa oanvända konton"), for charts bloated by an import from an old
 // system.
 //
@@ -21,11 +21,11 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 //       anything failing re-check at execute time is skipped and reported,
 //       never deleted and never an error.
 //
-// A used account can never be deleted through this path — its verifikat are
+// A used account can never be deleted through this path - its verifikat are
 // immutable under BFL and their lines must keep resolving to an account.
 // Deactivation (PUT is_active=false on the single-account route) remains the
 // only way to hide those. Draft usage also blocks deletion: a draft line
-// still references the account. Opening balances need no separate check —
+// still references the account. Opening balances need no separate check:
 // IB is booked as a verifikat (source_type 'opening_balance'), so the journal
 // usage count covers it. (The account_balances cache table was dropped in
 // migration 20240101000027.)
@@ -33,10 +33,10 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // Like the sibling single-account DELETE, there is a small window between
 // the usage re-check and the delete where a concurrent posting could slip
 // in; journal_entry_lines reference accounts by number (account_id is ON
-// DELETE SET NULL), so the entry itself is never damaged — the account row
+// DELETE SET NULL), so the entry itself is never damaged - the account row
 // would just need re-adding from the BAS catalog.
 //
-// Response shapes are legacy `{ data }` / `{ error: string }` — consumed by
+// Response shapes are legacy `{ data }` / `{ error: string }` - consumed by
 // the kontoplan UI alongside the sibling account routes.
 
 interface ChartAccountRow {
@@ -63,7 +63,7 @@ export const POST = withRouteContext(
     const { dry_run, account_numbers } = validation.data
 
     try {
-      // A full imported chart can exceed PostgREST's 1000-row page — paginate.
+      // A full imported chart can exceed PostgREST's 1000-row page - paginate.
       const accounts = (await fetchAllRows(({ from, to }) =>
         supabase
           .from('chart_of_accounts')
@@ -133,7 +133,7 @@ export const POST = withRouteContext(
       }
 
       // Execute: intersect the requested selection with the freshly computed
-      // deletable set — guards are re-verified here, not trusted from the
+      // deletable set - guards are re-verified here, not trusted from the
       // preview the client saw.
       const requested = [...new Set(account_numbers ?? [])]
       const deletableSet = new Set(accounts.filter(isDeletable).map((a) => a.account_number))

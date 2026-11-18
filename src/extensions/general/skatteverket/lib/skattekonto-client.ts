@@ -79,7 +79,7 @@ async function handleErrorResponse(response: Response): Promise<never> {
 
   // A bare 404 ({"message": "Not found"}, no felkod) on /skattekonton/{id}
   // means Skatteverket keeps no skattekonto for that identity yet. Observed
-  // in prod on newly formed companies: the same identifier, on the same
+  // in production on newly formed companies: the same identifier, on the same
   // consent, later answers 200 once Skatteverket has opened the account, so
   // the request is right and the state is Skatteverket's (B07).
   if (response.status === 404) {

@@ -1327,8 +1327,8 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox honours def
 })
 
 describe('commitPendingOperation: create_supplier_invoice_from_inbox: input violations surface as SI_CREATE_INVALID_INPUT', () => {
-  // Prod 2026-09-10 08:54:12Z and 08:55:08Z (inbox item
-  // 9a91271b-83e3-41ad-a542-8da3d29c1175, a SEB bank fee with no due date
+  // A real case (an inbox item,
+  // a bank fee with no due date
   // on the document): the INSERT failed with "null value in column
   // \"due_date\" of relation \"supplier_invoices\" violates not-null
   // constraint", the executor mapped only 23505, and the agent saw a bare

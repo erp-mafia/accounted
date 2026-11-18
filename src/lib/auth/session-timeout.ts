@@ -98,7 +98,7 @@ export function createSessionTimeoutState(args: {
 
 /**
  * Whether timeouts actually apply to this session. Auto logout is opt-in
- * per user (founder decision 2026-08-12): without the opt-in snapshot, or
+ * per user (product decision 2026-08-12): without the opt-in snapshot, or
  * the global force-all override, a session lives as long as the Supabase
  * refresh token.
  */

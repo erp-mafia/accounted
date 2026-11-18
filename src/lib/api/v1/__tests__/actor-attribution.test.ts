@@ -7,10 +7,10 @@
  * production call site (the pending-operations commit), so anything reaching
  * the ledger by another route committed anonymously.
  *
- * Measured on production over 90 days: 99.8% of `storno` entries and 100% of
- * `correction` entries had no actor. Those are the two sanctioned rättelse
- * paths under BFL 5 kap. 5 §, which makes them the entries where "who did
- * this" is a legal question and the ones with the least attribution.
+ * Nearly every `storno` entry and every `correction` entry had no actor.
+ * Those are the two sanctioned rättelse paths under BFL 5 kap. 5 §, which
+ * makes them the entries where "who did this" is a legal question and the
+ * ones with the least attribution.
  *
  * The test asserts the scope is visible from INSIDE the handler, which is what
  * a helper several frames down (reverseEntry, correctEntry) actually sees.
@@ -121,7 +121,7 @@ describe('v1 handlers run inside the commit-actor scope', () => {
       companyId: COMPANY,
       scopes: ['companies:read'],
       apiKeyId: 'key-1',
-      apiKeyName: 'DueCue automation stager',
+      apiKeyName: 'Partner automation stager',
       mode: 'live',
     } as Awaited<ReturnType<typeof validateApiKey>>)
   })
@@ -149,7 +149,7 @@ describe('v1 handlers run inside the commit-actor scope', () => {
 
     await handler(makeRequest(URL_FOR), staticParams())
 
-    expect(seen?.label).toBe('DueCue automation stager')
+    expect(seen?.label).toBe('Partner automation stager')
   })
 
   it("names the key's user as the person the request acts for", async () => {

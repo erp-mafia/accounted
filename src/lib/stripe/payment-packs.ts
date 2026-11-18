@@ -210,7 +210,7 @@ async function scheduleDecrease(
     // A schedule made a moment ago and left half-written would hold the
     // subscription as a plan change nobody made: let it go again. The
     // update's own error is the one the caller hears; a failed release is
-    // logged for a founder to release by hand.
+    // logged for an operator to release by hand.
     if (!existing) {
       await stripe.subscriptionSchedules.release(schedule.id).catch((releaseErr: unknown) => {
         log.error('payment packs: a half-written subscription schedule could not be released', releaseErr as Error, { scheduleId: schedule.id })
@@ -288,7 +288,7 @@ export interface PaymentPacksView {
   can_buy: boolean
   pack_size: number
   max_packs: number
-  /** Payments a month without packs: the founder's override, else the default. */
+  /** Payments a month without packs: the operator's override, else the default. */
   base_payments: number
   /** Packs the company holds (what the cap counts). */
   packs: number

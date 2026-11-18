@@ -1,1 +1,0 @@
-[2026-10-16] MCP tools accept handles in their id arguments but still answer plain UUIDs in Phase 1: tool output schemas and the tools/list budget stay unchanged; handles in tool output is a separate decision.

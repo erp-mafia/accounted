@@ -58,7 +58,7 @@ describe('palettePages: the shell tree is the page list', () => {
     expect(without.some((p) => p.href === '/settings/api')).toBe(false)
   })
 
-  it('finds the Agenter pages by their menu names (founder decision 2026-11-16)', () => {
+  it('finds the Agenter pages by their menu names (product decision 2026-11-16)', () => {
     const pages = pagesFor()
     const first = (query: string) => pages.find((p) => matches(p, query))?.href
     expect(first('koppla en agent')).toBe('/settings/api')

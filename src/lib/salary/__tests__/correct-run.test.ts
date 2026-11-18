@@ -403,7 +403,7 @@ describe('correctSalaryRun live', () => {
   it('stornos the posted rättelse of a user-corrected entry, so the correction run does not book the period twice', async () => {
     // A user corrected the salary verifikat with storno + rättelse before the
     // run was corrected: the run still points at the reversed original, and
-    // the pay lives on in the rättelse (prod 2026-09: both stayed posted next
+    // the pay lives on in the rättelse (seen 2026-09: both stayed posted next
     // to the correction run's new verifikat).
     const { supabase, enqueueMany, calls, order } = trackedSupabase()
     enqueueMany([

@@ -28,7 +28,7 @@ export const FORTNOX_YEAR = [
   '#VER A 2 20260115 "Bankavgift"', '{', '#TRANS 1930 {} -89.50', '#TRANS 6570 {} 89.50', '}',
   '#VER X 1 20260120 "Kundbet Testkund (259)"', '{', '#TRANS 0099 {} 2295.00', '#TRANS 0099 {} -2295.00', '}',
   '#VER A 3 20260125 "Momsrapport 2025-10-01 - 2025-12-31"', '{', '#TRANS 0099 {} 0.00', '#TRANS 0099 {} 0.00', '}',
-  '#VER E 12 20260126 "Levbet Foder och Frö AB (215)"', '{', '#TRANS 1930 {} -2117.00', '#TRANS 2641 {} 423.40', '#TRANS 0999 {} 1693.60', '}',
+  '#VER E 12 20260126 "Levbet Exempelfoder AB (215)"', '{', '#TRANS 1930 {} -2117.00', '#TRANS 2641 {} 423.40', '#TRANS 0999 {} 1693.60', '}',
   '#VER A 4 20260131 "Inbetalning kundfaktura 1"', '{', '#TRANS 1930 {} 12500.00', '#TRANS 1510 {} -12500.00', '}',
   '#VER E 13 20260215 "Levbet Veterinären i byn (298)"', '{', '#TRANS 1930 {} -575.00', '#TRANS 2641 {} 115.00', '#TRANS 0999 {} 460.00', '}',
   '#VER A 5 20260228 "Hyra februari"', '{', '#TRANS 1930 {} -12500.00', '#TRANS 5010 {} 10000.00', '#TRANS 2641 {} 2500.00', '}',

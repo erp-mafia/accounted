@@ -1,1 +1,0 @@
-[2026-11-17] An agent's tool copy without company_id is answered in responses (tool search, the bridge refusal, the upload reservation), not in tool descriptions: a stale tools/list never gets a new description, a fresh one already shows the parameter, and the frozen list had 6 tokens of room.

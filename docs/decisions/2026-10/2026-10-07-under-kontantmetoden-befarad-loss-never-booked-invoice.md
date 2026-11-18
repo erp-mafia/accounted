@@ -1,1 +1,0 @@
-[2026-10-07] Under kontantmetoden a befarad loss on a never-booked invoice is refused (there is no fordran to value), a konstaterad one is recorded without a voucher, and a recovery on such an invoice is refused with the advice to book the payment as an ordinary sale (no write-off voucher exists to reverse, and the cash builder for part payments lives in another PR).

@@ -2,17 +2,7 @@
 
 A legal form (`EntityType`: `enskild_firma`, `aktiebolag`, `ideell_forening`, `ekonomisk_forening`, `bostadsrattsforening`) changes what the ledger must do: which equity account a year closes to, whether an owner exists, which tax return is filed, which report exists. This document is the contract for how that variation is expressed in code so that the fourth and fifth form cost one file each, not another sweep of the codebase.
 
-Status: proposed 2026-09-17. Merging this document adopts the contract. It applies to every change under `src/lib/company/**` and to every site that today compares `entity_type` to a string.
-
-## The problem in numbers (main, 2026-09-17)
-
-`src/lib/company/entity-type.ts` already holds the form-dependent facts behind `byEntityType`, whose `Record<EntityType, T>` arms make the compiler reject a new form until every fact has an answer. That part is right. Everything that bypasses it grows per form:
-
-- 69 literal comparisons (`=== 'aktiebolag'`, `=== 'enskild_firma'`) in 45 non-test files. Each sends a new form down whichever branch it was not written for, and nothing forces an edit. The four ledger-affecting förening defects found in the 2026-09-17 audit all live here (SIE opening balance on a hard-coded 2099, the year-end dispositions step, the dispositions route, the MCP EF preview).
-- `isEf ? … : …` copy ternaries with paired `_ef` / `_ab` i18n keys, in two languages.
-- 93 form-name tags in `src/lib/bookkeeping/booking-templates.ts`, plus `entityOnly` in `src/lib/reports/catalog.ts` and form conditions in `src/lib/tax/deadline-config.ts`. Payroll templates are aktiebolag-only today because nobody widened a tag, not because of law.
-- `seed_chart_of_accounts` re-declared in full in seven migrations.
-- 1,582 distinct BAS account literals in 176 files. That is the jurisdiction weld, not the form weld, but every form change adds a few.
+It applies to every change under `src/lib/company/**` and to every site that today compares `entity_type` to a string.
 
 ## The rule
 
@@ -102,7 +92,6 @@ The document does not enforce anything. These do:
 - **Ratchet `literalLegalForm`** in `scripts/checks/no-new-antipatterns.mjs`, baseline in `antipatterns-baseline.json`: counts form-code string literals in comparisons, ternaries, defaults and single-string tags under `src/lib/`, `src/app/`, `src/components/`, `src/extensions/`, excluding tests and `src/lib/company/forms/**`. Baseline is the count at implementation time (69 comparisons today, tags counted separately). It may only go down. `npm run check:guards` fails on an increase.
 - **Ratchet `basAccountLiteral`** in `scripts/checks/no-new-antipatterns.mjs` (patterns and territory in `scripts/checks/jurisdiction-welds.mjs`), per-file counts in `antipatterns-baseline.json`: quoted BAS account numbers and account-prefix checks (`account.startsWith('19')`, `/^19\d{2}$/`) under `src/lib/`, `src/app/`, `src/components/`, `src/extensions/`, excluding tests and `SE_PACK_TERRITORY` (the chart data, the `se-*` form profiles in `src/lib/company/forms/` but not the registry beside them, year-end and the Swedish filings, kontrolluppgifter included: the future SE jurisdiction pack). Baseline at shipping (re-baselined on main 2026-10-15): 1,525 sites in 242 files. A file's count may only go down and a new file may not introduce one; `npm run check:guards` fails otherwise.
 - **pg-real test per form** (`<form>-entity-type.pg.test.ts`): CHECK accepts the value, the three create RPCs accept it, and the seeded chart contains the profile's equity accounts.
-- **This rule file**: `.claude/rules/legal-forms.md` loads for agents touching the affected paths and points here.
 
 ## What "supported" means
 
@@ -125,24 +114,9 @@ A form is not supported when onboarding accepts its label. It is supported when 
 | Copy in `sv` and `en`, help page, docs | `src/messages/*.json`, `src/app/(dashboard)/help` |
 | Change of form for a company created under the wrong one | `correct_company_entity_type` and the posted-history path |
 
-## Migration path
-
-No big-bang refactor. The contract is adopted by the next changes that would otherwise add literals:
-
-1. **Slice 1, with the ideell förening pre-flip fixes.** The six fixes from the 2026-09-17 audit are each a literal gate that should become a profile read: the SIE opening-balance account (`equity.closing`), the dispositions step and route (`filings.incomeReturn`, `filings.corporateTaxDispositions`), the "Skapa årsredovisning" button (`filings.arsredovisning`), the MCP EF preview and year-end text (`filings.incomeReturn`, `equity.closing`). The `literalLegalForm` ratchet ships in the same PR with the baseline set there.
-2. **Slice 2, as files are touched.** The remaining literal sites are converted when a PR edits them for any reason. The ratchet guarantees the count never rises; no sweep is scheduled.
-3. **Slice 3, when the next form is scheduled.** The chart-seed table. Two days, worth doing only when it saves a migration.
-4. **The #2652 stack** rebases onto the profile: its seven capability functions map one-to-one to profile fields, and its array tags are rule 2.
-
 ## Non-goals
 
 - Renaming DB or v1 API values (`aktiebolag` stays `aktiebolag`; no namespacing).
 - Legal forms as extensions. A form varies law that the kernel and the triggers must know at commit time; a form whose extension is off would book wrongly rather than fail. Extensions stay for connectors and verticals.
 - A jurisdiction layer, SEK column renames, or changes to the `rutaNN` VAT contract. Those wait for a second country as the forcing function.
 - Abstractions with one implementation. Every profile field must have at least two forms that answer it differently, or it is a constant and does not belong here.
-
-## Open founder decisions
-
-1. Adopt this contract (merge), so that maintainers, the ekonomisk förening contributor and agents build against the same shape.
-2. Rebase order: the contributor rebases #2652 onto the profile, rather than the profile adapting to #2652.
-3. Timing of the chart-seed table: with `ekonomisk_forening`, or later.

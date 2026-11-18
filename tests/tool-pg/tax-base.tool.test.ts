@@ -186,7 +186,7 @@ describe('resultat före skatt, the proposal against the declaration', () => {
   })
 
   // loadTaxAdjustmentSnapshot still reads the year without year_end vouchers:
-  // moving it moves INK2S 7653 on a declaration, so that is a founder's call.
+  // moving it moves INK2S 7653 on a declaration, so that is an operator's call.
   // Goes red the day that path moves: drop `.fails` then.
   it.fails('adds back a non-deductible cost carried on a year_end voucher', async () => {
     const seed = await companyWithYear()

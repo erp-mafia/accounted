@@ -683,7 +683,7 @@ interface NewDimensionFormInput {
 
 /**
  * Create form for a custom registry dimension (#DIM 20+). The parent
- * (#UNDERDIM) select is an advanced, rarely-used SIE concept — kept behind a
+ * (#UNDERDIM) select is an advanced, rarely-used SIE concept - kept behind a
  * quiet disclosure so the common path stays name + number.
  */
 function NewDimensionForm({
@@ -691,7 +691,7 @@ function NewDimensionForm({
   isSaving,
   onSubmit,
 }: {
-  /** Existing dims — active ones populate the parent select. */
+  /** Existing dims - active ones populate the parent select. */
   dimensions: DimensionDto[]
   isSaving: boolean
   onSubmit: (input: NewDimensionFormInput) => void | Promise<void>

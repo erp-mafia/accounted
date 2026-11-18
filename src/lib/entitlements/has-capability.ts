@@ -424,9 +424,8 @@ export interface CapabilityBlockedError {
 }
 
 /**
- * What lifts the block. An agent told only the upsell had no next step (57
- * MCP sessions in 30 days on gnubok_connect_bank and
- * gnubok_create_document_upload, 19 of them ended there): a person upgrades
+ * What lifts the block. An agent told only that a plan is needed has no next
+ * step: a person upgrades
  * under Inställningar → Abonnemang, or on a self-host the operator adds the
  * connector key, and the call waits for that.
  */

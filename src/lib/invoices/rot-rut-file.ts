@@ -46,7 +46,7 @@ import {
  *
  * Everything in this module is pure and deterministic: the caller passes the
  * invoices and `today`; blockers are named per invoice, never guessed.
- * File content stays Swedish (statutory surface, see .claude/rules/i18n.md).
+ * File content stays Swedish (statutory surface).
  */
 
 const ROOT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0'

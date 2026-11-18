@@ -1,1 +1,0 @@
-[2026-10-23] A password change ends every other session of the user (GoTrue logout scope others, CASA 2.2.2); a failed revocation keeps the new password and answers otherSessionsEnded: false: a reset must sign out whoever used the old password, but never undo the reset.

@@ -1,1 +1,0 @@
-[2026-11-07] The VAT filing unique index covers completed rows only, and its migration dismisses older duplicate filing records itself: an index over pending rows broke the deadline generator's insert-before-delete, and a manual repair before merge is easy to miss.

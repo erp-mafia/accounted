@@ -92,8 +92,7 @@ export function emailRefusal(invoice: Pick<Invoice, 'document_type'>): IssueRefu
  *
  * v1 mark-sent and v1 send refuse it. No other door reads the column (nor do
  * the books or the declaration, which follow the accounts), so it is not part
- * of issuable until the founders choose: see
- * docs/decisions/2026-11/2026-11-01-issue-null-ruta.md.
+ * of issuable.
  */
 export function lacksMomsRuta(
   invoice: Pick<Invoice, 'moms_ruta' | 'vat_amount' | 'vat_treatment'>,
@@ -430,7 +429,7 @@ export async function markInvoiceSentAndBook(
           // Don't fail the issuance: the verifikat committed; only the link
           // failed. But log it through the structured logger so it reaches log
           // aggregation/alerting: this write silently no-ops when the
-          // journal_entry_id column is missing (it was absent in prod until the
+          // journal_entry_id column is missing (it was absent in production until the
           // 20260613100000 migration), which leaves mark-paid unable to detect
           // an already-booked sale.
           log.error('issue: journal_entry_id link to invoice failed', linkError, {

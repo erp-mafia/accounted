@@ -1,1 +1,0 @@
-[2026-10-26] Import: a supplier's account lands in the clearing and account fields the form shows and payments read, its IBAN and BIC when valid, and its currency when booked here: free-text bank_account left accounts unpayable, and IBAN, BIC and currency were dropped (crm#1436).

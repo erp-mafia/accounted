@@ -7,8 +7,7 @@
  * lock and the company lock date, and a filing sets neither, so a back-dated
  * invoice, a correction on the original's date (storno-service keeps it) or a
  * voucher from an integration lands in a period Skatteverket already has. An
- * audit of prod (2026-10-26) found 8 of 94 declarations filed through the
- * connection and 13 of 147 marked by hand that no longer matched the books,
+ * audit (2026-10-26) found about one filed declaration in eleven no longer matched the books,
  * and nothing had told the company. This says which filed period moved, by
  * how much per ruta, and through which verifikat. What the company does about
  * it (a corrected declaration, or moving the verifikat to an open period) is
@@ -304,7 +303,7 @@ export async function withChangesAfterFiling(
         .gte('entry_date', filing.period_start)
         .lte('entry_date', filing.period_end)
         // Every posted verifikat carries committed_at (set_committed_at
-        // stamps the commit; none is null on prod, 2026-10-28).
+        // stamps the commit; none is null on seen 2026-10-28).
         .gt('committed_at', after)
         .order('id')
         .range(from, to),

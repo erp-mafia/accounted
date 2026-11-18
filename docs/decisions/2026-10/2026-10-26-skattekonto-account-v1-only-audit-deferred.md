@@ -1,1 +1,0 @@
-[2026-10-26] The skattekonto account gets a v1 door (GET/PATCH /settings/skattekonto-account, ledger module) but no MCP tool, and skattekonto links and ignores get no who/when audit trail yet: both need a migration with a pg test (a staged pending type, an audit log table), and pg tests cannot run on tonight's machine; left as follow-ups on issue #50.

@@ -1,1 +1,0 @@
-[2026-11-01] A bank row is open work when no live verifikat anchors it. An anchor at a reversed verifikat books nothing, unless a posted correction of it books on a bank account: 35 prod rows have their money there, and listing them as open would book it twice (founder question).

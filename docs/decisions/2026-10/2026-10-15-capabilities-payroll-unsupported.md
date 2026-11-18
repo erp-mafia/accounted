@@ -1,1 +1,0 @@
-[2026-10-15] The payroll offer rule (offersPayroll) reports payroll unsupported with unsupported_legal_form for an enskild firma without pays_salaries, per the reason-to-status mapping; its resolution names the opt-in. Status off would read as a company switch, which does not exist yet.

@@ -1,1 +1,0 @@
-[2026-10-23] Behandlingshistorik opens on the current month, remembered per report, with the whole year one choice away: a busy company's year is about 100 000 events (58 MB, 1.4-2 s) before the browser renders them in one table.

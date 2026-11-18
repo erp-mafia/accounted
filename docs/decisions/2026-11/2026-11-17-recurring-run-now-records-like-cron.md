@@ -1,1 +1,0 @@
-[2026-11-17] "Skapa faktura nu" makes the hourly run (lib/invoices/recurring-schedule-run.ts) and, when that run was due, moves next_run_date one interval past it, the cron's own rule: it recorded after the send with no claim gate, so the cron billed the period again (accounted#213).

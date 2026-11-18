@@ -1,1 +1,0 @@
-[2026-11-08] An org number several live companies claim gives the ombud connection only to the one whose current member proved it with a BankID skattekonto read for that company: a tenant that typed a victim's number must never inherit the grant.

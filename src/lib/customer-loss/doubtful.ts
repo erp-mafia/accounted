@@ -1,5 +1,5 @@
 /**
- * Befarad kundförlust (build spec 4.2 F and F2, founder decision F3).
+ * Befarad kundförlust (build spec 4.2 F and F2, product decision F3).
  *
  * A befarad loss is a valuation reserve on the receivable: Dr 6352 / Cr 1519
  * for the open part of the claim net of its VAT. The claim still stands and

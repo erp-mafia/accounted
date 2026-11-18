@@ -1,1 +1,0 @@
-[2026-10-26] A monthly loop (loop-usage-audit) proposes removing any page, route or MCP tool unused for 90 days in PostHog, event_log and Vercel: surface grows faster than use (42% of a month's new routes still unused), and only a recurring check keeps up. It never deletes.

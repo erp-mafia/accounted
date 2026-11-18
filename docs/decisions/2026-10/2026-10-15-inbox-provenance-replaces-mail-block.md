@@ -1,1 +1,0 @@
-[2026-10-15] The Inkorg provenance line sits at the top of the item rail and replaces the email Från/Ämne/Mottaget block only when arrivals answer: the item view has no title to sit under, and older items without arrivals keep the block that already serves them.

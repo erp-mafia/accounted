@@ -1,1 +1,0 @@
-[2026-10-16] The profile is stored on companies, not company_settings: the resolver's other company inputs live on that row, every company has it while a settings row can be missing, and company_settings is patched by the generic settings routes, where a profile change is not offered yet.

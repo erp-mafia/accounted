@@ -1,1 +1,0 @@
-[2026-11-01] Payslip row flags follow from item_type (payslipLineFlags); flags a caller sends are ignored, and a calculation stores a draft row's flags right again: a row of one type must mean the same from every door, and a choice per row was how a nettolöneavdrag never left the pay.

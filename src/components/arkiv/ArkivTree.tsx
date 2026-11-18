@@ -46,7 +46,7 @@ import { stockholmYearMonth } from '@/lib/dates/iso'
 const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-md px-3.5 text-[13px]'
 const PAGE = 25
 
-// Myndigheter is a stamp, not a bank; a receipt is a purchase already paid, so a bag, not a till slip (founder, 2026-09-24).
+// Myndigheter is a stamp, not a bank; a receipt is a purchase already paid, so a bag, not a till slip (2026-09-24).
 const ICONS: Record<FolderKey, AppIcon> = {
   agreements: PencilSquareIcon,
   authority: CheckBadgeIcon,

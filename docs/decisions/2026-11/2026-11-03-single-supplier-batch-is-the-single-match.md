@@ -1,1 +1,0 @@
-[2026-11-03] A kontantmetoden batch of one unbooked supplier invoice on the whole bank row books through the single bank match (bookSupplierBankMatch), not a new MCP tool or a second cash booking in the RPC: one booking implementation, no catalog cost (PH 243).

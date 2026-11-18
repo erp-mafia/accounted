@@ -1,5 +1,5 @@
 /**
- * The new Inkorg page (/inkorg) rolls out per company (founder decision
+ * The new Inkorg page (/inkorg) rolls out per company (product decision
  * 2026-10-16). With the flag on, the sidebar shows Inkorg as a top-level
  * entry under Att göra and Inköp no longer lists Underlag; with it off,
  * nothing changes and the workspace under Inköp (/e/general/invoice-inbox)

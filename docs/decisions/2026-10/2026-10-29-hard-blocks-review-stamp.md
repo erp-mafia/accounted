@@ -1,1 +1,0 @@
-[2026-10-29] The review stamp is a booking_review_stamps row written in the commit's own transaction by commit_reviewed_journal_entry, called only after commit_journal_entry refuses a person's single commit: same RPC signature, no extra call without rules.

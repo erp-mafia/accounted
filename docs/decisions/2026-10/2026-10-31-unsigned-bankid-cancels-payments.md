@@ -1,1 +1,0 @@
-[2026-10-31] A BankID the bank reports failed (cancelled, abandoned, expired) to the signing poll or the status sync cancels its payments at the bank and sends the orders back to approved, not to submitted with Signera igen: Open Payments takes no second BankID on them; kept, they read I betalning.

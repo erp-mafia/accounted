@@ -1,1 +1,0 @@
-[2026-11-10] The English invoice fine print is two nullable text columns (invoice_late_fee_text_en, invoice_credit_terms_text_en) beside the Swedish ones, not a jsonb { sv, en }: no rewrite of stored texts, each language sets and clears on its own, flat fields for the API and MCP (crm#1735).

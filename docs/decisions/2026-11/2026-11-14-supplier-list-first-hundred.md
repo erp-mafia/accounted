@@ -1,1 +1,0 @@
-[2026-11-14] The supplier invoice list shows its first 100 rows and more on request, as the invoice list does: drawing all of them took 8 500 rows for the largest register. Counts, select-all and the detail pager still cover the whole filtered list.

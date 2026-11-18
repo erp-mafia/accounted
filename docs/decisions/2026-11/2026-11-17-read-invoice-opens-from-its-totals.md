@@ -1,1 +1,0 @@
-[2026-11-17] A read supplier invoice opens with Fakturabelopp and Moms filled and one row per moms sats: from its totals when its lines charge one sats and fall short, else the lines summed; the lines are a quiet split. A row per read line left 13 % of multi-line readings off their total.

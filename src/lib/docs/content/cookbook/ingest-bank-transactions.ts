@@ -83,7 +83,7 @@ curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/transactions?status=
   -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
-Response (cursor-paginated, newest-imported first — ordered by \`created_at\` DESC):
+Response (cursor-paginated, newest-imported first - ordered by \`created_at\` DESC):
 
 \`\`\`json
 {
@@ -118,7 +118,7 @@ In a REST integration you supply the category yourself: choose a \`category\`, o
 
 ## 5. Commit the categorisation
 
-\`POST /transactions/{id}/categorize\` books the transaction directly. One exception: a booking that matches one of the company's booking review rules is staged for a person and answered \`202\` with the pending operation (\`staged_because: BOOKING_REVIEW_REQUIRED\`). \`is_business\` is required. Then supply a mapping: a \`template_id\` or \`counterparty_template_id\` (these take precedence), or a \`category\` for the default mapping. \`account_override\` is an optional posting-account override that **combines with \`category\`** — it applies only when neither \`template_id\` nor \`counterparty_template_id\` is present (as in the example below). Dry-run first to preview the resolved mapping:
+\`POST /transactions/{id}/categorize\` books the transaction directly. One exception: a booking that matches one of the company's booking review rules is staged for a person and answered \`202\` with the pending operation (\`staged_because: BOOKING_REVIEW_REQUIRED\`). \`is_business\` is required. Then supply a mapping: a \`template_id\` or \`counterparty_template_id\` (these take precedence), or a \`category\` for the default mapping. \`account_override\` is an optional posting-account override that **combines with \`category\`** - it applies only when neither \`template_id\` nor \`counterparty_template_id\` is present (as in the example below). Dry-run first to preview the resolved mapping:
 
 \`\`\`bash
 curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/categorize?dry_run=true" \\
@@ -133,7 +133,7 @@ curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/transactions/$TX_ID/
   }'
 \`\`\`
 
-The dry-run returns the resolved mapping (debit / credit accounts + VAT lines) under \`{ dry_run: true, preview }\` — not a full posted journal, and no voucher number is burned:
+The dry-run returns the resolved mapping (debit / credit accounts + VAT lines) under \`{ dry_run: true, preview }\` - not a full posted journal, and no voucher number is burned:
 
 \`\`\`json
 {
@@ -157,7 +157,7 @@ The dry-run returns the resolved mapping (debit / credit accounts + VAT lines) u
 }
 \`\`\`
 
-Drop \`?dry_run=true\` and reuse the same \`Idempotency-Key\` to commit. The commit response returns \`journal_entry_id\` (plus \`journal_entry_created\` and \`category\`); it does not include a voucher number or audit block — fetch the voucher via the journal entry if you need it.
+Drop \`?dry_run=true\` and reuse the same \`Idempotency-Key\` to commit. The commit response returns \`journal_entry_id\` (plus \`journal_entry_created\` and \`category\`); it does not include a voucher number or audit block - fetch the voucher via the journal entry if you need it.
 
 ## 6. Batch categorise
 
@@ -203,18 +203,18 @@ curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/transactions
   -d '{ "invoice_id": "inv_..." }'
 \`\`\`
 
-There is no \`payment_date\` field: the payment date is taken from the transaction's own \`date\`. For supplier-invoice payments use \`POST /transactions/{id}/match-supplier-invoice\` — same shape, but the body field is \`supplier_invoice_id\` and the transaction must be negative (expense).
+There is no \`payment_date\` field: the payment date is taken from the transaction's own \`date\`. For supplier-invoice payments use \`POST /transactions/{id}/match-supplier-invoice\` - same shape, but the body field is \`supplier_invoice_id\` and the transaction must be negative (expense).
 
 ## Multicurrency
 
 Bank statements that include non-SEK transactions are imported with the foreign amount preserved in \`amount\` + \`currency\`; the booked SEK value is stored in \`amount_sek\`. When you categorise, the engine looks up the Riksbanken FX rate for the transaction date and books the SEK equivalent on the GL side. The FX delta (rate at booking vs rate at month-end revaluation) is later picked up by the currency-revaluation job.
 
-The ledger is SEK-denominated; foreign amounts are converted to SEK automatically from the cached daily Riksbanken snapshot. There is no public FX-rate endpoint — rates are applied by the engine at categorisation time. (For cross-currency invoice settlement where no rate is published for a date, \`match-invoice\` accepts a \`manual_exchange_rate\`.)
+The ledger is SEK-denominated; foreign amounts are converted to SEK automatically from the cached daily Riksbanken snapshot. There is no public FX-rate endpoint - rates are applied by the engine at categorisation time. (For cross-currency invoice settlement where no rate is published for a date, \`match-invoice\` accepts a \`manual_exchange_rate\`.)
 
 ## Common pitfalls
 
 - **Re-running the same file is safe; date-only overlap is also safe.** Dedup is primarily by a stable \`external_id\` (see step 1); a secondary content match on \`(date, amount, description)\` against already-booked rows also skips, so partial overlap of two statements doesn't double-import.
-- **Settlement account selection matters.** The wrong settlement account silently breaks bank reconciliation later. \`1930\` (företagskonto) is the SEK default; a foreign-currency bank account uses its own asset account (e.g. \`1932\` for USD). \`/imports/bank\` resolves the settlement account automatically — to set it explicitly, ingest via \`POST /transactions/ingest\` with \`settlement_account\`.
+- **Settlement account selection matters.** The wrong settlement account silently breaks bank reconciliation later. \`1930\` (företagskonto) is the SEK default; a foreign-currency bank account uses its own asset account (e.g. \`1932\` for USD). \`/imports/bank\` resolves the settlement account automatically - to set it explicitly, ingest via \`POST /transactions/ingest\` with \`settlement_account\`.
 - **Cash-method companies and partial payments don't mix.** If \`company_settings.accounting_method = 'cash'\` and you try to match a partial payment, the response is \`400 INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED\` rather than booking accrual entries: cash-method cannot model the per-installment moms event correctly (bokslutsmetoden reports moms at payment, per installment). Either book the partial payment as a separate categorisation or switch to accrual.
 - **Batch-categorize is partial-success by default.** If one item hits a locked period, the others still commit. The summary block tells you the totals; check per-item \`ok\` flags.
 - **Categorize refuses a payment the ledger already books.** A bank line that an existing verifikat already covers (a supplier invoice marked paid, a manual voucher, a booked sibling row) returns \`409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE\` with the candidate; a plain 244x / 151x categorization that an open invoice covers returns \`409 TX_CATEGORIZE_SUGGEST_SI_MATCH\` / \`_CI_MATCH\`. Dry runs return the same 409s, so dry-run first. Match or link instead; override only after review, with \`force: true\` plus \`expected_duplicate_journal_entry_id\` (or \`expected_duplicate_transaction_id\`), or \`confirm_no_match: true\`. In batch-categorize these are per-item errors.

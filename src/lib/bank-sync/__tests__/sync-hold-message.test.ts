@@ -24,7 +24,7 @@ describe('syncCooldownMessages', () => {
 
 describe('syncHoldMessage', () => {
   // The toast a person got on Synka nu inside the cooldown read "Vänta tills
-  // next_allowed_at innan du synkar igen" (22 times, 9 companies, 2026-10-29
+  // next_allowed_at innan du synkar igen" (22 times, 2026-10-29
   // to 2026-11-11): the registry sentence, written for agents, shown as is.
   it('words a cooldown envelope with the time, in the reader\'s language', () => {
     const details = { connection_id: 'c-1', next_allowed_at: IN_14_MIN, retry_after_seconds: 821 }

@@ -1,1 +1,0 @@
-[2026-11-06] MCP instructions open with the rules an agent must not lose, inside a 4096-char client cut (Claude Code cut ours there and dropped the approval and year-end rules); the tools/list ceilings and listed tool count are frozen: a new tool pays by trimming, merging or search-only.

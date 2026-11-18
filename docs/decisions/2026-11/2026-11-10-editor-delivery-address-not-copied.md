@@ -1,1 +1,0 @@
-[2026-11-10] The invoice editor's Leveransadress sits in the Kund section behind "+ Leveransadress", the live preview prints it, and Kopiera faktura does not carry it: a copy already drops Er referens and Märkning, and a customer-card default is the follow-up that would cover repeat deliveries.

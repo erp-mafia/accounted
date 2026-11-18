@@ -1,1 +1,0 @@
-[2026-10-27] A new card is suggested 2890 only when no verifikat uses it, else 2899 (then 2894, 2896, 2480-2489), with one sentence saying why and an action to keep 2890 when it already holds this card's debt: the founders' option B; the server never refuses a used ledger.

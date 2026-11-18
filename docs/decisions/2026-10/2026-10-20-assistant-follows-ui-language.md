@@ -1,1 +1,0 @@
-[2026-10-20] The assistant answers in the user's UI locale instead of getting its own language setting: the app already stores one per user, and a second switch could disagree with it. Prompts stay Swedish; English chats get a sv=en label table from the message files (crm#1346).

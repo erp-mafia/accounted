@@ -1,6 +1,6 @@
 /**
  * The one look for everything that floats over the page: menus, comboboxes,
- * pickers, tooltips and popovers (design.md, "Popovers and menus"). Before
+ * pickers, tooltips and popovers. Before
  * this existed, about twenty hand-positioned panels each picked their own
  * background (bg-card or bg-popover), border (border-input, border-border/60)
  * and Tailwind shadow. Stil v3: the floating layer (bg-popover, one step up

@@ -24,7 +24,7 @@ import { roundOre } from '@/lib/money'
  * settlement (momsredovisning) books 26xx untagged, so a per-project 26xx
  * balance never clears. Carried, it would put an offsetting project line and
  * untagged line into every future IB, growing each year. A 26xx IB is
- * therefore always one untagged line (founder decision 2026-10-01). Account
+ * therefore always one untagged line (product decision 2026-10-01). Account
  * numbers are identifiers: a prefix check on the string, never arithmetic.
  */
 export function carriesObjectBalances(accountNumber: string): boolean {

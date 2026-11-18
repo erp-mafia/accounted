@@ -53,7 +53,7 @@
  *      Implementation in consent-token-access.mjs. No baseline: 0 today.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
- *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
+ *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 regression
  *      (empty Bedrock stream). No baseline: any drift is a hard failure.
  *   5. raw-user-error: raw caught-error messages passed to API response fields,
  *      client error state, or toast fields. Engine, database, and upstream
@@ -89,8 +89,7 @@
  *      (Stil v3, 2026-10-29: rounded-sm 4px leaves, rounded-md 6px buttons
  *      and chips, rounded-lg 8px fields and single objects, rounded-pop 10px
  *      menus and popovers, rounded-xl 12px the panel, dialogs and drawers,
- *      rounded-full only for dots, avatars and switch tracks; see
- *      .claude/rules/design.md). Before the 2026-08 migration the UI had
+ *      rounded-full only for dots, avatars and switch tracks). Before the 2026-08 migration the UI had
  *      seven radii in circulation and one toolbar row could mix four of
  *      them. Bare `rounded`, `rounded-2xl`+ and arbitrary `rounded-[Npx]` are
  *      dead vocabulary in app/ and components/. No baseline: the count is 0,
@@ -182,15 +181,15 @@
  *      for horizons.
  *      Implementation and rationale
  *      in utc-today.mjs. Allowlisted file-set, may only shrink.
- *   18. unsigned-provider-names: the name of a provider whose contract is not
- *      signed yet, anywhere in the change against the merge base (added
+ *   18. provider-name-denylist: a name from the maintainer-held provider-name
+ *      denylist, anywhere in the change against the merge base (added
  *      lines and file paths; committed, uncommitted and untracked). The
- *      names come from the UNSIGNED_PROVIDER_NAMES secret, never from the
+ *      names come from the PROVIDER_NAME_DENYLIST secret, never from the
  *      repository, so this check names nothing. No baseline: any hit is a
  *      hard failure. Without the secret, or without a merge base (a shallow
  *      CI checkout), it is skipped with a note; the provider-names workflow
  *      runs it with full history and also over the PR text. Implementation
- *      and rationale in unsigned-provider-names.mjs.
+ *      and rationale in provider-name-denylist.mjs.
  *   19. functiondef-patch: a migration that calls pg_get_functiondef(), the
  *      read half of patching a function body with replace() instead of
  *      stating it. 19 migrations did, and 24 functions ended up in no file.
@@ -202,16 +201,11 @@
  *      drifted once: `.si` refused by the dashboard (#2546), then `.si` and
  *      extensionless files refused by the onboarding SIE step while every
  *      other surface took `.si` (accounted#32). No baseline: the count is 0.
- *   21. decision-log: a dated line appended to DECISIONS.md, or a decision
- *      file under docs/decisions/YYYY-MM/ not named and dated as a search by
- *      date expects. A decision is a file of its own, because merge requests
- *      that append to one shared file conflict. No allowlist. Implementation
- *      and rationale in decision-log.mjs.
+ *   21. (retired)
  *   22. bas-account-literal: a BAS account number ('1930') or account-prefix
  *      check (acc.startsWith('19'), /^19\d{2}$/) outside the SE pack
- *      territory. Accounted is going multi-country with Sweden as jurisdiction
- *      pack one (docs/decisions/2026-09.md, 2026-09-30); every such site is a place the next
- *      country's chart cannot reach. Per-file count ratchet: a file's count
+ *      territory. Sweden is jurisdiction pack one; every such site is a place
+ *      another country's chart cannot reach. Per-file count ratchet: a file's count
  *      may only go down, a new file may not introduce one. Implementation,
  *      territory list and rationale in jurisdiction-welds.mjs.
  *   23. sek-literal: a comparison against the literal 'SEK' outside the
@@ -309,7 +303,6 @@ import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
 import { findFunctiondefPatches, FUNCTIONDEF_PATCH_HINT } from './functiondef-patch.mjs'
-import { findDecisionLogFindings, DECISION_LOG_HINT } from './decision-log.mjs'
 import { findScriptInitConditionFindings, SCRIPT_INIT_CONDITION_HINT } from './script-init-condition.mjs'
 import {
   findExtensionRouteFindings,
@@ -320,11 +313,11 @@ import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-pag
 import { findLinesInnerEmbeds, LINES_INNER_EMBED_ALLOWED } from './lines-inner-embed.mjs'
 import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 import {
-  checkWorkingChange as checkUnsignedProviderNames,
+  checkWorkingChange as checkProviderNameDenylist,
   formatFinding as formatProviderNameFinding,
   HINT as PROVIDER_NAME_HINT,
   NO_NAMES_NOTE as PROVIDER_NAMES_UNSET_NOTE,
-} from './unsigned-provider-names.mjs'
+} from './provider-name-denylist.mjs'
 import {
   findJurisdictionWelds,
   countByFile,
@@ -677,13 +670,11 @@ function countMcpBareErrorThrows() {
 
 /**
  * 9. provider-host: files that talk to an external provider API directly.
- * Provider integration logic is moving behind the connector (hosted
- * `app/api/connect/*` today, the Accounted Connect service later): the open
- * repo keeps the ledger, the contract and the manual file paths, and a
- * self-hosted instance reaches every provider through its connector key.
- * Per-file ratchet: the grandfathered set may only shrink. A NEW file naming a
- * provider API host is a boundary violation unless it is the connector's own
- * hosted adapter side.
+ * Providers are reached through the connector seam: an instance with a
+ * connector key goes through Accounted Connect, one with its own credentials
+ * calls the provider directly. Per-file ratchet: the grandfathered set may
+ * only shrink. A NEW file naming a provider API host is a boundary violation
+ * unless it is the connector's own hosted adapter side.
  */
 const PROVIDER_HOST_RE =
   /api\.enablebanking\.com|api\.tilisy\.com|api\.skatteverket\.se|peroauth2\.skatteverket\.se|sso\.skatteverket\.se|api\.qvalia\.com|api-test\.qvalia\.com|api\.fortnox\.se|apps\.fortnox\.se|vismaonline\.com|briox\.services|apigateway\.blinfo\.se|api\.bokio\.se|api\.bolagsverket\.se|api-accept2\.bolagsverket\.se|id\.tic\.io|graph\.facebook\.com|gmail\.googleapis\.com/i
@@ -728,7 +719,7 @@ function countHandRolledInvariants() {
   return count
 }
 
-// 9. off-ladder-radius. The radius ladder (.claude/rules/design.md, Stil v3)
+// 9. off-ladder-radius. The radius ladder (Stil v3)
 // allows exactly: rounded-sm (4px leaves), rounded-md (6px buttons, chips,
 // segments, menu rows), rounded-lg (8px fields, single objects),
 // rounded-pop (10px menus, popovers, toasts), rounded-xl (12px page panel,
@@ -880,9 +871,6 @@ const DIRECT_AI_CLIENT_ALLOWED = new Set([
   'lib/receipt-hunt/adjudicate.ts',
   'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
   'scripts/smoke-ai.ts',
-  // Out-of-tree CI reviewer with its own pinned SDK install (see the
-  // compliance workflow); deliberately not part of the app's AI layer.
-  'scripts/swedish-compliance-review.mjs',
 ])
 const DIRECT_AI_CLIENT_RES = [
   { rule: 'createAiClient-import', re: /import[^;]*\bcreateAiClient\b[^;]*from\s+['"]@\/lib\/ai\/provider['"]/ },
@@ -1385,9 +1373,8 @@ const current = {
   linesInnerEmbeds: findLinesInnerEmbeds(SOURCE_ROOT),
   localTestMocks: findLocalTestMocks(ROOT),
   utcToday: findUtcTodaySites(SOURCE_ROOT),
-  unsignedProviderNames: checkUnsignedProviderNames(),
+  providerNameDenylist: checkProviderNameDenylist(),
   functiondefPatch: findFunctiondefPatches(ROOT),
-  decisionLog: findDecisionLogFindings(ROOT),
   scriptInitCondition: findScriptInitConditionFindings(ROOT).findings,
   jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
   postingPort: findPostingPortBypasses(ROOT),
@@ -1498,8 +1485,8 @@ if (isUpdate) {
       files: errorMaskingCounts,
     },
   }
-  // The jurisdiction-weld ratchets may only be raised with a decision file
-  // (docs/decisions/YYYY-MM/): say so loudly when this re-baseline raises any of them. A ratchet
+  // The jurisdiction-weld ratchets may only be raised with the reason in the
+  // PR body: say so loudly when this re-baseline raises any of them. A ratchet
   // the previous baseline did not have yet is being introduced, not raised.
   const previous = frozenBaseline
   const raised = [
@@ -1531,7 +1518,7 @@ if (isUpdate) {
   if (raised.length) {
     console.log(
       `\n! This re-baseline RAISES ${raised.length} jurisdiction-weld baseline ${raised.length === 1 ? 'entry' : 'entries'}. A pure move or\n` +
-        '  rename is fine; anything else needs a decision file (docs/decisions/YYYY-MM/) saying why, in the same PR:',
+        '  rename is fine; anything else needs the reason in the PR body:',
     )
     raised.forEach((r) => console.log(`    ${r}`))
   }
@@ -1791,7 +1778,7 @@ if (current.offLadderRadii.length) {
   )
   current.offLadderRadii.forEach((f) => console.error(`    ${f}`))
   console.error(
-    '  → use the radius ladder (.claude/rules/design.md): rounded-md for buttons/chips, rounded-lg for\n' +
+    '  → use the radius ladder: rounded-md for buttons/chips, rounded-lg for\n' +
       '    fields/single objects, rounded-pop for menus/popovers, rounded-xl for the panel/dialogs/drawers,\n' +
       '    rounded-sm for leaves, rounded-full for dots/avatars. Bare `rounded`, rounded-2xl and\n' +
       '    rounded-[Npx] are dead vocabulary.',
@@ -1803,7 +1790,7 @@ if (current.offLadderRadii.length) {
 if (current.uiUniformity.length) {
   failed = true
   console.error(
-    `\n✗ ui-uniformity: ${current.uiUniformity.length} design-system violation(s) (.claude/rules/design.md):`,
+    `\n✗ ui-uniformity: ${current.uiUniformity.length} design-system violation(s):`,
   )
   const rules = [...new Set(current.uiUniformity.map((f) => f.rule))]
   for (const rule of rules) {
@@ -2015,16 +2002,6 @@ if (current.staticInitImports.length) {
   )
 }
 
-// 1h2. decision-log: no allowlist. A decision is a file of its own under
-// docs/decisions/YYYY-MM/; an appended line conflicts with every other merge
-// request that appends one.
-if (current.decisionLog.length) {
-  failed = true
-  console.error(`\n✗ decision-log: ${current.decisionLog.length} problem(s) in the decision log:`)
-  current.decisionLog.forEach(({ file, problem }) => console.error(`    ${file}: ${problem}`))
-  console.error(`  → ${DECISION_LOG_HINT}`)
-}
-
 // 1h3. script-init-condition: no allowlist. A script that loads lib/init and
 // is run without the react-server condition cannot load it; until 2026-10-16
 // it then posted with every event reaching no handler.
@@ -2111,21 +2088,21 @@ if (baseline.providerHosts && newProviderHosts.length) {
   )
 }
 
-// 1c3. unsigned-provider-names: no baseline, any hit is a hard failure. The
+// 1c3. provider-name-denylist: no baseline, any hit is a hard failure. The
 // findings never print the matched text (CI logs are public).
-if (current.unsignedProviderNames.skipped === 'no-names') {
-  console.log(`\n· unsigned-provider-names: skipped, ${PROVIDER_NAMES_UNSET_NOTE}.`)
-} else if (current.unsignedProviderNames.skipped === 'no-base') {
+if (current.providerNameDenylist.skipped === 'no-names') {
+  console.log(`\n· provider-name-denylist: skipped, ${PROVIDER_NAMES_UNSET_NOTE}.`)
+} else if (current.providerNameDenylist.skipped === 'no-base') {
   console.log(
-    `\n· unsigned-provider-names: skipped, no merge base with ${current.unsignedProviderNames.baseRef} in this checkout` +
+    `\n· provider-name-denylist: skipped, no merge base with ${current.providerNameDenylist.baseRef} in this checkout` +
       ' (the provider-names workflow scans the PR with full history).',
   )
-} else if (current.unsignedProviderNames.findings.length) {
+} else if (current.providerNameDenylist.findings.length) {
   failed = true
   console.error(
-    `\n✗ unsigned-provider-names: ${current.unsignedProviderNames.findings.length} place(s) in the change name a provider that is not signed yet:`,
+    `\n✗ provider-name-denylist: ${current.providerNameDenylist.findings.length} place(s) in the change name a provider on the denylist:`,
   )
-  current.unsignedProviderNames.findings.forEach((f) => console.error(formatProviderNameFinding(f)))
+  current.providerNameDenylist.findings.forEach((f) => console.error(formatProviderNameFinding(f)))
   console.error(PROVIDER_NAME_HINT)
 }
 
@@ -2207,8 +2184,7 @@ if (newTableWithoutGrant.length) {
     '  → new public tables get NO grants by default (migration 20260929220000_own_default_privileges;\n' +
       '    every Supabase project from 2026-10-30), so without the lines above the table answers 42501\n' +
       '    to every supabase-js client, the service-role one included. Put them in the same migration,\n' +
-      '    after the CREATE. anon gets a grant only when the table is meant to be public. Template:\n' +
-      '    .claude/skills/supabase-migration/SKILL.md.',
+      '    after the CREATE. anon gets a grant only when the table is meant to be public.',
   )
 }
 
@@ -2280,7 +2256,7 @@ const printSites = (sites, file, baselineCount) => {
   if (baselineCount > 0) console.error('        (a count cannot say which site is new: find it in your diff of this file)')
 }
 const NEVER_RAISE =
-  '    Never raise the baseline to make this pass without a decision file saying why; a pure\n' +
+  '    Never raise the baseline to make this pass without the reason in the PR body; a pure\n' +
   '    move or rename re-baselines with --update and says so in the PR.'
 
 const basLiteralRatchet = compareFileCounts(baseline.basAccountLiteral?.files ?? {}, basLiteralCounts)
@@ -2295,7 +2271,7 @@ if (baseline.basAccountLiteral && basLiteralRatchet.grown.length) {
     printSites(current.jurisdictionWelds.basAccountLiteral, g.file, g.baseline)
   }
   console.error(
-    '  → Accounted is going multi-country with Sweden as jurisdiction pack one, and an account number\n' +
+    '  → Sweden is jurisdiction pack one, and an account number\n' +
       "    at a call site is a place the next country's chart cannot reach. Read the account from one\n" +
       "    named role instead: resolveAccountRole(company, 'accounts_receivable') from\n" +
       '    lib/bookkeeping/account-roles (a new role goes there, its BAS account in se-bas.ts), an\n' +
@@ -2398,7 +2374,7 @@ if (baseline.duplicateBlocks && baseline.duplicateBlocks.window !== DUPLICATE_WI
   failed = true
   console.error(
     `\n✗ duplicate-block: the baseline was measured with a window of ${baseline.duplicateBlocks.window} lines, ` +
-      `the check now uses ${DUPLICATE_WINDOW}. Re-baseline with --update and say why in a decision file.`,
+      `the check now uses ${DUPLICATE_WINDOW}. Re-baseline with --update and say why in the PR body.`,
   )
 } else if (baseline.duplicateBlocks && duplicateRatchet.grown.length) {
   failed = true
@@ -2414,8 +2390,8 @@ if (baseline.duplicateBlocks && baseline.duplicateBlocks.window !== DUPLICATE_WI
   console.error(
     '  → Duplicated code drifts: the copy that misses the next fix is the bug (October 2026: twelve posting-line\n' +
       '    types, five payment dialogs). Call the existing code, or extract the shared part into one module both\n' +
-      '    files import. A copy you cannot avoid (a generated file, a deliberate fork) needs a decision file\n' +
-      '    (docs/decisions/YYYY-MM/) and --update in the same PR.\n' +
+      '    files import. A copy you cannot avoid (a generated file, a deliberate fork) needs the reason\n' +
+      '    in the PR body and --update in the same PR.\n' +
       NEVER_RAISE,
   )
 }
@@ -2593,5 +2569,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, mcp-bare-error: ${current.mcpBareErrorThrows}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, mcp-bare-error: ${current.mcpBareErrorThrows}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), provider-name-denylist: ${current.providerNameDenylist.skipped ? 'skipped' : current.providerNameDenylist.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
 )

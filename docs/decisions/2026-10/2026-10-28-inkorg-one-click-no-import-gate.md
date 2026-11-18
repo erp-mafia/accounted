@@ -1,1 +1,0 @@
-[2026-10-28] The Inkorg's one click honours the company's one-click switch and a rule's always-review, not the imported-rule gate: Inkorg bookings never learn rules, so an imported rule could never be confirmed there, and its plan never rests on the history count.

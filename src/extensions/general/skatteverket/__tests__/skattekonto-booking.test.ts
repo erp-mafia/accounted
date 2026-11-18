@@ -463,7 +463,7 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
     expect(sumAccountBalanceMock).not.toHaveBeenCalled()
   })
 
-  // Review of MR !34: an unfloored sum counts the year an IB restates twice.
+  // Review: an unfloored sum counts the year an IB restates twice.
   // FY2025 left D 3000 on 1650, the IB repeats it on 2026-01-01, and a refund
   // in February cleared it. The floored balance on a later refund is 0 (the
   // unfloored one would still say 3000), so the later refund keeps 2650.

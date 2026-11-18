@@ -364,7 +364,7 @@ function analyzeColumns(dataRows: string[][], colCount: number) {
  *
  * When a header row is available, columns are matched by their label first
  * (belopp → amount, saldo → balance, …) so a trailing running-balance column is
- * never mistaken for the amount — the original positional heuristic walked the
+ * never mistaken for the amount - the original positional heuristic walked the
  * row right-to-left and grabbed Saldo as the amount on the common
  * `…;Belopp;Saldo` layout. Falls back to value-based heuristics on the sample
  * data for any column the labels don't resolve; there the amount guess
@@ -463,7 +463,7 @@ export const genericCSVFormat: BankFileFormat = {
   fileExtensions: ['.csv', '.txt'],
 
   detect(_content: string, _filename: string): boolean {
-    // Generic CSV never auto-detects — it's the manual fallback
+    // Generic CSV never auto-detects - it's the manual fallback
     return false
   },
 

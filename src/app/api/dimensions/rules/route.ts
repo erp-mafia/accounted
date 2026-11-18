@@ -1,5 +1,5 @@
 /**
- * /api/dimensions/rules — per-account dimension policy (dimensions PR10).
+ * /api/dimensions/rules - per-account dimension policy (dimensions PR10).
  *
  * GET  ?account_number=4010 (optional) → every rule (or the account's).
  * POST → create a rule. 'required' blocks posting on the account without a
@@ -7,7 +7,7 @@
  * 'default' pre-fills at draft creation; 'fixed' always applies.
  *
  * Opt-in by construction: zero rules = the engine behaves exactly as before.
- * There is deliberately NO settings toggle for enforcement — a rule that
+ * There is deliberately NO settings toggle for enforcement - a rule that
  * exists but is ignored would be worse than either extreme; pausing a single
  * rule is what is_active is for.
  *

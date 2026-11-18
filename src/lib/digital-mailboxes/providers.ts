@@ -4,7 +4,7 @@
  * null, and each direction is null on its own: a deployment with only
  * Kivra's Partner API client receives from Kivra and sends nowhere.
  *
- * The credentials are Accounted's partner agreements with Kivra and Billo,
+ * Kivra and Billo issue the credentials to the operator,
  * so a self-hosted operator brings their own (or none, and the doors stay
  * hidden).
  */
@@ -41,7 +41,7 @@ export function resetDigitalMailboxProviders(): void {
 
 /**
  * Kivra and Billo roll out per company, so a deploy with credentials opens
- * them to one company before everyone (founder decision 2026-10-21).
+ * them to one company before everyone (product decision 2026-10-21).
  * DIGITAL_MAILBOX_COMPANY_IDS lists the companies (comma-separated ids, or
  * `*` for everyone); unset means nobody, so credentials alone switch nothing
  * on. A company outside the rollout sees the doors as "Kommer snart" and

@@ -1,1 +1,0 @@
-[2026-10-26] A refused createPayment takes the bank's specific code from Connect's relayed detail (FORMAT_ERROR then OCR_REF_INVALID) in the ledger, not Connect: other operations keep FORMAT_ERROR, which the signing restart reads. OCR_REF_INVALID after a message becomes OCR_REF_REQUIRED.

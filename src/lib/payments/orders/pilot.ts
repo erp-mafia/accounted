@@ -36,7 +36,7 @@ export async function paymentsAdmitted(
   if (pilot === 'all') return { ok: true }
   if (pilot) return pilot.has(companyId) ? { ok: true } : { ok: false, reason: 'not_in_pilot' }
   // A paid grant only, like the bank reading door (lib/bank-feed/door.ts):
-  // the provider charges per payment, so the seeded 30-day trial does not
+  // each payment carries a cost, so the seeded 30-day trial does not
   // open bank payments; a card entered during the trial does.
   if (await hasCapability(supabase, companyId, CAPABILITY.bank_sync, { excludeTrial: true })) return { ok: true }
   return { ok: false, reason: 'subscription' }

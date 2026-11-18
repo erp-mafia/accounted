@@ -1,1 +1,0 @@
-[2026-10-28] Document uploads over the hosted 4 MB request-body cap go straight to Storage (signed URL), so the archive's own 10 MB limit applies on every upload screen: Vercel's 4.5 MB body cap, not a rule of ours, was refusing larger files with a bare 413.

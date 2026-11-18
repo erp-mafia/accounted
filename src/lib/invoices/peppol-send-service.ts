@@ -319,8 +319,8 @@ export async function sendInvoiceViaPeppol(
   const service = options.service ?? supabase
 
   // Every refusal before a delivery row exists leaves one structured line
-  // with the registry code: no amounts, no names. Prod had zero deliveries
-  // and no way to tell which gate stopped them (#2484).
+  // with the registry code: no amounts, no names. Without it there was
+  // no way to tell which gate stopped a delivery (#2484).
   const logRefusal = (code: string, extra: Record<string, unknown> = {}) =>
     log.info('peppol send refused', { invoiceId, code, ...extra })
   const refuse = (code: string, rest: Omit<Failure, 'ok' | 'code'> = {}): Failure => {

@@ -1,1 +1,0 @@
-[2026-10-29] Bolaget W5: agreements take manual rows (origin manual, document linked never read) beside the Arkiv-derived ones; säkerheter and group links are registers feeding the ÅR notes; all behind BOLAGET_COMPANY_IDS: one store per concept, raw text over extraction.

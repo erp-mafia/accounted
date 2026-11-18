@@ -1,1 +1,0 @@
-[2026-10-22] #73: kontantmetoden books an EU goods supplier invoice whole at registration on its invoice date (ML 7 kap. 26, 40 §§), not as a VAT-only verifikat with the cost at payment: the registration link reuses every payment, credit and cut-off door; EU services stay at payment.

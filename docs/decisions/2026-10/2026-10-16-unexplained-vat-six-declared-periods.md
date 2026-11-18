@@ -1,1 +1,0 @@
-[2026-10-16] The VAT settlement check reads the six most recently declared periods: each costs a momsredovisning proposal (a ledger RPC plus lock reads), and an older unsettled period is a bokslut finding.

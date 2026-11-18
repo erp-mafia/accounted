@@ -1,6 +1,6 @@
 /**
  * Kivra: the Partner API (reading a company's Kivra Företag inbox) and the
- * Tenant API (sending as the company). Reference: docs/integrations/kivra.md.
+ * Tenant API (sending as the company). Reference: Kivra's API documentation.
  *
  * Both APIs live on one host per environment and authenticate with OAuth 2.0
  * client credentials at POST /v1/auth (HTTP Basic). Kivra issues the Partner

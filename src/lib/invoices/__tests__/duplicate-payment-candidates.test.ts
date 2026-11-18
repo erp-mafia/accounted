@@ -327,7 +327,7 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
 })
 
 describe('findDuplicatePaymentCandidatesForInvoice: Bankgirot aggregate rows', () => {
-  const invoice063 = { ...sekInvoice, invoice_number: '063', customer_name: 'Twelve Football AB', total: 62500, total_sek: 62500 }
+  const invoice063 = { ...sekInvoice, invoice_number: '063', customer_name: 'Kundbolaget AB', total: 62500, total_sek: 62500 }
 
   function aggregateRow(over: Partial<Record<string, unknown>> = {}) {
     return {

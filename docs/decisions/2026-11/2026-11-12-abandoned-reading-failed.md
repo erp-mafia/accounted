@@ -1,1 +1,0 @@
-[2026-11-12] A document reading still open 10 minutes after its upload is stamped failed:abandoned and answered as failed by extraction-status (reported once if under a day old): a function killed mid-reading left it 'running' for ever.

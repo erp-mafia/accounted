@@ -1,1 +1,0 @@
-[2026-11-12] A pair check (FK001, FK003, FK005) whose moms is booked but under a krona says so and tells the user not to correct the books; the filed whole-krona amounts are unchanged, since what to file there is a tax judgment left to the founders (crm#1822).

@@ -339,9 +339,9 @@ describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', ()
   })
 
   it('is never auto-linked: the invoice goes to review', async () => {
-    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Örnäs Byggteam AB' })])
     mFind.mockResolvedValueOnce([
-      cand({ je: 'v-other', confidence: 0.95, amount: 968, desc: 'Levbet Färgservice i Växjö AB (2247)' }),
+      cand({ je: 'v-other', confidence: 0.95, amount: 968, desc: 'Levbet Färgservice i Örnäs AB (2247)' }),
     ] as never)
 
     const res = await run()
@@ -354,9 +354,9 @@ describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', ()
   })
 
   it('neither in a dry run, which the provider migration settles from', async () => {
-    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Örnäs Byggteam AB' })])
     mFind.mockResolvedValueOnce([
-      cand({ je: 'v-other', confidence: 0.989, amount: 968, desc: 'Levbet Färgservice i Växjö AB (2247)' }),
+      cand({ je: 'v-other', confidence: 0.989, amount: 968, desc: 'Levbet Färgservice i Örnäs AB (2247)' }),
     ] as never)
 
     const res = await reconcileSupplierInvoiceVouchers({ supabase: {} as never, companyId: 'c1', userId: 'u1', dryRun: true })
@@ -366,9 +366,9 @@ describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', ()
   })
 
   it('still links the exact amount when the text names the supplier in full', async () => {
-    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Örnäs Byggteam AB' })])
     mFind.mockResolvedValueOnce([
-      cand({ je: 'v1', confidence: 0.95, amount: 968, desc: 'Leverantörsbetalning VÄXJÖ BYGGTEAM' }),
+      cand({ je: 'v1', confidence: 0.95, amount: 968, desc: 'Leverantörsbetalning ÖRNÄS BYGGTEAM' }),
     ] as never)
     mLink.mockResolvedValueOnce(okLink({ je: 'v1', paymentAmount: 968 }) as never)
 
@@ -379,7 +379,7 @@ describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', ()
   })
 
   it('leaves a reference hit alone: the reference, not the name, identifies the invoice', async () => {
-    queue([inv({ id: 'i1', total: 968, supplierName: 'Växjö Byggteam AB' })])
+    queue([inv({ id: 'i1', total: 968, supplierName: 'Örnäs Byggteam AB' })])
     mFind.mockResolvedValueOnce([
       cand({ je: 'v1', confidence: 0.99, amount: 968, desc: 'Bankgiro 123-4567 OCR 26535900' }),
     ] as never)
@@ -394,13 +394,13 @@ describe('reconcileSupplierInvoiceVouchers: the supplier named only in part', ()
 
 describe('voucherNamesSupplier', () => {
   it.each([
-    ['every distinctive word, any case', 'Växjö Byggteam AB', 'Levbet VÄXJÖ BYGGTEAM AB (17)', true],
-    ['legal forms and short words are not required', 'Mälarbygg Handelsbolag', 'Betalning Mälarbygg', true],
+    ['every distinctive word, any case', 'Örnäs Byggteam AB', 'Levbet ÖRNÄS BYGGTEAM AB (17)', true],
+    ['legal forms and short words are not required', 'Sjöbygg Handelsbolag', 'Betalning Sjöbygg', true],
     ['(publ) is a legal form too', 'Nordkraft Energi AB (publ)', 'Nordkraft Energi oktober', true],
-    ['a hyphenated name, written with a hyphen', 'Wiik-Bygg AB', 'Levbet Wiik-Bygg AB (3)', true],
-    ['a hyphenated name, written with a space', 'Wiik-Bygg AB', 'Levbet Wiik Bygg', true],
-    ['one word of the name only', 'Växjö Byggteam AB', 'Levbet Färgservice i Växjö AB (2247)', false],
-    ['the same trade, another company', 'Kronvik Installation AB', 'Levbet Kronvik Bygg AB (6045)', false],
+    ['a hyphenated name, written with a hyphen', 'Berg-Bygg AB', 'Levbet Berg-Bygg AB (3)', true],
+    ['a hyphenated name, written with a space', 'Berg-Bygg AB', 'Levbet Berg Bygg', true],
+    ['one word of the name only', 'Örnäs Byggteam AB', 'Levbet Färgservice i Örnäs AB (2247)', false],
+    ['the same trade, another company', 'Nordvik Installation AB', 'Levbet Nordvik Bygg AB (6045)', false],
     ['a word inside a longer word', 'Leverantör AB', 'Leverantörsbetalning', false],
     ['a name of legal forms only', 'AB', 'Levbet AB', false],
     ['no name', null, 'Levbet Leverantör AB', false],

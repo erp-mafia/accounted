@@ -1,1 +1,0 @@
-[2026-10-27] The revisor's påteckning is recorded only after the whole board signed, in the board's medium: electronic on an e-signed or BankID version, paper on a paper original. ÅRL 2 kap. 5 och 7 §§ make an årsredovisning either paper or electronic; no source allows mixing.

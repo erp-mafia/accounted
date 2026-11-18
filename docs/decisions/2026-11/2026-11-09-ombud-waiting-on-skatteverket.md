@@ -1,1 +1,0 @@
-[2026-11-09] An ombud grant Skatteverket has not listed yet reads "Väntar på Skatteverket", red only for one it withdrew, and the register sync runs hourly: registration took 3 to 52 minutes in prod and a nightly sync left fresh appointments red for up to a day.

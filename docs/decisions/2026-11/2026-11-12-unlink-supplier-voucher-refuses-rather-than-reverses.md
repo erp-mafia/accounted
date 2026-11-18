@@ -1,1 +1,0 @@
-[2026-11-12] Unlinking a supplier invoice from a verifikat takes back plain SEK links only and refuses payment verifikat, kvittning, evidence rows, foreign currency and a posted cut-off: each has its own undo or books something the unlink cannot reverse. Status follows delete_last_voucher.

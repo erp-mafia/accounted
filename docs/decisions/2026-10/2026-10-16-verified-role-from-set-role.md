@@ -1,1 +1,0 @@
-[2026-10-16] committed_auth_role reads current_setting('role'), the role PostgREST sets after checking the JWT and SECURITY DEFINER keeps, else session_user: current_user is the definer inside posting RPCs, and request.jwt.claims is a plain setting any SQL can set_config.

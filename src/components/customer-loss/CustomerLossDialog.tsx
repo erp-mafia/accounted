@@ -43,7 +43,7 @@ const REFUSAL_KEYS: Partial<Record<CustomerLossErrorCode, string>> = {
 }
 
 /**
- * "Bokför kundförlust" (build spec 3.10, founder decision F3). Befarad books
+ * "Bokför kundförlust" (build spec 3.10, product decision F3). Befarad books
  * a reserve and leaves the invoice as it is; konstaterad writes the claim off
  * with evidence and lowers the output VAT. The voucher is shown before the
  * person confirms; nothing is booked until then.

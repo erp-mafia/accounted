@@ -1,1 +1,0 @@
-[2026-11-02] An SIE import keeps the number of a source voucher it skips (cancelled, unbalanced, one line, unmapped): the next booked voucher of the series holds it, with a gap explanation, so numbers follow the source. Appends hold none. No zero entry: hard rule 3 (crm#1599).

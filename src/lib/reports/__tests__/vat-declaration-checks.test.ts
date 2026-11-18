@@ -1013,7 +1013,7 @@ describe('VAT_ACCOUNT_WITHOUT_RUTA', () => {
 
 // #3440: under kontantmetoden the moms on invoices unpaid at the fiscal year
 // end belongs to the VAT period containing the year end. A WARNING while the
-// cut-off is incomplete, never a gate (founder decision 2026-10-03).
+// cut-off is incomplete, never a gate (product decision 2026-10-03).
 describe('KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING', () => {
   const facts = (over: Partial<{
     incompleteYearEnds: Array<{ fiscal_period_id: string; period_end: string }>

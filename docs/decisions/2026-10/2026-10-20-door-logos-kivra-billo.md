@@ -1,1 +1,0 @@
-[2026-10-20] Kivra and Billo wear their own app icons as Inkorg doors, taken once from kivra.se and billo.life into public/logos like the other partner logos: Simple Icons has no mark for either, and the founder asked for the real logos over the monograms; nothing is fetched at runtime.

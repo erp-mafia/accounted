@@ -1,1 +1,0 @@
-[2026-11-01] VAT settlement race closed by a partial unique index on (company_id, source_id) with a period-derived source_id, not a no-migration check-then-storno: the database refuses the second draft before a voucher number is drawn, so no duplicate verifikat or storno ever exists (accounted#58).

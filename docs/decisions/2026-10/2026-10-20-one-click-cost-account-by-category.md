@@ -1,1 +1,0 @@
-[2026-10-20] Inkorg one click account: the purchase category decides (a person's choice, the supplier's instruction, the proposal), then the counterparty's booked account if the category lists it, the supplier's default if it does, else the category's usual account; no category asks for one.

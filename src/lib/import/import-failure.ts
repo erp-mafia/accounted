@@ -11,7 +11,7 @@ import type { SIEJob } from './sie-job-contract'
  * voucher that failed validation, the accounts without a target), and the
  * reference names the code, request and import so support can find the run
  * in the logs. Nothing here is a progress label: "Kontrollerar balansen:
- * något gick fel" (Easy Online Stores, 2026-09-16) was the theater's last
+ * något gick fel" (reported 2026-09-16) was the theater's last
  * step plus the generic fallback, and said nothing about the empty voucher
  * outside the fiscal year that actually refused the file.
  */

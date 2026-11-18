@@ -1,1 +1,0 @@
-[2026-10-15] The document read with include serves only the page text already stored and never reads the file or calls a model: a GET stays cheap and side-effect free on both doors; an unread page is named (not_read, pages_needing_vision) and gnubok_read_document reads on the spot.

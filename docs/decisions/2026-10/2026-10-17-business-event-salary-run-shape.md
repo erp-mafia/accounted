@@ -1,1 +1,0 @@
-[2026-10-17] A salary run event has the run as subject, files under expense.personnel, names an employee party only for a one-employee run, and its amount is the run's bruttolön (total_gross); avgifter, semester and pension stay in the lines, and nothing per employee enters evidence.

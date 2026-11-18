@@ -1,1 +1,0 @@
-[2026-10-15] Purchase-category codes are own, dotted, English and permanent (pc-2026-10, 17 groups, 79 codes, no catch-all "other"): building blocks will store them as the neutral category key, so a code is deprecated, never renamed or reused, and new codes bump the version.

@@ -1,1 +1,0 @@
-[2026-10-18] Payment reminder UI (Settings Utskick group, invoice detail Påminnelser) is hidden while REMINDERS_SENDING_ENABLED is false; stored schedules are untouched and show again when sending returns.

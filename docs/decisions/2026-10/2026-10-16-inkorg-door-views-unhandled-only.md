@@ -1,1 +1,0 @@
-[2026-10-16] Inkorg's door views list what is still in the inbox (not booked), and a door stays in the rail once anything came through it: Inkorg is what came in and is not handled, Dokument keeps everything, as the prototype splits them.

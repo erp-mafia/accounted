@@ -372,7 +372,7 @@ describe('PATCH /api/salary/runs/[id]', () => {
 // fire together in a Promise.all, so their from() calls resolve in this order:
 //   1 run, 2 employees, 3 settings (arbetsgivare), 4 previous-run lookup,
 //   [corrected_by lookup when status is 'corrected'], deliveries,
-//   [previous-run employees when found — nested after the lookup's await, so
+//   [previous-run employees when found - nested after the lookup's await, so
 //   it lands last].
 
 const GET_RUN = {
@@ -408,7 +408,7 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
       { data: { id: 'run-1', period_year: 2026, period_month: 6 } }, // previous-run lookup
       { data: [] }, // deliveries
       {
-        // previous-run employees — nested after the lookup's await, resolves last
+        // previous-run employees - nested after the lookup's await, resolves last
         data: [
           {
             employee_id: 'emp-1',

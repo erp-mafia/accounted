@@ -1,1 +1,0 @@
-[2026-10-29] Meetings and minutes: board minutes numbered when held (no gap from a deleted draft); signed minutes frozen in the DB; elections change company_roles at signing, dated the meeting day; an årsstämma writes agm_date to the narrative; per capsulam warns (no ABL rule).

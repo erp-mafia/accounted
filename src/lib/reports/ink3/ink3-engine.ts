@@ -47,7 +47,7 @@ import type {
  * INK3 underlag (Inkomstdeklaration 3, ideell förening): per-ruta values for
  * INK3R (balance sheet and both income statement columns), INK3S and
  * INK3SUF, for the user to type into Skatteverket's e-tjänst. Nothing is
- * filed from here and no SRU file is built (founder decision 2026-10-15,
+ * filed from here and no SRU file is built (product decision 2026-10-15,
  * delivery path (a)); the `filing` map is the shape an SRU bilaga would
  * reuse later.
  *
@@ -57,7 +57,7 @@ import type {
  *   - INK3R "enligt redovisningen" (6.1-6.19): the books before the
  *     resultatavslut, like INK2R (the closing verifikat would zero them).
  *   - INK3R "som ska tas upp/dras av": the per-account treatment the company
- *     sets (founder decision 2026-10-15, split per account): a taxable
+ *     sets (product decision 2026-10-15, split per account): a taxable
  *     account counts in full, an exempt one not at all, and a shared or
  *     unclassified account leaves the ruta waiting for the user's figure.
  *   - 6.20, 6.21, 7.1, 7.2, 7.9 and 7.10 are the blankett's own sums.

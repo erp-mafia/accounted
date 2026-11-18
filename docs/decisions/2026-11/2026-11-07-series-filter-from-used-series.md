@@ -1,1 +1,0 @@
-[2026-11-07] The verifikat list's series filter offers the single-letter series in voucher_sequences (crm#1680), read by its own cached query rather than a hook lifted out of VoucherSeriesManager as triage proposed: that file is restyled by an open MR, and the filter needs letters only.

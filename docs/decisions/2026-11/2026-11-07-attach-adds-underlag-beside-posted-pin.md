@@ -1,1 +1,0 @@
-[2026-11-07] Attaching a document to a booked bank row whose pinned document is already its verifikat's underlag adds it to that verifikat beside the pin instead of refusing: adding underlag changes no posted entry and removes nothing (BFL 5 kap 6-7 §§); replacing stays refused.

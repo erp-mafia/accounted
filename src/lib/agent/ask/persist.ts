@@ -5,7 +5,7 @@ import type { AiChatTurn } from '@/lib/ai'
  * Thread persistence for the single-call chat console (/chat).
  *
  * The console answers in one call via answerAssistantQuestion (no tool loop,
- * no streaming: runs on a local model). But the founder wants the /chat
+ * no streaming: runs on a local model). But the operator wants the /chat
  * sidebar and "resume a thread" to keep working, so each console turn is
  * written to the SAME durable tables the streaming runtime uses:
  * agent_conversations + agent_messages. That way old and new threads live in

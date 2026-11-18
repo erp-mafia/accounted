@@ -1,8 +1,7 @@
 /**
  * Core <-> Enable Banking extension boundary for the agent-triggered sync.
  *
- * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard,
- * .gitlab-ci.yml checks job), so the v1 REST endpoint
+ * `lib/` and `app/api/v1/` cannot import from `@/extensions/` (CI guard), so the v1 REST endpoint
  * POST /companies/{id}/bank-connections/{connectionId}/sync reaches the
  * runner only through the registry-resolved `services` channel: same
  * pattern as lib/skatteverket/declaration-status.ts. This module holds the

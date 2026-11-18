@@ -1,1 +1,0 @@
-[2026-10-27] A premium rule a payslip line derives from is switched off, never deleted: salary_line_items.source_premium_rule_id is NO ACTION like the benefit and recurring-line back-links, replacing the unmerged 2026-09-11 branch's hard delete, so a line keeps the rule it was paid under.

@@ -105,7 +105,7 @@ beforeEach(async () => {
 })
 
 describe('settleOrderWithDebit', () => {
-  it("books the Swedbank debit 7af13560 against order 4e42c482's invoice as the user who approved the order, and the trigger settles the order", async () => {
+  it("books the Swedbank debit 0d1d0000 against order 40e40000's invoice as the user who approved the order, and the trigger settles the order", async () => {
     const result = await settle()
 
     expect(result).toEqual({ ok: true, journalEntryId: 'je-payment', orderLinked: true, linkedBy: 'trigger' })

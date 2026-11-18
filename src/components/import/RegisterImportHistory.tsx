@@ -68,7 +68,7 @@ const REFERRER_LABEL_KEY: Record<string, string> = {
  * tab; mirrors BankFileImportHistory. What an undo keeps (rows already in
  * use, rows edited again since the import) opens in a dialog right after
  * the undo and stays one click away on the run's row afterwards (one-line
- * rows, design.md convention 4).
+ * rows).
  */
 export default function RegisterImportHistory() {
   const t = useTranslations('import')

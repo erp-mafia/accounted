@@ -1,1 +1,0 @@
-[2026-10-22] A failed read of remembered SIE mappings or active categorization templates now fails the SIE preview, preflight and template suggestions instead of answering as if none existed (#58): silently dropped remembered choices are the bug class fixed here.

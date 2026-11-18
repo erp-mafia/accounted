@@ -402,8 +402,8 @@ describe('importProviderDocuments', () => {
     expect(result).toMatchObject({ linked: 1, unmatched: 0 })
   })
 
-  it('counts a receipt as unmatched when no gnubok verifikat resolves', async () => {
-    // gnubok has the number in a DIFFERENT fiscal period: must not match.
+  it('counts a receipt as unmatched when no Accounted verifikat resolves', async () => {
+    // Accounted has the number in a DIFFERENT fiscal period: must not match.
     const supabase = rangeMockSupabase({
       fiscal_periods: PERIODS,
       journal_entries: [
@@ -840,7 +840,7 @@ describe('importProviderDocuments', () => {
     })
 
     it('outlives the token expiring mid-slice: the rest of the files come in on the new token', async () => {
-      // The hourly pattern in prod: Fortnox retires the token while our
+      // The hourly pattern in production: Fortnox retires the token while our
       // clock still calls it valid, and every later file of the slice failed.
       const supabase = wireFortnox({ connections: THREE_FILES })
       tokens('old-token', 'new-token')

@@ -3,8 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /*
- * Layout guards for settings, salary, skattekonto and bokslut (UI scan t1108
- * U4). Each one is a phone defect that rendered: a page that scrolled
+ * Layout guards for settings, salary, skattekonto and bokslut. Each one is a phone defect that rendered: a page that scrolled
  * sideways, a save bar under the bottom nav, a title under the actions.
  */
 const root = path.resolve(__dirname, '../../../')

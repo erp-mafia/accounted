@@ -17,7 +17,7 @@ export const GET = withRouteContext(
 
     // Article registers can exceed PostgREST's silent 1000-row cap (imported
     // product catalogs), so paginate. The secondary order on id gives the
-    // stable total order .range() paging requires — name alone is not unique.
+    // stable total order .range() paging requires - name alone is not unique.
     // Errors thrown here surface via the wrapper's canonical envelope.
     const data = await fetchAllRows(({ from, to }) => {
       let query = supabase

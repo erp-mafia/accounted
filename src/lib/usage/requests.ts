@@ -1,9 +1,9 @@
 /**
  * Begär fler: a person asking for more of a priced service than the month
  * includes. The request is stored (usage_requests) and mailed to support with
- * what a founder needs to open the charge: the company, who asked, the
- * month's usage against what is included, the price and who would pay. A
- * founder answers by opening the charge (consent.ts) and setting handled_at.
+ * what an operator needs to open the charge: the company, who asked, the
+ * month's usage against what is included, the price and who would pay. An
+ * operator answers by opening the charge (consent.ts) and setting handled_at.
  *
  * Bank payments keep their own request (lib/payments/allowance.ts), which
  * also asks how many payments a month the company needs.
@@ -20,7 +20,7 @@ import { countCompanyUsage } from './counters'
 import { formatOre, USAGE_INVOICE_LABELS, USAGE_PRICES, type UsageKind } from './kinds'
 import { readCompanyPayer } from './paying'
 
-/** One open request per company and kind a day: the founders answer by hand. */
+/** One open request per company and kind a day: the operators answer by hand. */
 export const USAGE_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export interface UsageRequestCreated {

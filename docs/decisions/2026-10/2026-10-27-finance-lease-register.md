@@ -1,1 +1,0 @@
-[2026-10-27] Finansiell leasing (K3 kap. 20) is a register under bokslut behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED, opt-in per company (20.29 relief stays default); "Bokför året" books each new lease's start and one year-end verifikat, once per year (finance_lease_postings), not a schedule.

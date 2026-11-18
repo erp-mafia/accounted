@@ -1,1 +1,0 @@
-[2026-10-16] create_document_version copies link_basis and link_evidence from the version it replaces instead of resolving a new one: the new version takes over the same verifikat link, nobody paired anything anew, as a storno move keeps the basis.

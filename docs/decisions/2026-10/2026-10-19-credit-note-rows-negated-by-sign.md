@@ -1,1 +1,0 @@
-[2026-10-19] accounted#58 a customer kreditfaktura negates each of the original's amounts by its sign (creditedAmount, header and rows), not -Math.abs, and its verifikat books each line on its natural side: a rabatt row comes back positive, so rows match the header and 1510 the reskontra.

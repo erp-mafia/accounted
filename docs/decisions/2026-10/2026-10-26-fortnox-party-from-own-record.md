@@ -1,1 +1,0 @@
-[2026-10-26] Import: a Fortnox customer or supplier is always read from its own record, never mapped from the list: the list form leaves out the country, VAT number and terms and names the phone differently, while Fortnox's schema claims it has everything (crm#1436).

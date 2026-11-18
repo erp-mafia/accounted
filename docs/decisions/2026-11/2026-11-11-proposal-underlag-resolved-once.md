@@ -1,1 +1,0 @@
-[2026-11-11] A proposal's underlag is resolved once for every operation type (proposal-document.ts), not per preview: only 2 of the types carrying a document showed it. credit_supplier_invoice is left out: its invoice id points at the credited invoice, not the credit note.

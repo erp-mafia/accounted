@@ -604,7 +604,7 @@ describe('MCP model-free document upload tools', () => {
   })
 
   it('takes over the item Arkiv queued while the reading ran instead of filing a twin (crm#1413)', async () => {
-    // Prod 2026-10-23: Arkiv classified the archived upload a minute before
+    // Seen 2026-10-23: Arkiv classified the archived upload a minute before
     // the extraction finished and queued it ('partner_api', no reading); the
     // upload then filed its own item beside it. One upload, two items.
     const queuedId = '66666666-6666-4666-8666-666666666666'

@@ -1,1 +1,0 @@
-[2026-10-23] Vacation days without an amount are priced by the calculation (#85): semestertillägg, procentregeln avdrag plus semesterlön, obetald avdrag; förskott derives nothing and an unknown procentregeln base stops the run (SemL 16 a, 16 b, 22, 26 §§): docs/research/payroll-semester-derived-pay.md.

@@ -1,1 +1,0 @@
-[2026-10-15] MCP generated writes accept preview_token without declaring it (McpTool.undeclaredArgs): declaring it on the eight listed writes costs ~70 tokens against ~15 of tools/list headroom; the dry-run answer that hands it out says how to send it back.

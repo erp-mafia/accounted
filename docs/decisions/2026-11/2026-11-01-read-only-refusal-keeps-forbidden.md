@@ -1,1 +1,0 @@
-[2026-11-01] A read-only refusal keeps code FORBIDDEN with the reason in details.code, on every door: not a new top-level code as first proposed. v1 clients branch on FORBIDDEN today, and details.code is what v1 already answers, so only session and MCP change shape.

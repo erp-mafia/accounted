@@ -1,1 +1,0 @@
-[2026-10-27] Haiku 5.5 where the job is reading or classifying (extraction, receipt-hunt adjudication, WhatsApp replies). Chat, heavy, Ask, atom selection and account selection (it picks the VAT jurisdiction) stay on Sonnet: Haiku scored 64% vs 86% on Swedish VAT reasoning.

@@ -1,1 +1,0 @@
-[2026-11-17] A typed verifikat that moves a ruta of a filed momsperiod needs confirming (VAT_PERIOD_ALREADY_FILED, the booking-time guard) instead of a third period state: filing still freezes nothing, a booking that leaves the declaration alone is never asked, and the lock stays the only block.

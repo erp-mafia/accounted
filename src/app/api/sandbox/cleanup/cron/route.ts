@@ -9,7 +9,7 @@ import { sandboxTeardownOutcome, type SandboxCleanupFailure } from '@/lib/sandbo
  *
  * Every PostgREST statement runs under authenticator's statement_timeout of
  * 8s, and a function-level SET statement_timeout does NOT lift it (the timer
- * arms when the top-level statement starts; verified empirically on prod
+ * arms when the top-level statement starts; verified empirically
  * 2026-08-07, same finding as the SIE import RPCs). One teardown costs
  * ~220ms with the account_id index, so the run loops SMALL batches: each
  * rpc() call is its own statement with its own 8s window, and the loop

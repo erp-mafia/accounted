@@ -1,1 +1,0 @@
-[2026-10-18] Hem shows the bank switch and an expiring bank consent only as Att göra rows, not also as notice lines: the rows read the same computations and windows, so the notice only repeated them (UI audit).

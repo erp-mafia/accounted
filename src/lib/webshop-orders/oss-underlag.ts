@@ -40,7 +40,7 @@ import { OSS_VAT_ACCOUNT, SWEDISH_RULE_RATES, isOssRule, sameVatRate } from './c
  *     and VAT amount only.
  * Which ECB rate converts a correction neither source says. This uses the
  * rate of the quarter being corrected, so that a full refund takes back
- * exactly what was declared (docs/decisions/2026-10).
+ * exactly what was declared.
  */
 
 export interface OssQuarterRef {

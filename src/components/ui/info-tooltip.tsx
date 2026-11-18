@@ -81,7 +81,7 @@ function InfoTooltip({
             // only forwards props: it never adds tabIndex, and a bare <span>
             // cannot take focus, so the focus handler never fired and everything
             // behind a labelled tooltip was mouse-only. WCAG 2.1 asks for
-            // keyboard access to content shown on hover, and .claude/rules/design
+            // keyboard access to content shown on hover, and the design system
             // asks for it too.
             //
             // Not a <button>: six of the nine call sites sit inside a

@@ -1,1 +1,0 @@
-[2026-10-16] A package switch writes its own audit_log row inside set_company_package_choice, not through an audit trigger on company_capability_config: the migration reset moves those rows between companies, and only package keys are processing rules.

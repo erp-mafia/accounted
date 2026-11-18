@@ -4,7 +4,7 @@
  * is used up (the month's amount, or for signed documents the company's
  * first in all), the action is refused: with USAGE_SUBSCRIPTION_REQUIRED for
  * a company nobody pays for (paying.ts), else with USAGE_LIMIT_REACHED until
- * the company asks for more (requests.ts) and a founder opens the charge for
+ * the company asks for more (requests.ts) and an operator opens the charge for
  * it (a usage_consents row, consent.ts); after that it goes ahead and costs
  * the unit price. A kind that is not billed is never stopped here: its own rules
  * apply as before.

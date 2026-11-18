@@ -3,7 +3,7 @@
 // Periodiseringar: running accrual schedules (förutbetalda kostnader 17xx,
 // upplupna kostnader 29xx / förutbetalda intäkter 29xx, upplupna intäkter
 // 17xx) created from invoice lines or set up by hand (Ny periodisering,
-// accounted#164). Not on the stays-Swedish list (.claude/rules/i18n.md), so
+// accounted#164). Not on the stays-Swedish list, so
 // the chrome reads the `periodiseringar` namespace; account numbers and
 // server error texts pass through as they are.
 

@@ -3,7 +3,7 @@ import { transactionCategorization } from '../transaction-categorization'
 import type { InboxChannelContext } from '@/types'
 import { svMenuPath } from '../../ask/__tests__/ui-fixture'
 
-// Locks in the prose-drift fix from /Users/jakobwennberg/.claude/plans/.
+// Locks in the prose-drift fix.
 // The promptTemplate must instruct the agent to narrate using CATEGORY
 // LABELS, never four-digit BAS account numbers. If a future edit
 // reintroduces a "föreslå BAS-konto"-style instruction, this test fails.

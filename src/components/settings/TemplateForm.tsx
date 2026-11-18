@@ -91,7 +91,7 @@ export function TemplateForm({
     })
   }
 
-  // Default new lines to a VAT line — the 2-line template starts with one
+  // Default new lines to a VAT line - the 2-line template starts with one
   // business + one settlement, and the natural extension is a VAT leg.
   // Defaulting to 'business' instead would silently break the converter
   // (which requires exactly one business line) and the template would
@@ -116,7 +116,7 @@ export function TemplateForm({
   const showRatio = businessLineCount > 1
   // The ratio only validates against cost/revenue lines (businessRatioSum), so
   // only those get an editable input. The settlement leg is the full counter-
-  // amount (ratio 1.0) and is shown in the live preview, not as a control —
+  // amount (ratio 1.0) and is shown in the live preview, not as a control:
   // an editable settlement ratio that doesn't feed the sum check would mislead.
   const firstRatioIndex = showRatio ? lines.indexOf(shareLines[0]) : -1
   const businessRatioSum = shareLines.reduce((sum, l) => sum + (l.ratio ?? 1), 0)
@@ -134,14 +134,14 @@ export function TemplateForm({
   }, [lines])
 
   // Soft, non-blocking hint when the chosen name collides with an existing
-  // company template (no DB unique constraint — duplicates are allowed).
+  // company template (no DB unique constraint - duplicates are allowed).
   const nameCollision =
     mode !== 'edit' &&
     name.trim().length > 0 &&
     duplicateNamePool.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase())
 
   // Real-time check: can this draft be picked from the transaction sheet?
-  // If not, we show a hint — save remains allowed (templates may still be
+  // If not, we show a hint - save remains allowed (templates may still be
   // useful from the journal-entry form).
   const isConvertible = (() => {
     const draft: BookingTemplateLibrary = {

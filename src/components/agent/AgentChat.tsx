@@ -156,7 +156,7 @@ export default function AgentChat({
   onStatus,
 }: AgentChatProps) {
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null)
-  // "Clear the proposals I didn't approve" — rejects the conversation's
+  // "Clear the proposals I didn't approve" - rejects the conversation's
   // still-pending staged operations in one call so they don't linger in
   // Granskning, then drops the cards from view.
   const [clearingProposals, setClearingProposals] = useState(false)

@@ -1,1 +1,0 @@
-[2026-10-15] Inline rättelse records its actor (actor_type, actor_label on journal_entry_rattelse_log, the audit GUCs set too), caller-asserted like commit_journal_entry; a deploy ahead of its migration retries once without the actor on PGRST202, so the write lands unattributed instead of failing.

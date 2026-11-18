@@ -1,1 +1,0 @@
-[2026-11-13] A bank's refusal is worded from its provider code where the error is read, in the reader's language: an English UI got the generic refusal line for every refusal, and a failed BankID attempt in Swedish.

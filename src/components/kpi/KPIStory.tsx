@@ -13,7 +13,7 @@ import {
 } from './month-values'
 
 /**
- * Nyckeltal as the founder-picked "Instrumentbrädan" layout: one flat row of
+ * Nyckeltal as the chosen "Instrumentbrädan" layout: one flat row of
  * figures, one per visible KPI from the user's preferences, the monthly
  * result bars at full width underneath, and the cost story as quiet rows
  * below. Pure presentation: everything derives from the existing KPIReport.

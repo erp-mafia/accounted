@@ -1,6 +1,6 @@
 /**
  * VENDOR_LOGOS_FETCH switches the vendor-logo cron on (true or 1). Off by
- * default: until a founder sets it, the cron answers "skipped" and no
+ * default: until an operator sets it, the cron answers "skipped" and no
  * vendor website is ever contacted. Icons already stored keep showing
  * either way; the flag only governs fetching.
  */

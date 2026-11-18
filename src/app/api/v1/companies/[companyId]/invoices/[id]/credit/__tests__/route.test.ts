@@ -369,7 +369,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(mocks.createJournalEntry).not.toHaveBeenCalled()
   })
 
-  // Founder decision 2026-10-13: fail closed. It used to answer 201 with the
+  // Product decision 2026-10-13: fail closed. It used to answer 201 with the
   // original already 'credited' and a JOURNAL_ENTRY_NOT_POSTED warning.
   it('fails closed when the reversing entry is refused: the draft kept, the original untouched', async () => {
     mocks.createJournalEntry.mockRejectedValue(new Error('Period locked'))

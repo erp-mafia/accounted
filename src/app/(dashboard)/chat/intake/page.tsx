@@ -18,8 +18,8 @@ export default async function ChatIntakePage() {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
-  // The interview goes with the built-in assistant (ASSISTANT_CHAT_ENABLED,
-  // founder decision 2026-11-18): switched off, it is not started.
+  // The interview goes with the built-in assistant (ASSISTANT_CHAT_ENABLED):
+  // switched off, it is not started.
   leaveWhenChatSwitchedOff()
   // onboarding.intake runs on the tool-loop runtime; without it (#2204) the
   // starter would fire an invoke that answers 503. The agent is built by now,

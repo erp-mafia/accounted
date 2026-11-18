@@ -1,1 +1,0 @@
-[2026-11-01] Inline event consumers throw their failures to the bus instead of catching at warn: the bus already isolates each consumer and logs a rejection as an error with event type and consumer name, and event_deliveries then records 'failed' instead of 'ok'.

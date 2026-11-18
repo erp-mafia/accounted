@@ -6,8 +6,7 @@ import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 /**
  * Can THIS caller file (momsdeklaration, AGI) right now? Filing runs on the
  * caller's own BankID session, never on the company connection another
- * member made (docs/decisions/2026-10/2026-10-16-skatteverket-filing-on-
- * callers-own-session.md), so the answer can differ from `status`.
+ * member made, so the answer can differ from `status`.
  */
 export interface SkvFilingReadiness {
   ready: boolean

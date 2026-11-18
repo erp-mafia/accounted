@@ -16,7 +16,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn().mockResolvedValue(undefined) } }))
-// The seeding + calculation libs have their own tests — stub them here and
+// The seeding + calculation libs have their own tests - stub them here and
 // assert on the wiring (defaults, conflict handling, non-fatal calc).
 vi.mock('@/lib/salary/create-run', () => ({ createSalaryRunWithEmployees: vi.fn() }))
 vi.mock('@/lib/salary/run-calculation', () => ({ runSalaryCalculation: vi.fn() }))
@@ -172,7 +172,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
 
     enqueueMany([
       { data: { salary_pay_day: 27 } },
-      // no latest-run lookup — period was explicit
+      // no latest-run lookup - period was explicit
       { data: null }, // conflict pre-check
     ])
 

@@ -1,1 +1,0 @@
-[2026-11-01] An OAuth key records mcp_oauth with its client's name at every door, pending_operations and arrivals included: credentialActor, new rows only. processing_history keeps api_key, its word for a key. The reserved-name split in the two SQL functions decides binding only, no record.

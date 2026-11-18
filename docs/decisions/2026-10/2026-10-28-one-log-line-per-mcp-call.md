@@ -1,1 +1,0 @@
-[2026-10-28] The proxy writes no line for an /api call without a session cookie (it did no work there), and the MCP endpoint writes one dispatcher line per tools/call with tool, key, company, outcome and error code; handshakes, tools/list and probes write none unless they fail with a 5xx.

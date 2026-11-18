@@ -1,1 +1,0 @@
-[2026-10-16] A staged-operation receipt has band review when a person approved and direct when a key did within its unattended ceiling (policy staged-approval.1): the CHECK needs a band to sit on an acted-on suggestion, and a key's approval is the code's own unattended path.

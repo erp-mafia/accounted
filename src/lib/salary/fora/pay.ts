@@ -16,8 +16,7 @@
  *
  * Bruttolöneavdrag (löneväxling, gross_deduction_*) lower the bruttolön and
  * stay lowered here: the cash actually paid out, the literal reading of
- * "kontant utbetald". Fora's list does not name them; see the MR for the
- * open question.
+ * "kontant utbetald". Fora's list does not name them.
  *
  * FORA_PAY_TREATMENT is exhaustive over the row types, so a new item_type
  * fails the typecheck until someone decides where Fora stands on it.

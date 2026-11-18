@@ -4,7 +4,7 @@
  * The RPC backs the kontoplan cleanup flow ("Rensa oanvända konton"): it
  * returns per-account posting counts so the prune endpoint can compute the
  * safe-to-delete set (usage_count absent = never posted). Verifies the
- * aggregation, company scoping, and that draft entries count as usage —
+ * aggregation, company scoping, and that draft entries count as usage:
  * a draft line still references the account, so deleting it would orphan
  * the draft.
  */
@@ -45,7 +45,7 @@ async function insertJournalEntry(params: {
   }
 
   const id = randomUUID()
-  // Insert directly, bypassing commit_journal_entry's voucher sequencing —
+  // Insert directly, bypassing commit_journal_entry's voucher sequencing:
   // fine for a read-side RPC that only aggregates line/account references.
   await getPool().query(
     `INSERT INTO public.journal_entries
@@ -107,7 +107,7 @@ describe('get_account_usage_counts RPC', () => {
     expect(byAccount.get('3001')).toBe('1')
     expect(byAccount.get('2611')).toBe('1')
     expect(byAccount.get('4010')).toBe('1')
-    // Never-posted accounts are simply absent — that absence IS the
+    // Never-posted accounts are simply absent - that absence IS the
     // "unused" signal the prune endpoint keys on.
     expect(byAccount.has('5410')).toBe(false)
   })
@@ -175,7 +175,7 @@ describe('get_account_usage_counts RPC', () => {
 
   it('adds the posted lines (from the ledger summaries) and the draft lines on one account, and answers the same from the lines alone', async () => {
     // Posted and reversed verifikat are counted from ledger_account_days, the
-    // rest from their lines (prod 2026-11-12: every line of the largest
+    // rest from their lines (seen 2026-11-12: every line of the largest
     // company took 5 s and timed out cold). A company whose summaries are not
     // built keeps the line path; both must give the same counts.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()

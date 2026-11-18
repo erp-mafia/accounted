@@ -1,1 +1,0 @@
-[2026-11-07] A skattekonto with no saldo fetched from Skatteverket shows no 0 kr balance line and never 'stämmer'; a saldo fetched by a connection since removed stays the comparison as of its date, since that is Skatteverket's own figure (crm#1701).

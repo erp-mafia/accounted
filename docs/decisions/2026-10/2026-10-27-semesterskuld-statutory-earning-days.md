@@ -1,1 +1,0 @@
-[2026-10-27] On the statutory Apr-Mar basis the semesterlöneskuld (report, remeasurement and year close) includes the next semesterår's days earned so far in the running intjänandeår (SemL 7 §); the close used to value only untaken and saved days, understating by a year's days.

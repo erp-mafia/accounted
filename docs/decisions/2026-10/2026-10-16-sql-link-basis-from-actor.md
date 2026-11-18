@@ -1,1 +1,0 @@
-[2026-10-16] SQL link writers resolve their basis in resolve_link_basis from the actor they see (p_actor_type, else gnubok.actor_type), no new parameter: an approval stays unseen, so an approved agent proposal they write records the approver's basis, not agent_proposed_user_approved.

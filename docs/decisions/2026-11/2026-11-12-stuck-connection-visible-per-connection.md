@@ -1,1 +1,0 @@
-[2026-11-12] The bank sync chip reads stale per active connection that has an account to fetch, not from the newest sync of all, and Hem shows a notice for a POS connection that needs action: one working bank hid a stuck one, and a stopped POS feed showed only on the Kassa page.

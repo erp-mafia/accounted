@@ -104,7 +104,7 @@ afterEach(() => vi.unstubAllEnvs())
 
 describe('watchCronRuns: a run the platform killed', () => {
   it('closes a run still open a minute past its limit as timed out, and reports it', async () => {
-    // Production, 2026-11-10 04:30: killed at 300 s, and nothing anywhere said so.
+    // Seen 2026-11-10 04:30: killed at 300 s, and nothing anywhere said so.
     rows.push(run('killed', { status: 'running', started_at: ago(7 * MINUTE), finished_at: null, duration_ms: null, http_status: null }))
 
     const result = await watch()

@@ -1,1 +1,0 @@
-[2026-10-16] The bank match and voucher link (lib/invoices) and the samlingsbetalning (lib/transactions) import lib/supplier-invoices/registration-first, three new boundary edges: an injected booking step instead would let a door forget it, which is the bug this fixes.

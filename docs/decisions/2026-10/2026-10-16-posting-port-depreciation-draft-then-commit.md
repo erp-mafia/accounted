@@ -1,1 +1,0 @@
-[2026-10-16] The engine splits commitAssetDepreciation (the commit_asset_depreciation RPC, cleanup, reload) from the draft, so the avskrivning drafts through the posting port like the disposal already did; createAssetDepreciationEntry stays as draft plus commit, RPC unchanged.

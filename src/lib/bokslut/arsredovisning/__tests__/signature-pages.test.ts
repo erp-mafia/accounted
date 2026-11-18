@@ -209,7 +209,7 @@ describe('årsredovisning PDF, signing render', () => {
 })
 
 /**
- * Founder decision 2026-10-15: a board member or the verkställande direktör
+ * Product decision 2026-10-15: a board member or the verkställande direktör
  * may sign the fastställelseintyg (swedish-financial-reporting,
  * bolagsverket-filing.md § 5; ÅRL 8 kap. 3 §).
  */

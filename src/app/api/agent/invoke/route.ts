@@ -108,7 +108,7 @@ export async function POST(request: Request) {
 
   // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): no turn
   // runs, for any intent. The onboarding interview (onboarding.intake) goes
-  // with the rest (founder decision 2026-11-18).
+  // with the rest.
   if (!assistantChatEnabled()) {
     return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
   }

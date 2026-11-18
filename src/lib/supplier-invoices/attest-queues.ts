@@ -112,7 +112,7 @@ export interface LoadAttestQueuesOptions {
 /**
  * The .in() lists of one payment order read: its company ids and invoice ids
  * together stay at IN_CLAUSE_CHUNK, the ceiling that keeps the request line
- * under the gateway's 8 KB (about 200 ids already got a 414 in prod,
+ * under the gateway's 8 KB (about 200 ids already got a 414 in production,
  * lib/suggestion-log/receipts.ts). One company's invoices may span reads.
  */
 export function paymentOrderReadChunks(

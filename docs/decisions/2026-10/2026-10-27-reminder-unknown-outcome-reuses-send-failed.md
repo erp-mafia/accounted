@@ -1,1 +1,0 @@
-[2026-10-27] Swept and unknown-outcome reminders are listed under the existing send_failed reason with a reworded sentence, not a new reason: a refused send is now retried on its row, so send_failed only ever means the outcome is unknown, and the batch dialog maps reasons exhaustively.

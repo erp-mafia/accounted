@@ -253,7 +253,7 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it("form-action includes the redirect_uri origin so the post-consent redirect isn't blocked", async () => {
@@ -404,7 +404,7 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI renders every
     // scope group with every row pre-checked except approve (one-click
-    // consent, founder decisions 2026-08-26 and 2026-10-03): the affirmative
+    // consent, product decisions 2026-08-26 and 2026-10-03): the affirmative
     // act is the Allow click on a page that shows the full set, every write
     // is staged as a proposal the user approves, and each row stays
     // individually untickable.
@@ -519,7 +519,7 @@ describe('client identity on the consent page', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('names Claude as a verified client and shows the redirect host', async () => {
@@ -710,7 +710,7 @@ describe('scope defaults for DB-registered clients', () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.resolveRedirectUri.mockResolvedValue(REGISTERED)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('pre-checks only read scopes when a registered client sends no scope', async () => {
@@ -761,7 +761,7 @@ describe('scope defaults for DB-registered clients', () => {
   })
 })
 
-describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03, option B)', () => {
+describe('approve is never pre-ticked (issue #3408, product decision 2026-10-03, option B)', () => {
   const params = {
     response_type: 'code',
     redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
@@ -777,7 +777,7 @@ describe('approve is never pre-ticked (issue #3408, founder decision 2026-10-03,
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it.each([
@@ -998,7 +998,7 @@ describe('role cap on consent', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('viewer: GET offers read scopes only and says why', async () => {
@@ -1126,7 +1126,7 @@ describe('Gemini custom apps', () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.resolveRedirectUri.mockResolvedValue(GEMINI)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('names Gemini as a verified client and shows Google\'s relay as the redirect host', async () => {
@@ -1197,7 +1197,7 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   afterEach(() => {
@@ -1340,7 +1340,7 @@ describe('account with no company yet (issue #1814)', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue(null)
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('GET renders consent labelled with the account instead of a company', async () => {
@@ -1424,7 +1424,7 @@ describe('company picker on consent (per-key company allowlist)', () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, 'Aktiva AB'))
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue(ACTIVE)
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   // One-shot overrides: vi.clearAllMocks() keeps the last implementation, so
@@ -1614,7 +1614,7 @@ describe('RFC 9207 iss parameter on authorization responses', () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   afterEach(() => {
@@ -1712,7 +1712,7 @@ describe('login and MFA redirects behind a reverse proxy', () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     mocks.resolveRedirectUri.mockResolvedValue(CLAUDE)
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
     // clearAllMocks keeps implementations, so the brand registry from the
     // iss tests above would otherwise answer here: start from an empty one.
     mocks.resolveBrandResultByHost.mockResolvedValue({ brand: null, lookupFailed: false })

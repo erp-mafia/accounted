@@ -1,1 +1,0 @@
-[2026-11-07] Every webshop panel (WooCommerce, Zettle, Shopify) offers the payment-method account form, keyed by the store scope its sync writes: the mapping was already platform-neutral; extra day-booking rows and a series per store stay out, listed for the founders (crm#1701).

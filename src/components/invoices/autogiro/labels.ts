@@ -1,6 +1,6 @@
 /**
- * How the Autogiro page names states and files. Chips mark exceptions
- * (design.md convention 5): a normal state (an active mandate, a debit sent or
+ * How the Autogiro page names states and files. Chips mark exceptions:
+ * a normal state (an active mandate, a debit sent or
  * debited) is muted text, a Badge only where something needs a look.
  */
 import type { useTranslations } from 'next-intl'

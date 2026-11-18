@@ -1,1 +1,0 @@
-[2026-10-27] The påteckning's opinion and revisionsbolag are frozen on the revisor's slot when it is signed, and a version renders a påteckning only if it carries a revisor slot: a locked, signed or filed version renders as it was signed (BFL 7 kap. 1 §), never from today's profile.

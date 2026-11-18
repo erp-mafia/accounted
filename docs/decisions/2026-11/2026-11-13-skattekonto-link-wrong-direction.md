@@ -1,1 +1,0 @@
-[2026-11-13] Skattekonto link (crm#1846): a row is WRONG_DIRECTION only when the verifikat books nothing on its side of the account, not when the remainder exceeds the net: a two-sided summary leaves such remainders (crm#1043). A one-sided verifikat netting an opposite row loses that link.

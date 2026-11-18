@@ -1,1 +1,0 @@
-[2026-10-30] Skattekonto Betala via banken opens on the primary bank account, read as is_primary on the payable accounts, not via the salary payment-account route: the inbetalning is booked against it and one read serves every opener (same class as PH 220).

@@ -58,7 +58,7 @@ export interface PortalEntry {
  * vendor here has a billing page; what earns an entry is that the invoice does
  * not arrive by mail, so a person has no other way to get it.
  *
- * Anthropic, Vercel and Supabase were removed after a founder pointed out that
+ * Anthropic, Vercel and Supabase were removed after an operator pointed out that
  * all three do email their invoices, at least to European customers. The poll
  * they came from asked which portals people log into, and people answered with
  * where the invoice can ALSO be found. Listing them told somebody to go and log
@@ -76,7 +76,7 @@ export interface PortalEntry {
  * ## The URLs were wrong, and shipped anyway
  *
  * Every path here was hand-written and none was opened. The file said so and
- * shipped regardless, and a founder then hit a 404 on Google Workspace. A
+ * shipped regardless, and an operator then hit a 404 on Google Workspace. A
  * subsequent HTTP sweep found GitHub's billing path 404 as well. Both are
  * corrected; Trygg Hansa was removed because neither of its candidate URLs
  * could be reached at all, and an unverifiable link is the same promise this

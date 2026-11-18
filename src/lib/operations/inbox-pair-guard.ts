@@ -5,7 +5,7 @@
  *
  * The read-side pairing shows such a half as that booking's companion, but
  * every door that turns an inbox item into a verifikat, an utlägg or a
- * supplier invoice used to take it as a new purchase: SofClo booked the same
+ * supplier invoice used to take it as a new purchase: one company booked the same
  * Anthropic purchase twice as utlägg on 2026-10-15, once from the invoice PDF
  * and once from the receipt PDF of the same mail. Those doors ask here before
  * anything is written (book-direct, the staged voucher, the utlägg

@@ -40,7 +40,7 @@ export function OpenInNewTab({
       rel="noopener noreferrer"
       // The new tab starts its own router, so a prefetch here is never used:
       // it only cost every visible row a full render and auth round trip of
-      // the record's page (eight per verifikat list load on prod).
+      // the record's page (eight per verifikat list load in production).
       prefetch={false}
       // Named by the visually-hidden text below rather than aria-label, so the
       // title renders a tooltip for sighted users without screen readers

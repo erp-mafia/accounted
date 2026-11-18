@@ -1,1 +1,0 @@
-[2026-10-15] IDEMPOTENCY_KEY_IN_PROGRESS sends a fixed Retry-After of 2 s, not the claim's remaining TTL: most writes finish in seconds, and a 15-minute hint would stall clients behind a request that finished long ago.

@@ -1,1 +1,0 @@
-[2026-10-29] PATC with AUTHORISATION_PENDING_API is countersigned in Accounted (Kontrasignera or a signing link) as a new authorisation on the same basket under the other signatory's PSU-ID; other PATC keeps the online-bank copy: Open Payments said SEB takes it via the API.

@@ -1,1 +1,0 @@
-[2026-10-30] An asset's basis (cost, date, category) locks only on engine-posted depreciation or disposal, the has_posted_depreciation predicate; the 12x9 ledger scan is gone: it locked 132 of 263 assets on imported or hand-booked credits the opening amount covers (crm#1511).

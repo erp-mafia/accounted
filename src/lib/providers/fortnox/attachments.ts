@@ -27,7 +27,7 @@ const PAGE_SIZE = 500;
 /**
  * The supplier-invoice list is read at Fortnox's default page size, not 500.
  * Its items are whole invoices with their vouchers, and a 500-item page of a
- * large register took longer than the client's 15 s per request: in prod
+ * large register took longer than the client's 15 s per request: in production
  * (2026-11-03) that list timed out six attempts in a row on 3 of 65 slices of
  * one company's runs, while the file-connection registers at 500 never did.
  * A smaller page is a shorter request.

@@ -3,8 +3,8 @@ import { useTranslations } from 'next-intl'
 /**
  * The INK2 page's "?" (UI-migration convention 7): what the declaration is
  * and how its SRU files are filed. The help is chrome and follows the user's
- * language; the form's own field codes and labels stay Swedish
- * (.claude/rules/i18n.md). A module of its own so the report shell can render
+ * language; the form's own field codes and labels stay Swedish.
+ * A module of its own so the report shell can render
  * it without pulling in the lazily loaded INK2DeclarationView.
  */
 export function Ink2FilingHelp() {

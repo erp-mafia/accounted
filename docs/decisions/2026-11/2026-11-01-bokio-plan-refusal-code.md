@@ -1,1 +1,0 @@
-[2026-11-01] A Bokio plan without API access classifies as BOKIO_PLAN_NO_API, not PROVIDER_API_MODULE_INACTIVE as the audit left open: that code's sentences name Visma and its menus, and the Bokio code already carries the remedy. It stops a job and a run like the other subscription refusals.

@@ -1,1 +1,0 @@
-[2026-10-26] The VAT close warns, never blocks, when 2650 or 1650 holds moms older than 150 days that built up since the last import: Skatteverket charged or paid it and that was never booked; 150 days covers every filing deadline, so no deadline data is needed.

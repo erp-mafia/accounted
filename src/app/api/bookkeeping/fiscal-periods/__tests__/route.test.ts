@@ -308,7 +308,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.data).toBeDefined()
   })
 
-  // Regression: a real user (Egon Johansson, 2026-04-27) set the company-wide
+  // Regression: a user (2026-04-27) set the company-wide
   // bookkeeping_locked_through to 2024-12-31 but never set locked_at on the
   // FY 2024 period. From their perspective and from the enforce_company_lock_date
   // trigger's perspective, the period is locked. The creation check must agree.

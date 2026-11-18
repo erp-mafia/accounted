@@ -1,6 +1,6 @@
 /**
  * PH 201: "Var hittar jag var jag kan lägga in utlägg?" The Utlägg menu row
- * stays hidden until a company's first claim exists (the founder's gate,
+ * stays hidden until a company's first claim exists (the operator's gate,
  * lib/navigation/nav-gates.ts), so a new company finds an utlägg only
  * through the inbox, the help page or ⌘K. The help page's "Eget utlägg"
  * told people to tick "Jag har betalat detta privat", a checkbox that "Vem

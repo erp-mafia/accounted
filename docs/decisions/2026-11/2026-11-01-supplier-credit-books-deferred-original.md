@@ -1,1 +1,0 @@
-[2026-11-01] accounted#58: crediting an unbooked deferred supplier invoice books its registration first (the Bokför step, its own date), then the credit, as accounted#45 does for customer invoices; deferring companies only. A locked original date refuses (SI_CREDIT_ORIGINAL_PERIOD_LOCKED).

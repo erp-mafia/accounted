@@ -1,1 +1,0 @@
-[2026-10-25] A derived IB reads an opening_balance verifikat as IB only when dated on its fiscal year's first day; one tagged IB on any other day is ordinary history. Chosen over re-tagging the 73 verifikat marked as IB in bank reconciliation: no writes to posted entries.

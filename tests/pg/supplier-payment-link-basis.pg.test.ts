@@ -2,7 +2,7 @@
  * pg-real test for 20261101045830_supplier_payment_rows_record_link_basis.sql.
  *
  * Every supplier payment row says why it is linked, as invoice_payments does.
- * The two SQL doors left link_basis NULL (157 rows on prod since 2026-10-17,
+ * The two SQL doors left link_basis NULL (157 rows in production since 2026-10-17,
  * none on the customer side): the Kopplingar view and the audit package then
  * read a link as unknown. A fixed basis would be worse: 40 of those rows came
  * from a rule or an import, so each door names its own.

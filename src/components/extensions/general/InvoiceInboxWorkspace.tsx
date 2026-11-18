@@ -1564,7 +1564,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       )}
       {/* The flow bar is the status picker, with errors beside it only while
           there are any. No document-type menu: the bar is the one axis, and a
-          second one next to it read as a second picker (founder review
+          second one next to it read as a second picker (review
           2026-09-07). The left column keeps only the search. */}
       <div className="mx-4 mt-3 flex items-center gap-3">
         <InboxPipeline counts={pipeCounts} active={pipeActive} onSelect={selectPipeStage} />

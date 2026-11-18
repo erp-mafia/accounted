@@ -1,1 +1,0 @@
-[2026-11-17] An invitation is spent by one conditional UPDATE (pending and unexpired to accepted) before the membership insert, and given back if the insert fails; an existing membership keeps it spent: single use (CASA 1.3.2) with no RPC, at the cost that a failed give-back needs a re-invite.

@@ -1,7 +1,7 @@
 import type { AiTier } from '@/lib/ai/types'
 
 /**
- * Arkiv reading layer (dev_docs/arkiv_plan.md, phase 1): every document gets
+ * Arkiv reading layer: every document gets
  * page text, read locally when a text layer exists and by the model otherwise.
  */
 

@@ -1,1 +1,0 @@
-[2026-10-16] MCP OAuth discovery resolves non-canonical hosts through resolveTrustedAppOrigin (the brands table) instead of its own host list: byrå users are given a brand-domain connector URL and the separate list failed sign-in there. A failed lookup answers canonical, never 5xx.

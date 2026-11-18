@@ -1,1 +1,0 @@
-[2026-10-15] commit_journal_entry writes journal_entry.committed to event_log under a unique dedupe_key; the bus handler still writes it with ON CONFLICT DO NOTHING rather than skipping the type: reverseEntry posts its storno by UPDATE, outside the RPC, and would vanish from the feed.

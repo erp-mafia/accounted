@@ -280,7 +280,7 @@ describe('validateOpeningDepreciation', () => {
     expect(kinds({ ...base, opening_accumulated_depreciation: 1_000, opening_depreciation_date: '2021-12-31' })).toEqual(['date_before_acquisition'])
   })
 
-  // The founder decision of 2026-09-23 refused this combination; K3 plan
+  // The product decision of 2026-09-23 refused this combination; K3 plan
   // decision 4 (2026-10-26) reverses it: the amount is the components' total.
   it('accepts an opening on an asset with K3 components, capped by the components\' depreciable bases', () => {
     const components = [

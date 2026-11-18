@@ -1,1 +1,0 @@
-[2026-11-11] A long invoice fine print (past 4 estimated lines) follows the PDF summary and may break across pages, a short one still travels whole with the payment area: a long one kept whole left page 1 mostly empty (crm#1787), short ones keep the crm#242 layout.

@@ -1,1 +1,0 @@
-[2026-10-18] sale.invoiced names no mapping_version when the send dialog's user-edited lines are booked: a person wrote them, no rule did, so the behandlingshistorik (BFNAR 2013:2 p. 9.16) must not attribute them to se.customer-invoice-lines.

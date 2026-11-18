@@ -181,23 +181,22 @@ export function holdSigning(db: MockDb, signing: PaymentOrderBatchRow, orders: P
 }
 
 /**
- * Production example, 2026-10-13: the first Open Payments payment (Arcim).
+ * An executed bank payment as one bank reports it.
  * Swedbank reports the debit WITHOUT the order's end-to-end id and writes the
  * payee's bankgiro zero-padded into the description, with the channel phrase
- * as the reference. Ids are the real row ids; the company and user ids are
- * placeholders.
+ * as the reference. All ids are placeholders.
  */
 export const ARCIM = {
   companyId: 'a7c1a000-0000-4000-8000-000000000a7c',
   userId: 'a7c1a000-0000-4000-8000-00000000a5e7',
-  cashAccountId: 'ed501e6a-ec81-4d6d-a00d-c8f5e3ca335f',
-  orderId: '4e42c482-40f8-4336-9150-f6ae656ab9a7',
-  transactionId: '7af13560-1ed2-4b17-8a1a-242438870caf',
-  invoiceId: '8976eb66-2742-4572-a140-57d6919b9990',
-  endToEndId: 'ACCd60621c108e442119d8ae9e24d5543c5',
+  cashAccountId: 'e0d50000-0000-4000-8000-000000000001',
+  orderId: '40e40000-0000-4000-8000-000000000002',
+  transactionId: '0d1d0000-0000-4000-8000-000000000005',
+  invoiceId: '80970000-0000-4000-8000-000000000003',
+  endToEndId: 'ACC00000000000000000000000000000001',
 } as const
 
-/** Payment order 4e42c482 as the status sync left it: executed (ACSC), not yet matched. */
+/** Payment order 40e40000 as the status sync left it: executed (ACSC), not yet matched. */
 export function arcimOrder(overrides: Partial<PaymentOrderRow> = {}): PaymentOrderRow {
   return order(ARCIM.orderId, {
     company_id: ARCIM.companyId,
@@ -236,7 +235,7 @@ export function arcimOrder(overrides: Partial<PaymentOrderRow> = {}): PaymentOrd
   })
 }
 
-/** Transaction row 7af13560: the Swedbank debit of that order, as ingest stored it (suggestion only). */
+/** Transaction row 0d1d0000: the Swedbank debit of that order, as ingest stored it (suggestion only). */
 export function arcimDebit(overrides: Partial<Transaction> = {}): Transaction {
   return makeTransaction({
     id: ARCIM.transactionId,
@@ -262,7 +261,7 @@ export function arcimDebit(overrides: Partial<Transaction> = {}): Transaction {
   })
 }
 
-/** Supplier invoice 8976eb66 as the booking reads it: open, booked to 2440 at receipt, 10,00 SEK remaining. */
+/** Supplier invoice 80970000 as the booking reads it: open, booked to 2440 at receipt, 10,00 SEK remaining. */
 export function arcimInvoice(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: ARCIM.invoiceId,

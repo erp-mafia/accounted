@@ -445,7 +445,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
-  // Fail closed (founder decision 2026-10-13): no sent invoice without its
+  // Fail closed (product decision 2026-10-13): no sent invoice without its
   // verifikat. The draft is restored, the number kept, nothing delivered.
   it('fails closed when the journal entry cannot be created: back to draft, no delivery', async () => {
     const { supabase, calls } = createTableMockSupabase({

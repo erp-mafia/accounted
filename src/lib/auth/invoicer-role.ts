@@ -5,7 +5,7 @@
  * or the bank (crm#1014, accounted#39). Hiding payroll from a member cannot
  * hold: a salary voucher is an ordinary verifikat and the bank feed shows each
  * net salary. So the role starts from nothing and is given back only what
- * invoicing needs. Decision: docs/decisions/2026-10/2026-10-27-invoicer-role.md.
+ * invoicing needs.
  *
  * The enforcement, layer by layer:
  *   - Database (20261027130000_invoicer_company_role): the shared membership

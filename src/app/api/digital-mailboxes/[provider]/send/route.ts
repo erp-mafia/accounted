@@ -12,8 +12,7 @@ type Params = { params: Promise<{ provider: string }> }
 /**
  * POST /api/digital-mailboxes/{kivra|billo}/send: register the company as
  * a sender at the provider, so its invoices and payslips can be sent to
- * recipients' mailboxes. Idempotent. Admin only: the provider bills per
- * item sent.
+ * recipients' mailboxes. Idempotent. Admin only.
  */
 export const POST = withRouteContext<Params>(
   'digital_mailboxes.send.activate',

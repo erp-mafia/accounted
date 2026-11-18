@@ -310,7 +310,7 @@ describe('make_cash_account_primary', () => {
 
 describe('set_cash_account_primary is unchanged for system merges', () => {
   // upsertFromPsd2 and the twin heal carry the flag onto the row a merge keeps,
-  // and that row may be disabled or non-SEK (38 such primaries in prod on
+  // and that row may be disabled or non-SEK (38 such primaries in production on
   // 2026-09-21). The eligibility rule must not have leaked into this function.
   it.each([
     { label: 'a disabled row', enabled: false, currency: 'SEK', ledgerAccount: '1931' },

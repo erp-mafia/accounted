@@ -1,1 +1,0 @@
-[2026-10-16] Grant enforcement is one SQL gate, claim_company_grant, matching a staged categorization field by field under a lock: exact match only, pg-testable, and the database stays the authority on limits, period locks, the key and the kill switch.

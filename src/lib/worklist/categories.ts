@@ -470,8 +470,7 @@ export async function countHeldDocuments(supabase: SupabaseClient, companyId: st
 
 /**
  * How far back "say what this is" reaches. The read backfill types years of history, and asking about every
- * old document it could not name would bury Att göra (prod 2026-09-25: 621 such questions in 78 companies
- * and growing as history was typed, 95 in one). Older ones stay in Dokument's folders, unasked.
+ * old document it could not name would bury Att göra. Older ones stay in Dokument's folders, unasked.
  */
 export const REVIEW_RECENT_DAYS = 60
 export const reviewSince = (now = new Date()): string => new Date(now.getTime() - REVIEW_RECENT_DAYS * 86_400_000).toISOString()

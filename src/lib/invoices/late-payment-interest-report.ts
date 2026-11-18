@@ -14,7 +14,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  *
  * Paid late counts only payments recorded in Accounted: an invoice_payments
  * row whose verifikat was booked here as a payment (PAYMENT_SOURCE_TYPES).
- * Imported history is left out on purpose (founder call 2026-10-26): a paid
+ * Imported history is left out on purpose (product call 2026-10-26): a paid
  * date that came with an import, a payment row linked to an imported
  * verifikat, or a registered partial payment without one says when the old
  * system recorded the payment, which is not a date anyone should charge

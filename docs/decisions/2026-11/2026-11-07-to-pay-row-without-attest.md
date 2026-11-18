@@ -1,1 +1,0 @@
-[2026-11-07] Att göra's Betala row covers every company: without an attest queue (kontantmetoden, or no attest policy) it counts each unpaid invoice whose approval is done or not part of the method, "Betala N leverantörsfakturor", with the attest queue's ready rule (crm#1631).

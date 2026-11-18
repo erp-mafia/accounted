@@ -1,1 +1,0 @@
-[2026-11-15] Balansrapport shows Ingående balans (the fiscal year's first day) beside Ingående saldo (the range start) in the view, PDF and xlsx: its one opening column held the range start under the IB label, so a mid-year range hid the year's IB.

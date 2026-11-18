@@ -1,1 +1,0 @@
-[2026-10-16] Registration-first applies only where defer_invoice_booking is on, and the migration voucher pass is exempt: elsewhere a supplier invoice without a registration link can be booked through SIE or a provider migration, and booking it again would double the cost.

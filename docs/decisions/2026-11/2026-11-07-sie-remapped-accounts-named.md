@@ -1,1 +1,0 @@
-[2026-11-07] A used SIE source account that a stored or agent mapping books on another number is named in the MCP preflight and on the import's approval card (2640 to 2641 excepted), not refused: overrides are deliberate choices, silence was the bug (crm#1684).

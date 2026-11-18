@@ -1,7 +1,7 @@
 /**
  * The Swedish names of the ledger context's VAT treatment codes. They stay
- * Swedish in both locales, like BAS account names and momsdeklaration labels
- * (.claude/rules/i18n.md). Shared by the Karta view and the wiki's context
+ * Swedish in both locales, like BAS account names and momsdeklaration labels.
+ * Shared by the Karta view and the wiki's context
  * view, so a treatment reads the same on both.
  */
 const VAT_LABELS: Record<string, string> = {

@@ -1,1 +1,0 @@
-[2026-10-15] DECISIONS.md no longer merges with merge=union: since it holds only the layout, a union merge of any branch that still appends there restores the whole old log (it did on !383's merge). Without it such a branch conflicts visibly; the decision-log guard stays the backstop.

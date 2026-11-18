@@ -1,1 +1,0 @@
-[2026-10-28] write_audit_log and write_sie_header_audit take auth.uid() before the row's user_id on every audited table, not a chosen list: a user session is the statement's actor and no audited table needs the creator over it. Service-role writes keep the row's user_id (#126).

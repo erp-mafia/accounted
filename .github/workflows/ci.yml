@@ -1,6 +1,6 @@
 name: CI
 
-# The merge gates, job for job the same as .gitlab-ci.yml: checks, pr-privacy,
+# The merge gates: checks, pr-privacy,
 # build, unit-tests (four shards), pg-coverage-gate, pg-real, pg-upgrade and
 # tool-pg. Production migrations are in migrations-production.yml; the nightly
 # simulated company and the report benchmark are in nightly.yml.
@@ -136,8 +136,7 @@ jobs:
             exit 1
           fi
 
-      # Main writes the state every pull request reads (the checks-cache job
-      # in .gitlab-ci.yml). Saved even when a later check failed, as long as
+      # Main writes the state every pull request reads. Saved even when a later check failed, as long as
       # the type check ran.
       - name: Save tsc and ESLint state
         if: ${{ !cancelled() && github.event_name == 'push' && steps.types.outcome != 'skipped' }}

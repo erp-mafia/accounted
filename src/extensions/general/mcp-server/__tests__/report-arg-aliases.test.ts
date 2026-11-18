@@ -1,6 +1,6 @@
 /**
  * Read-only report tools accept the parameter synonyms agents actually send
- * (prod telemetry: fiscal_period_id, date_from/date_to, start_date/end_date,
+ * (telemetry: fiscal_period_id, date_from/date_to, start_date/end_date,
  * as_of_date, account_number, metric), mapped onto the tool's own names.
  * tools/list stays strict: no alias ever appears in a published schema.
  *
@@ -131,7 +131,7 @@ describe('normalizeReportArgAliases: the names agents sent, 2026-10', () => {
     }
   })
 
-  it('get_measure reads measure as measure_id (2026-11 telemetry: 33 refusals, 18 companies)', () => {
+  it('get_measure reads measure as measure_id (2026-11 telemetry: 33 refusals)', () => {
     expect(map('gnubok_get_measure', { measure: 'bank_balance', as_of_date: '2026-09-30' }).args).toEqual({
       measure_id: 'bank_balance',
       as_of_date: '2026-09-30',

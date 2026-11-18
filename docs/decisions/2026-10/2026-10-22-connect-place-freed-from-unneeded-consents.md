@@ -1,1 +1,0 @@
-[2026-10-22] When Connect refuses a bank consent over its one-per-company limit, the app ends the consents it no longer needs (a renewal's old one, a removed row's unended one) and asks once more, not a longer wait or higher limit: Connect counts a consent until it is ended (crm#1363).

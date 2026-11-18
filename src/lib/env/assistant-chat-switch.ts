@@ -8,9 +8,9 @@
  * On until someone switches it off. Unset, empty or any other value keeps the
  * chat, so a self-hosted installation and hosted production lose nothing by
  * upgrading; `false`, `0`, `off` or `no` (any case, spaces trimmed) switches
- * it off. The founders decided 2026-11-17 to remove the chat in favour of the
- * assistant a customer connects over MCP (Agenter > Koppla en agent,
- * /settings/api): the switch is how the chat goes on the day they pick, and
+ * it off. The chat is to be removed in favour of the assistant a customer
+ * connects over MCP (Agenter > Koppla en agent, /settings/api): the switch is
+ * how the chat goes, and
  * the line in the chat (components/agent/ChatRemovalNotice.tsx) tells people
  * first.
  *
@@ -18,7 +18,7 @@
  * visitor to /settings/api and the two routes answer ASSISTANT_CHAT_OFF
  * instead of running a turn, for every intent. The interview a newly built
  * assistant held with the company (intent onboarding.intake) goes with the
- * rest (founder decision 2026-11-18): no intent is exempt. Nothing is
+ * rest: no intent is exempt. Nothing is
  * deleted: conversations stay in the database.
  *
  * What the switch never stops: the MCP server, agent profiles and memory,

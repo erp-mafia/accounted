@@ -1,1 +1,0 @@
-[2026-10-27] public.skattekonto_transactions leaves the supabase_realtime publication (migration 20261027060417) because its only listener was the removed nav badge channel and it is the most-updated published table, so every change was decoded and RLS-processed for nobody; re-add the table if a skattekonto screen ever needs live updates (O04).

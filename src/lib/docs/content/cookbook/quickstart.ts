@@ -65,7 +65,7 @@ Response (\`X-Dry-Run: true\` header, no row written). The would-be record is ne
 }
 \`\`\`
 
-With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. Save that committed \`data.id\` as \`CUSTOMER_ID\` for the next step. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) — which is why the create→send→pay steps below need a live key to produce IDs to chain on.
+With a **live** key, dropping \`?dry_run=true\` commits the row: the response drops the \`dry_run\`/\`preview\` wrapper and returns the record directly under \`data\` with a real \`id\` and \`created_at\`. Save that committed \`data.id\` as \`CUSTOMER_ID\` for the next step. With a **test** key the write is forced to dry-run either way, so you keep getting this preview (\`id\`/\`created_at\` stay \`null\`) - which is why the create→send→pay steps below need a live key to produce IDs to chain on.
 
 ## 3. Draft an invoice
 
@@ -157,7 +157,7 @@ curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$IN
 
 ## What just happened
 
-This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. That's **five committing calls** — list companies, create customer, create invoice, send, mark-paid — plus the optional \`?dry_run=true\` preview in step 2 if you run it. The engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. Run the committing calls with a live key; a test key can validate request shapes via dry-run first but never persists, so it can't chain the real IDs each step needs.
+This flow creates a customer, drafts a single-line invoice, posts the verifikation on \`/send\`, emails the PDF, and records the payment. That's **five committing calls** - list companies, create customer, create invoice, send, mark-paid - plus the optional \`?dry_run=true\` preview in step 2 if you run it. The engine handles BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering. Run the committing calls with a live key; a test key can validate request shapes via dry-run first but never persists, so it can't chain the real IDs each step needs.
 
 The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate): including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date: ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
 

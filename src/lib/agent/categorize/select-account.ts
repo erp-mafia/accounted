@@ -20,7 +20,7 @@ import type { EntityType, TransactionCategory, VatTreatment } from '@/types'
  * counterparty templates, rules, history), the model reasons and then CHOOSES,
  * from a CLOSED set of options:
  *   - one of the retrieved candidate accounts (the "known" path), or
- *   - one of the standard business categories (the "novel" path — a first-time
+ *   - one of the standard business categories (the "novel" path - a first-time
  *     vendor with no candidate), which maps deterministically to a BAS account, or
  *   - `needs_review` when nothing fits (routed to a human, never auto-applied).
  *

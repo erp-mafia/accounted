@@ -1,1 +1,0 @@
-[2026-11-04] The agent operation cash-accounts.change-ledgers (gnubok_change_bank_ledgers, crm#1663) is owner/admin only and staged, stricter than the dashboard ledger route (any writer): it moves where a bank books, and an agent proposing it should need the people who own the books.

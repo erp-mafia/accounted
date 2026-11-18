@@ -1,1 +1,0 @@
-[2026-10-28] The optional `reason` on every listed staging tool costs about 1 431 tools/list tokens; both payload ceilings rise by that (67 600, 63 100) rather than trimming it to a bare type, since the description is the instruction the agent needs. A founder call.

@@ -17,7 +17,7 @@ curl "https://app.accounted.se/api/v1/companies" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d '{ "name": "Ingager AB", "entity_type": "aktiebolag", "org_number": "5566778899", "vat_registered": true, "moms_period": "monthly", "accounting_method": "accrual", "f_skatt": true }'
+  -d '{ "name": "Exempelbolaget AB", "entity_type": "aktiebolag", "org_number": "5566778899", "vat_registered": true, "moms_period": "monthly", "accounting_method": "accrual", "f_skatt": true }'
 \`\`\`
 
 The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS chart of accounts is seeded on creation; the fiscal year follows \`fiscal_year_start_month\` (default January). The pain.001 payment file pays from the account the salaries are booked on, the company's primary bank account, with that account's IBAN and BIC. A company whose only bank account has no IBAN of its own (a company created over the API starts with one, 1930) uses the IBAN and BIC on \`PATCH /companies/{id}/settings\`; the bankgiro a Bankgirot LB file is sent from goes there too.

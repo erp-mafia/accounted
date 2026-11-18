@@ -1,1 +1,0 @@
-[2026-11-03] The engine stamps a foreign bank row's own figure on the line that books it, from bank_booking_context, instead of each builder: only the categorize builder did, so every match, cash and private booking of a foreign row left the account unreconcilable (crm#1590).

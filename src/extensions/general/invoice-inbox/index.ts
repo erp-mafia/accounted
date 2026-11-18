@@ -643,7 +643,7 @@ export const invoiceInboxExtension: Extension = {
         // A receipt dropped into Dokument is routed here the moment the
         // classifier types it, before its reading has landed: the item was
         // created with none and stayed "Inte AI-tolkad" although the document
-        // row got the reading seconds later (prod 2026-09-24). The document's
+        // row got the reading seconds later (seen 2026-09-24). The document's
         // own reading stands in for the item's.
         //
         // The same read gives an open item whose reading came back empty its

@@ -1,1 +1,0 @@
-[2026-11-10] A learned mapping rule is neither saved nor matched on a bank text that names no one (namesCounterparty, the catalog's BANK_NOISE_PHRASES), not the graph's PAYMENT_WORDS: one list for both learning stores, and stored rules are skipped on read, never deleted (crm#1707).

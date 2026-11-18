@@ -4,7 +4,7 @@
  *
  * Everything here is read from the company's own books and bank: the bank
  * rows it paid and the supplier invoices it registered. Never from Arkiv's
- * extracted agreements: the founder rule of 2026-09-27 keeps model-extracted
+ * extracted agreements: the operator rule of 2026-09-27 keeps model-extracted
  * facts out of this for every company outside the brain
  * (ARKIV_BRAIN_COMPANY_IDS), so a cadence is computed from dates that
  * happened and a door from where the documents actually came in, which also

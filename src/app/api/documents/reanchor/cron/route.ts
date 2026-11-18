@@ -10,7 +10,7 @@ import { sweepFloatingSupplierInvoiceDocuments } from '@/lib/core/documents/supp
  * routes is best-effort (the booking is already committed when it runs), so a
  * transient failure there leaves the verifikat flagged "Underlag saknas" with
  * the PDF plainly attached to the invoice, and until now only a hand-written
- * repair migration ever retried. Prod case 2026-08-28: kontantmetod payment
+ * repair migration ever retried. A case seen 2026-08-28: kontantmetod payment
  * verifikat posted, document eligible, anchor silently did nothing.
  *
  * Idempotent: an anchored document is never moved, locked/closed periods are

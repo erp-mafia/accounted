@@ -1,1 +1,0 @@
-[2026-11-12] The customer card, the sales order, the send dialog and the payment dialog print the amount the invoice list, the PDF and the mail print (getDisplayTotal for a row, getAmountToPay for the two dialogs): öresavrundning and the ROT/RUT deduction applied, never the raw total.

@@ -1,1 +1,0 @@
-[2026-10-26] Nedskrivning gets its own business event kinds, asset.impaired and asset.impairment_reversed (add-only, no source type): the voucher is booked as system, whose kind (ledger.system) does not say what happened to the asset, and ÅRL 5:8 reports write-downs separately.

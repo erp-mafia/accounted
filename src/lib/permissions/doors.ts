@@ -645,7 +645,7 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     // the owner's alone (the handler checks the role).
     'POST /api/billing/payment-packs': SETTINGS,
     // Asking for more of a priced service than the month includes: any member
-    // who records may ask; the founders open the charge by hand.
+    // who records may ask; the operators open the charge by hand.
     'POST /api/billing/usage/requests': BOOK_RECORD,
     '/api/calendar': BOOK_HOUSE,
     '/api/deadlines': BOOK_HOUSE,

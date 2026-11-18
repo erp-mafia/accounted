@@ -1,1 +1,0 @@
-[2026-10-26] The specification of changes in equity is one builder from the year's 20xx verifikat (equity-specification.ts) for K2 and K3: the K2 PDF now prints the roll-forward ÅRL 6 kap. 2 § asks for instead of year-end balances, and the K2 iXBRL table reads the same movements.

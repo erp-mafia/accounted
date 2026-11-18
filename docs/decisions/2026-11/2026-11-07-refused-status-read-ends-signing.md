@@ -1,1 +1,0 @@
-[2026-11-07] A payment status read the bank refuses (Connect 422, PAYMENT_NOT_FOUND) no longer holds an abandoned signing for ever: the BankID decides, and past an hour the orders go back to submitted, nothing cancelled; transient failures still wait. Rows name a bank silent for a day.

@@ -1,1 +1,0 @@
-[2026-10-09] The kundförlust and payout booking confirms open with one plain sentence of what is booked, and the voucher rows sit behind "Visa verifikationen": the sentence states the outcome, so confirm-up-front still holds.

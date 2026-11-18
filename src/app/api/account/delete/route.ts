@@ -122,7 +122,7 @@ export async function POST(request: Request) {
   //
   // Nothing else on the auth row is written here. GoTrue's admin update
   // MERGES metadata maps, so an updateUserById(..., { user_metadata: {} })
-  // wipe is a silent no-op (found on prod 2026-07-24), and
+  // wipe is a silent no-op (seen 2026-07-24), and
   // auth.admin.signOut() takes the user's JWT, not a user id, so the former
   // signOut(user.id, 'global') call could not end sessions. Both jobs live in
   // the RPC.

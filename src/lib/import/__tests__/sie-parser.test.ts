@@ -221,7 +221,7 @@ const SIE_RTRANS_WITHOUT_TWIN = [
 const SIE_BRACE_ON_VER_LINE = [
   '#FLAGGA 0',
   '#SIETYP 4',
-  '#FNAMN "Brace AB"',
+  '#FNAMN "Exempelbolaget AB"',
   '#RAR 0 20240101 20241231',
   '#KONTO 1930 "Företagskonto"',
   '#KONTO 3001 "Försäljning"',
@@ -738,7 +738,7 @@ describe('validateSIEFile', () => {
 // A completed fiscal year whose vouchers leave a residual on P&L accounts
 // never moved its result to equity. Later imported years derive IB from
 // balance-sheet accounts only, so the residual becomes a permanent
-// balansräkning differens (prod incident: 97 kr across three years).
+// balansräkning differens (seen as 97 kr across three years).
 
 const OMFORING_HEADER = [
   '#FLAGGA 0',
@@ -801,7 +801,7 @@ describe('validateSIEFile — untransferred result (omföring saknas)', () => {
   it('does not warn for a running fiscal year', () => {
     const content = [
       ...OMFORING_HEADER,
-      // Fiscal year end far in the future — the running year legitimately
+      // Fiscal year end far in the future - the running year legitimately
       // carries its result on class 3-8 until bokslut.
       '#RAR 0 20990101 20991231',
       ...OMFORING_MISSING_VOUCHERS.map((line) =>
@@ -1290,7 +1290,7 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#GEN\t20260512\t""',
     '#SIETYP\t4',
     '#ORGNR\t"950101-1234"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20250101 20251231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',
@@ -1315,7 +1315,7 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#GEN\t20260514\t""',
     '#SIETYP\t4',
     '#ORGNR\t"950101-1234"',
-    '#FNAMN\t"Erik Hellqvist "',
+    '#FNAMN\t"Erik Exempel "',
     '#RAR 0 20260101 20261231',
     '#KPTYP\tEUBAS97',
     '#KONTO\t1510\t"Kundfordringar"',

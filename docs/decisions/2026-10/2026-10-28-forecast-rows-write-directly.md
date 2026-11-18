@@ -1,1 +1,0 @@
-[2026-10-28] Forecast rows from the v1 API and MCP are written directly under a new forecast:write scope, not staged for approval (founder): a forecast row is planning data no verifikat reads. DIRECT_WRITE_SCOPES holds the exception; every bookkeeping scope still stages.

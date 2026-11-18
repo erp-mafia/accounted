@@ -518,8 +518,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // (dimensionDisplayName), the system pair included, so a custom dimension
   // reads like the built-in ones. Value names resolve through the registry
   // when loaded; raw codes otherwise. Muted text, not chips: dimensions are
-  // normal data on a line, and chips mark exceptions only. Stays Swedish per
-  // .claude/rules/i18n.md.
+  // normal data on a line, and chips mark exceptions only. Stays Swedish
+  // (verifikat surface).
   const renderDimensions = (line: JournalEntryLine) => {
     const entries = Object.entries(line.dimensions ?? {})
       .filter(([, code]) => code)

@@ -3,7 +3,7 @@
  *
  * The route is read-only and advisory: it proposes, the user approves, and the
  * posting still goes through book-direct. So the tests are mostly about what it
- * must NOT do — propose beside an already-posted verifikat, invent a booking for
+ * must NOT do - propose beside an already-posted verifikat, invent a booking for
  * an unmatched document, or turn an unmappable transaction into an error the
  * user cannot act on.
  *

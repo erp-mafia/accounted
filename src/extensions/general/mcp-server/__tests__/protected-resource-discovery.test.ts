@@ -10,7 +10,7 @@ import { mcpServerExtension } from '../index'
 
 // Endpoint-appended RFC 9728 discovery: Claude.ai's connector setup tries
 // <server url>/.well-known/oauth-protected-resource before any 401 and turns
-// a 404 into "Authorization failed" (production, 2026-08-26).
+// a 404 into "Authorization failed" (seen 2026-08-26).
 
 function findRoute(method: string, path: string) {
   const route = mcpServerExtension.apiRoutes?.find((r) => r.method === method && r.path === path)

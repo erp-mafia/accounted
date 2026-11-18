@@ -1,1 +1,0 @@
-[2026-11-07] The migration year picker starts a history longer than one run (6 years) from the oldest years not imported yet; up to 6 years keeps the newest-3 default: each year's opening balance then follows the year before, and no year goes to IB review (crm#1686).

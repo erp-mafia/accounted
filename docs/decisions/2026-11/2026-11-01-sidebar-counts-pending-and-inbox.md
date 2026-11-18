@@ -1,1 +1,0 @@
-[2026-11-01] Sidebar counts only on Agentförslag and Inkorg, served by /api/worklist/badges with the Att göra predicates: the inbox count needs the server-only pairing read, and two queries are cheaper to poll than /api/worklist/counts. Att göra and Transaktioner show their counts on the page.

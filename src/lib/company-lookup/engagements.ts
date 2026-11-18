@@ -90,8 +90,7 @@ export function addableEngagements(
  * marks the account with `bankid_pending` and then `bankid_linked`; unlinking
  * sets the flag to false but keeps the key. So an account with neither key
  * has no engagements, and callers can skip the `bankid_enrichment` read
- * (production 2026-10-28: every one of the 1,182 enrichment rows belongs to an
- * account carrying one of the keys).
+ * (every enrichment row belongs to an account carrying one of the keys).
  */
 export function mayHaveBankIdEngagements(appMetadata: Record<string, unknown> | null | undefined): boolean {
   return !!appMetadata && ('bankid_linked' in appMetadata || 'bankid_pending' in appMetadata)

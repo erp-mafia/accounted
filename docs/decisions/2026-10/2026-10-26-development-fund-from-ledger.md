@@ -1,1 +1,0 @@
-[2026-10-26] The fond för utvecklingsutgifter is trued up at year end to the carrying amount on 1010-1019 (ÅRL 4:2, 4:8), gross to and from balanserat resultat, rather than a transfer per voucher: one place to get it right, and it catches up a fund earlier years missed.

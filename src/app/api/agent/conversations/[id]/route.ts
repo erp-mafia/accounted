@@ -163,7 +163,7 @@ export const PATCH = withRouteContext(
 
     // Archiving a thread means "I'm done with it": clear any proposals the
     // assistant staged here that the user never acted on, so they don't linger
-    // in Granskning. Best-effort — a failure here must not fail the archive.
+    // in Granskning. Best-effort - a failure here must not fail the archive.
     if (body.archived === true) {
       try {
         await rejectPendingForConversation(supabase, existing.company_id as string, id)

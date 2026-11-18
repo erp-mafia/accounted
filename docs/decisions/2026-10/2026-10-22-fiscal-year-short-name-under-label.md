@@ -1,1 +1,0 @@
-[2026-10-22] A fiscal year under a Räkenskapsår label or heading shows the year part of a generated name (Räkenskapsår, Första räkenskapsåret or FY 2026 becomes 2026 or 2025/2026); hand-written names stay whole and stored names are not renamed (crm#1380).

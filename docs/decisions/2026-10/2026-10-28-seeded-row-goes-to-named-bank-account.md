@@ -1,1 +1,0 @@
-[2026-10-28] At bank connect the seeded 1930 row goes to the account its onboarding clearing and account number name, when exactly one account of the consent matches (digits found in its IBAN or BBAN); no match or several keeps the first-come rule, so a wrong match costs no more than today.

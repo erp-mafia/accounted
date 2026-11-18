@@ -24,13 +24,13 @@ describe('getBjornLundenActivationKey', () => {
   });
 
   it('returns the trimmed key when set', () => {
-    process.env.BJORN_LUNDEN_ACTIVATION_KEY = ' 36b2bf61-0514-4825-a8a5-08cf151176f2 ';
-    expect(getBjornLundenActivationKey()).toBe('36b2bf61-0514-4825-a8a5-08cf151176f2');
+    process.env.BJORN_LUNDEN_ACTIVATION_KEY = ' 11111111-2222-4333-8444-555555555555 ';
+    expect(getBjornLundenActivationKey()).toBe('11111111-2222-4333-8444-555555555555');
   });
 });
 
 describe('buildLundifyActivationUrl', () => {
-  const KEY = '36b2bf61-0514-4825-a8a5-08cf151176f2';
+  const KEY = '11111111-2222-4333-8444-555555555555';
   const CALLBACK = 'https://app.accounted.se/api/extensions/ext/arcim-migration/callback';
 
   it('follows BL: /activate-integration/{key}/{encodedRedirectUrl}?extra={state}', () => {

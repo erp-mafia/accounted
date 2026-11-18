@@ -11,7 +11,7 @@ import { LegalAcceptanceDialog } from './LegalAcceptanceDialog'
 const UNGATED_PATH_PREFIXES = ['/import', ACCOUNT_DELETION_PATH]
 
 /**
- * Founder decision 2026-10-22: no acceptance prompt in front of the app. The
+ * No acceptance prompt in front of the app. The
  * dialog, the accept route and the records stay so it can come back; while
  * this is false nothing is shown, and /dpa must not claim acceptances are
  * recorded (pinned in app/(public)/privacy/__tests__).

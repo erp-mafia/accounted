@@ -117,7 +117,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),
   'POST /api/billing/payment-packs': uiOnly('buying bank payment packs on the Stripe subscription: the owner\'s card is charged at once'),
-  'POST /api/billing/usage/requests': uiOnly('asking Accounted for more of a priced service: a person asks, the founders open the charge by hand'),
+  'POST /api/billing/usage/requests': uiOnly('asking Accounted for more of a priced service: a person asks, the operators open the charge by hand'),
 
   // ── Credentials, OAuth, membership (privilege) ─────────────────────
   'POST /api/settings/api-keys': uiOnly(PRIVILEGE),
@@ -409,7 +409,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Cash accounts ──────────────────────────────────────────────────
   'POST /api/cash-accounts': covered([`POST ${V}/cash-accounts`, 'gnubok_create_cash_account']),
   'PATCH /api/cash-accounts/:id': covered([`PATCH ${V}/cash-accounts/:id`, 'gnubok_update_cash_account'], 'the ledger account is not editable on any door'),
-  'DELETE /api/cash-accounts/:id': gap('P3', 'removing a wrongly synced, unbooked bank account (#3130) deletes bank rows; whether an API key or agent may do that is a founder call, so it ships dashboard-only'),
+  'DELETE /api/cash-accounts/:id': gap('P3', 'removing a wrongly synced, unbooked bank account (#3130) deletes bank rows; whether an API key or agent may do that is a product call, so it ships dashboard-only'),
   'POST /api/cash-accounts/:id/archive': gap('P3', 'archiving a mistakenly connected bank account (PH 222) hides its open rows; like removal it ships dashboard-only until it is decided whether an API key or agent may do that'),
   'POST /api/cash-accounts/:id/primary': covered([`POST ${V}/cash-accounts/:id/set-primary`, 'gnubok_set_primary_cash_account']),
   'PUT /api/cash-accounts/payee-defaults': covered([`PUT ${V}/cash-accounts/payee-defaults`, 'gnubok_set_invoice_payee_default']),
@@ -644,7 +644,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/payments/signing/:id/poll': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/signing/:id/restart': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/signing/:id/second-signature': uiOnly(PAYMENT_SIGNING),
-  'POST /api/payments/allowance-requests': uiOnly('asking the founders for more included bank payments a month: a support request from a person, answered by hand'),
+  'POST /api/payments/allowance-requests': uiOnly('asking the operators for more included bank payments a month: a support request from a person, answered by hand'),
   'POST /api/payments/verification': covered([`POST ${V}/payment-orders/verification/start`], 'answers the provider\'s know-your-customer form link, which a signatory fills in and signs'),
   'POST /api/payments/orders/status/cron': machine(CRON),
   'POST /api/payments/signing-links': covered([`POST ${V}/payments/signing-links`, 'gnubok_request_payment_signature'], 'agents and API clients request the link; the firmatecknare still signs in person with BankID'),
@@ -745,7 +745,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/reports/vat-declaration/not-momsredovisning': covered(['gnubok_withdraw_not_momsredovisning'], 'staged; a person approves the agent\'s withdrawal'),
   'PUT /api/reports/ink3/inputs': gap(
     'P2',
-    'INK3 account treatments, the allmännyttig statement and ruta overrides; v1 and MCP read the underlag only in this step (founder decision on #47)',
+    'INK3 account treatments, the allmännyttig statement and ruta overrides; v1 and MCP read the underlag only in this step (product decision on #47)',
   ),
   'POST /api/vat/validate': uiOnly('read-only VIES VAT-number check for a form, exposed as POST'),
   'POST /api/tax-assessment-notices': gap('P3', 'register a slutskattebesked'),
@@ -1106,18 +1106,18 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * dashboard only: the switch posts a catch-up verifikat behind a previewed
  * confirm; stäm av per datum has its v1 door.
  * 167 -> 168 (2026-10-27, accounted#111): K3 component replacement, dashboard
- * first; the operation lands with the K3 doors MR.
+ * first; the operation follows with the K3 doors.
  * 168 -> 169 (2026-10-27, accounted#111): the K3 nedskrivning vouchers,
- * dashboard first; the operation lands with the K3 doors MR.
+ * dashboard first; the operation follows with the K3 doors.
  * 169 -> 170 (2026-10-27, accounted#111): the K3 uppskjuten skatt inputs,
- * dashboard first; the operation lands with the K3 doors MR.
+ * dashboard first; the operation follows with the K3 doors.
  * 170 -> 171 (2026-10-27, accounted#111): the K3 18.7 development model,
- * dashboard first; the operation lands with the K3 doors MR.
+ * dashboard first; the operation follows with the K3 doors.
  * 171 -> 172 (2026-10-27, accounted#111): a building's tax plan, dashboard
- * first; the operation lands with the K3 doors MR.
+ * first; the operation follows with the K3 doors.
  * 172 -> 178 (2026-10-27, accounted#111): the K3 transition (start, note facts,
  * drop, preview, commit) and the split at it, dashboard first; the
- * operations land with the K3 doors MR.
+ * operations follow with the K3 doors.
  * 178 -> 167 (2026-10-27, accounted#111): the K3 doors (lib/operations/k3.ts)
  * cover the eleven K3 gaps above.
  * 167 -> 168 (2026-10-29, Bolaget W5): a building's or vehicle's

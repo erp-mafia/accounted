@@ -76,7 +76,7 @@ export function bareUrl(url: string): string {
 
 const firstLetter = (word: string | undefined) => (word ? [...word].find((c) => /\p{L}|\p{N}/u.test(c)) ?? '' : '')
 
-/** "JW" for Jakob Wennberg, "EM" for Emil Amnäs Mattsson: the first given name and the last surname. */
+/** "AA" for Anna Andersson, "EL" for Erik Berg Lund: the first given name and the last surname. */
 export function bankIdInitials(givenName: string, surname: string): string {
   const given = givenName.trim().split(/\s+/)
   const sur = surname.trim().split(/\s+/)

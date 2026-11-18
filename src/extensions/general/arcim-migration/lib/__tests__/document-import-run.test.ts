@@ -129,7 +129,7 @@ describe('foldDocumentImportSlice', () => {
     expect(foldDocumentImportSlice(first, slice({ nextCursor: 'file-90' }), 'file-60', 't2', tab('t0'))).toBeNull()
   })
 
-  it('leaves a newer run alone when a tab still looping on an older run sends a slice (review of !1172)', () => {
+  it('leaves a newer run alone when a tab still looping on an older run sends a slice', () => {
     // Run t0 reached file-600; then run t1 started from the top and reached file-200.
     const older = foldDocumentImportSlice(null, slice({ nextCursor: 'file-600' }), null, 't0')
     const newer = foldDocumentImportSlice(older, slice({ nextCursor: 'file-200' }), null, 't1')
@@ -387,7 +387,7 @@ describe('documentImportRunStatus', () => {
   })
 })
 
-/** A Fortnox run like Hreidur AB's: 2 740 of 17 219, its tab silent since. */
+/** A reported Fortnox run: 2 740 of 17 219, its tab silent since. */
 function stoppedRun(overrides: Partial<DocumentImportRunSummary> = {}): DocumentImportRunSummary {
   return {
     provider: 'fortnox',

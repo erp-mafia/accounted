@@ -90,7 +90,7 @@ describe('gnubok_list_inbox_items', () => {
   it('returns each row\'s document_id, the id the document tools take', async () => {
     // A mail or WhatsApp arrival's document has an id of its own. The list
     // returned only the item id, so agents sent it as document_id and
-    // gnubok_get_document_content answered NOT_FOUND (72 calls, 25 companies,
+    // gnubok_get_document_content answered NOT_FOUND (72 calls,
     // 2026-10-29..11-11).
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({

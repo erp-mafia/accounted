@@ -1,1 +1,0 @@
-[2026-10-23] Autogiro v1 ships as dashboard routes with eight P2 parity gaps (GAP_CEILING 147 to 155); the operations for v1 and MCP follow once a real debit has run. Invoices created through the API already get Autogiro through the draft trigger.

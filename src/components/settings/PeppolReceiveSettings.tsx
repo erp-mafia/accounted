@@ -64,8 +64,7 @@ function registryText(code: string, locale: UiLocale): string | null {
 
 /**
  * E-invoicing via Peppol for one company. Access is granted per company by
- * the operators (it costs per document and receiving consumes a contracted
- * slot), so the first row is the grant itself: ask, wait, see what you got.
+ * the operators, so the first row is the grant itself: ask, wait, see what you got.
  * Receiving is a second, separate grant and its switch publishes the
  * company's 0007:orgnr through the Access Point.
  */

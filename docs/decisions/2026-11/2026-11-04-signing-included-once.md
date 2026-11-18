@@ -1,1 +1,0 @@
-[2026-11-04] Signed documents are included once, not per month: a company's first 3 completed signings in all are included (USAGE_PRICES includedOnce), so the stop compares every signing so far with 3 and the monthly close bills a month's signings above what earlier months left (counted with countUsageByCompany before the month). Other kinds keep a monthly amount.

@@ -17,7 +17,7 @@ import { generateKassaflodesanalysWithStatement } from '@/lib/reports/kassaflode
  * The year before a räkenskapsår ends the day before it starts; a year across
  * a gap is never it (resolvePreviousFiscalPeriod). Each door here answered
  * "the nearest earlier year" or read the year itself: 2024 is missing, 92
- * years on prod sit behind such a gap.
+ * years in production sit behind such a gap.
  */
 const COMPANY = 'company-1'
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as unknown as Logger

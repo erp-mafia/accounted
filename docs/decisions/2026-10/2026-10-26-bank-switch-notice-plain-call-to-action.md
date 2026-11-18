@@ -1,1 +1,0 @@
-[2026-10-26] The Hem switch notice says only "Uppdatera din bankkoppling här", "här" linking into the switch (Emil), not the bank and deadline: one plain call to action; the date stays in Att göra and the mails, and the past-deadline wording is unchanged.

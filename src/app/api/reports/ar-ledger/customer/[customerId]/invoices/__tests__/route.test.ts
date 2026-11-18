@@ -248,7 +248,7 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
     }
     authWith(
       buildSupabase(
-        { id: 'cust-1', name: 'Callidus Tech AB' },
+        { id: 'cust-1', name: 'Kundbolaget AB' },
         {
           invoices: [
             { ...row, id: 'inv-open', invoice_number: '10', total: 1000, paid_amount: 0, remaining_amount: 1000, status: 'sent' },

@@ -1,1 +1,0 @@
-[2026-10-30] Dry-run docs corrected to the shape endpoints answer (lines under each resource's preview field) instead of building the promised top-level journal_lines: integrators already read the per-resource shape, and no field that never existed can be relied on (crm#1536).

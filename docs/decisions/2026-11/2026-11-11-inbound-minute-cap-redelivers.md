@@ -1,1 +1,0 @@
-[2026-11-11] Inbound mail over the per-minute inbox cap is answered 429 so Resend redelivers it, while under an hour old, instead of acknowledged and dropped: a 42-mail forward burst lost 12 (crm#1783). Older mail and the day cap still drop with a record, so a flood stays bounded.

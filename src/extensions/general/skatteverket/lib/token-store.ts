@@ -190,7 +190,7 @@ export async function deleteTokens(
 }
 
 /**
- * Terminal auth-error codes: the stored token can never recover on its own —
+ * Terminal auth-error codes: the stored token can never recover on its own:
  * only a fresh BankID consent fixes it. SESSION_EXPIRED qualifies because
  * SKV's `per`-flow refresh tokens live 65 minutes: once expired there is
  * nothing left to refresh with.

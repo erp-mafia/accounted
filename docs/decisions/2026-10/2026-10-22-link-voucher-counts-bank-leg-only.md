@@ -1,1 +1,0 @@
-[2026-10-22] link_invoice_to_voucher still counts only the 19xx debit of a never-booked kontantmetod invoice: the match books a provider's fee itself (fee_account), and reading a fee out of an arbitrary voucher would widen a legal RPC (crm#1364).

@@ -1,1 +1,0 @@
-[2026-11-13] The company's own invoice in the inbox is a stamp on the reading (sellerIsOwnCompany, documentKind other), not a new document kind: every reader of kind already treats other as no purchase, and a named seller or a typed document lifts it (crm#1830).

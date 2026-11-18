@@ -1,1 +1,0 @@
-[2026-10-16] A reversed bank booking unlearns by the pair it carries (one occurrence off, off at zero), not a stored booking-to-template link: no new state; a correction cannot be rolled back, so it switches off; auto rules stay (crm#1275).

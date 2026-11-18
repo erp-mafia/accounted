@@ -1,1 +1,0 @@
-[2026-10-30] Bolaget is one sidebar row (/bolaget) with a shared tab bar (Översikt, Ägare, Styrelse, Möten, Kapital, Ägarskatt, Avtal) instead of two sections; Avtal och åtaganden moved to /bolaget/avtal and /commitments redirects there. Same rollout gates; underline tabs, no pills.

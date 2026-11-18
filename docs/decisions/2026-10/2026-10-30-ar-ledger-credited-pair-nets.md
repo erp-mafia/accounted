@@ -1,1 +1,0 @@
-[2026-10-30] The kundreskontra applies a credit note's open credit to the invoice it credits (credited_invoice_id, read beside the population RPC): a full credit lists neither row, a partial leaves the rest on the original, an over-credit stays owed back; totals unchanged (crm#1537).

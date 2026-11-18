@@ -1,1 +1,0 @@
-[2026-10-28] Nordea pain.001 files name the stored Signer ID (SchmeNm CUST) as InitgPty and a Nordea company without one gets no file, as with Swedbank's ids: Nordea refused the org number (crm#1530). A Nordea-only setting, so a bank switch never carries a stale id.

@@ -30,7 +30,7 @@ import { fetchMigrationCoverageEnd as readMigrationCoverageEnd } from '@/lib/boo
  * fiscal year end (sie-import.ts) and would reintroduce the future-date bug
  * for any import with skipped vouchers. Excluding by description rather
  * than by its 'M' voucher series keeps genuine series-M vouchers from the
- * source file in the max (prod has companies whose files use series M for
+ * source file in the max (some companies' files use series M for
  * ordinary vouchers, e.g. moms). Two accepted residuals: (1) bank movement
  * covered only by the omföring (skipped vouchers dated after the last
  * cleanly imported one) falls outside the cutoff and is mostly unmitigated:

@@ -1,1 +1,0 @@
-[2026-10-30] A signed skattekonto or salary payment order is linked to its own debit and executed, never booked by it: exact amount, own account, execution window, and the debit names the order (end-to-end id, payee, or its OCR/message), since executed is final; executed_at is the debit's day.

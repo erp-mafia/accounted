@@ -397,7 +397,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Normal customer invoice (default) or a received self-billing invoice
   // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
   // the Ny faktura split button (?self=1) and is fixed for the editor's
-  // lifetime: the two flows are separate views, not tabs (founder call
+  // lifetime: the two flows are separate views, not tabs (product call
   // 2026-08-17). Self-billing is never available when editing a draft.
   const mode: 'invoice' | 'self_billed' =
     props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice'

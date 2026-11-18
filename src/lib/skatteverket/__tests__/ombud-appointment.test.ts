@@ -1,6 +1,6 @@
 /**
  * The appointment state every surface shows. Skatteverket can take from
- * minutes to over an hour to list a fresh grant (prod, 2026-11-08: 3, 18 and
+ * minutes to over an hour to list a fresh grant (seen 2026-11-08: 3, 18 and
  * 52 minutes, and one only the next nightly sync found). Until it does, the
  * register has nothing for the company and the row says 'denied': that is a
  * wait, never red. Red is a grant that was there and is gone.

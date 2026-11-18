@@ -7,7 +7,7 @@ import { getPool } from '@/tests/pg/setup'
 
 /**
  * pg-real coverage for 20261023011000_representation_account_descriptions.sql
- * (accounted#92): charts seeded before !765 keep the old 6072, 7631 and 7632
+ * (accounted#92): charts seeded before that change keep the old 6072, 7631 and 7632
  * descriptions; the migration gives them today's BAS reference text.
  *
  *  - a description that is still the exact old seed text becomes the new one,

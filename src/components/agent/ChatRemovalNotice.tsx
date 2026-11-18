@@ -9,8 +9,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
  * One line at the top of the built-in chat, over the empty state and over a
  * conversation alike: the chat will be removed, the bookkeeping is done with
  * a person's own assistant (Claude, for one), connected under Agenter >
- * Koppla en agent, and questions about the app go to support (founder
- * decisions 2026-11-17 and 2026-11-18, docs/decisions). It tells people
+ * Koppla en agent, and questions about the app go to support. It tells people
  * before the chat is switched off (ASSISTANT_CHAT_ENABLED), so it names no
  * day and stays true for as long as the chat is there.
  *

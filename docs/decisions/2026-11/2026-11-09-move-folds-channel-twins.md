@@ -1,1 +1,0 @@
-[2026-11-09] A ledger move that puts statement-file and bank-feed rows of one account on one account sets aside the open copies the import would have skipped (same date, öre and count per channel), as ignored rows with a behandlingshistorik record (crm#1701).

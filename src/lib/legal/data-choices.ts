@@ -1,5 +1,5 @@
 /**
- * A company's data choices (Inställningar → Datadelning och AI), founder
+ * A company's data choices (Inställningar → Datadelning och AI), product
  * decisions of 2026-10-21. Stored as company_capability_config rows and
  * written only by set_company_data_choice (migration 20261021170000), so
  * every change has who decided, when, and a dated line in behandlingshistorik.

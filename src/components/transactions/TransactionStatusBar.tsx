@@ -25,7 +25,7 @@ interface TransactionStatusBarProps {
  * Page header (V7 Pengar, Bankrader): the title, a quiet "Banken" menu with
  * the ways rows arrive from the bank (sync now, import a bank file) and one
  * filled primary, "Ny transaktion". The rare utilities never hold the filled
- * slot (founder decision 2026-11-14).
+ * slot (product decision 2026-11-14).
  */
 export default function TransactionStatusBar({
   onOpenCreateDialog,

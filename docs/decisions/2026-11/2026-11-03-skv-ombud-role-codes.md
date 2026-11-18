@@ -1,1 +1,0 @@
-[2026-11-03] Ombud roles are matched on code only, built in as skol (skattekonto reads) and momsdeklaration_ombud (env overrides), and users are told to grant "Skattekonto, bara läsbehörighet": Skatteverket's register has no "Juridiskt läsombud" (live test run 2026-11-03).

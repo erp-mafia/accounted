@@ -1,1 +1,0 @@
-[2026-10-16] Source types with sub-ledger state but no reversal hook are named in KNOWN_UNMIRRORED in the hook completeness test (the six named in the design plus six more found in the schema), so the gap is visible; no hooks are added for them here.

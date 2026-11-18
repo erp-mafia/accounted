@@ -1,1 +1,0 @@
-[2026-10-16] Account roles slice 1 adds no async resolver and no overrides table: no moved site reads a company choice, and the two that exist (primary cash account, skattekonto_account) keep their resolvers; the reconciliation's 1930 default is deliberately not the primary.

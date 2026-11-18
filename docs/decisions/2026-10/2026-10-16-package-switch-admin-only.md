@@ -1,1 +1,0 @@
-[2026-10-16] enable_package and disable_package need an owner or admin approver, re-checked in set_company_package_choice as for company_settings, and never a service account's own key: a package choice changes the menu and tool list for the whole company.

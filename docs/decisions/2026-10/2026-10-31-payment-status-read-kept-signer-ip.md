@@ -1,1 +1,0 @@
-[2026-10-31] Unattended payment status reads and agent cancels send the IP the signing was started from (payment_batch_psus.psu_ip_address; LF and SEB refuse the read without one), never a guessed one; kept only beside a PSU-ID, cleared by the status sync once no order of the signing is at the bank.

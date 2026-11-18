@@ -1,1 +1,0 @@
-[2026-11-01] Dark mode ships neutral grey (frame #0D0D0D, panel #1C1C1E, floating #262628, control #2C2C2F), as design.md had it: the warm-dark "Lite varm" variant on the canvas was not chosen; it is a token swap in globals.css if it ever is.

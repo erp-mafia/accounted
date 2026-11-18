@@ -148,7 +148,7 @@ describe('a row stored before the rule', () => {
   const roster = (db: ReturnType<typeof calculatedRun>) =>
     db.rows('salary_run_employees')[0] as { net_salary: number; vacation_accrual: number; gross_salary: number }
 
-  // The door defaults the audit proved, stored as they are on prod.
+  // The door defaults the audit proved, stored as they are in production.
   const doorDefaults = { is_taxable: true, is_avgift_basis: true, is_vacation_basis: true, is_gross_deduction: false, is_net_deduction: false }
 
   it.each([

@@ -40,8 +40,8 @@ import { consentUnusable, isMigrationResetSource, messageOf } from './repair-for
  * no detail at all. Visma and Bokio records were read under names those
  * providers do not use. So a privatperson became a company with its
  * personnummer in plain text as org number, inactive records came along, and
- * contact, address, VAT and bank fields stayed empty. The import is fixed
- * (!874-!876, !891, !892, !906); this repairs what it already wrote.
+ * contact, address, VAT and bank fields stayed empty. The import is fixed;
+ * this repairs what it already wrote.
  *
  * Every card is read again from its provider (Fortnox's detail form, one
  * request each) and gets what the import writes today, never over a value

@@ -10,7 +10,7 @@ import { flagEnabled } from '@/lib/env/public-flags'
  * reminder_days_level_1/2/3) stay stored, and Försäljning → Utskick reads
  * this constant to hide the schedule while automatic sending is off.
  *
- * Turning reminders back on is a founder product decision and means building
+ * Turning reminders back on is an operator product decision and means building
  * a sender again, not flipping this flag. Whatever sender comes next must be
  * idempotent per (invoice, reminder level), must decide how to treat the
  * backlog of long-overdue and imported invoices (the old sender would have
@@ -18,15 +18,15 @@ import { flagEnabled } from '@/lib/env/public-flags'
  * skip invoices the collections provider pursues (lib/collections/reminder-guard.ts),
  * and must start switched off for every company. The toggle is opt-in since
  * migration 20261025084600, and customers were told that reminders come back
- * off until they turn them on themselves. The rebuild spec is GitLab
- * accounted#104: remind only invoices issued from Accounted, pass the
+ * off until they turn them on themselves. The rule
+ * (accounted#104): remind only invoices issued from Accounted, pass the
  * collections bank check (lib/collections/bank-check.ts) before every
  * reminder, approval per batch by default with automatic sending opt-in.
  * The new sender's engine is lib/reminders (policy, facts, channel, and
  * dispatch.ts, the one send path), with the daily batch, the turn-on flow
  * and automatic sending built (phases 1 to 4).
  *
- * Switched on by NEXT_PUBLIC_REMINDERS_SENDING_ENABLED=true, a founder's
+ * Switched on by NEXT_PUBLIC_REMINDERS_SENDING_ENABLED=true, an operator's
  * decision: set it in the deployment's environment and redeploy (it is read
  * at build time, as client components import it). Unset, everything stays
  * dark: no batch is gathered, nothing sends, and no turn-on offer shows.

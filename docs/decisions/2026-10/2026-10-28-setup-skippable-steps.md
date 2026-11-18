@@ -1,1 +1,0 @@
-[2026-10-28] Kom igång: Skatteverket, receipts and Claude can be skipped per user and company (ui_state.setup_skipped) and count as done, books and bank cannot; receipts is done by any document a person put in, not only an inbox item, since one open optional step kept setups from finishing.

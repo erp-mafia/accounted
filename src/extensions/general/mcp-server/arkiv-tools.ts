@@ -36,7 +36,7 @@ const receiptLog = createLogger('mcp-get-record')
  *
  * Output schemas stay open at the top level: clients cache tools/list and
  * validate responses against it, so under a closed schema every added response
- * field breaks each session connected before the deploy (prod 2026-09-21: the
+ * field breaks each session connected before the deploy (seen 2026-09-21: the
  * `notice` field made ask_document fail in a live session). Inputs stay closed.
  */
 export type RecordKind = 'document' | 'agreement' | 'party' | 'journal_entry' | 'fact'
@@ -100,7 +100,7 @@ const RECORD_ID_SOURCES: Record<RecordKind, string> = {
 
 /**
  * gnubok_get_record for a well-formed record_ref no record answers to. It
- * said only "Record not found" (32 calls, 10 companies in 14 days, 20 of
+ * said only "Record not found" (32 calls in 14 days, 20 of
  * them followed by another get_record), naming neither the kind it looked
  * under nor the id, nor where a right id comes from.
  */
@@ -316,14 +316,14 @@ interface DocumentRow {
  * dates and pages, the verifikat it sits on. Nothing read out of it by a model
  * (extracted fields, the inbox reading, agreements, the parties and
  * agreements the brain tied it to) is served: an agent answers from the page
- * text, never from our interpretation of it (prod 2026-09-24: an extraction
+ * text, never from our interpretation of it (seen 2026-09-24: an extraction
  * filed a round's total as one investor's amount, and an agent repeated it).
  *
  * The ledger links are served to everyone (withLedgerLinks): the verifikat,
  * bank rows, supplier invoice, customer invoices, utlägg and inbox item that
  * hold the document are what the books say, not a reading of the file. Until
  * 2026-11-09 a document came back with links only inside the brain, and those
- * were only the brain's own (13 rows in prod, one company). A document nested
+ * were only the brain's own (13 rows in production, one company). A document nested
  * in a journal_entry record skips them: it supports that verifikat, and the
  * extra reads per document would multiply on a samlingsverifikat.
  */
@@ -631,7 +631,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         // Agreements and facts are the brain's interpretations: outside it the documents are the archive.
         const kinds = isArkivBrainEnabled(companyId) ? asked : (['document'] as const).slice()
         const items = await searchRecords(supabase, companyId, String(args.query ?? ''), { kinds, limit: Number(args.limit ?? SEARCH_LIMIT_DEFAULT) })
-        // An empty answer from an archive nobody has read yet is not "no such document" (prod 2026-09-25: a
+        // An empty answer from an archive nobody has read yet is not "no such document" (seen 2026-09-25: a
         // company with 10 unread invoices searched "faktura" and got nothing, with nothing saying why).
         // A later copy of the same file or text says so, as in list_records, so hits are counted once.
         const hitIds = [...new Set(items.map((i) => i.document_id).filter((id): id is string => !!id))]
@@ -888,7 +888,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         // It answers from the raw page text with a verified quote and reads nothing the brain derived, so it works
         // wherever the shelf does (2026-09-25: every call from a company outside the brain was refused).
         // A bare uuid too, the form the other document tools hand ids out
-        // in: the format refusal met 26 calls in 14 days (11 companies).
+        // in: the format refusal met 26 calls in 14 days.
         const documentId = documentIdOf(args.record_ref, 'record_ref')
         const question = String(args.question ?? '').trim()
         if (question.length < 3) throw invalid('question is required')
@@ -1180,7 +1180,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         const to = Math.min(from + 19, Math.max(from, Math.floor(Number(args.to_page ?? from + 19))))
         const { data: doc, error } = await supabase.from('document_attachments').select('id, file_name, doc_type, page_count').eq('id', documentId).eq('company_id', companyId).maybeSingle()
         if (error) throw dbError(error)
-        // "Document not found" alone: 12 calls in 14 days (7 companies).
+        // "Document not found" alone: 12 calls in 14 days.
         if (!doc) throw recordNotFound('document', documentId)
         const d = doc as { id: string; file_name: string; doc_type: string | null; page_count: number | null }
         let unreadable: string | null = null

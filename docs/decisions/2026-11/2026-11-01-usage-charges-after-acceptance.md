@@ -1,1 +1,0 @@
-[2026-11-01] Usage above what a month includes is billed only after an admin accepted the charge for that kind, as lines on the company's own Stripe subscription (monthly plan: next invoice; yearly plan: an invoice each month), never a separate bill.

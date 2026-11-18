@@ -1157,7 +1157,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: exchange rate resolution', 
 })
 
 describe('gnubok_create_supplier_invoice_from_inbox: due date default and total guard (feedback 395405)', () => {
-  // Prod 2026-09-10: inbox item 9a91271b-83e3-41ad-a542-8da3d29c1175 (SEB
+  // A real case: an inbox item (a
   // bank fee, 130 SEK, invoice_date 2025-09-17, no due date on the document)
   // was staged with due_date: null, the executor's INSERT failed on the NOT
   // NULL column, and the agent saw a bare 500 twice. The first attempt had
@@ -1691,7 +1691,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   // The invoice from feedback seq 753539 as registered on 2026-09-26: the lines
   // come to 355 894.12 + 88 297.79 = 444 191.91 against a billed 444 192.00,
   // and 2440 was credited with 444 191.91.
-  const themaxLines = [
+  const manyLineItems = [
     { account: '5800', net: 24659.23, rate: 25 },
     { account: '6550', net: 20000, rate: 25 },
     { account: '4010', net: 30903, rate: 25 },
@@ -1703,11 +1703,11 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
     { account: '4010', net: 2360, rate: 0 },
     { account: '5710', net: 343, rate: 0 },
   ]
-  const themax = {
+  const manyLineInvoice = {
     supplier: { name: 'Grossisten AB' },
     invoice: { invoiceNumber: '2026006', invoiceDate: '2026-09-25', dueDate: '2026-10-25', currency: 'SEK' },
     totals: { subtotal: 355894.12, vat: 88297.79, total: 444192, roundingAmount: 0.09 },
-    lineItems: themaxLines.map((l, i) => ({
+    lineItems: manyLineItems.map((l, i) => ({
       description: `Rad ${i + 1}`,
       quantity: 1,
       unitPrice: l.net,
@@ -1740,7 +1740,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   }
 
   it('stages a 0.09 zero-VAT 3740 line, so 2440 is credited with the billed 444 192.00', async () => {
-    const { result, params } = await stage(themax)
+    const { result, params } = await stage(manyLineInvoice)
 
     expect(result.staged).toBe(true)
     expect(params.items).toHaveLength(11)
@@ -1767,7 +1767,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   })
 
   it('credits 3740 when the supplier rounded down', async () => {
-    const { params } = await stage({ ...themax, totals: { ...themax.totals, total: 444191.5 } })
+    const { params } = await stage({ ...manyLineInvoice, totals: { ...manyLineInvoice.totals, total: 444191.5 } })
 
     expect(params.items[10]).toMatchObject({ account_number: '3740', line_total: -0.41, vat_rate: 0 })
     expect(params.total).toBe(444191.5)
@@ -1777,7 +1777,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   })
 
   it('does not carry a gap over 0.50 as öresavrundning, though per-line VAT rounding on ten lines still explains it', async () => {
-    const { result, params } = await stage({ ...themax, totals: { ...themax.totals, total: 444192.42 } })
+    const { result, params } = await stage({ ...manyLineInvoice, totals: { ...manyLineInvoice.totals, total: 444192.42 } })
 
     expect(result.staged).toBe(true)
     expect(params.items).toHaveLength(10)
@@ -1787,7 +1787,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
 
   it('stages nothing past the per-line rounding tolerance (feedback seq 983757)', async () => {
     // Ten lines tolerate 0.50 + 10 x 0.005 = 0.55.
-    const { result, params } = await stage({ ...themax, totals: { ...themax.totals, total: 444192.47 } })
+    const { result, params } = await stage({ ...manyLineInvoice, totals: { ...manyLineInvoice.totals, total: 444192.47 } })
 
     expect(result.staged).toBe(false)
     expect(params).toBeUndefined()
@@ -1798,7 +1798,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   it('stages a long invoice whose lines round their VAT one by one: 120 lines of 9.98 at 25 %', async () => {
     // Line by line 120 x 2.50 = 300.00; the document's VAT on the sum is 299.40.
     const many = {
-      ...themax,
+      ...manyLineInvoice,
       totals: { subtotal: 1197.6, vat: 299.4, total: 1497 },
       lineItems: Array.from({ length: 120 }, (_, i) => ({
         description: `Artikel ${i + 1}`, quantity: 1, unitPrice: 9.98, lineTotal: 9.98, vatRate: 25, accountSuggestion: '4010',
@@ -1816,7 +1816,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
       ok: true,
       rate: { currency: 'EUR', rate: 11.5, exchangeRate: 11.5, exchangeRateDate: '2026-09-25', source: 'fetched' },
     })
-    const { result, params } = await stage({ ...themax, invoice: { ...themax.invoice, currency: 'EUR' } })
+    const { result, params } = await stage({ ...manyLineInvoice, invoice: { ...manyLineInvoice.invoice, currency: 'EUR' } })
 
     expect(params.currency).toBe('EUR')
     expect(params.items).toHaveLength(10)
@@ -1826,7 +1826,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: öresavrundning (feedback 7
   })
 
   it('carries the rounding on top of the folded lines for a non-registered company', async () => {
-    const { params } = await stage(themax, { vatRegistered: false })
+    const { params } = await stage(manyLineInvoice, { vatRegistered: false })
 
     expect(params.items[10]).toMatchObject({ account_number: '3740', line_total: 0.09, vat_rate: 0 })
     expect(params.items.every((i) => i.vat_rate === 0 && i.vat_amount === 0)).toBe(true)

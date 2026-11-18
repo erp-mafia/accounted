@@ -221,7 +221,7 @@ export function AccountPickerDialog({
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
       // back to currency-based suggestions for accounts the user hasn't mapped
-      // yet. The currency default is suggested at most once — two SEK accounts
+      // yet. The currency default is suggested at most once - two SEK accounts
       // both pre-filled with 1930 would collide on the UNIQUE
       // (company_id, ledger_account) constraint at save; the second account is
       // left blank so the user picks a distinct slot. A card account that is

@@ -14,7 +14,7 @@ import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompa
  * although the period lock keeps it off the row. A booked document is dated
  * by its verifikat, not by the upload day. That date is read by key, or, for
  * a large archive, from the company's own entries in one range scan; never
- * from a scan of every company's journal entries (prod 2026-10-26: 13 s, past
+ * from a scan of every company's journal entries (seen 2026-10-26: 13 s, past
  * the statement timeout). A member sees their own company only.
  */
 async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string; journalEntryLineId?: string }): Promise<string> {
@@ -162,8 +162,8 @@ describe('arkiv_document_type_counts and arkiv_document_page', () => {
 
   it("finds the verifikat by key or inside the company, never by a join over every company's journal entries", async () => {
     // The functions run on a generic plan; a plain join there hash-joined a
-    // scan of the whole journal_entries table (prod 2026-10-26: 2.27 million
-    // rows, 13 s). A lookup by key is a SubPlan per document; the range scan
+    // scan of the whole journal_entries table (13 s at 2.27 million
+    // rows). A lookup by key is a SubPlan per document; the range scan
     // for a large archive carries the company it was called for.
     const calls: Array<[string, unknown[]]> = [
       ['SELECT * FROM public.arkiv_document_type_counts($1, $2)', [companyId, 2024]],

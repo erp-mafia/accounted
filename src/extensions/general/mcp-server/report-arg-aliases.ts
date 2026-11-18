@@ -220,7 +220,7 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
   gnubok_get_record: {
     id: { to: ['record_ref'], reads: RECORD_TYPE_KEYS, map: mapRecordId },
   },
-  // `measure` was refused 33 times in 14 days (18 companies, 2026-10-30..
+  // `measure` was refused 33 times in 14 days (2026-10-30..
   // 11-12). An id that names no measure is still refused by the tool.
   gnubok_get_measure: {
     measure: { to: ['measure_id'] },
@@ -232,7 +232,7 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
  * another tool. Appended to that tool's unknown-parameter refusal.
  */
 const UNKNOWN_ARG_NOTES: Readonly<Record<string, string>> = {
-  // 31 calls in 14 days (24 companies) sent a date, a date range or an
+  // 31 calls in 14 days sent a date, a date range or an
   // account range, and read back only "Valid parameters: period_id, dimensions".
   gnubok_get_trial_balance:
     "The trial balance covers one whole fiscal period: period_id from gnubok_list_fiscal_periods, or none for the most recent. For a date or an account range, gnubok_get_general_ledger takes from_date, to_date, account_from and account_to and gives each account's opening and closing balance.",

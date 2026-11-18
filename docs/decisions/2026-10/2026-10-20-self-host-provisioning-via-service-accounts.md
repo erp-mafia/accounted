@@ -1,1 +1,0 @@
-[2026-10-20] Self-host per-customer provisioning (crm#1328) is documented, not built: service accounts plus one operator key already cover company, company-bound key, rotation and revocation over v1; a user-creation API or operator endpoint would add a second credential path for nothing new.

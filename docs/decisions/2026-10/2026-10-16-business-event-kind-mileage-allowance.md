@@ -1,1 +1,0 @@
-[2026-10-16] Milersättning gets its own kind, expense.mileage_allowance (add-only, no source type): it is a kostnadsersättning, not an utlägg, so expense.claimed would merge the two, and its verifikat carries source_type manual, whose ledger.manual says nothing.

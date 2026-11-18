@@ -1,1 +1,0 @@
-[2026-10-16] Minting a service-account key does not honour Idempotency-Key (withApiV1 secretResponse): a replay would keep the plaintext key in idempotency_keys for a day, while keys are otherwise stored only as SHA-256.

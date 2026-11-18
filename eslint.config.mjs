@@ -60,7 +60,7 @@ const eslintConfig = defineConfig([
       "no-console": "error",
     },
   },
-  // One icon set and one way into Motion (.claude/rules/design.md, "Icons").
+  // One icon set and one way into Motion.
   // Icons come from @/components/icons, the only module that may import the
   // animated package: its adapter sizes them from className, plays them on
   // hover of the surrounding control and stills them under reduced motion.

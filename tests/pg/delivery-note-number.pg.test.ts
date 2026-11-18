@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { seedCompany, withSwedishToday } from '@/tests/pg/fixtures'
 
-// 20261015030100_delivery_note_number_no_truncate.sql (GitLab accounted #33):
+// 20261015030100_delivery_note_number_no_truncate.sql (accounted#33):
 // generate_delivery_note_number padded with LPAD(n, 3, '0'), and LPAD cuts a
 // longer string, so counter 1000 came out as FS-<year>100 and collided with
 // delivery note 100 of the same year.

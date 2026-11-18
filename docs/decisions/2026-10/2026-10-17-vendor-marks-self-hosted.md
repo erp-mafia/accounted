@@ -1,1 +1,0 @@
-[2026-10-17] Vendor marks ship inside the app from Simple Icons (CC0 1.0, only icons without their own licence), brand-coloured initials for vendors it lacks: no logo service is ever called, so none learns which merchants a company pays.

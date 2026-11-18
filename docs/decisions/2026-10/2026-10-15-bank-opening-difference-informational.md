@@ -1,1 +1,0 @@
-[2026-10-15] crm#1221: the bank opening_difference (reported balance rolled back to history_start against the ledger before it) is shown once but kept out of is_reconciled, unlike the skattekonto: 122 of 208 affected SEK accounts with a reported balance differ today; the balance is point-in-time.

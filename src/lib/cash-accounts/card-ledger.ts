@@ -82,7 +82,7 @@ export interface CardLedgerSuggestion {
  * The ledger a new card gets: the first candidate in CARD_LEDGER_ORDER that
  * no other cash account holds and no verifikat uses, so the card's ledger
  * carries the card alone and its balance can be reconciled with the
- * statement. 2890 is suggested only when it is unused (founder decision
+ * statement. 2890 is suggested only when it is unused (product decision
  * 2026-10-27); a company that already keeps this card's debt there confirms
  * it in the dialog. When every free candidate is in use, the first free one
  * is suggested and reported as skipped too, so the dialog still explains.

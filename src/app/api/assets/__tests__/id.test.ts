@@ -4,7 +4,7 @@
  * Exercises the routes through the real withRouteContext wrapper, mocking the
  * asset service and auth/company dependencies. The K3 component cross-sum
  * validation runs the REAL validateComponents so the regression case (body
- * changes acquisition_cost and k3_components together — sum must match the
+ * changes acquisition_cost and k3_components together - sum must match the
  * NEW cost) is covered end to end.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -440,7 +440,7 @@ describe('PATCH /api/assets/[id]', () => {
 
   it('validates the component sum against the NEW acquisition_cost when both change', async () => {
     // Regression: stored cost is 100 000 but the PATCH raises it to 120 000.
-    // Components summing to 120 000 must pass — previously they were checked
+    // Components summing to 120 000 must pass - previously they were checked
     // against the stale stored cost and wrongly rejected.
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k3')

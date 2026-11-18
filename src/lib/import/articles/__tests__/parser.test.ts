@@ -248,7 +248,7 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
       ['Fönsterputs', '500', 'RUT'],
       // A boolean "Rot"/"Husarbete" column exported by other systems: '1'/'0'
       // are not values the invoice editor can interpret, so they must not be
-      // stored (this is what produced 178 junk rows on prod).
+      // stored (this is what produced 178 junk rows in production).
       ['Bygg', '600', '1'],
       ['Skruv', '2', '0'],
     ])

@@ -4,7 +4,7 @@
  * This handler reads SIE as an ALREADY-DECODED string (the text /sie-data
  * fetched and archived), so an upstream that decoded CP437 bytes as windows-1252 has baked the
  * corruption in before the repo's own encoding detection could run: exactly
- * what the retired Arcim Sync gateway did on 2026-03-17, landing mojibake
+ * what an upstream gateway did on 2026-03-17, landing mojibake
  * ("L”neutbetalning", "BANKTJŽNSTER") in posted entries with no warning.
  *
  * The tripwire must WARN and NEVER BLOCK: the import proceeds untouched and

@@ -7,8 +7,7 @@
  * "Handel med andra EU-länder", so a company that bought or sold within the
  * EU with the setting off got the later date on the deadline list, in the
  * calendar, the reminders, Betala via banken and the cash forecast, while the
- * VAT close check named the earlier one (2026-11-12: 209 companies with EU
- * trade booked in 2026 and a later open yearly deadline).
+ * VAT close check named the earlier one.
  *
  * The nightly pass (alignYearlyVatDeadlinesWithBooks) answers it from the
  * books the way the momsdeklaration does: the period's own rutor

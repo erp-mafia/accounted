@@ -42,7 +42,7 @@ export const GET = withRouteContext(
 )
 
 /**
- * One-click run creation. All body fields are optional — defaults resolve
+ * One-click run creation. All body fields are optional - defaults resolve
  * server-side so the dashboard button can POST {}:
  *   period       → month after the latest non-corrected run, else current month
  *   payment_date → company_settings.salary_pay_day (default 25) in the period month
@@ -114,7 +114,7 @@ export const POST = withRouteContext(
       })
 
     // Corrected runs coexist with their correction in the same period (the
-    // unique index is partial), so exclude them — and use maybeSingle():
+    // unique index is partial), so exclude them - and use maybeSingle():
     // .single() errors on multiple rows and would skip the 409.
     const { data: existing } = await supabase
       .from('salary_runs')

@@ -1,1 +1,0 @@
-[2026-10-29] Budget file import is v1 only, no MCP tool: the file would be the staged params kept verbatim in pending_operations (the skattekonto-file precedent); an agent that holds a budget writes it with gnubok_upsert_budget_lines (accounted#134).

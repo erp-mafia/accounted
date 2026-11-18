@@ -4,7 +4,7 @@ export type { Ink3Blankett, Ink3Column, Ink3Datatyp } from './field-table'
 
 /**
  * How the company says an income or cost account relates to the taxable
- * activity (founder decision 2026-10-15, split per account): exempt accounts
+ * activity (product decision 2026-10-15, split per account): exempt accounts
  * stay out of the "som ska tas upp/dras av" column, taxable accounts go in
  * whole, and shared accounts need the user's own figure on the ruta.
  */

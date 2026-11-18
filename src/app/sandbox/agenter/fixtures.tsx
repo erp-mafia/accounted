@@ -21,7 +21,7 @@ import { REGISTRY_SKILLS } from '@/lib/agent-skills/registry'
 import type { AgentsOverview, ConnectionStatus } from '@/lib/agent-skills/agent-bundle'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 
-// Titles and versions as agent_atom_registry holds them on prod (2026-09-24).
+// Titles and versions as agent_atom_registry holds them in production (2026-09-24).
 const PACKS: Record<string, { title: string; version: number }> = {
   'horizontal/swedish-accounting-compliance': { title: 'Swedish Accounting Compliance', version: 5 },
   'horizontal/swedish-asset-accounting': { title: 'Swedish Asset Accounting', version: 4 },
@@ -39,7 +39,7 @@ const SETTINGS: Record<string, string> = { bank: '/settings/banking', skatteverk
 // Company facts the demo company holds (predicates from lib/arkiv/facts/predicates.ts).
 const KNOWN_FACTS = new Set(['legal_name', 'org_number', 'fiscal_year', 'vat_registered', 'vat_period', 'vat_method', 'accounting_method', 'f_skatt', 'sni_codes', 'board', 'share_capital', 'bank_connection', 'monthly_cost_baseline', 'top_counterparty'])
 
-// Every pack a company can choose, as the registry lists them on prod (titles, 2026-09-24).
+// Every pack a company can choose, as the registry lists them in production (titles, 2026-09-24).
 const OPTIONS: KnowledgeOption[] = [
   ...Object.entries(PACKS).map(([id, p]) => ({ id, tier: 'horizontal' as const, title: p.title, summary: '', version: p.version, reviewed_at: null })),
   { id: 'horizontal/swedish-e-invoicing', tier: 'horizontal', title: 'Swedish E Invoicing', summary: 'Peppol, e-faktura och krav vid offentlig sektor.', version: 7, reviewed_at: null },

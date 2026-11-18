@@ -1,1 +1,0 @@
-[2026-10-17] link_supplier_invoice_to_voucher stays off the port in step 2d: the SQL function drafts and commits its kursdifferens verifikat in one transaction, so an event link needs it to take an event id, a migration of its own; the brief allowed none.

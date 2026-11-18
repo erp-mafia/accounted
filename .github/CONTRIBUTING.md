@@ -30,9 +30,13 @@ You need a Supabase project for local development:
 
 ```bash
 npm run lint
+npm run check:types    # npm test does not type-check
+npm run check:guards   # ratchet guards; each failure prints its fix
 npm test
 npm run build
 ```
+
+   CI also checks that generated files are current (`skills:check`, `taxonomy:check`, `apiskill:check`, `notice:check`) and validates `packs/` and `registry/`; each prints the command that regenerates it.
 
 4. Commit using [Conventional Commits](https://www.conventionalcommits.org/):
    - `feat:` new feature
@@ -56,6 +60,19 @@ Contributions merged before the agreement was introduced were made under the [De
 - Ensure CI passes (the core build resets extensions to empty, so core code must compile standalone)
 - Link related issues if applicable
 
+## AI-Assisted Contributions
+
+You may use AI tools (coding agents, chat assistants, completion) to prepare a contribution. These rules apply to every pull request made with their help:
+
+- **Disclose it.** Say in the pull request which tools you used and for what; the pull request template has a checkbox for it.
+- **A human author is accountable.** You have read every line you submit, understand it, can explain it in review, and answer for it as your own work.
+- **Small, focused pull requests with tests.** One change per pull request, with tests for new or changed logic (the Definition of Done in [CLAUDE.md](../CLAUDE.md) lists them).
+- **No bulk or autonomous agent pull requests from outside contributors.** A person drives every pull request; an agent does not open pull requests on its own, and one issue does not become a batch of generated pull requests.
+- **At most 3 open pull requests per outside contributor.** Open the next one when an earlier one is merged or closed.
+- **The CLA applies** to AI-assisted work like any other; section 6 of the [CLA](../CLA.md) covers material produced with an AI tool.
+
+Pull requests that do not follow these rules may be closed without review. Agents working in this repository read [CLAUDE.md](../CLAUDE.md) or [AGENTS.md](../AGENTS.md).
+
 ## Extension Development
 
 See the [architecture guide](../docs/architecture.md) and [extension guide](../docs/EXTENSIONS.md) for the full extension architecture. Quick start:
@@ -73,23 +90,23 @@ Constraints:
 
 ## Community Registry
 
-The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/registry) (skills, MCP servers, workflows and apps built on Accounted) is sourced from the [`registry/`](../registry/) directory in this repo. To list something you built, add an MDX entry there by PR; see [registry/README.md](../registry/README.md) for the format and run `npm run validate:registry` for the local check. No code changes needed.
+The registry at [accounted.se/community/registry](https://www.accounted.se/community/registry) (skills, MCP servers, workflows and apps built on Accounted) is sourced from the [`registry/`](../registry/) directory in this repo. To list something you built, add an MDX entry there by PR; see [registry/README.md](../registry/README.md) for the format and run `npm run validate:registry` for the local check. No code changes needed.
 
 ## What Not to Do
 
 - **Don't modify enforcement triggers** in migration 017 (legally required for Swedish accounting law)
-- **Don't insert directly into journal tables** -- use the engine functions in `lib/bookkeeping/engine.ts`
-- **Don't break the core/extension boundary** -- core must compile standalone without extensions
-- **Don't delete posted journal entries** -- use storno reversal via `reverseEntry()`
+- **Don't insert directly into journal tables**: use the engine functions in `src/lib/bookkeeping/engine.ts`
+- **Don't break the core/extension boundary**: core must compile standalone without extensions
+- **Don't edit or delete posted journal entries**: correct them by storno (`reverseEntry()`, `correctEntry()`) or the inline rättelse RPCs
 
 ## Code Style
 
 - TypeScript strict mode, no `any` unless unavoidable
 - English for all code, comments, and commit messages
-- `Math.round(x * 100) / 100` for monetary calculations, never `toFixed()`
+- `roundOre()` from `src/lib/money.ts` for monetary rounding, never `toFixed()` or a hand-rolled `Math.round(x * 100) / 100`
 - Account numbers are strings (`'1930'`, not `1930`)
-- All shared types go in `types/index.ts`
+- All shared types go in `src/types/index.ts`
 
 ## Questions?
 
-Open a discussion or issue on GitHub. For security vulnerabilities, see [SECURITY.md](SECURITY.md).
+Open an issue on GitHub. For security vulnerabilities, see [SECURITY.md](SECURITY.md).

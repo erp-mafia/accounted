@@ -1,1 +1,0 @@
-[2026-10-15] The booking-summary route sends the newest receipt in full and at most 10 other decisions as when, who and source, plus the total: the view renders nothing more, and a samlingsverifikat carries up to 100 full receipts, which the Inkorg line would fetch for one sentence.

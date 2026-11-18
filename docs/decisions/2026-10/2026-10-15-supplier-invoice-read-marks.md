@@ -1,1 +1,0 @@
-[2026-10-15] crm#1229: approved_at and bank_entered_at go on the v1 list, v1 detail and MCP list, not the create response; the open payment order stays out: alone it misses betalfil batches, and the lifecycle stage covering both costs up to five more reads per list call.

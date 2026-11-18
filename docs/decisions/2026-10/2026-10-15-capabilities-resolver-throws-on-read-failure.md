@@ -1,1 +1,0 @@
-[2026-10-15] The capabilities resolver lives in src/lib/modules (infrastructure) and reads the plan through a new readCapabilityAxes that throws on a failed read: a report must not claim needs_plan because a query failed, and the gate's fail-closed hasCapability stays as it is.

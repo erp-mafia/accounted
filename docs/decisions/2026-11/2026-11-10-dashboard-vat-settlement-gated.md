@@ -1,1 +1,0 @@
-[2026-11-10] The Moms page's reviewed momsredovisning sends its period; the dashboard voucher route then refuses a settled period and keys the verifikat on it like the v1/MCP booking, so the live-unique index stops a second one. A VAT template without a period books as before (accounted#58).

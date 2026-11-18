@@ -1,1 +1,0 @@
-[2026-10-22] A benefit paid in full by nettolöneavdrag is declared at 0 in FK013 and FK012 (and their UlagEA / EjUlagSA fields), not left out: Teknisk beskrivning 1.1.18.2 avsnitt 5.3 states it for every förmån, so the FK013 fix also covers FK012 and keeps the housing flag.

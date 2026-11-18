@@ -268,7 +268,7 @@ describe('canHaveEmailReceipt', () => {
   it('keeps a supplier invoice paid over bankgiro', () => {
     // This one matched a real emailed invoice; skipping the whole rail would
     // have thrown away the hunt's best hit.
-    expect(canHaveEmailReceipt('Kontorsplatser j BG 0000059142596 Bg-bet. via internet')).toBe(true)
+    expect(canHaveEmailReceipt('Kontorsplatser j BG 0000001234567 Bg-bet. via internet')).toBe(true)
   })
 
   it('keeps an expense reimbursement, which has a receipt behind it', () => {
@@ -380,16 +380,16 @@ describe('worthFetching', () => {
 describe('worthFetching, on the search that found it', () => {
   it('fetches when the purchase that found the mail is close in time', () => {
     // The bank calls the landlord "Kontorsplatser j BG"; the invoice says
-    // "Stockholm Innovation & Growth AB". The names will never match, but the
+    // "Nordisk Kontorshub AB". The names will never match, but the
     // search that produced this mail was that purchase's own.
     const landlord = tx({
-      description: 'Kontorsplatser j BG 0000059142596 Bg-bet. via internet',
+      description: 'Kontorsplatser j BG 0000001234567 Bg-bet. via internet',
       merchant_name: null,
       amount: -15000,
       date: '2026-07-04',
     })
     const invoice = {
-      vendor: 'Stockholm Innovation & Growth AB',
+      vendor: 'Nordisk Kontorshub AB',
       date: '2026-07-02',
       amount: null,
       currency: null,
@@ -400,7 +400,7 @@ describe('worthFetching, on the search that found it', () => {
 
   it('still refuses when the dates are nowhere near each other', () => {
     const landlord = tx({ description: 'Kontorsplatser j BG', merchant_name: null, amount: -15000, date: '2026-07-04' })
-    const stale = { vendor: 'Stockholm Innovation & Growth AB', date: '2025-11-02', amount: null, currency: null }
+    const stale = { vendor: 'Nordisk Kontorshub AB', date: '2025-11-02', amount: null, currency: null }
     expect(worthFetching(stale, [landlord], [landlord])).toBe(false)
   })
 })

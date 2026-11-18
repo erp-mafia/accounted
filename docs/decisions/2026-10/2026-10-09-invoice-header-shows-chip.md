@@ -1,1 +1,0 @@
-[2026-10-09] The invoice header shows one chip: while an open, registered collection case puts its chip there, the invoice's own status reads as plain text beside it; the case card shows the stage in its own words as its one chip.

@@ -372,7 +372,7 @@ describe('syncAccountTransactions', () => {
       ],
       rawPages: ['{}'],
     })
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    archiveLog.info.mockClear()
 
     const result = await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
@@ -380,12 +380,11 @@ describe('syncAccountTransactions', () => {
     )
 
     expect(result.notBooked).toBe(3)
-    expect(logSpy).toHaveBeenCalledWith('[enable-banking] Skipped pending transactions (not booked or no booking_date)', expect.objectContaining({
+    expect(archiveLog.info).toHaveBeenCalledWith('Skipped pending transactions (not booked or no booking_date)', expect.objectContaining({
       skippedPending: 3,
       total: 4,
       reasons: { 'NONE/value_date+transaction_date': 2, 'PDNG/booking_date+value_date': 1 },
     }))
-    logSpy.mockRestore()
   })
 
   it('reports no unbooked entries when every entry is booked (PH 221)', async () => {

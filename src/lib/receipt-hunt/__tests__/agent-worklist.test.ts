@@ -207,7 +207,7 @@ describe('resolveAgentWorklist', () => {
 
   it('marks a restaurant charge as one that may carry a tip', async () => {
     mockFetchPurchases.mockResolvedValue([
-      { ...UNBOOKED, id: 'tx-rest', description: 'JORA RESTAURANG AB', currency: 'SEK', amount: -4002.9, amount_sek: -4002.9 },
+      { ...UNBOOKED, id: 'tx-rest', description: 'EXEMPEL RESTAURANG AB', currency: 'SEK', amount: -4002.9, amount_sek: -4002.9 },
     ])
     const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
     const { items } = await resolveAgentWorklist(supabase, 'co-1')

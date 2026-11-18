@@ -1,1 +1,0 @@
-[2026-10-27] Cheap tier moves from Haiku 4.5 to Haiku 5.5 (eu.anthropic.claude-haiku-5-5, verified on EU Bedrock): a tenth of the price and better on every Ledger-Bench suite (booking 81% vs 56%, reasoning 64% vs 22%). Extraction tier stays on BEDROCK_MODEL_ID until a real-document replay.

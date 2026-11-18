@@ -1,1 +1,0 @@
-[2026-10-22] An EU supplier's reverse-charge invoice in the editor has no goods/services default: it takes the supplier's latest answer or asks before registering (crm#1323). The silent "services" booked EU goods in ruta 21; guessing from the cost account was rejected since 5420/6540 can be either.

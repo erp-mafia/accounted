@@ -1,1 +1,0 @@
-[2026-11-17] Crediting a customer invoice sets its remaining_amount to 0 in the write that moves it to credited, as the supplier side does: every credit is a full one, and a reader of remaining_amount alone was told the customer still owed it (crm#1886).

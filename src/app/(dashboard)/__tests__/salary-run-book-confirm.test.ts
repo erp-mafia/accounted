@@ -1,8 +1,8 @@
 /**
  * crm#1216: Bokför on a salary run posted its vouchers on the first click,
  * dated on the payment date even when that date was a week ahead. Every
- * other state-advancing action on the page confirmed first; design.md
- * convention 10 says posting actions confirm up front with the outcome.
+ * other state-advancing action on the page confirmed first; the design
+ * convention is that posting actions confirm up front with the outcome.
  * Markera som betald, the step before it, asks first too when the payment
  * date has not come yet (the rule itself: lib/salary/payout-date.ts). The
  * server refuses an early payout without that answer, so the confirmed call

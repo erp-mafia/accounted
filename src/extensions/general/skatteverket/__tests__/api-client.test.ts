@@ -581,7 +581,7 @@ describe('refresh-token dead-session classification', () => {
   it('classifies 404 id_not_found as SESSION_EXPIRED', async () => {
     const { getTokens } = await import('../lib/token-store')
     const { refreshAccessToken } = await import('../lib/oauth')
-    // getValidToken reads once, refreshTokenForUser re-reads — queue both.
+    // getValidToken reads once, refreshTokenForUser re-reads - queue both.
     // ... and the dead-token path looks once more for a token another
     // process may have stored: here nobody did.
     vi.mocked(getTokens)

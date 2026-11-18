@@ -1,1 +1,0 @@
-[2026-10-30] A kontantmetoden samlingsbetalning books each unbooked SEK customer invoice paid in full from the single cash match's builder via match_batch_allocate's p_cash_lines, not a TS-only track: the RPC stays the one atomic boundary; mixes, suppliers, FX, installments still refuse (crm#1539).

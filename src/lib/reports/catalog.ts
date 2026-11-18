@@ -87,7 +87,7 @@ export interface ReportDescriptor {
   defaultRange?: Exclude<RangePreset, 'custom'>
   /**
    * Nav-promoted page that happens to render in the focused-report shell.
-   * Hides the report-library back link and the shell's fiscal-year selector —
+   * Hides the report-library back link and the shell's fiscal-year selector:
    * the view owns all of its period controls.
    */
   standalone?: boolean
@@ -264,7 +264,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     params: 'calendar',
     exports: ['xlsx'],
-    // Promoted to the Skatt & bokslut nav group — reached directly, not via
+    // Promoted to the Skatt & bokslut nav group - reached directly, not via
     // the report library, and it manages its own period selection.
     standalone: true,
   },

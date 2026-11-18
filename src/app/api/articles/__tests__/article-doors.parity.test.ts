@@ -35,7 +35,7 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 
 const COMPANY_ID = 'company-1'
 const USER_ID = 'user-1'
-const ARTICLE_ID = '3a9ac4d2-163a-4d43-8fa3-1b32827505fa'
+const ARTICLE_ID = '0d1d0000-0000-4000-8000-000000000002'
 
 /** The fields the doors used to store differently: empty texts and a lower-case currency. */
 const createInput = { name: 'Takarbete ', price_excl_vat: 850, unit: 'tim', currency: 'sek', notes: '', ean: '', housework_type: 'bygg' }

@@ -1,1 +1,0 @@
-[2026-10-26] Bostadsrättsförening is a fifth legal form behind NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED with no income return, no tax booking and no dispositions modelled (an äkta förening's property income is tax-exempt, IL 39:25), K3 only (BFNAR 2025:2 1.1A e) and insatser on 2083 named Insatser.

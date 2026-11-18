@@ -6,7 +6,7 @@ import { ensureFiscalPeriod, resolveCategorizeContext } from '../categorize-core
 /**
  * The bank door's räkenskapsår: once a company has recorded years the next one
  * chains from them, and fiscal_year_start_month only fills what nothing
- * records. 22 companies on prod have a settings month out of step with their
+ * records. Some companies have a settings month out of step with their
  * recorded year.
  */
 const COMPANY = 'company-1'

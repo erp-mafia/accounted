@@ -31,7 +31,7 @@ describe('bandFor', () => {
 
 describe('planAlias', () => {
   it('names nothing for salary and category text, whatever the model says', () => {
-    const d = planAlias({ pre: preclean('Lön Jakob Juni Överföring via internet'), model: reading({ counterpart: 'Jakob', kind: 'person' }) })
+    const d = planAlias({ pre: preclean('Lön Anna Juni Överföring via internet'), model: reading({ counterpart: 'Jakob', kind: 'person' }) })
     expect(d.band).toBe('nil')
     expect(d.kind).toBe('payroll')
     expect(d.displayName).toBeNull()
@@ -49,7 +49,7 @@ describe('planAlias', () => {
   })
 
   it('keeps a salary line off a suggested party, but not off a confirmed one', () => {
-    const pre = preclean('Lön Jakob Juni Överföring via internet')
+    const pre = preclean('Lön Anna Juni Överföring via internet')
     expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Lön Jakob', confirmed: false } })).toMatchObject({ band: 'nil', partyId: null })
     expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Anna Exempel', confirmed: true } })).toMatchObject({ partyId: 'p-j', source: 'ledger' })
   })
@@ -57,11 +57,11 @@ describe('planAlias', () => {
   it('lets a document outrank the directory and the model', () => {
     const d = planAlias({
       pre: preclean('Hotel at Booking.com K3667 Kortköp/uttag'),
-      document: { supplierName: 'Hotel Skeppsholmen AB', partyId: 'p-1' },
+      document: { supplierName: 'Strandhotellet AB', partyId: 'p-1' },
       directory: { name: 'Booking.com', kind: 'merchant', confidence: 0.95 },
       model: reading({ counterpart: 'Booking.com' }),
     })
-    expect(d).toMatchObject({ source: 'document', displayName: 'Hotel Skeppsholmen AB', partyId: 'p-1', band: 'link', kind: 'invoice_supplier' })
+    expect(d).toMatchObject({ source: 'document', displayName: 'Strandhotellet AB', partyId: 'p-1', band: 'link', kind: 'invoice_supplier' })
   })
 
   it('takes the directory before the model and marks a giro hit as an anchor', () => {
@@ -76,7 +76,7 @@ describe('planAlias', () => {
     expect(sj).toMatchObject({ displayName: 'SJ', band: 'link', source: 'directory' })
     const skatt = planAlias({ pre: preclean('Skatt lön Juni BG 0000050501055 Bg-bet. via internet'), directory: { name: 'Skatteverket', kind: 'authority', confidence: 0.98, viaGiro: true } })
     expect(skatt).toMatchObject({ displayName: 'Skatteverket', source: 'anchor', band: 'link' })
-    const lon = planAlias({ pre: preclean('Lön Jakob Juni Överföring via internet') })
+    const lon = planAlias({ pre: preclean('Lön Anna Juni Överföring via internet') })
     expect(lon).toMatchObject({ kind: 'payroll', band: 'nil' })
   })
 

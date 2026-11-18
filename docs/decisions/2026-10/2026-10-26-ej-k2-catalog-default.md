@@ -1,1 +1,0 @@
-[2026-10-26] The BAS catalog hides the # (not for K2) accounts by default unless the company reports under K3, årsbokslut forms included: BFNAR 2017:3 19.2/19.4 bar the same treatments and K1 is simpler; an unknown framework keeps them visible, as before.

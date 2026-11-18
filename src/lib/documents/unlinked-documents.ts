@@ -8,7 +8,7 @@
  * submission, and a ROT/RUT payout request. A
  * row referenced by none of them is stored, retained for seven years under
  * BFL, and connected to no bookkeeping at all. Nothing surfaces those today,
- * so they accumulate silently: 4 497 of them across 210 companies as of
+ * so they accumulate silently: thousands of them across many companies as of
  * 2026-08-27, 481 of them created in the preceding week.
  *
  * ## Why the mime allow-list is the whole design
@@ -21,7 +21,7 @@
  * them on an attention surface and an agent is handed 11 309 items of busywork
  * that it must not action, which is worse than showing nothing.
  *
- * Measured on production 2026-08-27: of the unreferenced rows,
+ * Measured 2026-08-27: of the unreferenced rows,
  * `application/json` was 11 309 of 11 309 PSD2 archive, and pdf / png / jpeg /
  * heic were 0 of 4 495. The split is clean, so the rule is an allow-list of
  * the mime types an underlag can actually be, not a filename exclusion. A new

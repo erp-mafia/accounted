@@ -1,1 +1,0 @@
-[2026-10-24] BankID document signing runs on TIC Identity, reached from core only via the tic extension's services (lib/signing/bankid-provider.ts), which collect the signature in the poll that sees it complete: TIC holds our BankID contract and hands a result out at most twice.

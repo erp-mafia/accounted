@@ -9,7 +9,7 @@ const log = createLogger('documents/locked-period')
  * enforce_period_lock_documents (migration 20240101000017, never changed)
  * refuses every update of a document whose entry sits in a closed or locked
  * fiscal period, not only a change of the link. So two things never land on
- * such a row (prod 2026-09-26: 5 736 documents in 64 companies): the read
+ * such a row: the read
  * stamp after its pages were stored, and the type a person or the model set.
  * The pages and the classification are stored beside the row, so readers look
  * there, the way document_integrity_checks keeps the integrity stamp beside

@@ -177,7 +177,7 @@ describe('/api/mcp-oauth/authorize with the real redirect-URI allowlist', () => 
     mocks.serviceClient.mockReturnValue(service)
     mocks.createClient.mockResolvedValue(userClient('user-1'))
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
-    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+    mocks.getBranding.mockReturnValue({ appName: 'Accounted' })
   })
 
   it('GET rejects a redirect URI registered by an unrelated user, even one named like Claude', async () => {

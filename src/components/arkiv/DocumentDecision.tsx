@@ -18,7 +18,7 @@ import { DefList, DefRow, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
 
 /**
- * The decision sheet (canvas artboard Granska): one document, the type we
+ * The decision sheet: one document, the type we
  * believe it is with the nearest alternatives, what was read from it with
  * its page, the fields where two readings disagreed, what saving will do,
  * and one primary action. Answers up to three questions in one save: does

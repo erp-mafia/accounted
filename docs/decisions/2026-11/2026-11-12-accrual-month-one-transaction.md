@@ -1,1 +1,0 @@
-[2026-11-12] A periodisering month posts its verifikat and its pending-to-posted in one transaction (commit_accrual_installment), not a draft claimed on the month: a claimed draft cannot be released (installment trigger) and a credit could still race it; this is how depreciation closed the same gap.

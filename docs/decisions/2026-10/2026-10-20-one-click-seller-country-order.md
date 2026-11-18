@@ -1,1 +1,0 @@
-[2026-10-20] Seller country is read in a fixed order (VAT prefix, IBAN, Swedish org number, a country or US state in the address) and only an unknown seller on a foreign-looking document without VAT is asked about, as one chip row: no country is ever guessed for reverse charge.

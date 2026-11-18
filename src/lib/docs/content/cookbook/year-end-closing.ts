@@ -1,6 +1,6 @@
 export const COOKBOOK_YEAR_END_MD = `# Cookbook: year-end closing (bokslut)
 
-> Run the year-end procedures for a Swedish fiscal year — the engine locks and closes it and sets the opening balances for the new year. Built around BFL 5 kap and 7 kap requirements (verifikationskedja, balanskontinuitet, 7-year retention).
+> Run the year-end procedures for a Swedish fiscal year - the engine locks and closes it and sets the opening balances for the new year. Built around BFL 5 kap and 7 kap requirements (verifikationskedja, balanskontinuitet, 7-year retention).
 
 This is the operational companion to the [Fiscal-periods reference](/docs/api/reference/fiscal-periods). Year-end is the single most consequential lifecycle event in a Swedish bookkeeping system: closing is irreversible per BFL 5 kap 8 §. Treat the steps below as a checklist, not a script to copy-paste.
 
@@ -9,7 +9,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 - A **live** API key with \`bookkeeping:write\`, \`reports:read\`, \`compliance:read\`, \`documents:write\`, and \`operations:read\` scopes. A test key (\`gnubok_sk_test_*\`) can run the read-only pre-flight steps, but the year-end run has no dry run and answers a test key with \`403 TEST_KEY_WRITE_BLOCKED\`.
 - All transactions for the year posted (no drafts).
 - All VAT declarations for the year filed (12 monthly, 4 quarterly, or 1 annual: see the [VAT cookbook](/docs/api/cookbook/file-vat-declaration)).
-- All AGI declarations for the year filed. (Employment income reported through monthly AGI is **not** re-reported on an annual kontrolluppgift — KU remains only for the specific payment types AGI doesn't cover, e.g. certain ränta/utdelning; it is not a blanket year-end step.)
+- All AGI declarations for the year filed. (Employment income reported through monthly AGI is **not** re-reported on an annual kontrolluppgift - KU remains only for the specific payment types AGI doesn't cover, e.g. certain ränta/utdelning; it is not a blanket year-end step.)
 - The bokslut date: usually 31 december for calendar-year companies (kalenderår), or the last day of the räkenskapsår for off-calendar (brutet räkenskapsår).
 
 ## 1. Pre-flight: continuity check (IB/UB per BFL 5 kap)
@@ -47,7 +47,7 @@ When a mismatch exists \`valid\` is \`false\` and each offending account appears
 }
 \`\`\`
 
-\`valid: false\` is a BFL violation: the previous period's closing balance (UB) was not carried into this period as the opening balance (IB). This is always a carry-forward problem — a missing/incorrect opening-balance entry, or a post-close mutation of the prior period — not a missed bank reconciliation or a VAT-vs-GL disagreement. Investigate the opening-balance entry for the flagged account before proceeding.
+\`valid: false\` is a BFL violation: the previous period's closing balance (UB) was not carried into this period as the opening balance (IB). This is always a carry-forward problem - a missing/incorrect opening-balance entry, or a post-close mutation of the prior period - not a missed bank reconciliation or a VAT-vs-GL disagreement. Investigate the opening-balance entry for the flagged account before proceeding.
 
 ## 2. Pre-flight: voucher gaps (BFNAR 2013:2)
 
@@ -62,7 +62,7 @@ The check returns a \`findings\` array; each unexplained gap is a \`blocker\` (c
 
 ## 3. Pre-flight: missing documents on posted entries
 
-For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The v1 \`compliance/check\` endpoint does **not** gate on documents — its supported types are \`year_end_readiness\`, \`voucher_gaps\` and \`vat_close\`, and only the last looks at receipts, for one momsperiod and high-value purchases — so surface missing underlag through the MCP tools instead:
+For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The v1 \`compliance/check\` endpoint does **not** gate on documents - its supported types are \`year_end_readiness\`, \`voucher_gaps\` and \`vat_close\`, and only the last looks at receipts, for one momsperiod and high-value purchases - so surface missing underlag through the MCP tools instead:
 
 \`\`\`
 accounted_list_verifikat_without_documents
@@ -97,16 +97,16 @@ Unlock a locked period with \`POST /fiscal-periods/{id}/unlock\`. A closed perio
 
 ## 5. Run year-end
 
-\`POST /fiscal-periods/{id}/year-end\` is the single engine-touching step. It takes **no request body** (only the mandatory \`Idempotency-Key\` header); the next fiscal period is resolved automatically — an existing next period is reused, otherwise one is created. In order, \`executeYearEndClosing\`:
+\`POST /fiscal-periods/{id}/year-end\` is the single engine-touching step. It takes **no request body** (only the mandatory \`Idempotency-Key\` header); the next fiscal period is resolved automatically - an existing next period is reused, otherwise one is created. In order, \`executeYearEndClosing\`:
 
 1. Re-validates readiness (no drafts, no unexplained voucher gaps, trial balance balanced). Preview it first with \`GET /compliance/check?type=year_end_readiness&fiscal_period_id=$PERIOD_ID\`.
 2. Runs currency revaluation, posting FX gains/losses to \`3960\`/\`7960\` **before** the closing entry so they get swept into the result, and turns it back (återföring, \`source_type=currency_revaluation\`) on the first day of the next period: payments and later revaluations are measured from the original booking rate, so the next year books only the difference that arises in it.
-3. Posts one closing entry (\`source_type=year_end\`, in the company's voucher series for bokslut: I in the standard set, A for a company that never applied it, "Årsbokslut …"): it zeros every result account in BAS class 3-8 and books the net result **directly** onto \`2099\` "Årets resultat" (aktiebolag) — or \`2010\` "Eget kapital" for enskild firma. There is no \`8910\` intermediate step.
+3. Posts one closing entry (\`source_type=year_end\`, in the company's voucher series for bokslut: I in the standard set, A for a company that never applied it, "Årsbokslut …"): it zeros every result account in BAS class 3-8 and books the net result **directly** onto \`2099\` "Årets resultat" (aktiebolag) - or \`2010\` "Eget kapital" for enskild firma. There is no \`8910\` intermediate step.
 4. Locks, then closes the period (irreversible per BFL 5 kap 8 §).
 5. Generates the opening-balance verifikat in the next period: every BAS class 1-2 account's UB becomes its IB, as a single balanced entry.
-6. Re-validates IB/UB continuity (rolling back on failure), then — for aktiebolag — omför föregående års resultat from \`2099\` to \`2098\` in the new period as a separate verifikat.
+6. Re-validates IB/UB continuity (rolling back on failure), then - for aktiebolag - omför föregående års resultat from \`2099\` to \`2098\` in the new period as a separate verifikat.
 
-The engine does **not** compute or post income tax (bolagsskatt), periodiseringsfond, or överavskrivningar. Book any bokslutsdispositioner and the tax entry yourself as ordinary verifikationer **before** running year-end — the tax entry debits \`8910\` against \`2512\`; a periodiseringsfond avsättning debits \`8811\` against an obeskattad reserv in \`21xx\` — so the closing entry sweeps their class-8 legs into the result.
+The engine does **not** compute or post income tax (bolagsskatt), periodiseringsfond, or överavskrivningar. Book any bokslutsdispositioner and the tax entry yourself as ordinary verifikationer **before** running year-end - the tax entry debits \`8910\` against \`2512\`; a periodiseringsfond avsättning debits \`8811\` against an obeskattad reserv in \`21xx\` - so the closing entry sweeps their class-8 legs into the result.
 
 This is an async operation. It takes no body:
 
@@ -168,9 +168,9 @@ You normally never touch \`POST /fiscal-periods/{id}/opening-balances\`: year-en
 
 ## 7. The period is already closed (\`/close\` is recovery-only)
 
-Step 5 already locked **and** closed the period — \`executeYearEndClosing\` runs \`closePeriod\` as its final bookkeeping step. **BFL 5 kap 8 §: closing is irreversible.** No code path can re-open a closed period, so in the normal flow you never call \`/close\` yourself.
+Step 5 already locked **and** closed the period - \`executeYearEndClosing\` runs \`closePeriod\` as its final bookkeeping step. **BFL 5 kap 8 §: closing is irreversible.** No code path can re-open a closed period, so in the normal flow you never call \`/close\` yourself.
 
-\`POST /fiscal-periods/{id}/close\` exists only as a recovery path: it finalizes a year-end that posted its closing entry and locked the period but did not reach the close step (a rare mid-flow failure). It reads **no body** — only the mandatory \`Idempotency-Key\` header:
+\`POST /fiscal-periods/{id}/close\` exists only as a recovery path: it finalizes a year-end that posted its closing entry and locked the period but did not reach the close step (a rare mid-flow failure). It reads **no body** - only the mandatory \`Idempotency-Key\` header:
 
 \`\`\`bash
 curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/fiscal-periods/$PERIOD_ID/close" \\
@@ -224,7 +224,7 @@ The one exception: the VAT declaration cadence is monthly/kvartalsvis/årlig reg
 - **Don't year-end before the last month's moms is declared.** The year-end procedure expects every moms-account balance to reconcile. A pending declaration leaves dangling balances on 2611-2641.
 - **Periodiseringsfond is your entry, not the engine's.** \`/year-end\` does not accept a set-aside amount and does not post the reserve; it only revalues currency, posts the closing entry (class 3-8 → \`2099\`), and generates the IB. If you set aside a periodiseringsfond, book it yourself as an obeskattad reserv (\`21xx\`, against \`8811\`) **before** running year-end. For sizing it: per IL 30 kap 5 § and 30 kap 6 a §, an AB can set aside max 25% of the **taxable profit AFTER schablonintäkt has been added back and BEFORE the periodiseringsfond deduction itself**. The schablonintäkt is **SLR × the periodiseringsfonder at the start of the tax year**, where SLR is the statslåneränta of 30 November the year before, at least 0.5%: **2.55%** for 2026. Under BFL/BFNAR 2016:10 (materiellt samband for AB), the periodiseringsfond is BOOKED as an obeskattad reserv, not just declared on INK2.
 - **Don't unlock a period after the AB's annual report is filed.** The signed annual report is a public document at Bolagsverket; unlocking and changing the books afterwards creates a discrepancy with the filed report (which is itself an audit finding). Book the correction as a new verifikation in the current open year instead (\`POST /journal-entries\`): a storno (\`POST /journal-entries/{id}/reverse\`) is numbered and dated in the original's fiscal year, so it is refused in a locked or closed year. (v1 has \`POST /fiscal-periods/{id}/unlock\`, but the same rule applies.)
-- **Year-end is async.** Don't block your request loop on it: poll \`GET /operations/{id}\` with reasonable backoff (every 5-10s). If you prefer webhooks, subscribe to \`period.year_closed\` — that is the event the engine emits on completion. (\`operation.completed\`, shown in the operation envelope, is the polling contract, not a separately deliverable subscription event.)
+- **Year-end is async.** Don't block your request loop on it: poll \`GET /operations/{id}\` with reasonable backoff (every 5-10s). If you prefer webhooks, subscribe to \`period.year_closed\` - that is the event the engine emits on completion. (\`operation.completed\`, shown in the operation envelope, is the polling contract, not a separately deliverable subscription event.)
 
 ## Next steps
 

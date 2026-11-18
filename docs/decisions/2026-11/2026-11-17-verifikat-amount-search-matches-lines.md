@@ -1,1 +1,0 @@
-[2026-11-17] The verifikat search matches an amount against line amounts, not against display_amount as the brief proposed: as a filter that computed column is a function call per verifikat, twice per request, where a line is an index probe. Not found: an omslutning that no single line carries.

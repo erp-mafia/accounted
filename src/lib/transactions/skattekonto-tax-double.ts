@@ -25,10 +25,10 @@
  * neighbouring month's verifikat never counts. Excluded: storno entries and
  * reversed originals, the opening balance, and a verifikat that another one
  * of the month mirrors exactly on both accounts (an imported annulment
- * pair). Measured on production before it shipped: no bank booking in the
- * reverse order would have been warned, and the six same-amount matches the
- * rule saw without its direction test (salary payouts crediting 2710 against
- * a storno of a skattekonto booking) are all excluded.
+ * pair). A bank booking in the reverse order is not warned, and a
+ * same-amount match the rule would see without its direction test (a salary
+ * payout crediting 2710 against a storno of a skattekonto booking) is
+ * excluded.
  *
  * Like every half of the booking guard it is a warning, never a block: the
  * refusal is TRANSACTION_BOOK_POSSIBLE_DUPLICATE with the candidate marked

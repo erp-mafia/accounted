@@ -1,1 +1,0 @@
-[2026-11-10] The bank connect screen gives the currency default (1930) to the account the person ticks, not the first one in the bank's list: only that number takes over the existing 1930 row, where the first sync skips what a bank file already brought (crm#1701).

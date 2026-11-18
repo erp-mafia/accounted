@@ -105,7 +105,7 @@ export async function POST(request: Request) {
   if (!membership) {
     return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
   }
-  // The pipeline upserts agent_profiles — a mutation, so viewers are refused
+  // The pipeline upserts agent_profiles - a mutation, so viewers are refused
   // (same rule as /api/agent/profile and /verify).
   // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
   // assistant: it runs as the service role and reads the whole company.

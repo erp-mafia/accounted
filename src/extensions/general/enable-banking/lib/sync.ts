@@ -361,7 +361,7 @@ export async function syncAccountTransactions(
   }
   // The person asking, as PSU headers: absent on the cron and the agent sync.
   const psu = psuHeadersOf(syncOptions?.signer)
-  console.log('[enable-banking] syncAccountTransactions starting', {
+  archiveLog.info('syncAccountTransactions starting', {
     connectionId,
     accountUid: account.uid,
     fromDate,
@@ -423,7 +423,7 @@ export async function syncAccountTransactions(
         balance_after: tx.balance_after ?? undefined,
         is_enriched: tx.is_enriched ?? undefined,
         // tx.parts (the Bankgirot split) is parsed and dropped here: the parts
-        // MR stores it.
+        // a later change stores it.
       },
       bookingDate: tx.booking_date,
       page: tx.raw_page_index ?? undefined,
@@ -499,7 +499,7 @@ export async function syncAccountTransactions(
     if (!maxBookingDate || bookingDate > maxBookingDate) maxBookingDate = bookingDate
   }
 
-  console.log('[enable-banking] Fetched transactions', {
+  archiveLog.info('Fetched transactions', {
     connectionId,
     accountUid: account.uid,
     via: connector ? 'connector' : 'direct',
@@ -516,7 +516,7 @@ export async function syncAccountTransactions(
 
   const skippedPending = totalFetched - bookedEntries.length
   if (skippedPending > 0) {
-    console.log('[enable-banking] Skipped pending transactions (not booked or no booking_date)', {
+    archiveLog.info('Skipped pending transactions (not booked or no booking_date)', {
       connectionId,
       accountUid: account.uid,
       skippedPending,
@@ -658,7 +658,7 @@ export async function syncAccountTransactions(
 
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
 
-  console.log('[enable-banking] Ingest result', {
+  archiveLog.info('Ingest result', {
     connectionId,
     accountUid: account.uid,
     imported: ingestResult.imported,
@@ -689,7 +689,7 @@ export async function syncAccountTransactions(
     : Number.POSITIVE_INFINITY
   const balanceIsFresh = balanceAgeMs >= 0 && balanceAgeMs < BALANCE_MAX_AGE_MS
   if (balanceIsFresh) {
-    console.log('[enable-banking] Skipping balance refresh (stored balance is fresh)', {
+    archiveLog.info('Skipping balance refresh (stored balance is fresh)', {
       connectionId,
       accountUid: account.uid,
       balanceUpdatedAt: account.balance_updated_at,

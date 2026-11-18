@@ -434,7 +434,7 @@ describe('decideBankMatch: another currency', () => {
 })
 
 describe('decideBankMatch: the card the document says paid it', () => {
-  // The X subscription (prod, company Arcim): invoice J0LVRPBD-0003 from "X Internet Unlimited
+  // The X subscription (a real case): invoice J0LVRPBD-0003 from "X Internet Unlimited
   // Company", 83 kr, due 2026-10-03; its receipt from the same mail says card 3667; the bank row
   // reads "X CORP. PAID FEATURES K3667": the card network's brand, not the seller's name.
   const x = invoice({

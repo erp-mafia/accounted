@@ -42,7 +42,7 @@ interface PruneAccountsDialogProps {
 
 /**
  * Bulk deletion of unused accounts. Fetches the server-computed deletable set
- * (dry run) and presents it in two groups — imported/custom accounts and
+ * (dry run) and presents it in two groups - imported/custom accounts and
  * untouched accounts from the seeded base plan. Nothing is preselected:
  * deletion is opt-in per account or per group. Used accounts never appear
  * here; the server re-verifies every guard at execute time anyway.
@@ -92,7 +92,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
         const deletable: PruneCandidate[] = data?.deletable ?? []
         setCandidates(deletable)
         setUsedCount((data?.used ?? []).length)
-        // Nothing starts selected — deletion is opt-in per account (or per
+        // Nothing starts selected - deletion is opt-in per account (or per
         // group via the header checkbox), never a preloaded default.
       } catch {
         if (!cancelled) setLoadFailed(true)
@@ -106,7 +106,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
     }
   }, [open, loadAttempt])
 
-  // Charts bloated by an import easily reach hundreds of candidates — filter
+  // Charts bloated by an import easily reach hundreds of candidates - filter
   // by number or name, same semantics as the kontoplan page search. Selection
   // is keyed by account number, so it survives filter changes; the confirm
   // button always shows the true selected count.
@@ -280,7 +280,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
           <EmptyState tone="done" icon={CheckCircleIcon} title={t('prune_empty')} />
         ) : (
           // min-w-0: DialogContent is a grid, and grid items default to
-          // min-width auto — without this, the nowrap (truncate) account
+          // min-width auto - without this, the nowrap (truncate) account
           // names propagate their full width up and blow the dialog open
           // horizontally instead of truncating.
           <div className="min-w-0 space-y-3">

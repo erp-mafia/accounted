@@ -6,7 +6,7 @@ import { getClient, getPool, runAsServiceRole, withUserContext } from '@/tests/p
  * The monthly cap on bank payments (migration *_bank_payment_allowances.sql):
  * a company reads its own allowance and requests, never another company's,
  * and a browser session can never raise its own cap or write a request
- * directly (the route writes requests as the service role, founders write
+ * directly (the route writes requests as the service role, operators write
  * allowances as the service role).
  */
 
@@ -158,7 +158,7 @@ describe('bank_payment_allowances.pg: the cap is read by members and raised only
     expect(rows).toEqual([{ purchased_packs: 2 }])
   })
 
-  it('lets the server write packs as the webhook does: a packs-only row, an update that keeps the founder\'s base, never below 0', async () => {
+  it('lets the server write packs as the webhook does: a packs-only row, an update that keeps the operator\'s base, never below 0', async () => {
     const { companyId } = await companyWithOwner()
     const founderSet = await companyWithOwner()
     await grantAllowance(founderSet.companyId, 40)

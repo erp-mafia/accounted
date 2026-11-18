@@ -1,1 +1,0 @@
-[2026-10-28] Migration completion: an unattended retry ends after a week (invoice rows 7 tries, 24 if failed; Bokio supplier rows 7 days from the first try, short deferrals excepted); idle companies skip the full test but wake on new invoices. A person asking still retries all.

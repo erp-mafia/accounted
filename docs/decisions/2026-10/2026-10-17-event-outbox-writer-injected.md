@@ -1,1 +1,0 @@
-[2026-10-17] lib/init installs the outbox writer on the event bus (setOutboxWriter) instead of bus.ts importing it: bus.ts is in every server entry's graph and may import only the data-only consumer index; with the mode off the writer is never called.

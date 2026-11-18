@@ -1,5 +1,5 @@
 /**
- * The domains whose icon is never fetched, in one place (founder decision
+ * The domains whose icon is never fetched, in one place (product decision
  * 2026-10-17). Checked when a domain is resolved, again when it is queued,
  * and again by the fetcher itself, so a domain on this list never reaches
  * the network whatever path named it.

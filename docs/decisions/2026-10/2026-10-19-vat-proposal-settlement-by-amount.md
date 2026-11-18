@@ -1,1 +1,0 @@
-[2026-10-19] The momsredovisning proposal, not the check, ties a settlement to its period by amount: one dated up to 400 days later settles it and gates booking; one inside a period that clears exactly the previous one's balances is that period's (crm#1316, refines the check's rule).

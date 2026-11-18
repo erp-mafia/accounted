@@ -1,1 +1,0 @@
-[2026-10-18] Hem's build-assistant promo waits until an agent is connected; until then the Kopplingar agent chip is the one agent prompt (one prompt, not two). Unpaid users without an agent lose the promo's Uppgradera link on Hem.

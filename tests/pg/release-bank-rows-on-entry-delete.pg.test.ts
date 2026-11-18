@@ -19,7 +19,7 @@ import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
  * share, and stands in for a door nobody has written yet.
  *
  * Deliberately NOT exercised: undo_sie_import and replace_sie_import. They
- * stranded most of the rows measured on prod, but since 20260911140532 no
+ * stranded most of the rows measured in production, but since 20260911140532 no
  * network role could execute them (the SIE job pipeline stornos the batch and
  * releases its bank rows itself), and 20261012100200 dropped them.
  * lib/import/__tests__/sie-import.replace.pg.test.ts pins that they are gone.

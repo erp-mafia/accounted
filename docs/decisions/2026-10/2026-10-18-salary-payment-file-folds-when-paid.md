@@ -1,1 +1,0 @@
-[2026-10-18] A paid or booked salary run folds its payment-file panel to one line (Betalfil, date, Ladda ner igen) behind a chevron instead of removing it, and the pain.001 bank-agreement caveat moves behind a ? on both salary and supplier files.

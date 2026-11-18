@@ -74,7 +74,7 @@ export default function YearEndPage() {
 
   // ---- Period selection ----
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
-  // Whether the company has ANY fiscal periods (eligible or not) — separates
+  // Whether the company has ANY fiscal periods (eligible or not) - separates
   // "inget att stänga ännu" from "inget räkenskapsår har skapats".
   const [hasAnyPeriods, setHasAnyPeriods] = useState(true)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(

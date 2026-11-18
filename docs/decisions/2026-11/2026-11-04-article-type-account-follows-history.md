@@ -1,1 +1,0 @@
-[2026-11-04] "Härleds automatiskt" takes 3041-3053 only when the company credited the account in this or the previous räkenskapsår (founder decision), so a chart merely carrying it switches nobody. Read from ledger_account_days, not journal lines (28 s vs 0.1 s).

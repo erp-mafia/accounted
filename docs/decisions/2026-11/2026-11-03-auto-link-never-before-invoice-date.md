@@ -1,1 +1,0 @@
-[2026-11-03] The unattended supplier voucher auto-link never takes a voucher dated before the invoice: the debt did not exist yet. 79 of 130 auto-links in prod did; they now go to review, where a person can still link one (PH 241).

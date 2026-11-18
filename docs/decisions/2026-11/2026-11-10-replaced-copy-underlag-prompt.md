@@ -1,1 +1,0 @@
-[2026-11-10] The re-run "Hämta underlag" prompt (#51) is one ochre line in the migration workspace, not an Att göra row: the run, its connection and its progress live there, and core cannot start it. It counts open years only, since a closed or locked year refuses the link.

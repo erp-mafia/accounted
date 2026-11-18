@@ -1,1 +1,0 @@
-[2026-11-01] The Stripe feed imports SEK balance transactions only (accounted#58): 1686 is a SEK cash account and the booking guards refuse other currencies there. Non-SEK rows are counted and named in the sync toast; a per-currency Stripe account waits on the founder.

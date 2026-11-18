@@ -80,7 +80,7 @@ describe('mapVismaToSupplierInvoice payment status', () => {
   })
 
   it('PaymentStatus Unpaid (3) with a PRESENT RemainingAmount of 0 stays open at the full total', () => {
-    // Company 5208b894 (2026-09-10): every invoice Visma reported as unpaid
+    // One company (2026-09-10): every invoice Visma reported as unpaid
     // landed as paid because a present zero was read as the open balance.
     const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 3, RemainingAmount: 0 }))
     expect(dto.paymentStatus.paid).toBe(false)

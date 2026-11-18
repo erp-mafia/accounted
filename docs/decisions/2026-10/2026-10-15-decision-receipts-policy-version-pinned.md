@@ -1,1 +1,0 @@
-[2026-10-15] DIRECT_BOOKING_POLICY_VERSION spells its thresholds into the string and a test pins direct-booking.ts's content hash to its revision: a threshold change moves the version by itself, a logic change fails the test until someone decides whether the revision moves.

@@ -1,1 +1,0 @@
-[2026-11-18] An edit never lifts a held recurring schedule, a new run date included: the unrecorded invoice may exist, and a lifted hold billed its period again on the new date. "Skapa faktura nu" and pausing and activating stay the ways out (accounted#213).

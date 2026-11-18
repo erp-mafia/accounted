@@ -30,8 +30,8 @@ describe('bareUrl', () => {
 
 describe('initials', () => {
   it('takes the first given name and the last surname, as BankID gives them', () => {
-    expect(bankIdInitials('Jakob', 'Wennberg')).toBe('JW')
-    expect(bankIdInitials('Emil', 'Amnäs Mattsson')).toBe('EM')
+    expect(bankIdInitials('Anna', 'Andersson')).toBe('AA')
+    expect(bankIdInitials('Erik', 'Berg Lund')).toBe('EL')
     expect(bankIdInitials('anna maria', 'af ström')).toBe('AS')
     expect(bankIdInitials('Åsa', 'Öberg-Lind')).toBe('ÅÖ')
   })

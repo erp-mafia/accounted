@@ -1,1 +1,0 @@
-[2026-11-17] A bulk retag counts the lines behind a period lock apart, in preview and answer, from one lock check (lib/dimensions/retag-lock.ts), and an answer that left lines says partial and why: an approval left a closed year's lines untagged without a word (crm#1908). Closed years stay shut.

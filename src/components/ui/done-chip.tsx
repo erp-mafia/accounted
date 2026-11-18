@@ -2,7 +2,7 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * The confirmation chip (Stil v3, founder decision 2026-10-29): green only
+ * The confirmation chip (Stil v3, product decision 2026-10-29): green only
  * while it confirms, in the spot of the button that did it, before the row
  * folds away or the dialog closes. The check draws itself once (check
  * draw, one of the four named motions). role="status" announces it.

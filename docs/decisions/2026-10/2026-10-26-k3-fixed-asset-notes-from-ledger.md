@@ -1,1 +1,0 @@
-[2026-10-26] K3 notes on finansiella anläggningstillgångar and on nedskrivningar come from the ledger (13xx, accounts named nedskrivning): the asset register carries neither; the register tie-out is compared net of ledger impairments instead of warning on every impaired company.

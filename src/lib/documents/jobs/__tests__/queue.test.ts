@@ -173,7 +173,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('settles a classification that did not match the schema on its first attempt instead of asking the same prompt five times', async () => {
-    // Prod 2026-11-09: each such job spent five model calls and gave up with the document still untyped.
+    // Seen 2026-11-09: each such job spent five model calls and gave up with the document still untyped.
     const reason = 'classification did not match schema: confidence Too big: expected number to be <=1'
     claim(job({ kind: 'classify', attempts: 1 }))
     mocked(classifyDocument).mockResolvedValue({ status: 'error', reason })

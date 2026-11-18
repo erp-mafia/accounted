@@ -17,7 +17,7 @@
  *      bank row's merchant name and texts, then the verifikat's description.
  *      A brand the booking-template catalog books in the other box than the
  *      directory places it answers nothing: those are the vendors that also
- *      bill from an EU entity, whose box waits on a founder call (crm#1028).
+ *      bill from an EU entity, whose box waits on a product call (crm#1028).
  * Another EU country starts on eu_business, a country outside the EU on
  * non_eu_business. Sweden starts on nothing: omvänd skattskyldighet inom
  * landet covers only the goods and services of ML 16 kap. (bygg, skrot,

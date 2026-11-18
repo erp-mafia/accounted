@@ -261,7 +261,7 @@ export default function UserMenu({
 
               {companiesOpen && (
                 // Top-aligned with the company row, growing DOWNWARD
-                // (founder feedback 2026-07-23: never upward over the menu).
+                // (feedback 2026-07-23: never upward over the menu).
                 <div className={cn('absolute top-0 left-full z-[61] ml-1.5 w-60 p-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
                   <div className="-mx-1 -mt-1 flex items-center gap-2 border-b-hairline px-3.5 pb-2 pt-2.5">
                     <MagnifyingGlassIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />

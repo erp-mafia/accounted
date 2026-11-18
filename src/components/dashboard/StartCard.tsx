@@ -150,7 +150,7 @@ const FLOAT_BADGES: Array<{ style: CSSProperties; icon: ReactNode }> = [
 /**
  * The first-time state of a page that has nothing yet: the painted start card
  * (Bokföring, Kundfakturor, Löner, Skattekonto, Transaktioner, Underlag). Stil
- * v3 keeps the painting (founder call 2026-11-02) and brings the rest to the
+ * v3 keeps the painting (product call 2026-11-02) and brings the rest to the
  * system: Inter titles (Hedvig is for numbers), a sentence-case eyebrow, the
  * 6px toolbar-height primary, a text link for the second way in and the 8px
  * radius of a single object. One sentence, one primary, at most one link, as

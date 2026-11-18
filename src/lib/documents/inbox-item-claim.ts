@@ -16,7 +16,7 @@
  * The engine assigns the voucher number when it posts, so the claim can only
  * run after the verifikat exists. A door that loses takes its own verifikat
  * back out of the books through the storno service, the compensation the
- * bank row got in !128 (reverseOrphanedJournalEntry); it never edits or
+ * bank row has (reverseOrphanedJournalEntry); it never edits or
  * deletes it. The document link and any other follow-up must run after a won
  * claim, never before, or a loser would move the underlag onto its reversed
  * verifikat.
@@ -182,7 +182,7 @@ export type InboxItemBookingState =
  * reversed or cancelled) does: its pointer's, or the one its document sits on,
  * stamp or not (lib/documents/inbox-item-state.ts). A pointer at a reversed verifikat is
  * stale: the door may replace exactly that value, as a bank row whose pointer
- * names a reversed verifikat may be booked again (!128).
+ * names a reversed verifikat may be booked again.
  */
 export async function readInboxItemBookingState(
   supabase: SupabaseClient,

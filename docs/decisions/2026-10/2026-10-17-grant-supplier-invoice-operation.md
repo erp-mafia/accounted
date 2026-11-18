@@ -1,1 +1,0 @@
-[2026-10-17] Grants slice 2 covers create_supplier_invoice_from_inbox, not book_supplier_invoice: it registers and books in one commit from params that carry every pattern field, while deferred booking is a company's choice to keep a person's step.

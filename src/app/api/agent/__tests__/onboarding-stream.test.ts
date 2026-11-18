@@ -1,5 +1,5 @@
 /**
- * Tests for POST /api/agent/onboarding/stream — auth surface only.
+ * Tests for POST /api/agent/onboarding/stream - auth surface only.
  *
  * The composer pipeline itself is exercised via lib tests; here we lock in
  * the guard order: 401, membership 403, and the viewer refusal (the pipeline
@@ -24,7 +24,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 }))
 vi.mock('@/lib/entitlements/keys', () => ({ CAPABILITY: { ai: 'ai' } }))
 
-// Pipeline internals — never reached in these tests, stubbed so the module loads.
+// Pipeline internals - never reached in these tests, stubbed so the module loads.
 vi.mock('@/lib/agent/composer/inputs', () => ({
   gatherComposerInputs: vi.fn(),
   inputsToSourceSignals: vi.fn(),

@@ -8,7 +8,7 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  *
  * Deletes permission_shadow_log rows older than 7 days: the window the
  * permission shadow (lib/permissions/shadow.ts) is read over. Retention is
- * declared in .compliance/ropa.yaml (id: permissions.shadow_log).
+ * declared in the record of processing activities (id: permissions.shadow_log).
  */
 const SHADOW_LOG_RETENTION_DAYS = 7
 

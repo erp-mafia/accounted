@@ -1,1 +1,0 @@
-[2026-11-07] gnubok_audit_package builds under a 50 MB ceiling (the documents bucket's object cap) and refuses past it while building, not after: a try/catch cannot catch an OOM kill and an async task dies with the instance too; delivering larger packages needs a streamed link (crm#1703).

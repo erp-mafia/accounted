@@ -1,1 +1,0 @@
-[2026-10-15] document_type in the one reading takes its value from resolveInboxKind, so a declared kind outranks the model there, unlike every other field: deciding the kind a second way would let the reading and the inbox disagree about one item.

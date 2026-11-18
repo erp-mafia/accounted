@@ -16,7 +16,7 @@ import { DocumentDecision, type DecisionDocument } from './DocumentDecision'
 import { QuestionCard, decisionDocumentFor } from './QuestionCard'
 
 /**
- * Granska (canvas artboard Granska): the questions Arkiv has for a person,
+ * Granska: the questions Arkiv has for a person,
  * each answered with one tap: the card fades out and a toast says what
  * happens next. The count sits in the top bar. The decision sheet is one
  * link away for an answer that is not on a chip.

@@ -9,8 +9,8 @@ import type { Locale } from '@/i18n/config'
  * chats) pick it from the user's locale.
  *
  * The prompts themselves stay Swedish; only the answer changes language.
- * Statutory terms keep their Swedish names, as they do in the English UI (the
- * "stays Swedish" table in .claude/rules/i18n.md), with a short English gloss
+ * Statutory terms keep their Swedish names, as they do in the English UI,
+ * with a short English gloss
  * so the user can follow them.
  */
 export function replyLanguageRule(locale: Locale = 'sv'): string {

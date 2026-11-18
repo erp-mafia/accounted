@@ -1,1 +1,0 @@
-[2026-11-03] Money against a learned counterpart's direction (a likely refund, crm#1598) is proposed mirrored and never books without a review (direct-booking.4): the habit was learned the other way. 0 of 4 such bookings since 2026-10-14 were one-click.

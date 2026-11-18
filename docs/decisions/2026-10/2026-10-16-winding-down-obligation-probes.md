@@ -1,1 +1,0 @@
-[2026-10-16] Winding-down obligations are TypeScript probes per package (lib/modules/obligations.ts), run only for packages that are switched off: no read for a company with every package on, no migration for the reader; package_open_obligations stays for the hide-unused detector.

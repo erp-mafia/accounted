@@ -1,1 +1,0 @@
-[2026-10-27] "Lägg till företag" moves from the company flyout to the user menu itself, directly under the company row (one door per menu, one click after opening it), and gets a button on Inställningar > Företag > Allmänt and an action in ⌘K; the ⌘K entry joins the hand-listed actions because the derived palette (#2502) never landed on main (PH 216, PH 202).

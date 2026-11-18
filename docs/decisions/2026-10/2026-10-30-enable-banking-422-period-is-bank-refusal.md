@@ -1,1 +1,0 @@
-[2026-10-30] Enable Banking's 422 WRONG_TRANSACTIONS_PERIOD joins the ASPSP_ERROR window-refusal path (narrow, else AspspUnavailableError), not a date clamp: every sample was a valid 7-day window ending on the UTC date during a Nordea incident, so a clamp would have changed nothing.

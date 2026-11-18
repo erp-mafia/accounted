@@ -1,1 +1,0 @@
-[2026-10-16] The event bus, the registries lib/init fills and the AsyncLocalStorage request scopes live on globalThis (globalSingleton): each Turbopack layer holds its own module copy, and extension code now runs in the instrumentation copy while routes emit and open scopes in theirs.

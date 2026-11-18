@@ -1,1 +1,0 @@
-[2026-10-26] K3 components must sum to the acquisition cost to the öre (was ±1 kr): the asset row's cost becomes the components' sum, so a tolerated krona would move the register away from the 12x0 balance in the ledger.

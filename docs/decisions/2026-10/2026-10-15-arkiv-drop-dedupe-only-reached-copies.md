@@ -1,1 +1,0 @@
-[2026-10-15] The Arkiv drop keeps a content hit only when that copy reached a verifikat or an inbox item; otherwise it stores the upload as before: Arkiv never queues a receipt typed over a day after it arrived, so answering with that copy would leave the receipt nowhere.

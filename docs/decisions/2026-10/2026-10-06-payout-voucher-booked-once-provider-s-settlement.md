@@ -1,1 +1,0 @@
-[2026-10-06] The payout voucher is booked only once the provider's settlement PDF is archived (it is the voucher's underlag); a settlement whose PDF the provider has not written yet stays received and is tried again, rather than booked without underlag.

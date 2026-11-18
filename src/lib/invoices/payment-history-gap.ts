@@ -19,7 +19,7 @@ const log = createLogger('invoices/payment-history-gap')
  *    exists here either; the payment lives in the previous system's books.
  *  - a "Markera som betald" from before the sub-ledger existed (#2019) left
  *    a posted invoice_paid / invoice_cash_payment voucher with no row. The
- *    2026-10-12 backfill repaired every one in prod; a new one fails the
+ *    2026-10-12 backfill repaired every one in production; a new one fails the
  *    weekly invariant check (lib/invoices/payment-row-invariant.ts) and
  *    still has the voucher to show here.
  *

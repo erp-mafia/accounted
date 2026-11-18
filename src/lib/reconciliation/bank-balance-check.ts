@@ -6,9 +6,9 @@
  * Why it exists next to the bridge: the bridge judges an account by its
  * movements inside a window, without the opening balance and without ignored
  * rows. A balance that never reached the books, or a real payment that was
- * ignored, therefore never shows there. Prod 2026-10-26: 993 of 1,479 bank
- * accounts differed from the bank's own balance, 160 of them only by the
- * opening balance or ignored rows, while their movements agreed.
+ * ignored, therefore never shows there. Measured 2026-10-26, two in three bank
+ * accounts differed from the bank's own balance, one in six of those only by
+ * the opening balance or ignored rows, while their movements agreed.
  *
  * The difference is split into what the user can act on:
  *   - unbooked: bank rows through that day with no verifikat

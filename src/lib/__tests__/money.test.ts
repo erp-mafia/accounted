@@ -89,7 +89,7 @@ describe('roundOre', () => {
     // Negative exact halves round toward positive infinity: Math.round's own
     // asymmetry, kept deliberately. -1.005 → -1.00, not -1.01. Symmetric
     // away-from-zero rounding would move credit notes and reversals one öre
-    // relative to the invoices they cancel, so it is a founder decision, not a
+    // relative to the invoices they cancel, so it is a product decision, not a
     // refactor. Pinned here so it cannot flip silently.
     expect(roundOre(-1.005)).toBe(-1)
     expect(roundOre(-10.075)).toBe(-10.07)

@@ -142,7 +142,7 @@ export type WithdrawOutcome =
  * deadlines it put in the calendar, and its facts, which are deprecated with
  * the reason rather than deleted. When the new type is the same kind of
  * agreement, nothing is withdrawn: the re-extraction refreshes the record in
- * place. Prod 2026-09-21: a subscription invoice typed as an agreement left an
+ * place. Seen 2026-09-21: a subscription invoice typed as an agreement left an
  * agreement, two obligations, a deadline and seven facts behind after retype.
  */
 export async function withdrawDerivedAgreement(supabase: SupabaseClient, documentId: string, newDocType: string, reason: string): Promise<WithdrawOutcome> {

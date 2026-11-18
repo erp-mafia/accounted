@@ -1,1 +1,0 @@
-[2026-10-30] A worklist count whose column or table is not migrated yet (42703/PGRST204/42P01/PGRST205) logs a warning and answers zero in logAndZero, not a per-reader fallback: one path covers every count, and a fallback for an applied migration is dead code.

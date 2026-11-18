@@ -372,8 +372,8 @@ describe('get_kpi_report_aggregates RPC', () => {
     // 20260730090000. Previously this month reported expenses 1250 (8910 debit
     // 1000 from the posted year_end entry plus the correction's 6200 debit
     // 250). Including them meant the resultatavslut charted the whole year's
-    // revenue as NEGATIVE income in the fiscal-year-end month: measured on
-    // production as 28 companies, worst case -10 347 459,81 kr in one month.
+    // revenue as NEGATIVE income in the fiscal-year-end month: measured in
+    // real ledgers, worst case millions in one month.
     // This fixture's December holds ONLY year-end-chain entries, so the month
     // disappears from the chart entirely, which is the correct operational
     // view: a month whose only activity is bokslut has no operating result.

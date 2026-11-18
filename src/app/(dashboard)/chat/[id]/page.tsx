@@ -31,7 +31,7 @@ export default async function ChatConversationPage({ params }: PageProps) {
   leaveWhenChatSwitchedOff()
 
   // Both queries key on the route id, so they run in parallel. The tenant
-  // check on the conversation row still gates rendering — when it fails,
+  // check on the conversation row still gates rendering - when it fails,
   // notFound() throws and the messages result is discarded unrendered.
   const [{ data: conversation }, { data: messages }, staged] = await Promise.all([
     supabase

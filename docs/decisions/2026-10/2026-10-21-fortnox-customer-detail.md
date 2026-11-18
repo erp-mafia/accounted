@@ -1,1 +1,0 @@
-[2026-10-21] Fortnox customers are read from their detail form (hydrateCustomers) because the list form leaves out TermsOfPayment; a customer whose detail fails still imports from its list form, unlike an invoice: a card with default terms beats a bare stub (crm#1245).

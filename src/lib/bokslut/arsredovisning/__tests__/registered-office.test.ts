@@ -13,7 +13,7 @@ describe('resolveRegisteredOffice', () => {
     })
   })
 
-  it('falls back to the postal town, flagged, while the säte is unknown (founder default)', () => {
+  it('falls back to the postal town, flagged, while the säte is unknown (default)', () => {
     expect(REGISTERED_OFFICE_FALLS_BACK_TO_CITY).toBe(true)
     expect(resolveRegisteredOffice({ registered_office: null, city: 'Postorten' })).toEqual({
       value: 'Postorten',

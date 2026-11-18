@@ -438,7 +438,7 @@ describe('GET /status: latest underlag run (crm#1410)', () => {
       needsReconnect: false,
     }
     const fortnoxConsent = (createdAt: string) => ({
-      id: 'consent-1', provider: 'fortnox', status: 1, companyName: 'Hreidur AB', createdAt,
+      id: 'consent-1', provider: 'fortnox', status: 1, companyName: 'Exempelbolaget AB', createdAt,
     })
 
     // A connection makes the route read the key's use too; it says nothing here.

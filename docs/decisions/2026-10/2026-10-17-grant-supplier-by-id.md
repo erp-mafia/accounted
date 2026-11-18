@@ -1,1 +1,0 @@
-[2026-10-17] A supplier-invoice grant is keyed by supplier id (supplier:<id>), never a name or bank text, and pins every line as account and VAT rate plus the verifikat's accounts: a new supplier, account or rate waits for a person.

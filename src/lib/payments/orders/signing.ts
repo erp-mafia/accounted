@@ -914,7 +914,7 @@ export async function startPaymentSigning(
   // TPP_KYC_INVALID). The verification is the company's, so it is asked for
   // in the corporate context only; whether a private-context payment (an
   // enskild firma on the owner's agreement) needs one is the provider's open
-  // question (DECISIONS.md 2026-10-12), and until it is answered such a
+  // question, and until it is answered such a
   // payment is tried, and the bank's own TPP_KYC_INVALID is shown if it comes.
   const plan = await planSigning(provider, built.ctx, ids.length, input.method)
   if (!plan.ok) return plan.outcome

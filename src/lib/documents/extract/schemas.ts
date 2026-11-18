@@ -2,7 +2,7 @@ import type { DocType } from '@/lib/documents/classify/taxonomy'
 import { DUE_DATE_RULE } from '@/lib/documents/due-date-labels'
 
 /**
- * Extraction schemas, version 1 (dev_docs/arkiv_plan.md, phases 3 and 6).
+ * Extraction schemas, version 1.
  * One schema per document type, a small generic one for `other`.
  * Every field is grounded: the model returns the value, the page it read it
  * from and a short verbatim quote; the reading layer's word boxes turn the

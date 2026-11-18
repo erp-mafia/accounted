@@ -2633,7 +2633,7 @@ export const CreateDimensionValueSchema = z
  * the request. An empty bag {} untags the line.
  */
 /**
- * POST /api/dimensions — create a custom dimension (dimensions PR10).
+ * POST /api/dimensions - create a custom dimension (dimensions PR10).
  * sie_dim_no omitted → server picks the next free number >= 20 (SIE leaves
  * 20+ unreserved). parent_sie_dim_no declares an #UNDERDIM hierarchy.
  */
@@ -2648,13 +2648,13 @@ const AccountDimensionRuleTypeSchema = z
   .enum(DIMENSION_RULE_TYPES)
   .describe('required: no posting on the account without a value; default: pre-filled when a line has none; fixed: always applied.')
 
-/** GET /api/dimensions/rules query — optional exact-account filter. */
+/** GET /api/dimensions/rules query - optional exact-account filter. */
 export const ListDimensionRulesQuerySchema = z.object({
   account_number: accountNumber.optional().describe('Only the rules of this account.'),
 })
 
 /**
- * POST /api/dimensions/rules — per-account dimension policy (dimensions
+ * POST /api/dimensions/rules - per-account dimension policy (dimensions
  * PR10). 'required' carries no value; 'default'/'fixed' must carry the value
  * to apply (ruleValueProblem, lib/dimensions/rule-value.ts). One rule per
  * (account, dimension): enforced by the DB UNIQUE. Also the input of the
@@ -3280,7 +3280,7 @@ export const BulkBookSchema = z
       .array(
         z.object({
           account_number: accountNumber,
-          // Bound at 99,999,999 SEK per line (compliance-swarm V4.5).
+          // Bound at 99,999,999 SEK per line.
           // Real-world max is in the millions; an 8-digit ceiling catches
           // typos (1000000 mistyped as 10000000000) before they hit the
           // RPC, without blocking legitimate large bookings.
@@ -4616,7 +4616,7 @@ export const PendingOperationsBulkRejectSchema = z.object({
 // Audit trail schemas
 // ============================================================
 
-// `satisfies` keeps every filter value a member of the AuditAction union —
+// `satisfies` keeps every filter value a member of the AuditAction union:
 // adding a bogus value here fails the typecheck.
 const auditActions = [
   'INSERT', 'UPDATE', 'DELETE', 'COMMIT', 'REVERSE', 'CORRECT',
@@ -5702,7 +5702,7 @@ export const CreateSalaryRunSchema = z.object({
   deviation_period_end: isoDate.optional(),
 })
 
-// One-click variant for the dashboard route: all fields optional — the route
+// One-click variant for the dashboard route: all fields optional - the route
 // resolves defaults server-side (period = month after the latest
 // non-corrected run, payment date from company_settings.salary_pay_day,
 // series from the per-source-type map), so "Starta lönekörning" can POST {}.

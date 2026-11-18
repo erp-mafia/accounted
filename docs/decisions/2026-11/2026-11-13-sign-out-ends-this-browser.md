@@ -1,1 +1,0 @@
-[2026-11-13] Every sign-out button ends this browser's session only (GoTrue logout scope local); Säkerhet's "Logga ut från alla enheter" ends every session after a confirm: the global default signed users out on their other devices, up to 51 users in two weeks. Founder decision.

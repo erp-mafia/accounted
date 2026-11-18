@@ -18,7 +18,7 @@ export interface CompanyUsageLine extends UsageLine {
   included_once: number | null
   /** Whether the kind stops at the included amount and more can be asked for: it is billed, priced and gated. */
   offered: boolean
-  /** Whether a founder opened the charge for the company at today's price (consent.ts). */
+  /** Whether an operator opened the charge for the company at today's price (consent.ts). */
   accepted: boolean
   accepted_at: string | null
   /** Whether units above the included amount are billed: offered, open, and someone pays (paying.ts). */

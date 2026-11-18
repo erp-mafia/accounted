@@ -347,7 +347,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
 // default_dimensions must stay in this projection: the inserted row is passed
 // straight to createSupplierInvoiceRegistrationEntry, which reads the bag off
-// the row — dropping the column here silently untags the registration JE.
+// the row - dropping the column here silently untags the registration JE.
 const SI_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, is_self_billed, self_billing_number, self_billing_agreement_ref, document_id, registration_journal_entry_id, payment_journal_entry_id, notes, default_dimensions, created_at, updated_at'
 

@@ -1,1 +1,0 @@
-[2026-10-27] The fond för utvecklingsutgifter is released only by the year's depreciation, write-down or disposal of assets marked own development (ÅRL 4 kap. 8 §); a fund larger than that is kept with a warning, and an unmarked 101x asset holds every proposal back.

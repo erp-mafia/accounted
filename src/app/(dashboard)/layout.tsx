@@ -260,7 +260,7 @@ export default async function DashboardLayout({
   // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
   // account after archiving their last company) and byrå team members (any
-  // role, founder call 2026-08-05), whose home is the EMPTY cockpit (mirrors
+  // role, product call 2026-08-05), whose home is the EMPTY cockpit (mirrors
   // the middleware's byrå exception): they render the no-company shell on
   // cockpit routes and are steered to /byra everywhere else, never to the
   // company wizard.

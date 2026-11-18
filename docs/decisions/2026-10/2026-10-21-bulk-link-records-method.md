@@ -1,1 +1,0 @@
-[2026-10-21] The bulk link to a posted verifikat records reconciliation_method 'manual' on every linked row, also the junction-only rows of a multi-row link (which recorded none and so could not be unlinked), except a row put back on the verifikat booked from it, the same rule as writeBankLink in PH 194; the 78 legacy rows get a one-shot repair after deploy, not a migration.

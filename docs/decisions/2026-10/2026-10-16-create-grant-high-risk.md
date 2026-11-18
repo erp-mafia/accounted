@@ -1,1 +1,0 @@
-[2026-10-16] create_grant is risk high and web-only: never in a bulk approval, and only an owner or admin approving in the app accepts it, with a confirmation. revoke_grant only takes authority away and is low, open to any approver.

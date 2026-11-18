@@ -21,7 +21,7 @@ import { cardTokensIn, normaliseCardLast4 } from './card-token'
 export const STATEMENT_ROWS_PER_CARD = 20
 /**
  * Card numbers checked per read, the first ones given (a list passes its
- * newest items first); any past them counts as unknown. Prod 2026-10-30:
+ * newest items first); any past them counts as unknown. Seen 2026-10-30:
  * a company's inbox names 2 distinct card numbers at the median, 13 at p99.
  */
 export const MAX_CARDS_CHECKED = 20

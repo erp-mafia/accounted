@@ -4,7 +4,7 @@
  * function/RPC, RLS policy, or DEFERRABLE constraint must also add or extend
  * a *.pg.test.ts.
  *
- * This enforces the rule documented in .claude/rules/database.md ("pg-real
+ * This enforces the rule in CLAUDE.md's Definition of Done ("pg-real
  * tests: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend
  * a *.pg.test.ts"): previously instruction-only, which means it got skipped.
  *
@@ -52,7 +52,7 @@ const migrations = changed.filter(
 )
 const pgTests = changed.filter((f) => f.endsWith('.pg.test.ts'))
 
-// DDL that the database.md rule classifies as requiring real-Postgres coverage.
+// DDL that the pg-real rule classifies as requiring real-Postgres coverage.
 const RISKY_DDL = [
   { kind: 'trigger', re: /\bCREATE\s+(OR\s+REPLACE\s+)?(CONSTRAINT\s+)?TRIGGER\b/i },
   { kind: 'function/RPC', re: /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b/i },
@@ -99,7 +99,7 @@ for (const { file, kinds } of flagged) {
   console.error(`  ${file}  (${kinds.join(', ')})`)
 }
 console.error(`
-The repo rule (.claude/rules/database.md) requires real-Postgres coverage for
+The repo rule (CLAUDE.md, Definition of Done) requires real-Postgres coverage for
 these objects: mocked Supabase tests cannot exercise them.
 
 Fix one of:

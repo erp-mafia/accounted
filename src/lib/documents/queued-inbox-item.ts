@@ -9,7 +9,7 @@
  * Arkiv classified inside the door's reading window got Arkiv's item first and
  * then the door's own: two items for one document, the copy without the door's
  * reading and stamp ("partner_api" for an MCP upload) left in Behöver dig
- * after the other was booked (prod 2026-09-25..10-25: 35 such twins).
+ * after the other was booked (seen 2026-09-25..10-25: 35 such twins).
  *
  * The door therefore looks before it files: an item already on its document
  * is taken over, the door writing what it knows on it (its reading, its door

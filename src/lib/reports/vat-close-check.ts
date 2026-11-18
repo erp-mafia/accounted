@@ -1362,7 +1362,7 @@ export async function computeVatCloseCheck(
       (check.code === 'RC_INPUT_VAT_MISMATCH' && noInputVatAtAll) ||
       // Kontantmetoden's year-end cut-off not booked (or not checkable):
       // filed now, the moms on invoices unpaid at balansdagen is missing from
-      // this period. A WARNING to the filing gate (founder decision
+      // this period. A WARNING to the filing gate (product decision
       // 2026-10-03), but the close is not ready, which the unattested-invoice
       // count used to say at the year end (agent feedback seq 878478, #88).
       check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'

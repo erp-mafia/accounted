@@ -27,7 +27,7 @@ const IMPORT_ROW = {
   user_id: 'user-1',
   execution_actor_id: null,
   fiscal_period_id: 'fp-1',
-  filename: 'lookmaab-201907-202006.se',
+  filename: 'exempelab-201907-202006.se',
   fiscal_year_start: '2019-07-01',
   fiscal_year_end: '2020-06-30',
 }
@@ -73,7 +73,7 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
     expect(result.operation_id).toBe('op-undo-1')
     expect(result.preview).toMatchObject({
       import_id: IMPORT_ID,
-      filename: 'lookmaab-201907-202006.se',
+      filename: 'exempelab-201907-202006.se',
       fiscal_year: '2019-07-01 till 2020-06-30',
       voucher_count: 109,
       reason: 'Importen skapade fel verifikat',
@@ -81,7 +81,7 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
     expect(result.next).toMatchObject({ tool: 'gnubok_sie_import_status' })
     expect(findCalls('pending_operations', 'insert')[0]?.[0]).toMatchObject({
       operation_type: 'undo_sie_import',
-      title: 'Ångra SIE-import: lookmaab-201907-202006.se',
+      title: 'Ångra SIE-import: exempelab-201907-202006.se',
     })
   })
 

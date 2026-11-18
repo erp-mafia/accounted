@@ -44,8 +44,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
     key: 'terms',
     path: '/terms',
     updatedAt: '2026-11-04',
-    // Terms v2 (founder decisions 2026-11-02/03: no notice e-mail, no counsel
-    // review). It binds the customers who sign up from acceptanceVersion (its
+    // Terms v2. It binds the customers who sign up from acceptanceVersion (its
     // 14.4; the signup records it in legal_acceptances). Customers who signed
     // up before stay on the previous wording below until a notice under 14.1
     // moves them. Both dates are the day it went live.
@@ -62,8 +61,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
     key: 'dpa',
     path: '/dpa',
     // Point 13 now matches terms v2 9.3 (18 months of export, then sealed and
-    // released on written request). The acceptance version stays (founder
-    // decision 2026-11-03): the customer still reaches the records for the
+    // released on written request). The acceptance version stays: the customer still reaches the records for the
     // whole archiving period, so nothing is taken away.
     updatedAt: '2026-11-04',
     acceptanceVersion: '2026-10-21',

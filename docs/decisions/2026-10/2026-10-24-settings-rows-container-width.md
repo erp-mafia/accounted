@@ -1,1 +1,0 @@
-[2026-10-24] Settings rows go two-column on their own width (container query, 640px), not the md viewport breakpoint, and a bank row shows one button with the rest behind its menu: beside the nav, rail and a docked assistant the 400px control column overlapped labels and clipped buttons.

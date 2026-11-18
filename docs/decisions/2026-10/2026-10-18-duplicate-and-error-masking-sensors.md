@@ -1,1 +1,0 @@
-[2026-10-18] check:guards gains duplicate-block (10 meaningful lines, ratchet per file pair on shared lines; window 8 gave 890 blocks of mostly route and JSX idioms, 12 missed copied contract types) and error-masking (per file), in plain Node with no new dependency (jscpd not approved): GitClear 2026 duplicated blocks +81%, error masking +47%.

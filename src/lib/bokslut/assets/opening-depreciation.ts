@@ -50,7 +50,7 @@ export interface OpeningDepreciationIssue {
  *   after today and not before the acquisition date.
  * - With K3 components the amount is the components' total: their
  *   depreciable bases cap it, and the asset service splits it over them
- *   unless each component states its own (K3 17.4; founder decision of
+ *   unless each component states its own (K3 17.4; product decision of
  *   2026-09-23 reversed by the K3 plan, decision 4 of 2026-10-26).
  */
 export function validateOpeningDepreciation(

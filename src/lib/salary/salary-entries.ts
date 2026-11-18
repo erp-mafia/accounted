@@ -753,8 +753,8 @@ function buildSalaryLines(
     // avgiftsunderlag (so they reach 2710 and the avgifter entry) but are no
     // cost or payment, so they get no line of their own; the employer's real
     // cost of the benefit (leasing, the meals) is booked from its invoice
-    // (swedish-payroll: förmånsvärde to the AGI, avgifter on it; crm#1354,
-    // docs/decisions/2026-10). Every benefit type, from the one list
+    // (swedish-payroll: förmånsvärde to the AGI, avgifter on it; crm#1354).
+    // Every benefit type, from the one list
     // (benefit-payments.ts BENEFIT_ITEM_TYPES), whether the row was derived
     // from the employee or entered on the payslip.
     let lineItemTotal = 0

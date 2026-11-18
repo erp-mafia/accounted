@@ -1,1 +1,0 @@
-[2026-10-29] A party used only by private-person customer cards holds no org number and is kind person, and its audit row records that a number was set, never the value: a personnummer must not stay in plain text on parties or be copied into the append-only audit log.

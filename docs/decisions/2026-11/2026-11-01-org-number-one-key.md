@@ -1,1 +1,0 @@
-[2026-11-01] orgNumberKey is the only reducer (org_number_key in SQL); 12 digits without a 16, 18, 19 or 20 are no number. Bank files take the key at the reader, so old batches regenerate as they were. SKV574008's header and 0007 Peppol ids stay: no skill settles one, one mirrors the connector.

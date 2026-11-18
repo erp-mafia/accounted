@@ -201,7 +201,7 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).toContain('Did you mean: "as_of" -> "as_of_date"?')
   })
 
-  // Replays the 31 trial balance calls of 2026-10-30..11-12 (24 companies)
+  // Replays the 31 trial balance calls of 2026-10-30..11-12
   // that sent dates or an account range: the parameter list alone did not
   // say that the question belongs to the general ledger.
   it.each([
@@ -221,7 +221,7 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).not.toContain('gnubok_get_general_ledger')
   })
 
-  // Replays `measure` (33 calls, 18 companies, 2026-10-30..11-12): the call
+  // Replays `measure` (33 calls, 2026-10-30..11-12): the call
   // runs as measure_id instead of being refused.
   it('get_measure reads measure as measure_id and runs', async () => {
     const response = await handleMcpRequest(mcpToolCall('gnubok_get_measure', { measure: 'bank_balance' }))

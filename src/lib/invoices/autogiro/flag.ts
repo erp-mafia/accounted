@@ -1,6 +1,6 @@
 /**
  * Autogiro rolls out per company: it moves customers' money, so it opens to
- * the pilot first and to everyone once real debits have run (founder rule:
+ * the pilot first and to everyone once real debits have run (rule:
  * no date to anyone until one real debit has gone through).
  *
  * AUTOGIRO_COMPANY_IDS lists the companies (comma-separated ids, or `*` for

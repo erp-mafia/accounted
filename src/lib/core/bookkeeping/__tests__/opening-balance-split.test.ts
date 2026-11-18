@@ -129,7 +129,7 @@ describe('buildOpeningBalanceLines', () => {
     expect(netByAccount(lines)).toEqual({ '1930': 0 })
   })
 
-  describe('VAT accounts (26xx) are never split per project (founder decision 2026-10-01)', () => {
+  describe('VAT accounts (26xx) are never split per project (product decision 2026-10-01)', () => {
     // A project invoice: 1510 debit 1250 and 2611 credit 250 tagged P1/P2,
     // the VAT settled untagged (2611 debit, 2650 credit), so the per-project
     // 2611 parts net against an untagged settlement on the same account.

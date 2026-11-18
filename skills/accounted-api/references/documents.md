@@ -1319,7 +1319,7 @@ Request body:
 Example request:
 ```json
 {
-  "journal_entry_id": "dcccb3c5-b44a-4536-82fa-f0b9bb77f900"
+  "journal_entry_id": "0d1d0000-0000-4000-8000-000000000004"
 }
 ```
 
@@ -1344,7 +1344,7 @@ Example response `200`:
 {
   "data": {
     "id": "4d2fcdbb-13b3-4ff3-911f-a4cc82f1f6db",
-    "created_journal_entry_id": "dcccb3c5-b44a-4536-82fa-f0b9bb77f900"
+    "created_journal_entry_id": "0d1d0000-0000-4000-8000-000000000004"
   },
   "meta": {
     "request_id": "req_…",

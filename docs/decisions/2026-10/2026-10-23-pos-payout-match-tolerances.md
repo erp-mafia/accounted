@@ -1,1 +1,0 @@
-[2026-10-23] Till payout matching: Swish to the öre against one receipt paid 0-5 days before the row; card 98-101 % of one to three open days paid 1-5 days later, or 98-100.5 % of the open card balance for the catch-up payouts, unnamed rows only. Set from three weeks of one venue's bank rows.

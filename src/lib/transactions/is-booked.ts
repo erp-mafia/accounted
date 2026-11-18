@@ -251,7 +251,7 @@ async function readPostedAnchors(
  * (source_type, source_id) index. The other half, a verifikat whose
  * bank_booking_context names the row, is not read here: as the caller (row
  * level security) its GIN index cannot be used, and the probe read about
- * 116,000 pages, 4.5 s, per row in the largest company on 2026-11-09 (see
+ * 116,000 pages, 4.5 s, per row in a large company (see
  * 20261107213000), against 0.06 ms for the source half. A probe that runs as
  * its owner is #205.
  */

@@ -9,7 +9,7 @@ import type { GraphEdge, GraphFamily } from '@/lib/context-graph/types'
 
 /**
  * The stage of the context graph: the dots, the lines between them and the
- * hands-on part (founder brief 2026-11-14: "like Obsidian's clean graph",
+ * hands-on part (brief 2026-11-14: "like Obsidian's clean graph",
  * "more living", "add dragging and zooming").
  *
  * - It unfolds from the middle when it opens, then every dot sways a few
@@ -29,8 +29,8 @@ import type { GraphEdge, GraphFamily } from '@/lib/context-graph/types'
  * screen, and under prefers-reduced-motion (then the picture is still, and
  * dragging and zooming still work).
  *
- * The sway is the one decorative motion on the page, asked for by the
- * founder for this picture; it is not a pattern for other surfaces.
+ * The sway is the one decorative motion on the page, asked for
+ * for this picture; it is not a pattern for other surfaces.
  */
 
 export interface StageNode {

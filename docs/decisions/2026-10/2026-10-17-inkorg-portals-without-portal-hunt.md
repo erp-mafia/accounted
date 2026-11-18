@@ -1,1 +1,0 @@
-[2026-10-17] The Inkorg rail lists portals from the portal directory and leaves out Hitta portaler i mejlen: Kvittojakten fetches missing underlag and finds no portals, so the row waits for a Portaljakten skill that proposes per-company portal recipes.

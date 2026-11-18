@@ -11,8 +11,8 @@
  *      doors that book a receipt without a bank row propose alike;
  *   2. previous_claim: the account the company's latest utlägg for the same
  *      merchant was booked on. Utlägg teach no template (the credit side is
- *      the person, not a bank). In prod 2026-10-26, 69 of the 73 utlägg in
- *      60 days for a merchant claimed before were booked on the account of
+ *      the person, not a bank). Measured 2026-10-26, nearly every utlägg
+ *      for a merchant claimed before was booked on the account of
  *      the time before, picked by hand each time.
  *
  * Both sources hold cost accounts only: templateCostAccount keeps an expense

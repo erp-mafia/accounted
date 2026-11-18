@@ -1,1 +1,0 @@
-[2026-10-23] The representation description migration also replaces 7632's old seed text (its bare name) so the 7631/7632 pair reads alike, changes renamed accounts whose description is still the untouched seed text but never their names, and updates archived companies' charts too, skipping only migration-reset sources (accounted#92).

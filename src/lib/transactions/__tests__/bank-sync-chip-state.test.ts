@@ -210,7 +210,7 @@ describe('getChipState', () => {
   })
 
   it('reads paused when the company lacks the bank_sync entitlement', () => {
-    // 56 of 191 active connections on prod sat in this state on 2026-09-01:
+    // A large share of active connections can sit in this state:
     // the cron skips them, so they are neither dead nor merely stale.
     const state = getChipState([row({ last_synced_at: at(-20 * DAY_MS) })], {
       now: NOW,

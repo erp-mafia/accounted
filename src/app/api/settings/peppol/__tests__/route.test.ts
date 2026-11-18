@@ -27,7 +27,7 @@ const user = { id: 'user-1', email: 'owner@example.test' }
 const enabledAccess = {
   company_id: 'company-1', status: 'enabled', max_sends: 50, receive_enabled: true,
   requested_at: null, requested_by: null, request_note: null,
-  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'anna', disabled_at: null, note: null,
   created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
 }
 const companySettings = { org_number: '559538-6219', company_name: 'Arcim Technology AB', vat_number: 'SE559538621901', city: 'Stockholm', country: 'SE' }

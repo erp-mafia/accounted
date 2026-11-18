@@ -26,7 +26,7 @@ const log = createLogger('enable-banking/session-sharing')
  * and sync its own accounts from it, with no second BankID and nothing revoked.
  *
  * What is shared is exactly the consent: `session_id` and `consent_expires`.
- * Everything else stays per-company — its own bank_connections row, its own
+ * Everything else stays per-company - its own bank_connections row, its own
  * accounts_data subset, its own cash_accounts and transactions. Company B's
  * row never carries an account company A already claimed, so the shared
  * session is not a window into another company's books.
@@ -384,8 +384,8 @@ export async function fetchCrossCompanyAccountContext(
   // accounts with no cash_accounts rows until its picker is saved, and
   // ignoring that window lets a second company take the same physical
   // account (the exact failure fetchIbanCarriers documents). Their DISABLED
-  // flags are unconfirmed callback output though — including this guard's
-  // own fail-closed writes — so they never feed the deselection memory:
+  // flags are unconfirmed callback output though - including this guard's
+  // own fail-closed writes - so they never feed the deselection memory:
   // one abandoned picker or transient lookup error must not poison every
   // later connect.
   let connectionRows: Array<{
@@ -403,7 +403,7 @@ export async function fetchCrossCompanyAccountContext(
         .neq('id', excludeConnectionId)
         .in('status', ['active', 'pending_selection', 'expired', 'error'])
         // Unique-column order: fetchAllRows pages with .range(), and an
-        // unordered paged read can silently SKIP rows at page boundaries —
+        // unordered paged read can silently SKIP rows at page boundaries:
         // a skipped row here is a missed claim, which fails open.
         .order('id')
         .range(range.from, range.to),

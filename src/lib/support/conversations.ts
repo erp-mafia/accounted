@@ -5,7 +5,7 @@ import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
  * PostHog Support (Conversations) as the in-app support channel.
  *
  * The person is verified with the identity hash set in AnalyticsIdentify, so a
- * ticket follows the user across devices and the founders answer in PostHog's
+ * ticket follows the user across devices and the operators answer in PostHog's
  * inbox. This module is the only place the SDK's conversation methods are
  * called from; everything here returns null or [] instead of throwing, because
  * the dialog must degrade to the email form, never to an error screen.
@@ -78,7 +78,7 @@ export function toSummary(t: RawTicket): TicketSummary {
   }
 }
 
-/** Private notes are the founders' own; they never reach the customer view. */
+/** Private notes are the operators' own; they never reach the customer view. */
 export function toThreadMessage(m: RawMessage): ThreadMessage | null {
   if (m.is_private) return null
   return {

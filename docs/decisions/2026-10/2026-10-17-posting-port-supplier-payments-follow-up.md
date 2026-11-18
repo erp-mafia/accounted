@@ -1,1 +1,0 @@
-[2026-10-17] Step 2d moves registration, deferred booking, inbox conversion and crediting only; supplier payments (mark-paid, bank match, voucher matching) and the inbox book-direct follow in their own merge request, each with a fixture taken first, as the brief allowed.

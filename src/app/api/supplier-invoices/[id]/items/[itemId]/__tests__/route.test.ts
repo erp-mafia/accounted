@@ -27,13 +27,13 @@ describe('planAccountMove', () => {
 
   it('splits an aggregate line so the old account keeps the rest', () => {
     const plan = planAccountMove(
-      [{ id: 'l1', account_number: '6580', debit_amount: 30548, credit_amount: 0, line_description: 'RosholmDell' }],
+      [{ id: 'l1', account_number: '6580', debit_amount: 30548, credit_amount: 0, line_description: 'Nordljus' }],
       '6580', '6550', 43640, 'Juridiskt biträde',
     )
     expect(plan).toEqual({
       strike: ['l1'],
       add: [
-        { account_number: '6580', debit_amount: 0, credit_amount: 13092, line_description: 'RosholmDell' },
+        { account_number: '6580', debit_amount: 0, credit_amount: 13092, line_description: 'Nordljus' },
         { account_number: '6550', debit_amount: 43640, credit_amount: 0, line_description: 'Juridiskt biträde' },
       ],
     })

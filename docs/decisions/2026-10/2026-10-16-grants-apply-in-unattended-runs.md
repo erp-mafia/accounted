@@ -1,1 +1,0 @@
-[2026-10-16] Grants also apply in an MCP run marked unattended: the mark stops the agent approving anything, while a grant is the owner's approval given in advance for one exact pattern; the key's unattended ceiling still caps it.

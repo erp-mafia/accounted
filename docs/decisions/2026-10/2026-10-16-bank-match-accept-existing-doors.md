@@ -1,1 +1,0 @@
-[2026-10-16] Accepting a bank match stops at existing doors: a receipt books through book-direct with the proposed row (links keep the rule as evidence); a supplier invoice is convert, then match-supplier-invoice. One step for both needs a new staged operation and a call on partial failure.

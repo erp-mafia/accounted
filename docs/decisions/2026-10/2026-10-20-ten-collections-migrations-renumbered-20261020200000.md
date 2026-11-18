@@ -1,1 +1,0 @@
-[2026-10-20] The ten collections migrations move to 20261020200000..20261020200900, above main's and production's newest (20261020083701). Main restated none of their objects since; the op type CHECK stays catalog-expanded, the source type CHECK and series default literal. (Renumbered 2026-10-21 to 20261021120000..20261021120900, see that entry.)

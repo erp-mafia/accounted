@@ -6,7 +6,7 @@
  * on the platform's default address: the recipient sees whose document it
  * is, the From domain stays ours (DMARC-clean), the way Scrive and DocuSign
  * send. A company with a brand keeps the WL-13 identity of
- * ./brand-sender.ts unchanged (founder call: no "via" for brands). Only the
+ * ./brand-sender.ts unchanged (product call: no "via" for brands). Only the
  * signing mails use this; every other mail keeps getSenderForCompany as is.
  */
 import { getBranding } from '@/lib/branding/service'

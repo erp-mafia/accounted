@@ -1,1 +1,0 @@
-[2026-10-16] A company's package switch is the company_capability_config key package:<id>: the table is free text and already the enablement axis, so step 1 needs no migration, and the prefix keeps switches apart from capability keys, whose old disables stay module-level.

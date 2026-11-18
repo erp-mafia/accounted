@@ -59,7 +59,7 @@ export default async function OnboardingLayout({
     <div className="min-h-dvh bg-background flex items-center justify-center">
       {user && <SessionTimeoutController />}
       {/* Analytics runs for a signed-in person unless they switched it off,
-          the dashboard's rule (founder decision 2026-10-22), so the company
+          the dashboard's rule (product decision 2026-10-22), so the company
           journey is measured too. No company to group by here yet. */}
       {user && acceptance && (
         <AnalyticsIdentify

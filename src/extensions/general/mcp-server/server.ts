@@ -7255,7 +7255,7 @@ export const tools: McpTool[] = [
       const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : ''
       // No host enforces `required`: a call without connection_id (or with a
       // name where the id belongs) reached the database and came back as
-      // invalid input syntax for type uuid: "" (12 calls, 10 companies in 14
+      // invalid input syntax for type uuid: "" (12 calls in 14
       // days). Refused here with where the id comes from.
       if (!isUuid(connectionId)) {
         throw codedRefusal(
@@ -8592,7 +8592,7 @@ export const tools: McpTool[] = [
             }
             // Account dimension rules (PR10): tell the agent up front which
             // accounts refuse postings without a value (required) and which
-            // auto-apply one (default/fixed) — so gnubok_create_voucher calls
+            // auto-apply one (default/fixed) - so gnubok_create_voucher calls
             // self-correct instead of bouncing off MANDATORY_DIMENSION_MISSING.
             const requiredByDimension = new Map<string, string[]>()
             const defaultByDimension = new Map<string, string[]>()
@@ -9685,7 +9685,7 @@ export const tools: McpTool[] = [
           date: tx.date,
           // Exact journal lines the approval will post (net cost line, VAT
           // line, gross bank line, SEK). The summary fields above pair the
-          // GROSS amount with the cost account — read alone they misled
+          // GROSS amount with the cost account - read alone they misled
           // users and agents into seeing an unbalanced entry.
           lines: result.lines ?? [],
           vat_lines: result.vat_lines || [],
@@ -13776,8 +13776,8 @@ export const tools: McpTool[] = [
         throw badArgument('search', 'search must be text: the start of an account number or part of an account name.')
       }
       const search = typeof rawSearch === 'string' ? rawSearch.trim().toLocaleLowerCase('sv-SE') : undefined
-      // A 379-account chart is 88 kB in full detail (Easy Online Stores,
-      // 2026-09-16): compact keeps what an agent needs to pick or check a
+      // A 379-account chart is 88 kB in full detail
+      // (reported 2026-09-16): compact keeps what an agent needs to pick or check a
       // konto, and limit/offset page the rest. Both are opt-in so every
       // existing caller sees the same rows as before, plus `total`.
       const compact = args.detail === 'compact'
@@ -19967,7 +19967,7 @@ export const tools: McpTool[] = [
         ...(note ? { complianceNote: note } : {}),
         // Two waiting already, this is the third: an agent working down a
         // list, each link its own approval (crm#1207: 131 of them). Said at
-        // the third and then every tenth, not on every call: in prod 65 % of
+        // the third and then every tenth, not on every call: in production 65 % of
         // single links were staged with two or more already waiting.
         ...(waitingVoucherLinks % 10 === 2
           ? {
@@ -20751,7 +20751,7 @@ export const tools: McpTool[] = [
         if (!data) {
           const period = `${periodYear}-${String(periodMonth).padStart(2, '0')}`
           // Say which runs do exist: agents looking for the latest run asked
-          // month by month backwards (78 misses, 35 companies in 14 days; 20
+          // month by month backwards (78 misses in 14 days; 20
           // were followed at once by the same call for another month).
           const { data: latest, error: latestError } = await supabase
             .from('salary_runs')
@@ -27029,7 +27029,7 @@ export const tools: McpTool[] = [
         }
         // A year closed with a bokslut is never unlocked (reopen or correct in
         // the open year); a locked period is, by its owner. The registry's
-        // text and remediation for each (founder decision 2026-11-08: the old
+        // text and remediation for each (product decision 2026-11-08: the old
         // sentence told the user to unlock a closed year). PERIOD_LOCKED is
         // what the lock trigger answers the same voucher at commit.
         const periodRefusal = period.is_closed ? 'TARGET_PERIOD_CLOSED' : period.locked_at ? 'PERIOD_LOCKED' : null
@@ -30631,7 +30631,7 @@ function emitSkillNotFound(payload: {
 /**
  * gnubok_load_skill for a slug no skill has. It was a plain Error, so the
  * agent read UNKNOWN_ERROR, "Något gick fel. Försök igen.", for a call no
- * retry fixes (18 calls, 15 companies in 30 days). NOT_FOUND with the closest
+ * retry fixes (18 calls in 30 days). NOT_FOUND with the closest
  * slugs first and the full list kept; an own/ draft says it waits for a
  * person to add it.
  */
@@ -31236,7 +31236,7 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
       const simpleCompanyMode = await resolveSimpleCompanyMode()
       // A connection made without Godkänn (pending_operations:approve) cannot
       // approve or reject: approve is never pre-ticked on the consent page
-      // (founder decision 2026-10-03, issue #3408), so this is the default
+      // (product decision 2026-10-03, issue #3408), so this is the default
       // one-click connection. Its instructions send the user to the review
       // list in the app instead of promising a chat approval the key cannot
       // do (tools/list already hides both tools). Anonymous traffic keeps the

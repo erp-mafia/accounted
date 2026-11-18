@@ -42,7 +42,7 @@ interface VoucherLinesTableProps {
   withCurrency?: boolean
   /**
    * Swedish heads in both locales, for the surfaces that stay Swedish
-   * (.claude/rules/i18n.md: the year-end wizard, the verifikat page).
+   * (the year-end wizard, the verifikat page).
    */
   swedish?: boolean
   'aria-label'?: string

@@ -102,7 +102,7 @@ function applyAuditFilters(
  * scan from an OR across two columns, so it walked
  * idx_audit_log_company_created_id from the company's newest row and
  * filtered every row before the cursor (187 ms and 200 000 buffers on page
- * 400 of the largest company). The redundant `created_at <= ts` is the
+ * 400 of a large company). The redundant `created_at <= ts` is the
  * bound it can start from (1.6 ms, 544 buffers); the .or() then only drops
  * the rows that share the cursor's timestamp.
  */

@@ -15,7 +15,7 @@ const log = createLogger('supplier-invoice-handler')
  * The forward direction (a freshly imported tx scanning existing invoices) lives
  * in lib/transactions/ingest.ts. This is the mirror: needed because a Bankgiro
  * payment is often imported BEFORE the invoice is registered, and nothing
- * re-matched it afterwards (the reported RosholmDell case). Reuses the same
+ * re-matched it afterwards (a reported case). Reuses the same
  * `findSupplierInvoiceMatch` scorer (one invoice, many txs) so the two
  * directions can never score differently.
  *

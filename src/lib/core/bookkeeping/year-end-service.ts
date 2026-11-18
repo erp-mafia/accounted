@@ -218,7 +218,7 @@ export async function validateYearEndReadiness(
     .single()
 
   // The blocker/warning strings below are Swedish: they render verbatim in the
-  // bokslut wizard (a "stays Swedish" surface per .claude/rules/i18n.md).
+  // bokslut wizard (a "stays Swedish" surface).
   // Blockers are routed on `code`, never on the wording, so rewording a
   // message is safe. Adding a NEW code is not: the MCP year_end_readiness tool
   // maps every YearEndBlockerCode to its public `kind`, so a new code needs a

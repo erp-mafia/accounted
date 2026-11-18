@@ -1,1 +1,0 @@
-[2026-10-30] A card number read off a receipt counts as the paying card only when it is a registered company card or a card the company's bank rows print; otherwise matching ignores it and the Inkorg shows it as read, never snapped to a near card (crm#1534).

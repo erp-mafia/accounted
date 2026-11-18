@@ -1,1 +1,0 @@
-[2026-10-22] The attest doors (dashboard, v1 approve, gnubok_approve_supplier_invoice, mail link) keep accepting a kontantmetod attest as optional internal control, not refused: nothing reads approved_at there for booking or payment, and agents committed 84 such attests in 7 companies (#88).

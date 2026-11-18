@@ -1,1 +1,0 @@
-[2026-10-20] Inkorg one click: a purchase paid at purchase (a receipt, an invoice its receipt says is paid, or a bank row at most 7 days after the invoice date) is ONE verifikat on the row's settlement account, no 2440: BFL 5 kap 4 § makes reskontra optional; a card payment is not kontant.

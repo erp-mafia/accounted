@@ -1,1 +1,0 @@
-[2026-10-19] Skattekonto: the saldo shortfall outranks the ledger proposals for the page's one ochre line, since it has a date and costs kostnadsränta; the proposals stay as a muted line with Koppla dem, since hiding them invites booking the same events twice.

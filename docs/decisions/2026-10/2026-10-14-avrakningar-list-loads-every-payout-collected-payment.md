@@ -1,1 +1,0 @@
-[2026-10-14] The Avräkningar list loads every payout and collected payment Att göra counts (paged, ordered by id) beside the newest 200 of the rest, instead of only the newest 200, so the list and the count never disagree; voucher, invoice and customer lookups are chunked by 200 ids.

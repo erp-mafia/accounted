@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-// The automated ombud announcement mail (MR !1346) was removed: the founder
+// The automated ombud announcement mail was removed: the operator
 // announces features himself and does not want the app mailing customers about
 // them. Nothing may schedule or ship it again.
 

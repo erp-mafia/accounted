@@ -1,1 +1,0 @@
-[2026-11-01] Ledger counterparty patterns key on the template text (merchant, else original_description, else description; namesCounterparty; 2+ chars), not grant_counterparty_key: its rail list drops real counterparts like Klarna or Stripe payouts; the 70 % dominance floor filters mixed keys.

@@ -33,7 +33,7 @@ export async function unknownAccountKeyError(
   accountKey: unknown,
 ): Promise<Error> {
   // No host enforces `required`: a call without account_key reached here and
-  // read back as Unknown account_key "undefined" (15 calls, 12 companies in
+  // read back as Unknown account_key "undefined" (15 calls in
   // 14 days), naming a value nobody sent instead of the missing argument.
   const missing = accountKey === undefined || accountKey === null || (typeof accountKey === 'string' && accountKey.trim() === '')
   const sent = typeof accountKey === 'string' && !missing ? accountKey : null

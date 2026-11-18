@@ -1,1 +1,0 @@
-[2026-10-06] A payout's principal is reconciled per case against the case's booked collected payments not yet paid out, taken in payment order until they sum to the principal; anything else (a payment not booked yet, an amount that does not add up) leaves the payout for a person rather than guessing which payments it covers.

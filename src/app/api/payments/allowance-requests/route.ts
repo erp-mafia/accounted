@@ -15,7 +15,7 @@ const RequestSchema = z.object({
 /**
  * POST /api/payments/allowance-requests: Begär fler betalningar. Stores the
  * request and mails support with the company, the requester, this month's
- * usage and what is asked for; a founder raises the cap by hand
+ * usage and what is asked for; an operator raises the cap by hand
  * (company_bank_payment_allowances). 201 with the request id; 409
  * BANK_PAYMENTS_ALLOWANCE_REQUEST_OPEN while an unanswered request from the
  * company is younger than a day.

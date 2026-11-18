@@ -11,7 +11,7 @@ const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), chil
 const params = {
   companyId: 'company-1',
   companyName: 'Arcim Technology AB',
-  requester: 'Jakob Wennberg',
+  requester: 'Anna Andersson',
   title: 'Testavtal',
   email: 'emil@example.se',
   url: 'https://app.accounted.se/signera/tok_en',
@@ -42,7 +42,7 @@ describe('sendSigningRequestMail', () => {
     const [sent] = service.sendEmail.mock.calls[0]!
     expect(sent).toMatchObject({ to: 'emil@example.se', subject: 'Signera: Testavtal', fromName: 'Arcim Technology AB via Accounted' })
     expect(sent.fromAddress).toBeUndefined()
-    expect(sent.html).toContain('Jakob Wennberg på Arcim Technology AB ber dig signera ett dokument')
+    expect(sent.html).toContain('Anna Andersson på Arcim Technology AB ber dig signera ett dokument')
     expect(sent.html).toContain('3 sidor &middot; 2 undertecknare &middot; gäller till 5 november kl. 09:18')
     expect(sent.html).toContain('<img src="https://storage.example.test/logos/c/logo-1.png" width="47" height="48"')
     expect(sent.text).toContain('Läs och signera: https://app.accounted.se/signera/tok_en')

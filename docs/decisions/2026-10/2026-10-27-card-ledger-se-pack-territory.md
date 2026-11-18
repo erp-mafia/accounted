@@ -1,1 +1,0 @@
-[2026-10-27] lib/cash-accounts/card-ledger.ts joins SE_PACK_TERRITORY: it is the BAS rule for which liability accounts a company card books on (mirrors the cash_accounts_card_shape CHECK); every other file imports its patterns instead of writing 2890 or 289x itself.

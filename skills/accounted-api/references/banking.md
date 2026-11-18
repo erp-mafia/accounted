@@ -389,7 +389,7 @@ Example response `200`:
 
 The campaign (on, deadline, days left), the company's state (the Enable Banking connections still to switch, the ones at banks Open Payments does not reach) and, for an owner or admin, the totals across companies (counts per bank, no company identities). Null company when the campaign does not apply to it.
 
-**Use when:** Rendering the switch deadline, the deep link to the switch, or the founders' counter.
+**Use when:** Rendering the switch deadline, the deep link to the switch, or the operators' counter.
 **Do not use for:** Starting the switch: that is bank-feed.start with replace_connection_id, and a person's BankID.
 
 **Pitfalls:**

@@ -1,1 +1,0 @@
-[2026-11-01] A SEK invoice whose issue verifikat booked the öresavrundning (1510 at Att betala, the öre on 3740) is settled against what 1510 carries: carriedSekOf answers that figure, the payment's 3740 takes only the rest. Batch allocation still clears the remainder (crm#1553).

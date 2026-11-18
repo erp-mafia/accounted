@@ -8,7 +8,7 @@ export type CollectionsStartStep = 'reminder' | 'collection'
  * later than when the debt arose (eligibility.ts computes reminderFeeAgreed
  * per invoice from the company's terms date). Until the provider can leave
  * the fee off per claim, an invoice without an agreed reminder fee starts at
- * the inkassokrav, whose fee needs no agreement (founder decision 2026-10-20).
+ * the inkassokrav, whose fee needs no agreement (product decision 2026-10-20).
  */
 export function startStepsFor(offered: readonly CollectionsStartStep[], reminderFeeAgreed: boolean): CollectionsStartStep[] {
   return reminderFeeAgreed ? [...offered] : offered.filter((step) => step !== 'reminder')

@@ -1,1 +1,0 @@
-[2026-10-31] Form dialogs hold Escape only while there is unsaved input or an open companion panel (holdEscapeWhileUnsaved), not always: an untouched Ny verifikation now closes on Esc (crm#1558). API key scopes stay fixed after creation; the row says to make a new key.

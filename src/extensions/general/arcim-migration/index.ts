@@ -1681,7 +1681,7 @@ export const arcimMigrationExtension: Extension = {
           // Mojibake tripwire (warn, never block). The archived file holds
           // the ALREADY-DECODED text /sie-data fetched, so an upstream that
           // decoded CP437 bytes as windows-1252 has baked the corruption in
-          // before we ever see it (the retired Arcim Sync gateway did
+          // before we ever see it (an upstream gateway did
           // exactly that on 2026-03-17). Flag the signature so it can never
           // again land silently in posted entries; the import itself
           // proceeds untouched.

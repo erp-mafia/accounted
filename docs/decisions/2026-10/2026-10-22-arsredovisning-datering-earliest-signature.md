@@ -1,1 +1,0 @@
-[2026-10-22] The årsredovisning is dated by the earliest signature date, one helper for the PDF and every iXBRL path: the board fixed the content no later than its first signature, and the latest date put the datering after a board signature (Bolagsverket kontrollkod 1232) whenever people signed on different days.

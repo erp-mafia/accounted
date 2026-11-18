@@ -1,1 +1,0 @@
-[2026-10-16] Ingest matchers are a hand-written ordered list in lib/composition/ingest-matchers.ts; the split and the mapping rule stay inline: the same passes, order and writes as the hard-wired sequence, proven by an unchanged characterisation snapshot.

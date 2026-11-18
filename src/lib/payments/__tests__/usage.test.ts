@@ -138,7 +138,7 @@ describe('getBankPaymentsUsage', () => {
     expect(await getBankPaymentsUsage(supabase, COMPANY, '2026-11')).toMatchObject({ period: '2026-11', payments_sent: 1, remaining_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH - 1 })
   })
 
-  it('uses the allowance a founder set for the company instead of the default', async () => {
+  it('uses the allowance an operator set for the company instead of the default', async () => {
     const rows = Array.from({ length: 12 }, (_, i) => ({ id: `o${i}`, cash_account_id: 'a1' }))
     const db = createTableMockSupabase({
       payment_orders: { data: rows },

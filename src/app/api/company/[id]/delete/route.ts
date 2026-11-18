@@ -35,7 +35,7 @@ const DeleteCompanySchema = z.object({
  *  - The body must include confirm_name matching the company's display name
  *    exactly as the UI shows it: company_settings.company_name, falling back
  *    to companies.name only when no settings row exists. ONLY that single
- *    name is accepted (see step 3) — accepting alternates would weaken the
+ *    name is accepted (see step 3) - accepting alternates would weaken the
  *    confirmation gate on an irreversible action.
  *  - Already-archived companies return 404 (treated as not found).
  *  - The company's Stripe subscription ends first (crm#1373); if Stripe
@@ -292,7 +292,7 @@ export async function POST(
 
   // 7. Write audit log row. companies has no auto-audit trigger, so do it
   // explicitly. Service client bypasses audit_log RLS (no INSERT policy).
-  // The archive already happened — don't fail the request, but an audit
+  // The archive already happened - don't fail the request, but an audit
   // write failing on an irreversible action must never be silent.
   const { error: auditError } = await service.from('audit_log').insert({
     user_id: user.id,

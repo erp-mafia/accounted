@@ -1,1 +1,0 @@
-[2026-11-13] A bank that also signs in our screen is not offered its own page: every later call on such a consent must name that flow and nothing stores it (Swedbank refused a revoke on it), and the four companies SEB refused there all connected in our screen within two hours.

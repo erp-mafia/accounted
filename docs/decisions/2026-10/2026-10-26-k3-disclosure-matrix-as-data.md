@@ -1,1 +1,0 @@
-[2026-10-26] K3 disclosures are a matrix of data (disclosures/k3-mindre.ts): each requirement names its source, when it applies and how it is met; one evaluation drives the PDF, completeness and the editor, so a new requirement is one entry, not three code paths.

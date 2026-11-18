@@ -245,11 +245,11 @@ describe('findSupplierInvoiceMatch', () => {
     expect(result).toBeNull()
   })
 
-  // Pass 3, widened window: early payments (the reported RosholmDell case)
+  // Pass 3, widened window: early payments (a reported case)
   it('auto-matches an EARLY exact payment near the invoice date, weeks before due', () => {
     // Paid 2026-06-08, invoice issued 2026-06-05, due 2026-07-05 (27 days out).
     // The old due-date-only ±5d window missed this; the issue→due window catches it.
-    const tx = makeTransaction({ amount: -29890, date: '2026-06-08', description: 'RosholmDell Advo BG 0000007746514' })
+    const tx = makeTransaction({ amount: -29890, date: '2026-06-08', description: 'Nordljus Advo BG 0000001234567' })
     const inv = makeSupplierInvoice({
       status: 'registered',
       remaining_amount: 29890,

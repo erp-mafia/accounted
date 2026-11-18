@@ -1,1 +1,0 @@
-[2026-11-14] A verifikat the momsredovisning shapes catch can be marked 'rättelse, inte momsredovisning' on the Moms page (append-only, who and when; refused in closed, locked or filed periods): the rutor then read it and its storno, closing the 2026-09-20 follow-up (crm#1849).

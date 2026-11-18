@@ -1,10 +1,10 @@
 /**
- * The hard monthly cap on bank payments (founder decision 2026-10-14): a
+ * The hard monthly cap on bank payments (product decision 2026-10-14): a
  * signing that would take the month past the company's allowance is refused
  * before anything is sent to the provider, and a person can ask for more.
  * Once payments above the allowance are offered at the unit price (usage.ts,
  * bankPaymentsBilled), the refusal at the allowance says so and points to
- * Begär fler; once a founder opens the charge for the company
+ * Begär fler; once an operator opens the charge for the company
  * (lib/usage/consent.ts) the cap is the safety ceiling and the allowance is
  * what the month includes.
  *
@@ -117,7 +117,7 @@ export async function bankPaymentsAllowanceRefusal(
   return { ok: false, code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED', details: { ...details }, messageSv: allowanceExceededMessage(details) }
 }
 
-/** One open request per company per day: the founders answer by hand. */
+/** One open request per company per day: the operators answer by hand. */
 export const ALLOWANCE_REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export interface AllowanceRequestInput {
@@ -136,8 +136,8 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * Begär fler betalningar: stores the request and mails support with what a
- * founder needs to decide (company, org number, who asked, this month's
+ * Begär fler betalningar: stores the request and mails support with what an
+ * operator needs to decide (company, org number, who asked, this month's
  * usage, the number wanted and the message). Written as the service role:
  * a browser session cannot write the table. Refused while the company has
  * an open request younger than a day. When the mail cannot be sent the row

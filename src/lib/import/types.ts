@@ -425,7 +425,7 @@ export interface ImportResultDetails {
   openingBalanceDifferences?: OpeningBalanceDifference[]
 
   /**
-   * Non-latest fiscal years whose P&L doesn't net to zero — their result
+   * Non-latest fiscal years whose P&L doesn't net to zero - their result
    * was never transferred to equity (omföring av årets resultat saknas).
    * Each corrupts every later derived opening balance by exactly pl_net,
    * which surfaces as a balansräkning differens. Structurally identical to

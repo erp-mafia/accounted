@@ -8,7 +8,7 @@
  *   - Skill bodies must reach prod via the one deploy path the project trusts:
  *     supabase/migrations applied on deploy. The SQL is generated, never hand-authored.
  *   - It also fixes the "registry never seeded" case (the manual seed may never have
- *     run in prod): the migration populates the rows on deploy.
+ *     run in production): the migration populates the rows on deploy.
  *
  * Determinism:
  *   - Atoms are emitted sorted by id; bodies are dollar-quoted with a collision-proof

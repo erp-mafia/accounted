@@ -3,7 +3,7 @@
  * own sentence. Wrapped as SIE_IMPORT_UNEXPECTED (500) it reached the wizard
  * as "Importens resultat kunde inte bekräftas" with the reason buried in
  * details.reason, and three imports of one file failed without a word about
- * the voucher that refused it (Easy Online Stores, 2026-09-16).
+ * the voucher that refused it (reported 2026-09-16).
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'

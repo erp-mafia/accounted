@@ -1,1 +1,0 @@
-[2026-10-18] Payment and ROT/RUT events carry no idempotency key: an invoice is paid in parts, and a reclaim or reclassification can be reversed and booked again, so a key would tie the new verifikat to the first act's event.

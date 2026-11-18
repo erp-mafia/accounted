@@ -1,1 +1,0 @@
-[2026-10-15] A person's purchase category is final (founder): every write that replaces an inbox reading (set_inbox_extracted_data, Tolka om, the deferred first extraction) carries it via keepPersonPurchaseCategory unless the new reading names purchaseCategory itself; agents cannot clear it.

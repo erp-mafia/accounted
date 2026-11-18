@@ -1,1 +1,0 @@
-[2026-10-27] The import's card target is chosen at the upload step (or ?account=<card>), not in the confirm step's account select as designed: the sign flip must be decided before the preview, so a card picked last would import purchases as income.

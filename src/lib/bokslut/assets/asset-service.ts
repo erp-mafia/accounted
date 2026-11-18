@@ -534,7 +534,7 @@ export async function listAssets(
   companyId: string,
   options: { activeOnly?: boolean } = {},
 ): Promise<Asset[]> {
-  // Paginated past PostgREST's silent 1000-row cap — the depreciation engine
+  // Paginated past PostgREST's silent 1000-row cap - the depreciation engine
   // iterates this list, so truncation would silently skip assets at year-end.
   // Secondary order on id gives the stable total order .range() paging
   // requires; acquisition_date alone is not unique.

@@ -1,1 +1,0 @@
-[2026-11-01] A payment recorded by hand has one definition per side (invoicePayableRefusal, planSupplierSettlement): overpayment, future date and signed bank payment refuse on every door, and an orphan voucher is cancelled: the v1 storno reverted a concurrent payment.

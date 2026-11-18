@@ -1,1 +1,0 @@
-[2026-10-26] Monthly currency revaluation (#523) posts at a month end inside the year and reverses on the next day through the storno path, always measured from the original rate; the balansdag stays with the year-end close, which counts only posted revaluations, so a reversed interim one never blocks it.

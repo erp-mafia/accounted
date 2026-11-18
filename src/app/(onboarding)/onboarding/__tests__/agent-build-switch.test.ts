@@ -3,7 +3,7 @@ import { billingHref } from '@/lib/entitlements/upgrade-reason'
 
 // /onboarding/agent under ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts).
 // The page builds the built-in assistant and ends in the interview on
-// /chat/intake. Switched off there is neither (founder decision 2026-11-18),
+// /chat/intake. Switched off there is neither,
 // so the page leads to Koppla en agent (/settings/api) before the paywall and
 // before anything is fetched or built. Unset or on, it runs as before.
 

@@ -504,7 +504,7 @@ export default function DeadlinesPage() {
   }
 
   // Statutory deadlines (moms, arbetsgivardeklaration, F-skatt) are generated
-  // from the company's tax settings — none present usually means those
+  // from the company's tax settings - none present usually means those
   // settings were never filled in, so point there instead of letting the page
   // read as an empty manual todo list. One attn line per page: this setup
   // nudge outranks the overdue-invoices note because it unlocks the page.

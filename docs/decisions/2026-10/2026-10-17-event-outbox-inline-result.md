@@ -1,1 +1,0 @@
-[2026-10-17] Shadow reconciliation records each consumer's inline result on its outbox delivery (event_deliveries.inline_result), counted per hour by event_outbox_shadow_counts: no counter table, no log scraping for the main comparison.

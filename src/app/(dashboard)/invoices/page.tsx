@@ -177,7 +177,7 @@ function statusGroupOf(invoice: ListInvoice): StatusGroup {
 // rows recede to muted text, open rows keep the foreground, and the overdue
 // chip stays the one marker on its row (one status indicator per element;
 // semantic colours stay data-only, convention 12). This Record is the swap
-// surface if the founder prefers colour: a row tint is
+// surface if the operator prefers colour: a row tint is
 // 'bg-success/[0.04]' / 'bg-warning/[0.05]' / 'bg-destructive/[0.05]'; a
 // left-edge bar is '[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-success'
 // and its warning/destructive siblings. Nothing else in the row changes.

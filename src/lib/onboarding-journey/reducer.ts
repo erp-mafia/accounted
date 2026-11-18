@@ -301,7 +301,7 @@ function continueManually(state: JourneyState): JourneyState {
  * the fiscal-year station. Order: name → address → F-skatt.
  * - A company_name from the lookup (or BankID roles) skips the name
  *   question for every form: the orgnr answers it, Enter is the whole step
- *   (founder call 2026-09-11). A form whose org number is the owner's
+ *   (product call 2026-09-11). A form whose org number is the owner's
  *   personnummer (enskild firma) has no registered name, so without lookup
  *   data it still names its verksamhet; the name stays editable in Settings.
  * - Address is asked only when the lookup did not provide one.

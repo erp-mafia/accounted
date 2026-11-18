@@ -1,1 +1,0 @@
-[2026-10-22] The momsdeklaration checks mirror Skatteverket's FK001-FK004 by presence (a filed whole-krona amount in any ruta of a side, either sign) beneath the existing sales and reverse-charge checks, as FK005/FK006 already did: only what Skatteverket refuses is added (#83).

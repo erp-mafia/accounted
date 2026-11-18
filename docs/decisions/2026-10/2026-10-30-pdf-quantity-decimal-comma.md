@@ -1,1 +1,0 @@
-[2026-10-30] Invoice PDF quantity (crm#1480): the stored value with the language's decimal separator, not Intl like the self-billing PDF: Intl would round past its fraction cap and group digits, widening the quantity column on 17k rows of 1000 or more; the document never rounds a quantity.

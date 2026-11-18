@@ -6,8 +6,8 @@ import type { CustomerDto, PartyDto } from '@/lib/providers/dto'
 /**
  * Guards customer type inference + identity-number routing in mapCustomer:
  *  - a 12-digit (century-prefixed) Swedish personnummer must read as domestic,
- *    not be misfiled as a foreign org number → non_eu_business (the Johan
- *    Ekengren 19700616-7113 bug);
+ *    not be misfiled as a foreign org number → non_eu_business (a
+ *    reported bug);
  *  - an individual's number must land in personal_number (not org_number), or
  *    the individual customer form (which renders personal_number) hides it,
  *    and it must be ENCRYPTED on the way in: the column takes ciphertext only.
@@ -55,9 +55,9 @@ describe('mapCustomer: type inference & identity-number routing', () => {
   })
 
   it('12-digit personnummer (no VAT, provider type=company) → swedish_business, not non_eu', () => {
-    const row = mapCustomer(makeCustomer({ type: 'company', number: '19700616-7113' }), 'u', 'c')
+    const row = mapCustomer(makeCustomer({ type: 'company', number: '19121212-1212' }), 'u', 'c')
     expect(row.customer_type).toBe('swedish_business')
-    expect(row.org_number).toBe('19700616-7113')
+    expect(row.org_number).toBe('19121212-1212')
     expect(row.personal_number).toBeNull()
   })
 

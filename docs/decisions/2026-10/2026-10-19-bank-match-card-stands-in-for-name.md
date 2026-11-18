@@ -1,1 +1,0 @@
-[2026-10-19] Bank match: a row that names the card the document (or its receipt) was paid with, with the amount to the öre in one currency inside the payment window, is trolig without name agreement, never higher: card statements print the network's brand (X CORP.), not the seller.

@@ -1,1 +1,0 @@
-[2026-10-16] Scripts that load lib/init check the react-server condition at start and exit 1, not re-exec themselves with it or add npm runner entries: a re-exec hides a second process and breaks fork IPC (acceptance-worker); check:guards holds every written invocation to the flag.

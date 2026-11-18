@@ -297,7 +297,7 @@ export function templateAccountNames(
 
 /**
  * Derive amount-parameterised template lines from a concrete, balanced set of
- * booking rows — the inverse of {@link applyTemplate}, used by "Spara som mall".
+ * booking rows - the inverse of {@link applyTemplate}, used by "Spara som mall".
  *
  * A booking stores literal debit/credit amounts; a template stores ratios of a
  * total plus VAT rates. The mapping:

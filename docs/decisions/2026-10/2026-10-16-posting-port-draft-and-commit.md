@@ -1,1 +1,0 @@
-[2026-10-16] The posting port gains draftJournalEntry and commitJournalEntry for producers that claim their source row between draft and commit (kassa, webbshop): the event is linked to the draft before a voucher number is drawn and their claim race stays as it is.

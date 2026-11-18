@@ -358,7 +358,7 @@ export function classifyError(error: unknown): ErrorClassification {
   // A `.single()` lookup that matched no row. 46 MCP tools read one record
   // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
   // "Något gick fel. Försök igen.", which tells an agent to retry a call
-  // that can never succeed (get_inbox_item: 56 calls, 4 companies, 30 days).
+  // that can never succeed (get_inbox_item: 56 calls, 30 days).
   if (isNoRowFromSingle(error)) {
     return {
       code: 'NOT_FOUND',
@@ -469,7 +469,7 @@ export function getStructuredError(
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
   // Approve gets its own hint: it is never pre-ticked on the MCP consent page
-  // (founder decision 2026-10-03, issue #3408), so a default connection lacks
+  // (product decision 2026-10-03, issue #3408), so a default connection lacks
   // it, and the way forward is the review list in the app, or reconnecting
   // with it ticked (scopes cannot be added to an existing key).
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {
@@ -529,7 +529,7 @@ interface MinimalLogger {
 
 /**
  * 4xx outcomes are expected request failures (auth, validation, domain
- * guards) — log them at warn so Vercel's runtime-error clustering surfaces
+ * guards) - log them at warn so Vercel's runtime-error clustering surfaces
  * only genuine 5xx. Falls back to error when the caller's logger has no warn.
  */
 function logAtLevel(

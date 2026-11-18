@@ -68,7 +68,7 @@ const MAX_EXCHANGE_RATE = 100000
 
 /**
  * The rate a foreign-currency invoice takes from the verifikat that booked
- * it (crm#1039, founder decision 2026-10-06): one that gives the booked
+ * it (crm#1039, product decision 2026-10-06): one that gives the booked
  * kronor back, so the reskontra agrees with 151x/244x and a payment clears
  * them exactly. The first of `stated` (the rate the verifikat's own line
  * names), totalSek / total at four decimals and at six whose product lies

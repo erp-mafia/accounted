@@ -129,7 +129,7 @@ describe('gnubok_vat_close_check under kontantmetoden', () => {
     expect(KONTANTMETOD_CUTOFF_HINT).toMatch(/gnubok_post_kontantmetod_cutoff/)
     expect(pointsAtAttest(result)).toBe(false)
     expect(result.ready_to_close).toBe(false)
-    // The filing gate is unchanged: still a WARNING there (founder decision 2026-10-03).
+    // The filing gate is unchanged: still a WARNING there (product decision 2026-10-03).
     expect(result.declaration_checks).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING' })]),
     )

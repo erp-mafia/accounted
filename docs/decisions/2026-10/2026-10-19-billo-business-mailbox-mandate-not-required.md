@@ -1,1 +1,0 @@
-[2026-10-19] A Billo business mailbox is created with mandate NotRequired (Billo refuses BankID for a company) and the admin as representative, personnummer read from their own BankID login, consent recorded on the connection; a signed physical mandate instead is a founder and legal call.

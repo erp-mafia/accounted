@@ -1,1 +1,0 @@
-[2026-10-16] Core event consumers are one static list in lib/composition/event-consumers.ts (new infra folder), the EventConsumer type and subscriber in lib/events/consumers.ts: bus.ts imports neither, so lazy-init-reach stays 1 and the list reads as one map of who reacts to what.

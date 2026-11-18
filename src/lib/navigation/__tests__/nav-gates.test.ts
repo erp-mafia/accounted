@@ -128,7 +128,7 @@ describe('the invoicer role', () => {
   })
 })
 
-describe('the one Bolaget row (founder decision 2026-10-30)', () => {
+describe('the one Bolaget row (product decision 2026-10-30)', () => {
   const hub = item({ href: '/bolaget', module: 'corporate', requiresBolagetHub: true })
 
   it('is hidden outside the rollout, for every form', () => {

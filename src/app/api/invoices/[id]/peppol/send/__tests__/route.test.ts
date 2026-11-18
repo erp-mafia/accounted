@@ -171,7 +171,7 @@ const accessRow = {
   max_sends: 50,
   receive_enabled: false,
   requested_at: null, requested_by: null, request_note: null,
-  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'anna', disabled_at: null, note: null,
   created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
 }
 /** The sandbox gate reads company_settings.is_sandbox through the user client before anything else. */

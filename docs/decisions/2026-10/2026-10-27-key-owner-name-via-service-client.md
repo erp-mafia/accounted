@@ -1,1 +1,0 @@
-[2026-10-27] The api-keys list names a colleague's key (owner_name) through the service client, only for rows RLS already showed the caller: admins see every member's key but not their profile, and an unnamed "Kollega" left nobody sure whose Claude a Disconnect would cut.

@@ -6,8 +6,7 @@
  * idempotency_key. Both cards then wait in the queue; the person approves one
  * and the other stays pending until the 30-day expiry, approvable but dead: a
  * second reversal of a verifikat already reversed, an SIE file already
- * imported. Prod had 31 such twins in 30 days, mostly reverse_entry and
- * import_sie.
+ * imported. Such twins are mostly reverse_entry and import_sie.
  *
  * Transaction claims (transaction-claims.ts) already settle this for the bank
  * rows a proposal books. This covers the types where two identical proposals

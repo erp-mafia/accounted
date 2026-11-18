@@ -17,7 +17,7 @@ import type { CreateJournalEntryLineInput } from '@/types'
 
 /**
  * Preview the journal entries that would be created when booking this salary run.
- * Shows exact BAS accounts and amounts: this is a key differentiator.
+ * Shows exact BAS accounts and amounts.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.preview',

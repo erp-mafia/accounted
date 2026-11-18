@@ -1,1 +1,0 @@
-[2026-11-17] Kivra and Billo get rows on Kopplingar (settings) that connect in the row, drawn by the Inkorg dialog's own row components through a frame prop, and shown only where the inbox is (extension, AI capability, no sandbox): one connect flow on two surfaces, no mailbox a company cannot read.

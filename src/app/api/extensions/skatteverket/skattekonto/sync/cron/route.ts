@@ -355,7 +355,7 @@ export const GET = withCronContext('cron.skatteverket_skattekonto_sync', async (
         await markNeedsReconsent(supabase, userId, companyId, err.code, err.tokenRow?.version)
         return { userId, companyId, source, status: 'expired', error: err.code }
       }
-      // TOKEN_REVOKED auto-deletes the row inside skvRequest — treat it as
+      // TOKEN_REVOKED auto-deletes the row inside skvRequest - treat it as
       // the same quiet "reconnect needed" outcome, not a runtime error.
       if (source === 'user' && err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
         return { userId, companyId, source, status: 'expired', error: err.code }

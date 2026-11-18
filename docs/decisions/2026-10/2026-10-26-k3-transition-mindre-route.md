@@ -1,1 +1,0 @@
-[2026-10-26] The K3 transition supports only the mindre företag route (transition date = first day of the first K3 year, comparatives not restated, 35.7 andra stycket): locked years stay untouched and P1's K3 scope is mindre AB. Restated comparatives stay unsupported.

@@ -1,1 +1,0 @@
-[2026-11-01] A provider invoice the source calls paid is settled in full on both registers, whatever its money fields say: paid beside money open was the contradiction. An unissued or voided one settled nothing. A stated payment counts as issued on every provider. paid_at only on full settlement.

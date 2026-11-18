@@ -183,7 +183,7 @@ describe('Skills registry', () => {
     // so no text may claim Accounted validates against it.
     expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces|validates)[^.\n]*EN\s*16931/i)
     // Peppol send is live behind a per-company access grant (app/api/invoices/[id]/peppol/send).
-    // A text that claims the capability is absent sends users to a competitor; say gated instead.
+    // A text must not claim a gated capability is absent; say gated instead.
     // The patterns take the capability as subject (active, passive and adjective forms) so that
     // the true statement "a v1 or MCP Peppol send action is not yet available" stays legal.
     const capabilityAbsentPatterns = [
@@ -228,7 +228,7 @@ describe('Skills registry', () => {
       expect(text).toMatch(/send cap/i)
       // The restrictions agents must not over-promise past (lib/invoices/peppol-bis-billing.ts).
       // Every legal form with an organisationsnummer sends; only enskild firma, whose org number
-      // is the owner's personnummer, waits for GLN (founder decision 2026-09-29).
+      // is the owner's personnummer, waits for GLN (product decision 2026-09-29).
       expect(text).toMatch(/organisationsnummer/i)
       expect(text).toMatch(/enskild firma/i)
       expect(text).not.toMatch(/aktiebolag senders|must be an aktiebolag/i)
@@ -552,7 +552,7 @@ describe('gnubok_load_skill tool', () => {
   })
 
   // A plain Error answered UNKNOWN_ERROR, "Något gick fel. Försök igen.",
-  // for a slug no retry finds (18 calls, 15 companies in 30 days).
+  // for a slug no retry finds (18 calls in 30 days).
   it('answers NOT_FOUND with the closest slugs first and the full list kept', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
     const err = await tool

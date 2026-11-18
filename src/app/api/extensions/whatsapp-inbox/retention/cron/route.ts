@@ -5,8 +5,8 @@ import { runRetention } from '@/extensions/general/whatsapp-inbox/lib/retention'
 
 /**
  * GET /api/extensions/whatsapp-inbox/retention/cron: daily GDPR purge for
- * the WhatsApp channel. Enforces the retention table in .compliance/ropa.yaml
- * (whatsapp.receipt_intake): 90-day chat transcripts, 30-day unknown-sender
+ * the WhatsApp channel. Enforces the retention table in the record of
+ * processing activities (whatsapp.receipt_intake): 90-day chat transcripts, 30-day unknown-sender
  * rows, expired link codes, dead rate counters, and the 90-day crypto-shred
  * of revoked phone bindings. Receipts themselves are 7-year WORM under BFL
  * and are never touched here. Scheduled in vercel.json (and the generated

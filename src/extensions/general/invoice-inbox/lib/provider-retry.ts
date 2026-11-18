@@ -26,7 +26,7 @@
  *   4. on a reading, writes it onto the inbox item with a compare-and-set on
  *      the updated_at the item was selected with (still received, still not
  *      booked), and only then mirrors it onto the document: an inbox path's
- *      mirror follows its claim (docs/decisions/2026-10.md, 2026-10-12). Any
+ *      mirror follows its claim. Any
  *      write to the item in between, a person's correction above all, wins
  *      and the reading is dropped. Another provider failure keeps the claimed
  *      stamp; any other failure or skip gets its own stamp, which ends the

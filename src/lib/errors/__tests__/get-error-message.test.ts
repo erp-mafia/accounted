@@ -250,12 +250,12 @@ describe('getErrorMessage: accumulated validation details', () => {
     const msg = getErrorMessage(
       {
         error: 'Valideringsfel: korrigera innan godkännande',
-        details: ['Tomas Tysén: Bankuppgifter saknas (clearingnummer och/eller kontonummer)'],
+        details: ['Anna Andersson: Bankuppgifter saknas (clearingnummer och/eller kontonummer)'],
         warnings: [],
       },
       { context: 'salary', statusCode: 400 },
     )
-    expect(msg).toContain('Tomas Tysén')
+    expect(msg).toContain('Anna Andersson')
     expect(msg).toContain('Bankuppgifter saknas')
     expect(msg).toContain('Valideringsfel')
     // Must NOT collapse to the generic HTTP-400 fallback.

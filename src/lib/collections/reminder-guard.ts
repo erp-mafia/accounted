@@ -3,7 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Accounted's own reminders never run beside the collections provider's
- * (build spec 3.5, founder decision 2026-10-03: the provider runs the whole
+ * (build spec 3.5, product decision 2026-10-03: the provider runs the whole
  * ladder). An Accounted-side reminder sender must skip an invoice with an
  * open case, and every invoice of a company whose collections connection is
  * active, so it can never send a reminder, or book a reminder fee, on an

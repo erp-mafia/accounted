@@ -40,7 +40,7 @@
  * never double-applies; a row that changed underneath is counted as skipped.
  * Safe to re-run.
  *
- * Never run by a loop: the founder decides when it runs. Production's key
+ * Never run by a loop: an operator decides when it runs. Production's key
  * exists only in the deployed app, so production runs the same repair through
  * the one-off cron /api/customers/personal-number-repair/cron.
  */

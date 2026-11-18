@@ -1,1 +1,0 @@
-[2026-10-16] The byrå picks the client's profile in the company invite form, required only for members of the client company's byrå team: creation and invitation are separate steps today, the invitation is where the client meets the result, and the client's own people pick nothing.

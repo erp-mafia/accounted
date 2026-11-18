@@ -12,7 +12,7 @@ import {
 } from '../pairs'
 import { makeItem, reading } from './fixtures'
 
-/** The X subscription mail (prod, company Arcim): one forwarded mail, two PDFs. */
+/** The X subscription mail (a real case): one forwarded mail, two PDFs. */
 const MAIL = 'resend-mail-x'
 
 function invoice(overrides: Partial<PairableItem> = {}): PairableItem {

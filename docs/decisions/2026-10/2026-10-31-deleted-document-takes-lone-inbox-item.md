@@ -1,1 +1,0 @@
-[2026-10-31] Deleting a document also deletes an unbooked, unmatched inbox item whose only file it was (deleteDocument, every door), not a status flag and not a CASCADE: the item has nothing left to stand for, a Peppol item keeping its other file stays, and booked items stay refused (crm#1565).

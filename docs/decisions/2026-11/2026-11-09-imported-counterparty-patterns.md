@@ -1,1 +1,0 @@
-[2026-11-09] Imported verifikat teach ledger_context counterparty patterns only behind Accounted's own bank-row patterns, from 2+ verifikat at the 0.7 share, never from payments: one imported verifikat predicted the next account 80-87 %, two or more 94-97 %.

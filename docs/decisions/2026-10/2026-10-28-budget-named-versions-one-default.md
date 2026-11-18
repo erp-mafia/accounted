@@ -1,1 +1,0 @@
-[2026-10-28] A year holds named budget versions with at most one default, the one reports read unnamed (accounted#134): a forecast beside the budget is the common need; a new default takes it from the old in the database, so the rule has one writer.

@@ -1,1 +1,0 @@
-[2026-10-31] Attest answers go back to whoever registered the invoice (one mail per answer, byrå owners/admins if they left), plus an Att göra row and two byrå client columns from one queue definition (attest-queues.ts): the byrå pays what its client attests (crm#1569).

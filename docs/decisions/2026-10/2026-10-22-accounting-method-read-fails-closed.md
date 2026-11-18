@@ -1,1 +1,0 @@
-[2026-10-22] Booking paths and their previews refuse (503 retryable, or 409) when company_settings.accounting_method cannot be read or the row is missing, instead of defaulting to faktureringsmetoden (#58): the column is NOT NULL, so null only ever meant a failed read.

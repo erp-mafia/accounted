@@ -1,9 +1,9 @@
 /**
- * /api/dimensions/rules/[id] — mutate one account dimension rule (PR10).
+ * /api/dimensions/rules/[id] - mutate one account dimension rule (PR10).
  *
- * PATCH  { rule_type?, value_id?, is_active? } — value presence is
+ * PATCH  { rule_type?, value_id?, is_active? } - value presence is
  *        re-validated against the EFFECTIVE rule_type (required ⇔ no value).
- * DELETE — removes the rule; enforcement stops immediately. Pausing without
+ * DELETE - removes the rule; enforcement stops immediately. Pausing without
  *          losing the configuration is is_active: false.
  *
  * The rules live in lib/dimensions/rules-service.ts, shared with the v1

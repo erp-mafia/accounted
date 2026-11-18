@@ -388,8 +388,8 @@ describe('categorizeTransaction: refusals every door shares', () => {
     expect(createTxJE).not.toHaveBeenCalled()
   })
 
-  // crm#1765: foreign VAT the seller charged in error. Sources and the
-  // reasoning: docs/decisions/2026-11/2026-11-12-reverse-charge-with-foreign-seller-vat.md.
+  // crm#1765: foreign VAT the seller charged in error. The law is cited on
+  // FOREIGN_SELLER_VAT_FLAG in lib/vat/reverse-charge-box.ts.
   describe('reverse charge on an underlag that shows the seller\'s VAT', () => {
     // Paid 1 250: a price of 1 033.06 and 216.94 Dutch VAT (21 %).
     const withUnderlag = (extracted: Record<string, unknown>) =>

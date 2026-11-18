@@ -1,1 +1,0 @@
-[2026-11-07] The booking-time ledger coverage guard (accounted#101) runs only for feed connector rows (import_source stripe) and has no override: a manual verifikat on 1930 says nothing about which days are booked, while one on 1686 is a samlingsverifikat.

@@ -462,7 +462,7 @@ async function refreshTokenForUser(
   } catch (err) {
     // SKV's `per`-flow refresh tokens live 65 minutes. Any daily cron (or a
     // user returning the next day) therefore always finds a dead token and
-    // gets 404 id_not_found back — that's ordinary session expiry, not a
+    // gets 404 id_not_found back - that's ordinary session expiry, not a
     // runtime error. Classify it so the crons' quiet buckets and the UI's
     // reconnect flow catch it instead of a raw Error escaping to the logs.
     // SKV speaks several dialects for the same terminal state: 404 with
@@ -689,7 +689,7 @@ export async function skvRequest(
 
 /**
  * Make an authenticated request to the Skatteverket API and write exactly one
- * row to skatteverket_api_audit_log for it (founder decision D4: every
+ * row to skatteverket_api_audit_log for it (product decision D4: every
  * outbound call, reads included). The audit is a required argument so no
  * call site can skip it, and no route writes its own row on top.
  *

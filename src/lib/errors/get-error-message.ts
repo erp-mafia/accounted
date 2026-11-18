@@ -1006,7 +1006,7 @@ export function getErrorMessage(
 
     // Accumulated per-item validation list from routes that collect several
     // problems before responding, e.g. the salary approve route:
-    //   { error: 'Valideringsfel …', details: ['Tomas Tysén: Bankuppgifter saknas …', …] }
+    //   { error: 'Valideringsfel …', details: ['Anna Andersson: Bankuppgifter saknas …', …] }
     // Surface the specific reasons: otherwise this shape falls all the way
     // through to the generic HTTP-400 message and the user learns nothing.
     if (

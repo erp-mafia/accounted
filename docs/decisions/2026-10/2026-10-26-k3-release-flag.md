@@ -1,1 +1,0 @@
-[2026-10-26] K3 release is one default-off flag (NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED): off keeps AR-K3-DRAFT-ONLY and the watermark; on opens lock, BankID and paper. The watermark reads k3_release stored in the version, so a locked document never changes with the flag.

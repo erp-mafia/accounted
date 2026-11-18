@@ -1,1 +1,0 @@
-[2026-11-01] A customer match refuses a booked or ignored bank row on every door and reverses nothing, the supplier decision applied (accounted#58): the refusal names the undo per shape, and a link-only row, which uncategorize cannot reach, names a storno of its verifikat.

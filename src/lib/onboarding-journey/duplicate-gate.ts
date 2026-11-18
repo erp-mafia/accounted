@@ -13,8 +13,8 @@ export interface ExistingCompanyMatch {
 /**
  * Whether the journey must stop and ask before creating a second copy of a
  * company the user already has. A faint "you already have X" note let users
- * walk straight into a duplicate (prod 2026-09-23: 72 org numbers where one
- * user belonged to two or more copies, most of them an empty shell), so the
+ * walk straight into a duplicate (one user in two or more copies of a
+ * company, most of them an empty shell), so the
  * journey now pauses on the first step after the orgnr until the user either
  * opens the existing company or explicitly asks for a separate copy.
  *

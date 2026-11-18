@@ -1,10 +1,10 @@
 /**
  * SIGNING_ENABLED: BankID document signing (signing requests, the /signera
- * page and their API and MCP doors). Unset = off until the founder flips it.
+ * page and their API and MCP doors). Unset = off.
  *
  * It rolls out per company, like AUTOGIRO_COMPANY_IDS: `1`, `true` or `*`
  * opens it for every company, a comma-separated list of company ids for
- * those only (Arcim's own first, to sign for real before anyone else).
+ * those only.
  *
  * SIGNING_ARSREDOVISNING_ENABLED is the same for the board's BankID
  * signatures on a locked årsredovisning, on top of SIGNING_ENABLED: it waits

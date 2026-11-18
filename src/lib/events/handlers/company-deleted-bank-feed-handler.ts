@@ -10,7 +10,7 @@ const log = createLogger('company-deleted-bank-feed')
 /**
  * A deleted company's Open Payments connections end with it. Once the
  * company is archived nobody can open Kopplingar to disconnect them, yet each
- * consent stays live at the bank: Open Payments bills per active consent, and
+ * consent stays live at the bank, and
  * the sync would keep reading a company its members were told is gone.
  *
  * Every row that may still hold a consent (any status but 'revoked') goes

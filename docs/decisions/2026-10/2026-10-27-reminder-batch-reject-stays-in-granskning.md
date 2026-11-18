@@ -1,1 +1,0 @@
-[2026-10-27] The reminder batch dialog gets no reject button: its none-ticked line points to Granskning, where each pending batch has its reject action. A reject in the dialog would need a rejection category, and the collections batch dialog has none either.

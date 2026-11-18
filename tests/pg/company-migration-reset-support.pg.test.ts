@@ -46,7 +46,7 @@ async function supportReset(
       ownerId,
       overrides.name ?? 'Test AB',
       overrides.caseRef ?? 'PH 242',
-      overrides.actor ?? 'jakob',
+      overrides.actor ?? 'anna',
       'The re-import shifted every voucher number, the customer starts over.',
     ],
   )
@@ -94,7 +94,7 @@ describe('support migration reset (pg)', () => {
       [companyId],
     )
     expect(log).toHaveLength(1)
-    expect(log[0].reason).toMatch(/^Support \(PH 242, jakob\): /)
+    expect(log[0].reason).toMatch(/^Support \(PH 242, anna\): /)
     expect(log[0].replacement_company_id).toBe(result.replacement_company_id)
   })
 
@@ -143,7 +143,7 @@ describe('support migration reset (pg)', () => {
       await client.query('BEGIN')
       await client.query(`SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`)
       const reset = await client.query<{ result: ResetResult }>(
-        `SELECT public.support_reset_company_for_migration($1, $2, 'Test AB', 'PH 248', 'jakob',
+        `SELECT public.support_reset_company_for_migration($1, $2, 'Test AB', 'PH 248', 'anna',
            'The customer wants to import the Fortnox books again from scratch.') AS result`,
         [target.companyId, target.userId],
       )

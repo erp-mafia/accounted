@@ -77,11 +77,10 @@ export interface VerifikatSearchScope {
 /**
  * Whether a search over journal_entries may read an amount. An amount is
  * looked up on the lines, one probe per verifikat of the set (no index holds
- * an amount), so its cost follows the set. Measured on production 2026-11-18:
- * inside one fiscal period the count answers in 0.4 to 1.9 s for the four
- * largest years there are (38,000 to 79,000 verifikat); across every year of
- * the largest company (154,000 verifikat) the count takes 10 s and the first
- * page 9.4 s, past the 8 s statement timeout. Bounded therefore means
+ * an amount), so its cost follows the set. Inside one fiscal period the count
+ * answers within two seconds also for a year of tens of thousands of
+ * verifikat; across every year of a very large ledger the count and the first
+ * page each pass the 8 s statement timeout. Bounded therefore means
  * filtered to one fiscal period. A date range is not a bound: it can be open
  * at one end or span every year.
  */

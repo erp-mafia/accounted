@@ -1,1 +1,0 @@
-[2026-10-15] Content dedupe only on free-floating uploads (Arkiv drop, MCP upload_document, v1 opt-in via dedupe_by_content), never on verifikat-targeted ones: one underlag sits on several verifikat as one row each; v1 is opt-in so a public API does not change silently.

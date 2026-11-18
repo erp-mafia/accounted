@@ -1,1 +1,0 @@
-[2026-10-27] k3IxbrlEnabled() requires NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED as well as NEXT_PUBLIC_K3_IXBRL_ENABLED, in that one function: the iXBRL is the same K3 årsredovisning, so it never exists while the report is a granskningsutkast.

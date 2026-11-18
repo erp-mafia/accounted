@@ -54,7 +54,7 @@ export interface ReadPlan {
  * pages: six receipt and letter photos, fifteen scanned agreement pages):
  * Sonnet 4.6 recovered every one of 29 checked facts, Haiku 4.5 28 at a
  * third of the price, Nova 2 Lite 22 with organisation numbers dropped.
- * The founder chose accuracy first, so history reads with the extraction
+ * The operator chose accuracy first, so history reads with the extraction
  * tier like everything else; ARKIV_HISTORY_READER_TIER=cheap moves it to
  * Haiku when the volume makes that worth it.
  */
@@ -72,7 +72,7 @@ export interface PlanInput {
   /** The document has been through a read pass before (pages_read_at is set). */
   pagesRead: boolean
   /**
-   * It sits on a verifikat: already booked. Read lazily whatever its age (founder, 2026-09-25: the goal is agents
+   * It sits on a verifikat: already booked. Read lazily whatever its age (2026-09-25: the goal is agents
    * answering correctly when asked, and 88 % of background model reads were booked imports nobody opened). The
    * free text layer is read up front; the model reads the rest when someone opens it.
    */
@@ -98,7 +98,7 @@ export const ON_DEMAND_REASONS = ['ai_gated', 'partial:ai_gated', 'partial:budge
  * before downscaling existed), a HEIC stamped unsupported (read before it
  * was decoded) and a CSV whose format AnyDoc could not detect (read before
  * the reader named it). Stamped once, they were never tried again, so an
- * agent asking for the page got nothing (prod 2026-09-24: 5 photos on
+ * agent asking for the page got nothing (seen 2026-09-24: 5 photos on
  * verifikat, 4 HEICs; 2026-10-28: 403 CSVs on verifikat).
  */
 export function isCuredFailure(doc: { read_error?: string | null; mime_type?: string | null }): boolean {

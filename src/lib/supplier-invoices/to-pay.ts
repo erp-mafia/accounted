@@ -9,8 +9,7 @@
  * attest policy, and only the policy's own invoices of a company with one;
  * the API and MCP the statuses "Markera som betald" is offered for, an
  * invoice already at the bank or with nothing left included. Att göra said
- * "Betala 1" and the tab it opens showed 3 (2026-11-12: the tab and the row
- * differed at 296 companies, the tab and the API at 136).
+ * "Betala 1" and the tab it opens showed 3.
  *
  * An invoice waits to be paid when the payment file would pay it and nobody
  * has started to: a payable status (PAYABLE_SUPPLIER_INVOICE_STATUSES), money

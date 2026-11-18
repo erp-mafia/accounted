@@ -196,7 +196,7 @@ function fmt(amount: number): string {
 
 /**
  * Renders ÅRL post-level statement rows (see statement-rows.ts) with a
- * jämförelseår column — mirrors the K2 template so the two documents stay
+ * jämförelseår column - mirrors the K2 template so the two documents stay
  * visually consistent.
  */
 function StatementTable({
@@ -378,7 +378,7 @@ export function ArsredovisningK3PDF({
         ))}
       </Page>
 
-      {/* Resultaträkning — ÅRL post level, no account numbers. */}
+      {/* Resultaträkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
@@ -390,7 +390,7 @@ export function ArsredovisningK3PDF({
         <StatementTable rows={data.resultatrakning} hasPrevious={data.previous_period !== null} />
       </Page>
 
-      {/* Balansräkning — ÅRL post level, no account numbers. */}
+      {/* Balansräkning - ÅRL post level, no account numbers. */}
       <Page size="A4" style={styles.page} wrap>
         <PageChrome data={data} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>

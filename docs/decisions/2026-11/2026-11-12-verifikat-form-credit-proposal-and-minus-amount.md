@@ -1,1 +1,0 @@
-[2026-11-12] Verifikat form: a closing amount that belongs in kredit is proposed there while focus stays in debet, and a minus amount moves sides on blur: moving focus to kredit would cost Shift+Tab on every row of a several-debit verifikat; a typed debit clears the proposal.

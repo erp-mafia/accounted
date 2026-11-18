@@ -1,1 +1,0 @@
-[2026-11-01] An inbox item is open while no link holds it, Arkiv did not take it and no live verifikat holds its document (lib/documents/inbox-item-state.ts): every list, count and processed flag reads this, stamp or not. A reversed verifikat holds nothing: the purchase is unbooked again.

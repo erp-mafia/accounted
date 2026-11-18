@@ -1,1 +1,0 @@
-[2026-10-16] v1 capabilities keeps publishing the module report field for field; packages, profile and availability stay internal until profiles exist: step 1 promises no visible change, and packages mean something to an API client only once a profile can turn one off.

@@ -2,7 +2,7 @@
  * Package doors: which doors START new work in a package, so that a package
  * switched off (./capabilities.ts: off or winding_down) refuses them with
  * PACKAGE_OFF, while every door that settles, corrects, reads or keeps a
- * register open keeps working. The founder's rule (Profiles and
+ * register open keeps working. The operator's rule (Profiles and
  * Suggestions, 2026-10-16): "off" closes the start paths only; obligations
  * keep running.
  *

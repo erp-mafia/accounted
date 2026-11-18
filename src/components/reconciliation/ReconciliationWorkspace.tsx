@@ -19,7 +19,7 @@ import { ManualMatchMode } from './ManualMatchMode'
 /**
  * /reconciliation?account=: one account's reconciliation flow (concept
  * P.recon + reconflow), full width, with the way back to Konton in the top
- * bar. The account list itself is Konton (founder decision 2026-10-18 merged
+ * bar. The account list itself is Konton (product decision 2026-10-18 merged
  * the two lists); the bare address redirects there in next.config.ts, and an
  * account the list does not know goes back there too. The open account lives
  * in the URL so a link lands on the right account and a reload keeps it.

@@ -9,8 +9,8 @@
  * dated on the period's first day, with its stornos and rättelser, is dropped
  * too. `get_vat_ruta_source_lines` filtered
  * on company, status and date only, so expanding a ruta listed verifikat that
- * were not in the number it claims to explain. 322 posted/reversed entries
- * across 214 companies sat in those classes on production (2026-08-28).
+ * were not in the number it claims to explain. Posted/reversed entries
+ * sat in those classes in real ledgers (2026-08-28).
  *
  * A momsdeklaration is räkenskapsinformation (BFL 5 kap.) and this drill-down
  * is what substantiates a filed figure, so the headline test here is a single

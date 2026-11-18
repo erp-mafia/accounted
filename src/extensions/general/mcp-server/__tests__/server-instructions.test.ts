@@ -15,7 +15,7 @@ import { projectToolReferencesInText } from '../tool-namespace'
 // every connection variant, rendered in the namespace the client sees.
 
 const canonical = new Set(tools.map((t) => t.name))
-const COMPANY_ID = 'ed461bc1-dbb5-4568-ae20-9337515878e2'
+const COMPANY_ID = 'c0000000-0000-4000-8000-0000000000a1'
 
 type CompanyMode = Pick<ServerInstructionsOptions, 'pinnedCompanyId' | 'pinnedCompanyName' | 'simpleCompanyMode' | 'companyId'>
 

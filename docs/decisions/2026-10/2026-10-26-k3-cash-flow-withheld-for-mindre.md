@@ -1,1 +1,0 @@
-[2026-10-26] A mindre K3 document carries no kassaflödesanalys (withheld, whatever the user chose): voluntary for mindre företag (ÅRL 2:1) and ours does not meet K3 kap 7 yet; a större företag keeps it but is blocked as AR-K3-STORRE-UNSUPPORTED.

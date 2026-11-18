@@ -56,8 +56,7 @@ export const SWEDBANK_CORPORATE_PAY_ID_PATTERN = /^\d{9}CPO\d{4}$/
  * The agreement number of Swedbank's ISO 20022 1.0 file service, which the
  * bank hands a company for "Filöverföring via internetbanken": "06", the
  * 10-digit organisationsnummer, then B001 (payments) or R001 (reporting), 16
- * characters (MIG 1.0's nnnnnnnnnnnnAnnn, docs/decisions/2026-10.md
- * 2026-10-13). The files here follow 2.0 (see above), so both id fields refuse
+ * characters (MIG 1.0's nnnnnnnnnnnnAnnn). The files here follow 2.0 (see above), so both id fields refuse
  * it by name instead of as a wrong format: Swedbank tells the customer to
  * enter it in the business system (agent feedback seq 2321961).
  */

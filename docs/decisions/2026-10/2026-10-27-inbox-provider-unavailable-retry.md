@@ -1,1 +1,0 @@
-[2026-10-27] The inbox sweep re-reads only readings stamped failed:provider_unavailable, capped at three readings: an outage says nothing about our code or the document, so retrying it hides no crash; crashes and other failures keep their own stamp, are never retried and stay visible.

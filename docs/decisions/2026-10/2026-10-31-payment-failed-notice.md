@@ -1,1 +1,0 @@
-[2026-10-31] A bank payment the bank rejects or that fails is mailed once to the people behind it (not the one who saw it on screen) and stays in Att göra until the invoice is paid again; executed payments get no mail: success is the normal path, and its mail would bury the failure mail.

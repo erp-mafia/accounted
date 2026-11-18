@@ -610,7 +610,7 @@ describe('createTransactionJournalEntry: pre-FY clamp', () => {
 })
 
 // The exported builder feeds the staged categorization preview (MCP
-// preview_data.lines and the pending-operations PATCH re-derive) — these
+// preview_data.lines and the pending-operations PATCH re-derive) - these
 // tests pin that what a user approves is the netted entry, not the
 // gross-on-cost-account summary that used to mislead users and agents.
 describe('buildTransactionEntryLines', () => {

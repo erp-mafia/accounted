@@ -42,7 +42,7 @@ Open `.env` and fill in the **required** values:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase dashboard → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase dashboard → Settings → API → `anon` `public` key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Settings → API → `service_role` key |
-| `NEXT_PUBLIC_APP_URL` | The URL where you'll access Accounted (e.g. `https://gnubok.example.com`) |
+| `NEXT_PUBLIC_APP_URL` | The URL where you'll access Accounted (e.g. `https://accounted.example.com`) |
 | `CRON_SECRET` | Any random string: `openssl rand -hex 32` works |
 
 Once `.env` is filled in, **restrict its permissions** so other users on the host can't read your service-role key or cron secret:
@@ -136,13 +136,13 @@ Ship a Caddy reverse proxy alongside the app: it auto-provisions Let's Encrypt c
 
 ### 1. Point a domain at the host
 
-`gnubok.example.com → <your-public-ip>` (A record). Ports 80 and 443 must be reachable from the internet (Let's Encrypt's HTTP-01 challenge uses port 80).
+`accounted.example.com → <your-public-ip>` (A record). Ports 80 and 443 must be reachable from the internet (Let's Encrypt's HTTP-01 challenge uses port 80).
 
 ### 2. Set `DOMAIN` in `.env`
 
 ```env
-DOMAIN=gnubok.example.com
-NEXT_PUBLIC_APP_URL=https://gnubok.example.com
+DOMAIN=accounted.example.com
+NEXT_PUBLIC_APP_URL=https://accounted.example.com
 ```
 
 ### 3. Download the overlay + Caddyfile
@@ -161,7 +161,7 @@ curl -fsSL -o docker/Caddyfile \
 docker compose -f docker-compose.yml -f docker/compose.caddy.yml up -d
 ```
 
-Caddy obtains a cert on first boot (takes ~10 s). Visit `https://gnubok.example.com`.
+Caddy obtains a cert on first boot (takes ~10 s). Visit `https://accounted.example.com`.
 
 If you already have nginx / a managed load balancer / Cloudflare in front, skip Caddy and point your existing proxy at `127.0.0.1:3000`: set `NEXT_PUBLIC_APP_URL` to match the public URL.
 
@@ -298,7 +298,7 @@ Example nginx upstream:
 
 ```nginx
 server {
-    server_name gnubok.example.com;
+    server_name accounted.example.com;
     listen 443 ssl http2;
     # ssl_certificate / ssl_certificate_key / etc.
 

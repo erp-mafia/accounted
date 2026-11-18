@@ -9,7 +9,7 @@ import { GET } from '../route'
 
 // RFC 9728 path-based discovery: Claude.ai's connector setup fetches
 // /.well-known/oauth-protected-resource/<mcp path> before any 401 and treats
-// a 404 as "Authorization failed" (seen in production 2026-08-26).
+// a 404 as "Authorization failed" (seen 2026-08-26).
 
 function call(url: string, path: string[]) {
   return GET(new Request(url, { headers: { host: new URL(url).host } }), {

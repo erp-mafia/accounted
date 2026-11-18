@@ -108,9 +108,8 @@ export function assembleMonthlyBreakdown(
  * Year-end entries are excluded, including the storno/correction chain of a
  * REVERSED year-end entry (an undone bokslut). Without that the resultatavslut,
  * which posts the mirror image of every P&L account, showed the whole year's
- * revenue as negative income in the fiscal-year-end month: measured on
- * production as 28 companies affected, worst case a single month understated by
- * 10 347 472 kr. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
+ * revenue as negative income in the fiscal-year-end month: measured in
+ * real ledgers, worst case a single month understated by millions. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
  * serves the same chart on the no-dimension hot path; the two must agree.
  *
  * Without a dimension filter the months come from that RPC itself (its

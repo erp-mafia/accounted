@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
  * Stand-in for AgentChat in the sandbox. The real chat surface POSTs to
  * /api/agent/invoke which is server-gated by guardSandbox(), so the input
  * would just produce a 403. Instead of showing that as a raw error, we
- * render a brief description of what the assistant does in prod and a
+ * render a brief description of what the assistant does in production and a
  * single "Skapa konto" CTA. Same chrome (header) as the real chat: only
  * the body swaps out.
  *

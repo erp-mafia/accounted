@@ -1,1 +1,0 @@
-[2026-10-18] A samlingsverifikat a SQL function posts gets one event per business act it books (per bank line, allocation or claim), all linked to it, not one per verifikat: each act keeps its own subject and party, as business_event_entries was made many to many for.

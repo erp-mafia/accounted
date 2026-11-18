@@ -1,1 +1,0 @@
-[2026-10-27] Procentregeln semesterlöneskuld is valued from the earning year's semesterlönegrundande lön (SemL 16 b §, the payout's procentregelnDayValue) and the running intjänandeår's semesterunderlag so far, not today's salary; today's-pay estimate only where Accounted lacks that year (VL-09).

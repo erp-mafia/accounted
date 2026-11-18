@@ -8,7 +8,7 @@ import { KvittojaktenButton } from './KvittojaktenButton'
  * The AI action on an Att göra row. Only "Verifikat utan underlag" carries
  * one: Kvittojakten, whose prompt names a skill and no tenant data, so it
  * opens the chat prefilled in one click. The generic "Gör med Claude"
- * handoff was pulled from the rows and page headers on 2026-09-24 (founder:
+ * handoff was pulled from the rows and page headers on 2026-09-24 (
  * it was everywhere) and deleted on 2026-10-12; the MCP accounting-task tool
  * still offers its task list (lib/ai-handoff/tasks).
  */

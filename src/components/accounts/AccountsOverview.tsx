@@ -30,7 +30,7 @@ async function fetchAccounts(url: string): Promise<ReconciliationAccount[]> {
 const COLUMNS = 7
 
 /**
- * Konton: the one list of every account with an outside truth (founder
+ * Konton: the one list of every account with an outside truth (product
  * decision 2026-10-18 merged the Översikt and Avstämning lists, which read
  * the same accounts from the same route). Bank accounts and the skattekonto
  * first, the balance accounts without a feed folded under their own group so

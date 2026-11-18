@@ -20,11 +20,11 @@ export const CAPABILITY = {
   org_lookup: 'org_lookup',
   /** EU VAT-number validation (VIES). NOT gated: identity/lookup is always free. */
   vat_validation: 'vat_validation',
-  /** Riksbanken FX auto-fetch. NOT gated at launch (kept free); manual rate entry is always allowed. */
+  /** Riksbanken FX auto-fetch. Not gated; manual rate entry is always allowed. */
   currency_rates: 'currency_rates',
-  /** Cloud backup to Google Drive. NOT gated at launch (kept free: never hold a customer's data hostage). */
+  /** Cloud backup to Google Drive. Not gated. */
   cloud_backup: 'cloud_backup',
-  /** Migration import from other systems (Fortnox/Visma/Bokio/BL/Briox). Kept open so new payers can migrate IN. */
+  /** Migration import from other systems (Fortnox/Visma/Bokio/BL/Briox). Not gated. */
   migration: 'migration',
   /** Bolagsverket iXBRL årsredovisning filing. Reserved (extension not yet enabled). */
   bolagsverket: 'bolagsverket',
@@ -57,8 +57,7 @@ export const CAPABILITY = {
    * Peppol e-invoicing (send/receive via a Peppol Access Point). Never free:
    * on hosted it needs a paid account plus the operator-granted Peppol access
    * on top of the plan; on a self-host it is brokered through the connector
-   * (Arcim's contracted access point, with a per-key one-address and volume
-   * quota).
+   * (with a per-key one-address and volume quota).
    */
   peppol: 'peppol',
   /**
@@ -66,17 +65,17 @@ export const CAPABILITY = {
    * company activates itself (lib/collections; the provider is described at
    * runtime by the Connect catalogue, never named here). In
    * PAID_CAPABILITIES like every other paid service: the Stripe subscription
-   * sync, operator grants and, since the founder decision of 2026-10-22, the
-   * trial write it. The grant gates START paths only (activation, handover,
-   * delivery, the daily batch): a lapsed plan or trial never stops the duties
-   * toward a case already open at the provider (lib/collections/flags.ts).
+   * sync, operator grants and, since 2026-10-22, the trial write it. The
+   * grant gates START paths only (activation, handover, delivery, the daily
+   * batch): a lapsed plan or trial never stops the duties toward a case
+   * already open at the provider (lib/collections/flags.ts).
    */
   collections: 'collections',
   /**
    * BankID signing of archive documents (lib/signing): sending a PDF for
    * signing, from the app, v1 or MCP, and the board's BankID signatures on a
    * locked årsredovisning. Part of the paid plan and the trial, no fee per
-   * document yet (docs/decisions/2026-10/2026-10-26-signing-in-paid-plan.md). The grant
+   * document. The grant
    * gates START paths only (creating a request): a lapsed plan never stops
    * a signer finishing a request already sent, nor anyone reading the
    * signed copy and evidence package.
@@ -87,19 +86,16 @@ export const CAPABILITY = {
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
 
 /**
- * The set actually withheld from non-payers (manual tier) at the 2026-07-07
- * cutover. Founder decision (2026-06-28): gate the high-value recurring external
- * services only.
+ * The set withheld on the manual tier since the 2026-07-07 cutover: the
+ * recurring external services only.
  *
- * KEPT FREE on purpose:
- *   - identity & lookup: TIC org_lookup, VIES vat_validation, BankID login:
- *     they aid onboarding/data quality; gating them is friction in the wrong place.
+ * NOT gated:
+ *   - identity & lookup: TIC org_lookup, VIES vat_validation, BankID login.
  *   - currency_rates (FX auto-fetch) and cloud_backup.
  * Internal bookkeeping is always fully usable on the manual tier.
  *
- * NOTE: bank_sync and skatteverket stay PAID even though their flows use BankID
- * as an auth step: what's charged for is the bank data sync and the VAT/AGI
- * filing service, not the identity check.
+ * NOTE: bank_sync and skatteverket are paid capabilities even though their
+ * flows use BankID as an auth step.
  */
 export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.ai,
@@ -115,7 +111,7 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   // 2026-09-10 (issue #2494): the key is kept and granted so the gate can
   // be re-armed by env, but nothing withholds extra users today.
   CAPABILITY.multi_user,
-  // Trial-seeded since 2026-10-22 (founder decision; paid plan only before).
+  // Trial-seeded since 2026-10-22 (paid plan only before).
   CAPABILITY.collections,
   // Trial-seeded and Stripe-synced since 20261028130000.
   CAPABILITY.signing,
@@ -123,11 +119,10 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
 
 /**
  * Paid capabilities a trial never includes: only a paying subscription (the
- * Stripe sync) or an operator grant (manual, comp, a byrå team agreement)
- * unlocks them. Empty since 2026-10-22: collections was the only one (founder
- * decision 2026-10-04) and is now part of the trial (founder decision
- * 2026-10-22, migration 20261022120000); a lapsed trial still finishes the
- * cases it opened.
+ * Stripe sync) or an operator grant
+ * unlocks them. Empty since 2026-10-22: collections was the only one and is
+ * now part of the trial (migration 20261022120000); a lapsed trial still
+ * finishes the cases it opened.
  */
 export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [] as const
 

@@ -422,7 +422,7 @@ describe('fiscal_period_frameworks', () => {
     }
   })
 
-  // The bostadsrättsförening arrives with !914 (ENTITY_TYPES and the
+  // The bostadsrättsförening arrives later (ENTITY_TYPES and the
   // companies.entity_type CHECK); until then this case does not run.
   const BRF = 'bostadsrattsforening'
   it.runIf((ENTITY_TYPES as readonly string[]).includes(BRF))(

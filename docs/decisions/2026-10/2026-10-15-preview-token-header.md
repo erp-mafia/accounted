@@ -1,1 +1,0 @@
-[2026-10-15] A v1 preview token travels in a Preview-Token header, not a body field: it is a precondition like Idempotency-Key, stays out of strict operation inputs and the idempotency hash, and withApiV1 refuses it where unsupported so it is never ignored.

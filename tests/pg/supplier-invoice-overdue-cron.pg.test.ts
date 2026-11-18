@@ -249,7 +249,7 @@ describe('update_overdue_supplier_invoices() un-flip', () => {
  * Migration-reset archives, 20260924204244: a past-due payable inside a
  * migration-reset source company made block_migration_reset_source_mutation
  * raise, which rolled back the whole UPDATE and stopped the flip for every
- * company (prod: failing daily from 2026-08-29).
+ * company (seen: failing daily from 2026-08-29).
  */
 describe('update_overdue_supplier_invoices() with a migration-reset archive', () => {
   it('skips the frozen archive and still flips every other company', async () => {

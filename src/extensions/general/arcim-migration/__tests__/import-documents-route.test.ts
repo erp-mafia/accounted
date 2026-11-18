@@ -589,7 +589,7 @@ describe('POST /import-documents continues from the point the saved run reached 
     expect(body.result.run).toBe('2026-10-31T10:37:18Z')
   })
 
-  it('leaves a newer run alone when a tab still looping on an older run continues (review of !1172)', async () => {
+  it('leaves a newer run alone when a tab still looping on an older run continues', async () => {
     ;(importProviderDocuments as Mock).mockResolvedValue({ ...nextSlice, nextCursor: 'file-9200' })
     const { ctx, set } = contextWithRun()
 

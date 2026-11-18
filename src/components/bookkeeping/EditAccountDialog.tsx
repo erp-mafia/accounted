@@ -59,9 +59,9 @@ const RULE_TYPE_LABELS: Record<DimensionRuleType, string> = {
 }
 
 const RULE_TYPE_HELP: Record<DimensionRuleType, string> = {
-  required: 'Krävs — verifikat på kontot kan inte bokföras utan värde',
-  default: 'Förval — värdet föreslås men kan ändras',
-  fixed: 'Låst — värdet sätts alltid automatiskt',
+  required: 'Krävs: verifikat på kontot kan inte bokföras utan värde',
+  default: 'Förval: värdet föreslås men kan ändras',
+  fixed: 'Låst: värdet sätts alltid automatiskt',
 }
 
 export function EditAccountDialog({ open, onOpenChange, account, onSaved }: EditAccountDialogProps) {
@@ -83,7 +83,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   const [isActive, setIsActive] = useState(account.is_active)
   const [isSaving, setIsSaving] = useState(false)
 
-  // Dimension rules ("Dimensionsregler") — visible only when the company has
+  // Dimension rules ("Dimensionsregler") - visible only when the company has
   // dimensions enabled (same /api/settings gate as JournalEntryForm). Rule
   // mutations apply immediately via their own fetches + toasts; they are
   // deliberately independent of the account PUT below.
@@ -195,7 +195,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
   async function handleToggleRule(rule: AccountDimensionRuleDto, checked: boolean) {
     const ruleId = rule.account_dimension_rule_id
-    // Optimistic — the switch flips immediately and reverts on failure.
+    // Optimistic - the switch flips immediately and reverts on failure.
     setRules((prev) =>
       prev.map((r) =>
         r.account_dimension_rule_id === ruleId ? { ...r, is_active: checked } : r,

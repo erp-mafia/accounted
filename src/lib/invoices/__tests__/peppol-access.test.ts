@@ -26,7 +26,7 @@ function row(overrides: Partial<PeppolAccessRow> = {}): PeppolAccessRow {
     requested_by: 'user-1',
     request_note: null,
     enabled_at: '2026-08-21T16:00:00.000Z',
-    enabled_by: 'jakob',
+    enabled_by: 'anna',
     disabled_at: null,
     note: null,
     created_at: '2026-08-21T15:00:00.000Z',
@@ -159,14 +159,14 @@ describe('requestPeppolAccess / setPeppolAccess', () => {
 
   it('grants with a cap and receiving flag, and disables without touching the cap', async () => {
     enqueue({ data: row({ max_sends: 25, receive_enabled: true }), error: null })
-    await setPeppolAccess({ service, companyId: 'company-1', status: 'enabled', maxSends: 25, receiveEnabled: true, by: 'jakob' })
+    await setPeppolAccess({ service, companyId: 'company-1', status: 'enabled', maxSends: 25, receiveEnabled: true, by: 'anna' })
     const granted = calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
-    expect(granted).toMatchObject({ status: 'enabled', max_sends: 25, receive_enabled: true, enabled_by: 'jakob', disabled_at: null })
+    expect(granted).toMatchObject({ status: 'enabled', max_sends: 25, receive_enabled: true, enabled_by: 'anna', disabled_at: null })
     expect(typeof granted.enabled_at).toBe('string')
 
     reset()
     enqueue({ data: row({ status: 'disabled', disabled_at: 'x' }), error: null })
-    await setPeppolAccess({ service, companyId: 'company-1', status: 'disabled', by: 'jakob' })
+    await setPeppolAccess({ service, companyId: 'company-1', status: 'disabled', by: 'anna' })
     const disabled = calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
     expect(disabled.status).toBe('disabled')
     expect(disabled.max_sends).toBeUndefined()

@@ -12,8 +12,7 @@
  *
  * Keys that look alike (same core) are reported in the reason as
  * similar_to, so the queue can offer "same as X?" for a person to decide.
- * The model selection step is not wired here yet; it runs in shadow through
- * scripts/parties/eval-selection.ts until its decisions are labelled.
+ * The model selection step is not wired here yet.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'

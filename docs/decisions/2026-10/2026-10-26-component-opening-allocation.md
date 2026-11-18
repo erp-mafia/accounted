@@ -1,1 +1,0 @@
-[2026-10-26] An opening amount given for a whole component asset is split over components stating none, by each one's own straight-line write-off to the opening date, capped at its base: a default the user sees and edits per component; refusing would block migrations again.

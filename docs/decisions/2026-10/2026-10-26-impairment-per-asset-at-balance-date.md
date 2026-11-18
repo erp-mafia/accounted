@@ -1,1 +1,0 @@
-[2026-10-26] Nedskrivning is per asset (no cash-generating units), dated the balansdag after the year's depreciation, from a stated recoverable amount; a reversal is capped by the straight-line plan without it (K3 27.15). Mid-year write-downs and CGUs are follow-ups.

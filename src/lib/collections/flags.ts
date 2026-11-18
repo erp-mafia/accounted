@@ -140,7 +140,7 @@ export interface CollectionsGateFacts {
  * A sandbox company whose connection runs on the fake provider, or would:
  * a new row of a sandbox always gets route 'fake' (registry.ts). Such a
  * company needs neither the paid capability nor a place on the pilot list
- * (founder default 2026-10-04: sandboxes try the flows on the fake, nothing
+ * (default 2026-10-04: sandboxes try the flows on the fake, nothing
  * reaches a customer); COLLECTIONS_ENABLED still decides for it too.
  */
 export function isSandboxOnFake(facts: Pick<CollectionsGateFacts, 'sandbox' | 'connection'>): boolean {

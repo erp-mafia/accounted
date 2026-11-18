@@ -11,8 +11,8 @@ import type { JournalEntrySourceType } from '@/types'
  * acts carry the se. prefix.
  *
  * Closed and add-only: a kind is never renamed or removed, because events
- * are kept seven years (BFL 7 kap.). Add one here with a decision record
- * (docs/decisions). The database checks the shape only
+ * are kept seven years (BFL 7 kap.). Add one here with its reason in the
+ * pull request. The database checks the shape only
  * (business_events_kind_check), so adding one needs no migration.
  */
 export const BUSINESS_EVENT_KINDS = [

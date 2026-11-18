@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
  * offers a selectable server address and an explicit connector link. Same
  * URLs as Settings and the Hem checklist. A client that has completed the
  * OAuth sign-in (the Done step polls /api/onboarding/ai-status) turns its
- * chip into a green Ansluten mark. Founder direction 2026-09-14: no card,
+ * chip into a green Ansluten mark. Product direction 2026-09-14: no card,
  * all three visible, the connect action a pill like everything else. An
  * agent connected with a key that names none of the three (an older key,
  * Cursor) shows as one generic connected agent instead of three offers that

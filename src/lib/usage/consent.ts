@@ -1,13 +1,13 @@
 /**
  * The charge for use above what a month includes, open for one company
  * (usage_consents). When a company reaches the included amount of a priced
- * kind, the paid action stops; the company asks for more (requests.ts) and a
- * founder opens the charge by writing the company's row at today's price and
- * included amount. It holds, month after month, until a founder closes it
+ * kind, the paid action stops; the company asks for more (requests.ts) and an
+ * operator opens the charge by writing the company's row at today's price and
+ * included amount. It holds, month after month, until an operator closes it
  * (revoked_at). Nothing above the included amount is billed without it.
  *
  *   insert into usage_consents (company_id, kind, unit_price_ore, included, accepted_by)
- *   values ('<company>', '<kind>', <price in öre>, <included>, '<founder user id>');
+ *   values ('<company>', '<kind>', <price in öre>, <included>, '<operator user id>');
  *
  * An open row covers the price it was given at or lower: a price raised
  * since needs a new row. No route writes it: neither the company nor an

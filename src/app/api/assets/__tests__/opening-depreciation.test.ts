@@ -148,7 +148,7 @@ describe('POST /api/assets: opening accumulated depreciation', () => {
     expect(res.status).toBe(200)
   })
 
-  // Founder decision 2026-09-23 refused this; reversed by K3 plan decision 4.
+  // Product decision 2026-09-23 refused this; reversed by K3 plan decision 4.
   it('accepts an opening amount on a K3 component asset: the service splits it over the components', async () => {
     enqueue({ data: { accounting_framework: 'k3' } })
     frameworkOnDateMock.mockResolvedValue('k3')

@@ -1,1 +1,0 @@
-[2026-10-16] The application link writers stamp a basis now; eight SQL RPC writers (bulk_book_transactions, match_batch_allocate, the link-voucher RPCs and others) wait for a restatement, listed in a coverage test whose exact counts can only shrink.

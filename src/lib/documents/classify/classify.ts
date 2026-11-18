@@ -58,7 +58,7 @@ export const CLASSIFICATION_JSON_SCHEMA = {
  * normaliseClassification. The same prompt gives the same answer, so the job
  * queue settles the classify job as SCHEMA_MISS_RESULT instead of asking four
  * more times, and the backfill leaves the document alone until it is read
- * again or a person types it (prod 2026-11-09: jobs gave up after five paid
+ * again or a person types it (seen 2026-11-09: jobs gave up after five paid
  * attempts each and the documents stayed untyped).
  */
 export const SCHEMA_MISMATCH = 'classification did not match schema'
@@ -161,9 +161,7 @@ interface VerifikatShape {
  * record of which way the money went: a supplier debt raised (2440 credit)
  * or an expense is a purchase, a customer claim raised (15xx debit) or
  * revenue (3xxx credit) a sale. Beats the model's guess between the two
- * invoice types (prod 2026-09-26: 217 purchase documents typed
- * customer_invoice in 41 companies; Arcim's Kundfakturor held six supplier
- * invoices). Says nothing for a payment (the claim or debt settled: the
+ * invoice types. Says nothing for a payment (the claim or debt settled: the
  * document on it is as often a payment notice as the invoice, and the text
  * is the better judge), for a mixed shape, or for an entry that is neither.
  */
@@ -206,7 +204,7 @@ async function verifikatOf(supabase: SupabaseClient, row: DocumentRow): Promise<
  * the row, set for every purchase document that came through Inköp). The
  * inbox only ever sees documents the company pays, so its "supplier_invoice"
  * or "receipt" is the company's own knowledge of the direction and beats
- * the model's guess between the two invoice types (prod 2026-09-24: 131
+ * the model's guess between the two invoice types (seen 2026-09-24: 131
  * invoices addressed to the company typed customer_invoice, in 23
  * companies, because Swedish invoices are headed "Kundfaktura").
  */
@@ -461,7 +459,7 @@ export async function classifyUnclassifiedDocuments(
     .limit(limit * 10)
   if (error) throw new Error(`fetch unclassified failed: ${error.message}`)
   // A document the model already classified keeps no type only when its row refuses the update (a locked
-  // period, an archived reset source). Asking again cannot change that: prod 2026-09-24, 29 such documents
+  // period, an archived reset source). Asking again cannot change that: seen 2026-09-24, 29 such documents
   // were classified about 300 times each in one day.
   const candidates = ((data ?? []) as Array<{ id: string }>).map((r) => r.id)
   let asked = new Set<string>()

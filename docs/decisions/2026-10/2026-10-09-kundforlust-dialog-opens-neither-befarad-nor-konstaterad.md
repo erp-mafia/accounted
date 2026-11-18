@@ -1,1 +1,0 @@
-[2026-10-09] The kundförlust dialog opens with neither befarad nor konstaterad chosen and its confirm stays disabled until the person picks one: the two differ in what happens to the invoice and its output VAT, and a preselected konstaterad was the variant that changes VAT and needs evidence.

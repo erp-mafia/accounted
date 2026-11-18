@@ -1,1 +1,0 @@
-[2026-10-27] Webshop day booking is one verifikat per store, day and payment method with server-derived lines and every order linked (BFNAR 2013:2 p. 6.1), not mark-booked over MCP: marking only points at a verifikat the agent built, so nothing checks its sums and rows stay unfrozen.

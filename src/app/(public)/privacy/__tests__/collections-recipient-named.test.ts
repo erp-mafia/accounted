@@ -5,13 +5,12 @@ import path from 'node:path'
 /**
  * Pins the named collections recipient on /dpa and /privacy.
  *
- * Once the collections provider's contract is signed, the two legal pages
- * name the company a customer can activate for reminders and collection,
+ * The two legal pages name the company a customer can activate for reminders and collection,
  * next to the provider-neutral disclosure that
  * collections-delivery-disclosures.test.ts pins. This test reads the name
  * from the pages instead of repeating it, so the two pages stay the only
  * files that name the provider: the public name guard
- * (scripts/checks/unsigned-provider-names.mjs) allowlists exactly them, and
+ * (scripts/checks/provider-name-denylist.mjs) allowlists exactly them, and
  * the last case below checks the app source without needing the guard's
  * secret name list.
  */

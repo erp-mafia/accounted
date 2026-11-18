@@ -1,1 +1,0 @@
-[2026-10-15] src/lib/modules/manifest.ts is the single declaration of building blocks that operations, v1/OpenAPI and the boundary ratchet resolve from. An operation's module is its id prefix, not a field on 185 definitions: no diff where concurrent work edits; a test makes new ones resolve.

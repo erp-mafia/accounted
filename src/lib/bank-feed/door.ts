@@ -9,16 +9,14 @@
  *      hosted and self-hosted alike.
  *   2. Is the company let in? OPENPAYMENTS_READING_COMPANY_IDS is the pilot
  *      switch and, unlike the payments one, it is OFF when unset or empty:
- *      Enable Banking stays the bank feed until a founder lists a company. A
+ *      Enable Banking stays the bank feed until an operator lists a company. A
  *      comma-separated list of company ids opens the door for exactly those
  *      companies, whatever their plan; `*` opens it for every company on a
  *      paid plan (CAPABILITY.bank_sync, the paid key of the bank services):
- *      a Stripe subscription, including a card entered during the trial, or a
- *      manual, comp or team agreement. The seeded 30-day trial counts only
- *      when OPENPAYMENTS_READING_TRIALS=true. Open Payments bills each
- *      calendar month in which a company's bank is read, not the consent, and
- *      the cron stops reading once the trial grant has expired, so a trial
- *      that never converts costs the one or two months it was read in.
+ *      a Stripe subscription, including a card entered during the trial, or
+ *      an operator grant. The seeded 30-day trial counts only when
+ *      OPENPAYMENTS_READING_TRIALS=true; the cron stops reading once the
+ *      trial grant has expired.
  *      Read on every call so a redeploy with a new value needs no restart.
  *
  * Polling, syncing on the cron and disconnecting a connection that already

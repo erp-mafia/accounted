@@ -88,7 +88,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     labelKey: 'v2_todo',
     sub: [{ href: '/pending', module: 'platform', labelKey: 'v2_proposals' }],
   },
-  // Inkorg, lifted out of Inköp to sit under Att göra (founder decision
+  // Inkorg, lifted out of Inköp to sit under Att göra (product decision
   // 2026-10-16): what arrives is not only purchases, and an inbox that feeds
   // supplier invoices, utlägg and verifikat should not live inside one of
   // them. Per company while it rolls out; Underlag under Inköp hides for the
@@ -112,7 +112,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/accounts',
     module: 'ledger',
     labelKey: 'v2_accounts',
-    // One list, no sub-items (founder decision 2026-10-18): Avstämning was a
+    // One list, no sub-items (product decision 2026-10-18): Avstämning was a
     // second list of the same accounts, so it merged into Konton. Each row
     // opens the account's reconciliation at /reconciliation?account=, which
     // keeps this row lit (DashboardNav isActive).
@@ -121,7 +121,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/transactions',
     module: 'transactions',
     labelKey: 'transactions',
-    // Regler is back in the menu (founder call 2026-10-28, reversing the
+    // Regler is back in the menu (product call 2026-10-28, reversing the
     // 2026-09-07 one): it is where a rule is set to always ask, and where
     // Ett klick says which rules book without a review (accounted#130).
     sub: [
@@ -134,7 +134,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     module: 'invoicing',
     labelKey: 'v2_invoicing',
     sub: [
-      // A quote is not an invoice (founder direction 2026-09-12): its own row
+      // A quote is not an invoice (product direction 2026-09-12): its own row
       // above Kundfakturor, shown while quotes are switched on in settings.
       { href: '/quotes', module: 'invoicing', labelKey: 'quotes', requiresQuotes: true },
       // Återkommande opens from Ny faktura; it is a way to make invoices, not a place.
@@ -151,7 +151,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
   },
   {
     // Inköp lands on the invoice list: the flow-strip landing that sat here
-    // said less than the list itself (founder call 2026-09-09).
+    // said less than the list itself (product call 2026-09-09).
     href: '/supplier-invoices',
     module: 'supplier-invoices',
     labelKey: 'v2_purchases',
@@ -240,7 +240,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     ],
   },
   {
-    // Bolaget, one row (founder decision 2026-10-30): the registers of the
+    // Bolaget, one row (product decision 2026-10-30): the registers of the
     // company as a legal entity (aktiebok, board, meetings, capital, owner
     // tax; ABL 5, 6 and 8 kap.) and Avtal och åtaganden live behind the tab
     // bar of the /bolaget pages, not as sub-items here. Shown where either

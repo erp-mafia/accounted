@@ -82,7 +82,7 @@ const connectHandler = findRoute('POST', '/connect').handler as RouteHandler
 
 const APP_URL = 'https://app.example.test'
 const CALLBACK_PATH = '/api/extensions/ext/arcim-migration/callback'
-const ACTIVATION_KEY = '36b2bf61-0514-4825-a8a5-08cf151176f2'
+const ACTIVATION_KEY = '11111111-2222-4333-8444-555555555555'
 const USER_KEY = '1f0e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f'
 
 const blState = {

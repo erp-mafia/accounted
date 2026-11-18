@@ -106,7 +106,7 @@ describe('gnubok_search_tools', () => {
   })
 
   it('a bag of words that no single tool holds falls back to any-term, best match first', async () => {
-    // Every-term finds nothing here (prod, 2026-09-21: "arkiv graph source links fact history" answered 0 tools).
+    // Every-term finds nothing here (seen 2026-09-21: "arkiv graph source links fact history" answered 0 tools).
     const bag = await call({ query: 'neighbourhood zzzunmatchedzzz', limit: 50 })
     expect(bag.total_matched).toBeGreaterThan(0)
     expect(bag.tools[0].name).toBe('gnubok_get_neighbourhood')

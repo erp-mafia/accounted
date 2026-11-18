@@ -1,1 +1,0 @@
-[2026-10-18] Bokslut and Årsredovisning guidance and § references move behind one ? per step or section instead of running text; field hints keep only what changes the answer, and no legal fact or reference is removed.

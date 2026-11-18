@@ -1,5 +1,5 @@
 /**
- * Tests for POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner —
+ * Tests for POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner:
  * input-bound validation. The schablonintäkt rate feeds the avsättning cap
  * base (IL 30 kap 25 % limit), so an unbounded rate would let a caller
  * inflate the legal ceiling; these tests lock the bounds in.

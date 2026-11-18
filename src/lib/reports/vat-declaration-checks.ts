@@ -185,7 +185,7 @@ function describeAccount(account: VatRevenueAccountWithoutRuta | VatAccountWitho
  * belongs to the VAT period that contains the year end (BFL 5 kap 2 §: they
  * are booked at räkenskapsårets utgång). Filed before the cut-off is posted,
  * that moms is missing from the declaration and a rättad momsdeklaration is
- * needed afterwards. WARNING, never ERROR (founder decision 2026-10-03):
+ * needed afterwards. WARNING, never ERROR (product decision 2026-10-03):
  * there is no cut-off door in the dashboard yet, and manual filing stays
  * ungated whatever the tier.
  */
@@ -239,7 +239,7 @@ export function kontantmetodCutoffFindings(facts: KontantmetodCutoffVatFacts | u
  *
  * WARNING, never ERROR: the account may just as well be momsfri or not a sale
  * at all, and the declaration deliberately does not infer ruta 05 for it (an
- * open founder decision). The user is told which accounts and how much, and
+ * open product decision). The user is told which accounts and how much, and
  * where to fix it: the momskod on the account in Kontoplan.
  */
 export function revenueAccountWithoutRutaFinding(

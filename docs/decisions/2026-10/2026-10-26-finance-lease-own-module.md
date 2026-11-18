@@ -1,1 +1,0 @@
-[2026-10-26] Finansiell leasing under K3 20.5-20.11 is an opt-in module of its own (lib/bokslut/leasing), not part of the asset register: payments stay on the lease cost account during the year and one year_end verifikat moves them to interest (accrued by month, 20.9), amortisation and depreciation; 20.29 stays the default.

@@ -1,1 +1,0 @@
-[2026-10-15] gnubok_get_transaction is a search-only hand-written read, not an operation: v1 transactions.get is a hand-written route, and the tool must follow all three booking anchors (pointer, bulk link, batch payment) to show the verifikat, which that route does not.

@@ -298,7 +298,7 @@ describe('claimSendingDomain', () => {
     expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
     expect(domainsMock.get).not.toHaveBeenCalled()
     expect(domainsMock.remove).not.toHaveBeenCalled()
-    // The founders hear about it: one alert-flagged error with a stable code
+    // The operators hear about it: one alert-flagged error with a stable code
     // and Resend's own text for them to read.
     expect(logMock.error).toHaveBeenCalledTimes(1)
     expect(logMock.error).toHaveBeenCalledWith(

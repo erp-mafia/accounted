@@ -1,1 +1,0 @@
-[2026-10-28] The filed-VAT check for a lock date move moved from the v1/MCP lock operation into updateCompanySettings (refuseReopeningFiledVat), so period.lock_date_changed names the reopened periods on every door from one read; a failed read now fails a settings page save closed too (#128).

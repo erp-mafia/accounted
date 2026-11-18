@@ -1,1 +1,0 @@
-[2026-10-15] v1 pending operations are hand-written registerEndpoint routes, not operations: approve needs the calling key (commit actor, unattended limit) that OperationContext lacks, and an operations entry would also generate an MCP door; list and get stay beside them as one family.

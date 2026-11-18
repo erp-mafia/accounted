@@ -25,7 +25,7 @@ async function insertDocumentSurfaceEntry(params: Parameters<typeof insertPosted
 }
 
 /**
- * P1-3 (mcp_optimization_plan): both missing-document surfaces implement ONE
+ * Both missing-document surfaces implement ONE
  * predicate: posted, needs-doc source type, no CURRENT-version
  * document_attachments row, no journal_entry_no_doc_required waiver, no
  * supplier-invoice reference carrying a retained document: and the
@@ -526,7 +526,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       })
     }
 
-    // Case A (Emil's flow): doc pinned to the tx, never propagated.
+    // Case A: doc pinned to the tx, never propagated.
     const jeA = await mkPostedJe(1, s.fiscalPeriodId)
     const docA = await attachDocument({ userId: s.userId, companyId: s.companyId, journalEntryId: null })
     const txA = await insertTransaction({

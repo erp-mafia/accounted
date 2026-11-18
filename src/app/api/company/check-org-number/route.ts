@@ -16,7 +16,7 @@ import { CheckOrgNumberBodySchema } from '@/lib/api/schemas'
  * own companies (`{ id, name }[]`), scoped by RLS. Nothing about other
  * accounts leaves the server: whether the same org number exists under
  * someone else's account is not the caller's business (a company can be
- * set up in several accounts on purpose; the founder removed the
+ * set up in several accounts on purpose; the operator removed the
  * "finns redan i Accounted" hint 2026-09-09).
  *
  * Org-number reuse across the platform is intentionally allowed (see

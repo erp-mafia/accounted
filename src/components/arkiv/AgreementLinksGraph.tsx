@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ARKIV } from './palette'
 
 /**
- * The "Kopplingar" figure of the agreement page (canvas artboard Avtal): the
+ * The "Kopplingar" figure of the agreement page: the
  * agreement in the middle, and around it what it is tied to: the
  * counterparty, its documents (the source one lit), the stream of expected
  * payments, a deposit, the asset, the notice date. Only what exists is drawn.

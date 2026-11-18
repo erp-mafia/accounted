@@ -58,7 +58,7 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     )
     // Learning on every booking: occurrence_count / confidence / last_seen_date,
     // and counterparty_aliases, which the learning path merges in the same
-    // write (20260901200000; prod showed 15 of the first 16 audit rows were
+    // write (20260901200000; without it 15 of the first 16 audit rows were
     // alias+learning noise).
     await getPool().query(
       `UPDATE public.categorization_templates

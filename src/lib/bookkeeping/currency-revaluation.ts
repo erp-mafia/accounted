@@ -737,8 +737,7 @@ interface RevaluationRow {
  * the payment's realised difference, which runs from the original rate again,
  * and by the next revaluation, measured from the original rate once more. With
  * the återföring the ledger is back on the original rate from the next year's
- * first day, the convention the monthly revaluation already follows
- * (docs/decisions/2026-10/2026-10-26-monthly-fx-revaluation-reversed.md): the
+ * first day, the convention the monthly revaluation already follows: the
  * closed year keeps its balansdag valuation (ÅRL 4 kap. 13 §), and the next
  * year books only the difference that arises in it.
  *
@@ -841,8 +840,7 @@ export async function syncCurrencyRevaluationReversals(
         source_type: 'currency_revaluation',
         source_id: revaluation.id,
         // No voucher_series: the engine takes the company's series for
-        // currency_revaluation from its map, as new year-end vouchers do
-        // (docs/decisions/2026-11/2026-11-01-year-end-series-from-map.md).
+        // currency_revaluation from its map, as new year-end vouchers do.
         lines,
       },
     })

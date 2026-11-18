@@ -1,1 +1,0 @@
-[2026-11-08] Ombud copy says Accounted is appointed for the company (aktiebolag as well as enskild firma, firmatecknare sign for it) and the fallback opens Skatteverket's "Utse ombud för ett företag": skatteverket.se/ombud lands on the page for a private person.

@@ -105,7 +105,7 @@ const group = (type: string | null): keyof ArkivMap['documents']['by_group'] =>
  * map only: the company, the documents by group and the latest ones by file
  * name and type. No agreements, facts or findings, and no title or date read
  * out of a document by a model: an agent starts from what is archived, then
- * reads the text (prod 2026-09-24: the map handed agents a stale loan date and
+ * reads the text (seen 2026-09-24: the map handed agents a stale loan date and
  * a round's total filed as one investor's amount).
  */
 export async function buildArkivMap(supabase: SupabaseClient, companyId: string, opts: { brain?: boolean } = {}): Promise<ArkivMap> {

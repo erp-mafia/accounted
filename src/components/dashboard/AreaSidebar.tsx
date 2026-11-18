@@ -57,7 +57,7 @@ interface AreaSidebarProps {
  * company row on top, the area's name, its create button, its rows, one
  * Inställningar row for the area's settings pages, and the user block at the
  * foot. One sidebar per area; the rail beside the panel switches between
- * them. Metrics follow the prototype (kit/board.py _sidebar): 10px side
+ * them. Metrics: 10px side
  * padding, 30px rows with a 16px icon and a 10px gap, a 44px title row.
  */
 export function AreaSidebar({

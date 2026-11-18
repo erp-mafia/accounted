@@ -25,7 +25,7 @@ const CheckoutSchema = z.object({
  * The client redirects to it; provisioning happens via the webhook on
  * checkout.session.completed (never trust the success redirect for fulfilment).
  *
- * company_subscriptions is read/written via the service client on purpose —
+ * company_subscriptions is read/written via the service client on purpose:
  * the row is webhook-owned and not member-readable under RLS; every query
  * still filters by the membership-validated companyId.
  */

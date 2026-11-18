@@ -1,1 +1,0 @@
-[2026-10-16] kernel-import: engine.ts's two lib/invoices edges become one edge to lib/composition/reversal-hooks (31 to 30), kept counted because the seam still pulls ROT/RUT under the kernel; compositionSeams pins who imports it and what it imports.

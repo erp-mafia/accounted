@@ -143,7 +143,7 @@ export function useCapability(key: CapabilityKey): boolean {
  * Whether POST /api/agent/categorize can answer for the active company. The
  * route refuses a sandbox company and one without the AI capability, and its
  * callers hide the refusal, so asking anyway only spends a request: 480 of
- * them from 62 companies in the week to 2026-11-12, nearly all on an expired
+ * them from many companies in the week to 2026-11-12, nearly all on an expired
  * trial. Fail-open outside a CompanyProvider, like useCapability.
  */
 export function useAssistantReadsAvailable(): boolean {

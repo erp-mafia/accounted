@@ -29,7 +29,7 @@ export const NOTHING_SETTLED: InvoiceSettlement = { status: null, paidAmount: 0,
  * came from the provider's explicit payment-status enum
  * (paymentStatus.source === 'enum') and says NOT settled, a non-positive
  * balance beside it is a payload artefact rather than a settlement, so the
- * open balance is the total. Company 5208b894 (Visma, 2026-09-10) imported all
+ * open balance is the total. One company (Visma, 2026-09-10) imported all
  * 53 of its unpaid supplier invoices as paid with remaining_amount 0 because
  * the zero balance was combined with the flag by OR. Without an enum the
  * balance keeps its drift-tolerant meaning: a residual öre resolves to paid.

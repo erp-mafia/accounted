@@ -1,1 +1,0 @@
-[2026-11-17] An underlag Arkiv types "other" stays in Underlag when the reader saw any amount, negative included (crm#1887): a payout advice is a verifikat's underlag too. Chosen over the proposed threshold on large amounts: a size limit is arbitrary.

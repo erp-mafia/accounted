@@ -1,1 +1,0 @@
-[2026-10-16] Bank match evidence: exakt = OCR and amount (a giro on the row may not contradict), stark = amount and payee giro in the payment window, trolig = amount, window and name; a tie the date cannot break proposes nothing: a proposal claims one row, never a score.

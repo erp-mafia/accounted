@@ -1,1 +1,0 @@
-[2026-10-26] Rows with a manual avgifter_amount_override are left out of the regionalt stöd underlag (FK471): the operator's figure is filed as is and may already carry a reduction, so claiming the 10 % avdrag on top could take it twice, while leaving them out can only under-claim (PH 208).

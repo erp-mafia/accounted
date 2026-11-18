@@ -29,8 +29,7 @@
  * their employed days in the year; days taken beyond that are förskott. The
  * owed days are earned minus taken, never below zero per employee: a
  * förskott is reclaimable only in the cases Semesterlagen 29 a § lists, so it
- * is not recognised as an asset against the other employees' liability
- * (docs/decisions/2026-10/2026-10-27-semesterskuld-forskott-floor.md). On
+ * is not recognised as an asset against the other employees' liability. On
  * the year's last day earned is the whole entitlement, which is the figure
  * the semesterårsavslut has always valued.
  *

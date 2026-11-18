@@ -2,7 +2,7 @@ import type { ReconciliationAccount } from './schemas'
 
 /**
  * Where an account on the Konton list leads. The list is the one list of
- * accounts with an outside truth (founder decision 2026-10-18: Översikt and
+ * accounts with an outside truth (product decision 2026-10-18: Översikt and
  * Avstämning merged); a row opens the account's reconciliation, and the bare
  * /reconciliation address redirects to the list (next.config.ts).
  */

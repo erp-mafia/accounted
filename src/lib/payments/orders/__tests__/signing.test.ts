@@ -267,7 +267,7 @@ describe('startPaymentSigning', () => {
     expect(ctx.log.warn).toHaveBeenCalledWith('payments verification not stored at signing', { err: 'boom' })
   })
 
-  it('asks for the company verification in the corporate context only (DECISIONS.md 2026-10-12)', async () => {
+  it('asks for the company verification in the corporate context only', async () => {
     const unverified = fakeProvider({ getCompanyVerification: vi.fn().mockResolvedValue({ status: 'invalid', validUntil: null }) })
     registerPaymentInitiationProvider(unverified)
     const personal = { ...order('o1').debtor_snapshot, bic: 'SWEDSESS', affiliated_aspsp_id: '08999', psu_type: 'personal' }
@@ -759,7 +759,7 @@ describe('a refused start says where it left the payments (crm#1357)', () => {
   const timedOut = () => new PaymentProviderError('The answer was lost', 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN', false, 502, true)
 
   it("carries the signing when the bank's create timed out: the order is held, and the same start could only be refused again", async () => {
-    // Production, 2026-10-21: one payment signed from a phone; the bank did not answer the create within Connect's 20 s.
+    // Seen 2026-10-21: one payment signed from a phone; the bank did not answer the create within Connect's 20 s.
     const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(timedOut()) })
     registerPaymentInitiationProvider(provider)
     const held = claimedOrder('o1', { outcome_unknown_at: '2026-10-21T04:35:46Z', provider_error_code: 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN' })

@@ -23,7 +23,6 @@ Start with the [user and API documentation](https://docs.accounted.se) for using
 - [Legal forms](LEGAL-FORMS.md): capability profiles and the cross-surface support contract.
 - [White-label setup](WHITELABEL.md): branding and partner configuration.
 - [Peppol foundation](PEPPOL_FOUNDATION.md): e-invoicing integration design.
-- [Kivra](integrations/kivra.md) and [Billo](integrations/billo.md): digital mailbox API references (reading a company's mailbox into the Inkorg, sending invoices and payslips).
 - [Bookkeeping packs](../packs/README.md): reusable template data and validation.
 
 ## Hosting and operations
@@ -32,23 +31,18 @@ Start with the [user and API documentation](https://docs.accounted.se) for using
 - [Docker reference](DOCKER.md): image, Compose overlays, and runtime configuration.
 - [Swedish infrastructure](SOVEREIGN.md): hosting and provider choices.
 - [SIE import operations](operations/sie-import-backbone.md): import jobs and recovery.
-- [Provider migration jobs](operations/provider-migration-jobs.md): worker operation and diagnosis.
-- [Company migration reset](support/company-migration-reset.md): support procedure.
+- [Provider migration jobs](operations/provider-migration-jobs.md): worker operation and limits.
 - [Repository scripts](../scripts/README.md): generators, validation, and operational tools.
 
 ## Security and policies
 
 - [Vulnerability reporting](../.github/SECURITY.md).
-- [Company authorization policy](../.compliance/authorization-policy.md): membership and shared-resource decisions.
 - [Privileged RPC authorization](security/authorization-policy.md): database-operation access contracts.
 - [Authentication abuse protection](security/auth-abuse-protection.md).
 - [Logging and observability](security/logging-and-observability.md).
-- [Compliance configuration and evidence](../.compliance/).
 
-## Project history and community
+## Community
 
-- [Decision log](../DECISIONS.md): one file per decision under [decisions/](decisions/), plus the dated archives.
-- [Historical review notes](archive/README.md): context from completed work, not current setup instructions.
 - [Community registry](../registry/README.md): contribute a skill, MCP server, workflow, or app.
 - [Code of conduct](../.github/CODE_OF_CONDUCT.md).
 

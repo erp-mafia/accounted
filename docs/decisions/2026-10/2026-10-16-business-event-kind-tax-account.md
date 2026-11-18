@@ -1,1 +1,0 @@
-[2026-10-16] A skattekonto row booked from the Skatteverket feed gets the kind se.tax_account.booked (add-only, no source type): its verifikat carries source_type system, whose ledger.system says nothing, and vat.settled would misname F-skatt, avgifter and ränta.

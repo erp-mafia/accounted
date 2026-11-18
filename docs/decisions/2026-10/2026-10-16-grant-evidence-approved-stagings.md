@@ -1,1 +1,0 @@
-[2026-10-16] The grant suggestion counts the latest five staged categorizations of a counterparty a person approved, identical pattern, still posted as shown, never one a grant let through: the evidence is exactly what the grant would book.

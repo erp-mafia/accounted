@@ -1,1 +1,0 @@
-[2026-10-15] An underlag decision records no policy_version or confidence_band: no approval policy decides an underlag (a person or an approved operation registers each one), and its score is the model's own, which 2026-08-21 rules out as a basis for a band.

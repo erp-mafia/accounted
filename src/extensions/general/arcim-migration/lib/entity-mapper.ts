@@ -192,7 +192,7 @@ function inferTypeFromVatOrCountry(
 
   // 4. A number that isn't a Swedish-format identity number → foreign entity.
   //    Any form orgNumberKey reads is Swedish, so a domestic personnummer like
-  //    19700616-7113 isn't treated as foreign.
+  //    19121212-1212 isn't treated as foreign.
   if (orgNumber) {
     const digits = orgNumber.replace(/[-+\s]/g, '')
     if (digits.length > 0 && !isOrgNumberShaped(orgNumber)) {
@@ -1261,7 +1261,7 @@ export function mapSupplierInvoice(
 
   // Nothing is ever paid on a kreditfaktura: it reduces what is owed to the
   // supplier rather than settling anything, so it carries no open balance
-  // either (prod: a credited Fora note landed with remaining_amount = its
+  // either (seen: a credited Fora note landed with remaining_amount = its
   // total). Same rule as the customer side.
   const settlement = isCreditNote ? NOTHING_SETTLED : resolveInvoiceSettlement(dto.paymentStatus, dto.status, total)
 

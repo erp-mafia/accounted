@@ -1,8 +1,7 @@
 /**
  * A bank executes a payment on a banking day, and Open Payments takes an
  * execution date only when it is "a valid banking day, not a weekend or
- * holiday, between 1 day and 12 months from today" (its EXECUTION_DATE_INVALID,
- * dev_docs/open-payments/error_messages.md). Same-day payments are therefore
+ * holiday, between 1 day and 12 months from today" (its EXECUTION_DATE_INVALID). Same-day payments are therefore
  * never offered: the earliest date is the first banking day after today, and
  * every date that leaves here is a banking day on or after the one asked for.
  */

@@ -12,7 +12,7 @@ export type BranchChoice =
   | 'fresh'
   | 'skip'
 
-/** Visma has no logo on purpose (founder, 2026-10-29): it shows by name with a letter mark. */
+/** Visma has no logo on purpose (2026-10-29): it shows by name with a letter mark. */
 export const BRANCH_PROVIDERS: { id: BranchChoice; name: string; logo?: string; mark?: string }[] = [
   { id: 'fortnox', name: 'Fortnox', logo: '/logos/fortnox.svg' },
   { id: 'visma', name: 'Visma', mark: 'V' },

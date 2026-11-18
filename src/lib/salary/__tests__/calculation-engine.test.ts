@@ -102,7 +102,7 @@ function makeBasicInput(overrides = {}) {
 }
 
 describe('calculateSalary', () => {
-  it('deducts a derived absence row once even though it carries is_gross_deduction (Frey, 2026-09-18)', () => {
+  it('deducts a derived absence row once even though it carries is_gross_deduction', () => {
     // 31 500 kr monthly, one VAB day at daily rate 1 500: gross must be 30 000,
     // not 28 500. The derived rows carry is_gross_deduction for the booking
     // split, and Step 4 must not consume them a second time.

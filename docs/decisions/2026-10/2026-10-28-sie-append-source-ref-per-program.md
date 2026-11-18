@@ -1,1 +1,0 @@
-[2026-10-28] An SIE append matches a voucher's source series and number only within import batches of the same #PROGRAM: a card provider's A1 is not Fortnox's A1, and matching across programs would refuse every 4I file over a Fortnox year (#108).

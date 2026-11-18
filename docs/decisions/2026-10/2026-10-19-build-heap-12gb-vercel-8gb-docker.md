@@ -1,1 +1,0 @@
-[2026-10-19] Build heap raised to 12288 MiB on Vercel (Elastic build machine, 8 to 60 GB) and 8192 in Docker: the shipped code's type-check outgrew 6144 (two out-of-memory production builds on the inbox landing); still scoped to the build through buildCommand.

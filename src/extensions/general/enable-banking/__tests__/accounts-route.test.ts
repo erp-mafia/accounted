@@ -239,7 +239,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     // the self-heal path.
     mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
     // Allocator stand-in mirroring the real behavior: currency default first,
-    // then the next free 1931–1959 slot (skipping other currency defaults).
+    // then the next free 1931-1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
       async (
         _supabase: unknown,
@@ -1518,7 +1518,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/samma konto/i)
       expect(body.duplicate_accounts).toEqual(['1930'])
-      // Nothing written — the collision is rejected before any update.
+      // Nothing written - the collision is rejected before any update.
       expect(stub.selectionReceipts).toBeUndefined()
       expect(stub.selectionCalls).toBeUndefined()
     })
@@ -1656,7 +1656,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
-      // No allocation — the existing mirrored assignment wins.
+      // No allocation - the existing mirrored assignment wins.
       expect(mockAllocate).not.toHaveBeenCalled()
       const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1940')

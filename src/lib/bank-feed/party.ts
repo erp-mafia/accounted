@@ -12,7 +12,7 @@
  *     ('business' | 'personal') so every later read uses the same one.
  *   - personalNumber: the PSU-ID the provider wants on every request
  *     ("Always include PSU-ID in all requests to ensure proper consent
- *     tracking per user", dev_docs/open-payments/consent_and_ais.md). A call
+ *     tracking per user"). A call
  *     to a connection's existing consent sends the number the consent was
  *     created with (bank_connection_psus, lib/auth/resource-psu.ts): several
  *     banks require that same PSU-ID on every later call to it. Otherwise,

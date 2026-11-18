@@ -1,1 +1,0 @@
-[2026-10-16] Hämta med Claude in Saknar underlag runs the whole Kvittojakten with its fixed prompt, not one purchase: a transaction id would be tenant data in the chat URL, and the hunt already includes the purchase in its worklist.

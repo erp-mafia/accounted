@@ -8,7 +8,7 @@
  * string, the damage is already baked in: CP437 diacritics become C1 specials
  * (o-umlaut 0x94 -> U+201D, a-umlaut 0x84 -> U+201E, A-umlaut 0x8E -> U+017D),
  * producing text like "Ink[U+201D]p tj[U+201E]nster" and "BANKTJ[U+017D]NSTER".
- * That exact corruption shipped through the retired Arcim Sync gateway on
+ * That exact corruption shipped through an upstream gateway on
  * 2026-03-17 and sat undetected in posted entries.
  *
  * This scanner is the tripwire: it flags parsed SIE text carrying that

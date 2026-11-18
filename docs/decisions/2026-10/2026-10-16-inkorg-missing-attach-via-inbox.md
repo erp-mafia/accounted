@@ -1,1 +1,0 @@
-[2026-10-16] Saknar underlag attaches a file by inbox upload then match-transaction (the Underlag workspace's path), not /api/documents plus attach-document: the file gets its reading and lands in the inbox, and Ångra is unmatch-transaction, which frees the purchase and keeps the file.

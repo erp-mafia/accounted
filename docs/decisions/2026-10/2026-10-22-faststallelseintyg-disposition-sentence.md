@@ -1,1 +1,0 @@
-[2026-10-22] The intyg's AGM sentence says "vinstdisposition" when the free equity at the AGM's disposal is zero or more and "behandling av ansamlad förlust" when it is negative: the schema only accepts those two, and the old "resultatdisposition" sentence made every file invalid. To confirm with Bolagsverket.

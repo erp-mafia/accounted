@@ -190,7 +190,7 @@ const ItemSchema = z.discriminatedUnion('kind', [
     /** Optional override for the SLR-based schablonintäkt rate; defaults to
      *  the server-side constant. Used both to compute the cap base and to
      *  feed back into bolagsskatt's adjustment if present in the same batch.
-     *  Bounded to a sane range — an inflated rate would inflate the cap base
+     *  Bounded to a sane range - an inflated rate would inflate the cap base
      *  and let the caller exceed the legal 25 % avsättning limit (IL 30 kap). */
     schablonintaktRate: z.number().min(0).max(0.2).optional(),
     desiredAmount: z.number().positive().optional(),

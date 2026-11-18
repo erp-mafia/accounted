@@ -1,1 +1,0 @@
-[2026-11-01] Hem asks a connected client for a first task until an agent has worked: a live key only proves the sign-in, and 73 of 358 first-time people in October connected and never made one call. A single self-clearing chip, so the generic handoff removed on 2026-10-12 stays removed.

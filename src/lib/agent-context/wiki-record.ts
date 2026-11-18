@@ -10,8 +10,8 @@
  * Kinds: what get_record opens on main. document and journal_entry for every
  * company; agreement, party and fact where the company brain is on (the tool
  * refuses them otherwise). Further kinds (bank rows, customer and supplier
- * invoices, skattekonto rows: accounted MR !1324) slot in by adding them to
- * WIKI_RECORD_KINDS: links already read the `record_ref` that MR returns.
+ * invoices, skattekonto rows) slot in by adding them to
+ * WIKI_RECORD_KINDS: links already read the `record_ref` the briefing returns.
  *
  * Pure: no IO, safe on the client too.
  */
@@ -192,7 +192,7 @@ function link(relation: RecordLink['relation'], kind: string, id: string | null,
   }
 }
 
-/** A link written as a record_ref (brain links, and every record's links once accounted MR !1324 lands). */
+/** A link written as a record_ref (brain links, and every record's links once every record returns them). */
 function refLink(raw: Json, fallbackRelation: RecordRelation): RecordLink | null {
   const ref = parseRecordRef(raw.record_ref)
   if (!ref) return null
@@ -263,7 +263,7 @@ export function describeRecord(kind: WikiRecordKind, id: string, answer: Json): 
   if (!isObject(body)) throw new Error(`get_record answered no ${kind}`)
   const base = { kind, id, record_ref: `${kind}:${id}`, native_href: nativeRecordHref(kind, id) }
 
-  // Links in the !1324 shape (relation + record_ref) on any kind; read before the kind's own.
+  // Links in the record_ref shape (relation + record_ref) on any kind; read before the kind's own.
   const refLinks = arr(body.links).filter(isObject).flatMap((l) => (l.record_ref ? [refLink(l, 'linked')] : [])).filter((l): l is RecordLink => !!l)
 
   switch (kind) {

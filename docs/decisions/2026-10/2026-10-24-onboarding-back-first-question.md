@@ -1,1 +1,0 @@
-[2026-10-24] Onboarding Tillbaka never trusts the browser's previous page: the first question leads to the BankID picker or the user's company, or shows no Tillbaka, because /login and /select-company send the user straight back to it.

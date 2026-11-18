@@ -72,7 +72,7 @@ export interface CashFlowOmissionState {
 
 /**
  * One presentation row of the RR/BR in ÅRL uppställningsform. Post-level
- * only — labels must never contain BAS account numbers (Bolagsverket
+ * only - labels must never contain BAS account numbers (Bolagsverket
  * rejects balans-/resultaträkningar med kontonummer). Rows are derived
  * from the K2 risbs mapping in lib/bokslut/arsredovisning/statement-rows.ts.
  */
@@ -123,7 +123,7 @@ export interface ArsredovisningData {
     entity_type: string
     /** Företagets säte: company_settings.registered_office, the municipality
      *  the company is registered in (never the postal town). Null when
-     *  unknown; while the founder default holds, the postal town stands in
+     *  unknown; while the default holds, the postal town stands in
      *  with a warning (registered-office.ts). Printed on the cover, in
      *  förvaltningsberättelsen and on the underskrifter and
      *  fastställelseintyg place lines. */

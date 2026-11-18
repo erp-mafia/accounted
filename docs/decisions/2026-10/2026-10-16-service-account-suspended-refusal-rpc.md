@@ -1,1 +1,0 @@
-[2026-10-16] A suspended service account's key gets 403 SERVICE_ACCOUNT_SUSPENDED via a refusal RPC read only after validation returns no row, not a flag on a returned row: an older deploy still fails closed.

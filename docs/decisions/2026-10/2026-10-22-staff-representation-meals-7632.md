@@ -1,1 +1,0 @@
-[2026-10-22] Staff representation meals default to 7632 (ej avdragsgill) in the Intern representation template and the Inkorg staff category, the twin of the 6072 change: a teamlunch or julbord is as non-deductible as a customer lunch (IL 16 kap. 2 §); 7631 stays for enklare förtäring and kringkostnader (accounted#86).

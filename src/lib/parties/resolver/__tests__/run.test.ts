@@ -26,7 +26,7 @@ describe('groupStrings', () => {
     const g = groupStrings([
       { id: 't1', original_description: 'ANTHROPIC* CLAUDE SUB', description: null, amount: -200, currency: 'SEK', merchant_name: null },
       { id: 't2', original_description: 'ANTHROPIC* CLAUDE SUB', description: 'renamed by user', amount: -220, currency: 'SEK', merchant_name: null },
-      { id: 't3', original_description: null, description: 'Lön Jakob Juni', amount: -20000, currency: 'SEK', merchant_name: null },
+      { id: 't3', original_description: null, description: 'Lön Anna Juni', amount: -20000, currency: 'SEK', merchant_name: null },
       { id: 't4', original_description: null, description: '', amount: -1, currency: 'SEK', merchant_name: null },
     ])
     expect(g.size).toBe(2)
@@ -69,7 +69,7 @@ describe('resolveCompanyCounterparts', () => {
       data: [
         { id: 't1', original_description: 'Kortköp 260828 KRONANS APOTEK AB', description: null, amount: -475, currency: 'SEK', merchant_name: null },
         { id: 't2', original_description: 'SQSP  WORKSP', description: null, amount: -92, currency: 'SEK', merchant_name: null },
-        { id: 't3', original_description: 'Lön Jakob Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
+        { id: 't3', original_description: 'Lön Anna Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
         { id: 't4', original_description: 'ALREADY DONE AB', description: null, amount: -10, currency: 'SEK', merchant_name: null },
       ],
     })
@@ -98,7 +98,7 @@ describe('resolveCompanyCounterparts', () => {
     const byName = Object.fromEntries(inserted.map((r) => [r.sample_text, r]))
     expect(byName['Kortköp 260828 KRONANS APOTEK AB']).toMatchObject({ source: 'directory', display_name: 'Kronans Apotek', band: 'link', company_id: COMPANY })
     expect(byName['SQSP  WORKSP']).toMatchObject({ source: 'directory', display_name: 'Squarespace', party_id: 'p-sq', band: 'link' })
-    expect(byName['Lön Jakob Juni Överföring via internet']).toMatchObject({ kind: 'payroll', band: 'nil', display_name: null })
+    expect(byName['Lön Anna Juni Överföring via internet']).toMatchObject({ kind: 'payroll', band: 'nil', display_name: null })
   })
 
   it('links a text the company booked before to its own party, without the model', async () => {

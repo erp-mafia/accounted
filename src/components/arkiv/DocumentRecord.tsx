@@ -273,7 +273,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
       />
       {view.classification?.summary && (
-        // Written by a model, so it says so behind the "?": the document itself, beside it, is the source (founder: raw first).
+        // Written by a model, so it says so behind the "?": the document itself, beside it, is the source (raw first).
         <Section title={t('record_classification')} help={t('record_classification_note')}>
           <p className="m-0 text-[13px]">{view.classification.summary}</p>
         </Section>

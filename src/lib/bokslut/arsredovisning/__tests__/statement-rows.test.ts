@@ -5,8 +5,8 @@
  * number. A user filed an årsredovisning whose RR/BR listed per-account rows
  * ("1930 Företagskonto", "3001 Försäljning …") and Bolagsverket rejected it
  * with "Balansräkning och resultaträkning ska inte innehålla kontonummer".
- * The rows must be the statutory posts from the K2 risbs mapping — the same
- * mapping the iXBRL filing uses — so PDF and digital filing cannot diverge.
+ * The rows must be the statutory posts from the K2 risbs mapping - the same
+ * mapping the iXBRL filing uses - so PDF and digital filing cannot diverge.
  */
 import { describe, it, expect } from 'vitest'
 import {

@@ -1,1 +1,0 @@
-[2026-11-11] AGI rows follow an active employee with a salary set while neither employer flag is attested, derived in the deadline generator, not written to the flags: no settings change, an explicit false still wins, the nightly backfill reaches existing companies (crm#1790).

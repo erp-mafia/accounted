@@ -1,1 +1,0 @@
-[2026-11-11] The Lön settings save sends employer_registered only when the person set that switch; an unanswered NULL stays NULL and its switch shows pays salaries as set on the page, so no save turns the AGI rows off or stops a booked run from filling the flag (crm#1790).

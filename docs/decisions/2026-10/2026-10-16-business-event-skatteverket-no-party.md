@@ -1,1 +1,0 @@
-[2026-10-16] VAT and skattekonto events name no party: Skatteverket has no counterparty row and the closed party types (customer, supplier, employee, party) hold no authority; adding one changes business_events_party_type_check, a migration step 2b may not ship.

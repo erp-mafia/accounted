@@ -1,1 +1,0 @@
-[2026-10-28] The VAT close check compares each rate's share of the base derived from output VAT, not ruta 10 / ruta 05 (#129). rate_share_shift reports delta_pct in percentage points, and the revenue floor reads the larger period's ruta 05, so 2 000 to 7 000 kr stays quiet.

@@ -1,1 +1,0 @@
-[2026-10-20] "Skicka igen" emails the archived PDF the customer first got, hash-checked, as a "Kopia:" mail, and only for sent/overdue invoices: a re-render can differ under the same number, and a copy of a paid invoice repeats the amount to pay (crm#1339).

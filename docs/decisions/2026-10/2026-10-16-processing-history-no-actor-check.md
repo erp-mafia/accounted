@@ -1,1 +1,0 @@
-[2026-10-16] processing_history names a service account's key service_account (TS union, writers, heal_cash_account_twins list); no CHECK on actor->>'type' is added: older rows' types cannot be verified from the repo, and a best-effort append a new CHECK refused would vanish silently.

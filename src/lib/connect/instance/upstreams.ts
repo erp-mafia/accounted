@@ -87,7 +87,7 @@ export function skatteverketConnectorMode(companyId?: string): ConnectorUpstream
 }
 
 /**
- * Peppol through Arcim's contracted access point. Same rule as the other
+ * Peppol through the Connect service's access point. Same rule as the other
  * upstreams: an instance with its own Qvalia partner keys runs Peppol itself
  * and is never routed here.
  */

@@ -1,1 +1,0 @@
-[2026-10-18] The SQL posting functions get the POSTING_EVENTS mode from their caller as p_event_mode beside p_event_ids (strict raises before the number, anything else logs a WARNING): SQL reads no environment, and the port that recorded the events knows the mode.

@@ -117,7 +117,7 @@ describe('POST /api/agent/ask', () => {
     expect(b.error).toBe('The assistant gave no answer. Please try again.')
   })
 
-  // Prod 2026-10-19: "503 Bedrock is unable to process your request." bursts
+  // Seen 2026-10-19: "503 Bedrock is unable to process your request." bursts
   // answered 500 with a generic message and logged as our error. The SDK
   // already retried; the honest answer is "the AI service is down, wait".
   it('502s with a provider-unavailable message (not 503, which the console reads as unconfigured) on a Bedrock outage', async () => {

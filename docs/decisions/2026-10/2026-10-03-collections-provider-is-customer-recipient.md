@@ -1,1 +1,0 @@
-[2026-10-03] /dpa and /privacy disclose an inkasso- och utskicksföretag the customer activates as a recipient it engages itself, not our underbiträde (prose, never a row in lib/legal/subprocessors.ts): the customer accepts its terms at activation, and every transfer follows its instruction.

@@ -10,7 +10,7 @@ import {
 } from '@/lib/core/bookkeeping/voucher-gaps'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
-// Voucher gap detection + explanations (BFNAR 2013:2 — gaps in voucher
+// Voucher gap detection + explanations (BFNAR 2013:2 - gaps in voucher
 // sequences must be documented). Response shapes are legacy `{ data }` /
 // `{ error: string }`.
 

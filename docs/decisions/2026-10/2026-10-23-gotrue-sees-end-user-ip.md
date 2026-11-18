@@ -1,1 +1,0 @@
-[2026-10-23] Server-side GoTrue calls send Sb-Forwarded-For with SUPABASE_SECRET_KEY, /auth/v1/ only, and change nothing without the key: with the server-held session every sign-in comes from our server, so GoTrue's per-IP limits would otherwise put all users in one bucket.

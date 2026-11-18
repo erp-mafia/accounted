@@ -1563,7 +1563,7 @@ async function bookedOnTemplate(
  * teaches that template its text (accounted#36). The bank often abbreviates
  * a party ("CBA PLESK" for a template learned from "Levfakt Cleverbridge -
  * Plesk"), so the two share no first name word and the token tier cannot
- * tie them without the false matches !243 removed. The booking is the
+ * tie them without the false matches removed earlier. The booking is the
  * evidence: the row's normalized key joins the template's aliases, and the
  * next row with that text is the same name (exact_normalized). Without this
  * the booking started a second template under the row's key, with one

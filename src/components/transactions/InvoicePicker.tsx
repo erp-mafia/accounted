@@ -416,8 +416,8 @@ export default function InvoicePicker(props: InvoicePickerProps) {
           const { exact, close, candidateSek } = proximity
           const invoiceCurrency = normalizeCurrency(invoice.currency)
           // The currency earns a marker only when it deviates from the bank
-          // row's: the same marker on every row would say nothing (design.md,
-          // "chips mark exceptions"). It is what explains why a row is or is
+          // row's: the same marker on every row would say nothing (chips
+          // mark exceptions). It is what explains why a row is or is
           // not ranked as close.
           const foreignCurrency = proximity.basis !== 'same_currency'
           // The invoice's own status (lib/invoices/status-display.ts or

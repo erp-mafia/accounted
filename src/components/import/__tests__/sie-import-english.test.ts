@@ -75,7 +75,7 @@ import ImportResultStep from '../ImportResultStep'
 
 /**
  * Swedish on purpose in the English text: a BAS account name (BAS names stay
- * Swedish, .claude/rules/i18n.md) and the source systems' own menu paths.
+ * Swedish) and the source systems' own menu paths.
  * A voucher series' name is the company's own (company_settings, with the
  * presets from lib/bookkeeping/voucher-series-resolver as fallback): data,
  * not chrome.

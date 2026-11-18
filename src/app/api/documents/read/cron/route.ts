@@ -22,7 +22,7 @@ const TIME_BUDGET_MS = 180_000
  * No model call is still open past this point (lib/ai/call-limit.ts). The
  * budget above only stood between documents, and a page read by the model had
  * no time limit at all, so one long scan started late ran into the 300 s kill
- * (prod, 30 days to 2026-11-12: once). A document cut here is not stamped: it
+ * (seen over 30 days to 2026-11-12: once). A document cut here is not stamped: it
  * stays unread, and leads the next run with the whole run ahead of it.
  */
 const MODEL_STOP_MS = 280_000
@@ -40,7 +40,7 @@ export const GET = withCronContext('documents.read', async (_request, ctx) => {
     deadlineAt: ctx.startedAt + TIME_BUDGET_MS,
     budgetPagesPerDay: budget,
     // A recent document read here gets typed like one that arrived today. History is typed only under a budget:
-    // typing is a model call, and without one it stays text a search finds and a question opens (founder, 2026-09-24).
+    // typing is a model call, and without one it stays text a search finds and a question opens (2026-09-24).
     onRead: async (doc) => {
       if (!doc.company_id || doc.doc_type) return
       // Booked documents are typed when someone opens them, not in the background (goal: agents answer when asked).

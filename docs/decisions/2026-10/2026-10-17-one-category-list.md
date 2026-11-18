@@ -1,1 +1,0 @@
-[2026-10-17] One category list: purchase codes are children of the posting port's keys ('<port key>.<item>', expense.software.saas; parent = first two segments), pc-2026-10 renamed before release: an event stores the finest key and its parent stays readable; no code was stored yet.

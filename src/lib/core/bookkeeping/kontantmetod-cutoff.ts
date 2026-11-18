@@ -7,7 +7,7 @@
  * räkenskapsårets utgång, and the moms on an invoice still open at the year
  * end belongs to the final VAT period of that year.
  *
- * Shape (founder decision 2026-10-03, the way Fortnox and Visma do it): one
+ * Shape (product decision 2026-10-03, the way Fortnox and Visma do it): one
  * year_end verifikat per invoice open at period end, dated on period_end,
  * built by the invoice's own registration line builder (ordinary moms
  * accounts 2611/2621/2631/2641, the full ROT/RUT 1513 leg, currency metadata

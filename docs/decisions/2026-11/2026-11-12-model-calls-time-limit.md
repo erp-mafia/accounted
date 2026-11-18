@@ -1,1 +1,0 @@
-[2026-11-12] Model calls through getAiService end after 120 s (structured answers, document readings; AI_CALL_TIMEOUT_SECONDS overrides) and at a run's withAiDeadline; a cut counts as provider unavailable: the SDK default (10 min, 3 tries) outlived 300 s functions.

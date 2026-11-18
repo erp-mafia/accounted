@@ -1,1 +1,0 @@
-[2026-11-09] gnubok_get_record serves ledger links (verifikat, payments, invoices, skattekonto) to every company; document_links stay brain-only: they are party/agreement ties read out of the file (extraction output), the ledger ties are what the books say.

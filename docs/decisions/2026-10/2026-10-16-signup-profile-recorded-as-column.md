@@ -1,1 +1,0 @@
-[2026-10-16] The profile derived at company creation is recorded in companies.suggested_profile_id and version, not as an event: event_log keeps rows 30 days, and both the flag flip and the byrå invite preselect need the value for as long as the company exists.

@@ -1,1 +1,0 @@
-[2026-11-17] An SIE import approval refused because another import of the company is unfinished keeps its proposal, answered as SIE_IMPORT_UNFINISHED with a link to the imports: the job RPC rolled back, so approving again once that import is done starts from the same books.

@@ -1,1 +1,0 @@
-[2026-10-18] A supplier invoice's three pay buttons are one SplitButton whose face is the last-used mode (persistKey supplier_invoice_pay); every gate is unchanged, and a single available mode renders a plain button.

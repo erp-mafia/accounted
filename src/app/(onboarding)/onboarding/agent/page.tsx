@@ -30,8 +30,9 @@ export default async function AgentOnboardingPage() {
   leaveWhenChatSwitchedOff()
 
   // Paywall: the build flow drives the gated composer stream (ai capability).
-  // Send non-payers to billing instead of a build sequence that 403s
-  // mid-stream, with the reason, so the page can say what brought them there.
+  // Without the ai capability, redirect to billing instead of a build
+  // sequence that 403s mid-stream, with the reason, so the page can say what
+  // brought them there.
   if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) {
     redirect(billingHref('assistant'))
   }

@@ -65,7 +65,7 @@ const config2026: PayrollConfig = {
   reducedAvgiftAge: 67,
 }
 
-// The shape measured on prod 2026-09-21 (amounts only): salary 48 000, a car
+// The shape Measured 2026-09-21 (amounts only): salary 48 000, a car
 // benefit of 6 664 and a payment of the same amount. Three brackets so the
 // tax proves WHICH base was looked up:
 //   41 336 = the base when a same-amount bruttolöneavdrag adjusts a second time

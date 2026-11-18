@@ -376,8 +376,8 @@ function lawScenarios(): LawScenario[] {
       sources: [SRC.sickAterinsjuknande, at(SRC.sickDay2to14, { at: '3-5' }), { kind: 'statute', ref: 'Lag (1991:1047) om sjuklön 7 §', quote: 'the new sick period is a continuation of the earlier sjuklöneperiod (återinsjuknande within five calendar days)' }],
       note:
         'Was an engine bug: the engine numbered sick rows by calendar days elapsed since 5 October, so the healthy days 15-18 October ' +
-        'consumed sjuklöneperiod days. Fixed on fix/sjuklon-aterinsjuknande-remaining-days (derive-absence-line-items.ts numbers the ' +
-        '14 days over sick spells only; docs/decisions/2026-10/2026-10-27-sjuklon-aterinsjuknande-counts-sick-spells.md).',
+        'consumed sjuklöneperiod days. Fixed: derive-absence-line-items.ts numbers the ' +
+        '14 days over sick spells only.',
     })
   }
 

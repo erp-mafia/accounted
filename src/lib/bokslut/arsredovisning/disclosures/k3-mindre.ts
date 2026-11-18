@@ -1,9 +1,7 @@
 /**
  * The K3 (BFNAR 2012:1, consolidated 2025-12-15) disclosure requirements of
  * a mindre aktiebolag: förvaltningsberättelse, redovisningsprinciper and
- * notes. Each entry cites its source; the review package
- * (docs/review/k3-arsredovisning-mindre-ab.md) lists them with how Accounted
- * meets each one and the K3 points judged not applicable.
+ * notes. Each entry cites its source.
  *
  * Entries that apply to större företag too carry both sizes; the större-only
  * entries (ÅRL 5 kap. 25-48 §§, K3 3.12-3.13, 8.4-8.5, 2.2, ...) are P4's

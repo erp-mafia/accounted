@@ -28,7 +28,7 @@ function toolReply(input: unknown) {
 function candidate(overrides: Partial<CandidateForReview> = {}): CandidateForReview {
   return {
     messageId: 'msg-1',
-    mailbox: 'invoice@arcim.io',
+    mailbox: 'invoice@example.se',
     subject: 'Fwd: Your receipt from Anthropic, PBC',
     from: 'jakob@example.com',
     receivedAt: '2026-08-01T10:00:00.000Z',

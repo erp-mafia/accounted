@@ -44,7 +44,7 @@ describe('signature detectors', () => {
   it('does not flag legitimate space-padded typography (false-positive guard)', () => {
     // A curly quote, ellipsis or en-dash that is NOT letter-adjacent is
     // punctuation, not a mangled diacritic. Real BAS names carry the en-dash:
-    // "Kundfordringar – delad faktura" (1513), "Periodiseringsfond 2021 – nr 2".
+    // "Kundfordringar - delad faktura" (1513), "Periodiseringsfond 2021 - nr 2".
     expect(hasCp1252Artifact('Betalning enligt avtal ” 2024')).toBe(false)
     expect(hasCp1252Artifact('Avvaktar underlag …')).toBe(false)
     expect(hasCp1252Artifact('Kundfordringar – delad faktura')).toBe(false)

@@ -1,1 +1,0 @@
-[2026-10-15] GET /api/events persists every public webhook event (derived from the catalogue) and gates salary_run.*/agi.* behind payroll:read on API keys, as webhook registration does: the pull feed must never hand out more than the push surface, and payroll rows now reach it.

@@ -1,1 +1,0 @@
-[2026-11-07] Skattekonto bookings (tax_account) default to the company's system series while its map has no tax_account key, and share the system live-unique index under its old name: no backfill, no series move at deploy, no second booking of a row across the two types (#172).

@@ -1,1 +1,0 @@
-[2026-10-16] The unexplained queue lives in lib/unexplained as infrastructure, like the worklist: its checks read the ledger, the reconciliation engine, VAT filings and bank rows, and a kernel folder would add the kernel-to-block edges the boundary ratchet forbids.

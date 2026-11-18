@@ -22,7 +22,7 @@
  * reversed copy only, and only while no other invoice holds the copy.
  *
  * A foreign-currency invoice is the one exception to an exact AP/AR match
- * (crm#1039, founder decision 2026-10-06). Its SEK total came from our rate
+ * (crm#1039, product decision 2026-10-06). Its SEK total came from our rate
  * index, while the source booked the verifikat at its own rate. When the
  * verifikat its ref singles out books within FX_SAME_DOCUMENT_LIMIT of that total,
  * it is this invoice at the source's rate: the invoice links and takes the

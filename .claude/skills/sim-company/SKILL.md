@@ -16,8 +16,6 @@ It lives in the tool-pg Docker stack: Postgres and PostgREST on this machine, ne
 
 ## Run it
 
-Run from a worktree, with `export PATH=/usr/bin:$PATH` first.
-
 ```bash
 npm run tools:pg:reset     # the database: about 3 minutes, once
 npm run sim:build          # the small company: about 3 minutes
@@ -36,7 +34,7 @@ A failed test means the product and the key disagree. Neither is right by defaul
 1. Find the verifikat behind the number: `docker exec tool-pg-postgres-1 psql -U postgres`, then `journal_entries` joined to `journal_entry_lines` by the `companyId` in `.local/sim/state.json`.
 2. Decide from the law, not from the code: load the matching `swedish-*` skill.
 3. The key is wrong: fix the key, and put the rule in the list at the top of `answer-key.ts`.
-4. The product is wrong: fix it, or if that is out of scope, leave a `it.fails` test that names the gap and tell the founder. It goes red the day the gap closes.
+4. The product is wrong: fix it, or if that is out of scope, leave a `it.fails` test that names the gap and say so in the pull request. It goes red the day the gap closes.
 
 A build that stops prints the event and the tool's own refusal. A refusal is often the finding: a customer's agent would hit it too.
 

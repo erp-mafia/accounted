@@ -126,7 +126,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     enqueue({
       data: [
         { id: 'sup-1', name: 'Star*Mart' },
-        { id: 'sup-2', name: 'Starke Martinsson AB' },
+        { id: 'sup-2', name: 'Stark & Son AB' },
         { id: 'sup-3', name: '100%_AB' },
       ],
     })

@@ -1,1 +1,0 @@
-[2026-11-01] A periodisering deferral (17xx cost, 29xx revenue) of a period ending before the invoice month is refused naming 2990/2960 or 1790; an omitted account takes the form's suggestion. A period overlapping the invoice month stays allowed (6 prod lines do it).

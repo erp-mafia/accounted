@@ -1,1 +1,0 @@
-[2026-10-26] Three year-end MCP tools with no call in 90 days (settle_rot_rut_payout, run_currency_revaluation, post_annual_depreciation) leave the default catalog: gnubok_stage_tool still reaches them, and tools/list keeps room for tools agents use.

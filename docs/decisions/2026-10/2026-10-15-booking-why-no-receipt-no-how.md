@@ -1,1 +1,0 @@
-[2026-10-15] Without a receipt the booking summary says only who booked it, never by hand: an agent voucher a person approves commits as that person with source_type manual, and journal_entries.created_via is a dead column, so the entry alone cannot tell the two apart.

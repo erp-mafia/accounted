@@ -115,7 +115,7 @@ describe('AI provider disclosures match the code', () => {
     // and the models are Anthropic's Claude running inside Bedrock. Whether
     // Anthropic is an underbiträde of AWS is a contractual question between
     // AWS and Anthropic that this repo cannot verify, so the row must not
-    // assert it either way; that wording is founder/legal's.
+    // assert it either way.
     const aws = recipient('Amazon Bedrock')
     expect(aws.purpose).toContain('AI-anropen skickas till Amazon Bedrock')
     expect(aws.purpose).toContain(
@@ -270,7 +270,7 @@ describe('consent and data choices match the code', () => {
   const MIGRATION = readRepo('supabase/migrations/20261021170000_legal_acceptances_and_data_choices.sql')
 
   it('starts PostHog only from AnalyticsIdentify, on unless the person switched it off', () => {
-    // Founder decision 2026-10-22: on by default, opt-out in settings. The
+    // Product decision 2026-10-22: on by default, opt-out in settings. The
     // page must say opt-out and legitimate interest, never consent.
     expect(INSTRUMENTATION).not.toContain('posthog.init')
     expect(INSTRUMENTATION).not.toContain("from 'posthog-js'")

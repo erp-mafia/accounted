@@ -8,7 +8,7 @@
  *   - the vendor's own site, read 2026-10-17 (theme colour, tile colour,
  *     manifest or logo file): ICA, OKQ8, Tele2, Tre, Biltema, Coop, Apoteket,
  *     Byggmax, Preem, SJ;
- *   - the Inkorg prototype (underlagsflodet.html): Telia, Vattenfall, Clas
+ *   - the Inkorg prototype: Telia, Vattenfall, Clas
  *     Ohlson, Circle K, Kjell & Company, Folksam, Securitas, Kivra, Peppol,
  *     Billo, Espresso House;
  *   - the brand's published primary colour: PostNord, OpenAI, Amazon, AWS,

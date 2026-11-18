@@ -1,1 +1,0 @@
-[2026-10-21] A pasted http:// portal link is moved to https:// rather than refused (the stored link stays https only), and a bank row whose fold is only payment words ("swish betalning") names no supplier and offers no portal: it would claim every such row on the statement.

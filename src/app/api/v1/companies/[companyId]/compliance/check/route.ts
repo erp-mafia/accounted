@@ -1,9 +1,9 @@
 /**
  * GET /api/v1/companies/{companyId}/compliance/check?type=...
  *
- * Accounted's defensible edge: a single, structured pre-flight endpoint that
- * surfaces the same compliance checks the MCP / dashboard run, in a form
- * an agent can act on programmatically.
+ * A single, structured pre-flight endpoint that surfaces the same compliance
+ * checks the MCP / dashboard run, in a form an agent can act on
+ * programmatically.
  *
  * Generalises the existing MCP tools (gnubok_vat_close_check,
  * gnubok_year_end_readiness) under a single response shape. vat_close runs

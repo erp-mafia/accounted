@@ -1,1 +1,0 @@
-[2026-10-23] Reports read trigger-maintained ledger summaries (sums per account and day and per dimension value, and which verifikat book each account) once a company is built: a 50 000-verifikat year cost 0.7-3.7 s per report; the journal stays the record, drift() pins equality.

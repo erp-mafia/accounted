@@ -34,7 +34,7 @@ beforeEach(() => {
 describe('getMessageSummary', () => {
   it('asks for the full message, because metadata omits the parts tree', async () => {
     respond({ id: 'm1', payload: { headers: HEADERS } })
-    await getMessageSummary('token', 'm1', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'm1', 'conn-1', 'invoice@example.se')
 
     const url = String(mockFetch.mock.calls[0][0])
     expect(url).toContain('format=full')
@@ -72,7 +72,7 @@ describe('getMessageSummary', () => {
       },
     })
 
-    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@arcim.io')
+    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@example.se')
     expect(candidate.attachmentIds).toEqual(['att-deep'])
     expect(candidate.bodyIsReceipt).toBe(false)
   })
@@ -88,7 +88,7 @@ describe('getMessageSummary', () => {
       },
     })
 
-    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@arcim.io')
+    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@example.se')
     expect(candidate.attachmentIds).toEqual([])
     expect(candidate.bodyIsReceipt).toBe(true)
   })
@@ -99,7 +99,7 @@ describe('getMessageSummary', () => {
       payload: { headers: HEADERS, mimeType: 'text/html', body: { size: 4000 } },
     })
 
-    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@arcim.io')
+    const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@example.se')
     expect(candidate.bodyIsReceipt).toBe(true)
     expect(candidate.subject).toBe('Faktura-20251070')
   })
@@ -115,9 +115,9 @@ describe('message reads are not repeated', () => {
   it('fetches a given message once per mailbox', async () => {
     respond({ id: 'cache-me', payload: { headers: HEADERS } })
 
-    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
-    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
-    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@example.se')
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@example.se')
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@example.se')
 
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
@@ -125,7 +125,7 @@ describe('message reads are not repeated', () => {
   it('keeps mailboxes apart, since a hit in one says nothing about the other', async () => {
     respond({ id: 'shared', payload: { headers: HEADERS } })
 
-    await getMessageSummary('token', 'shared', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'shared', 'conn-1', 'invoice@example.se')
     await getMessageSummary('token', 'shared', 'conn-2', 'owner@example.com')
 
     expect(mockFetch).toHaveBeenCalledTimes(2)

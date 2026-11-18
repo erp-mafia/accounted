@@ -1,1 +1,0 @@
-[2026-10-25] signing_method 'bankid' on an årsredovisning slot is written only by record_signing_signature (record-signature answers SIGNING_METHOD_RESERVED, plus a NOT VALID CHECK): any caller could type it before, and the one prod 'bankid' slot has no signature behind it.

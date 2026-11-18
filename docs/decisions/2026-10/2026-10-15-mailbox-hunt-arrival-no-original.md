@@ -1,1 +1,0 @@
-[2026-10-15] Hunted mail (Gmail and Microsoft, source 'mailbox', provider and address in source_meta) keeps the envelope (from, subject) but no message text and no .eml: the hunt reads a person's mailbox and deliberately never stores the body; keeping it is a privacy call for the founders.

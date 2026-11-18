@@ -75,7 +75,7 @@ describe('GET /api/agent/memory', () => {
 describe('POST /api/agent/memory', () => {
   it('rejects a viewer in the target company with 403', async () => {
     // requireWrite passed for the ACTIVE company, but the body targets a
-    // company where the caller is only a viewer — the re-check must refuse.
+    // company where the caller is only a viewer - the re-check must refuse.
     enqueue({ data: { role: 'viewer' } })
 
     const req = createMockRequest('/api/agent/memory', {

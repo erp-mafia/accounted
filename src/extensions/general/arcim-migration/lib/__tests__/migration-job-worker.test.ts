@@ -796,7 +796,7 @@ describe('a register the provider refuses', () => {
     // A Fortnox user restricted so only the accounting firm sees supplier
     // invoices: the suppliers register answers 403 2003275, the supplier
     // invoices register 400 2002182, and customers elsewhere 400 2001538
-    // (prod, 2026-10-05 and 2026-10-12). The 400s used to park the job on
+    // (seen 2026-10-05 and 2026-10-12). The 400s used to park the job on
     // MIGRATION_RETRY, and every "Återuppta" got the same answer.
     const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers', 'supplierInvoices'] })
     mocks.page.mockRejectedValueOnce(fortnoxError(400, 2001538, 'Saknar behörighet för kundregister.'))

@@ -1,1 +1,0 @@
-[2026-10-16] Match on arrival reuses findSupplierInvoiceMatch and the giro reader by injection (lib/operations/inbox-bank-match.ts), as the reading does with PeppolReader: the inbox block may not import invoicing or transactions, and declaring a dependency would change the published capabilities.

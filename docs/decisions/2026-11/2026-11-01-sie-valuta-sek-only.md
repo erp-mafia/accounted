@@ -1,1 +1,0 @@
-[2026-11-01] SIE import refuses a file whose #VALUTA is not SEK, at preview and at submit, instead of converting: the ledger is kronor only and the file carries no rates, so EUR amounts would post as kronor and still balance (accounted#58).

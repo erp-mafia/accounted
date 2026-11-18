@@ -1,1 +1,0 @@
-[2026-10-16] pg-real drives route handlers through a PostgREST-over-SQL fetch (tests/pg/postgrest-over-pg.ts), not the tool-pg stack: pg-real runs on every MR with Postgres only, and the shim records any request outside its grammar so a test asserts it answered nothing PostgREST would not.

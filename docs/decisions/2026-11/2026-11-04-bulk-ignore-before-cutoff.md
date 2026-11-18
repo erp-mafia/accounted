@@ -1,1 +1,0 @@
-[2026-11-04] Old unbooked bank-feed rows before a cutoff are cleared by a bulk ignore (one staged ignore_transaction over pinned ids, booked/matched/invoice-linked rows untouched), not deleted: an imported row is the bank's record and is never deleted (lib/transactions/origin.ts) (crm#1647).

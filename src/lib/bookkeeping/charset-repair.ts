@@ -12,7 +12,7 @@
  */
 
 /**
- * Windows-1252 code point → byte for the 0x80–0x9F block, where CP1252 diverges
+ * Windows-1252 code point → byte for the 0x80-0x9F block, where CP1252 diverges
  * from Latin-1 (e.g. 0x96 = U+2013 "–", 0x85 = U+2026 "…"). Reversing
  * double-encoding requires mapping these back to their original byte; the å/ä/ö
  * continuation bytes for UPPERCASE Å/Ä/Ö (0x85/0x84/0x96) land in this block.
@@ -33,7 +33,7 @@ export function hasMojibakeSignature(s: string): boolean {
 
 /**
  * True if the name contains a Windows-1252 C1 "special" character used IN PLACE
- * OF A LETTER — i.e. a CP437/Latin-1 diacritic byte mis-decoded as CP1252
+ * OF A LETTER - i.e. a CP437/Latin-1 diacritic byte mis-decoded as CP1252
  * (CP437 ö 0x94 → "”", ä 0x84 → "„", Ö 0x99 → "™"). Swedish diacritics always
  * sit mid-word, so the tell is letter-adjacency: "F”rmedlad" (corrupt) vs
  * "Periodiseringsfond 2021 – nr 2" (a legitimate space-padded en-dash, NOT
@@ -52,7 +52,7 @@ export function hasCp1252Artifact(s: string): boolean {
 /**
  * Reverse a double-encoded (UTF-8-bytes-read-as-CP1252-then-re-UTF-8) string.
  * Returns the recovered string, or null when the input can't be a clean
- * double-encoding (a char outside CP1252, or bytes that aren't valid UTF-8) —
+ * double-encoding (a char outside CP1252, or bytes that aren't valid UTF-8):
  * which also makes it a no-op on already-correct names.
  */
 export function reverseMojibake(s: string): string | null {

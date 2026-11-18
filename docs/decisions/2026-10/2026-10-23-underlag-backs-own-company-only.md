@@ -1,1 +1,0 @@
-[2026-10-23] A document or a no-underlag waiver backs a verifikat only in the verifikat's own company: another company's file is not this company's underlag, the rule can only surface a warning, never hide one, and it lets the missing set be resolved once per company.

@@ -15,13 +15,13 @@ import '@/components/onboarding/journey/journey.css'
 /**
  * BankID company picker: the companies the user's BankID says they run
  * (CompanyRoles) that are not in Accounted yet, as the journey's searchable
- * list (founder decision 2026-07-24: the list is the standard at ANY count).
+ * list (product decision 2026-07-24: the list is the standard at ANY count).
  * Picking one routes to /onboarding?pick=<TIC companyId> (one Lens lookup
  * happens there, on pick); "Lägg till manuellt" is the journey without a
  * prefill.
  * The roster itself is free CompanyRoles data: this page never calls TIC.
  * Companies the user already belongs to are not listed: the page redirects
- * before rendering when there is nothing new to add (founder direction
+ * before rendering when there is nothing new to add (product direction
  * 2026-09-14), and opening a company is the in-app switcher's job.
  */
 

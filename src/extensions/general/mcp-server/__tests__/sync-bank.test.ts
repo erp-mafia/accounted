@@ -166,7 +166,7 @@ describe('gnubok_sync_bank', () => {
     ).rejects.toMatchObject({ code })
   })
 
-  // Replays the 12 calls (10 companies, 2026-10-29..11-09) that sent no
+  // Replays the 12 calls (2026-10-29..11-09) that sent no
   // connection_id: the runner passed '' to a uuid column and the agent read
   // `invalid input syntax for type uuid: ""`.
   it.each([

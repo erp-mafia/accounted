@@ -742,7 +742,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // only stages a file for it (documents bucket, 50 MB cap, two-hour TTL,
   // per-company pending prefix). A read key can therefore check a file
   // before anyone holds a write key; the ledger write stays the staged
-  // gnubok_import_sie (Easy Online Stores evaluation, 2026-09-16).
+  // gnubok_import_sie (an agent evaluation, 2026-09-16).
   gnubok_sie_preflight:                   'reports:read',
   gnubok_create_sie_upload:               'reports:read',
   // Rot/rut begäran om utbetalning (records a payout request on generate)

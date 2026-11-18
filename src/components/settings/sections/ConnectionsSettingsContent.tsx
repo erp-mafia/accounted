@@ -612,7 +612,7 @@ export function ConnectionsSettingsContent() {
               href: '/settings/banking',
               connected: (status?.bankCount ?? 0) > 0,
               // A cardless trial with a bank connection: the new connection
-              // (Open Payments, billed per consent) opens once a card is in,
+              // (Open Payments) opens once a card is in,
               // so say so where the switch would be instead of hiding it.
               actions:
                 trialWithoutCard && (status?.bankCount ?? 0) > 0 ? (
@@ -758,7 +758,7 @@ export function ConnectionsSettingsContent() {
 
       {!isSandbox || hasStripe || hasShopify || hasWooCommerce || hasZettle || showCollections ? (
         <SettingsGroup label={t('group_payments_shop')}>
-          {/* Kassasystem: core, not an extension (provider code lives in Accounted Connect). */}
+          {/* Kassasystem: core, not an extension (provider code runs in the Connect service). */}
           {!isSandbox &&
             row({
               logo: <BuildingStorefrontIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,

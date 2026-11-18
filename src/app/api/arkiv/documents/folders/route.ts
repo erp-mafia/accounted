@@ -10,8 +10,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * The Dokument tree's folders with their counts and type mix over the whole
  * archive (arkiv_document_type_counts). The tree loaded the newest 500
  * documents and counted those, so a larger archive showed wrong counts and
- * left older documents out (prod 2026-09-25: 35 369 documents in 21
- * companies). Each folder then loads its own rows, page by page.
+ * left older documents out. Each folder then loads its own rows, page by page.
  */
 export interface ArkivFoldersResponse {
   total: number

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Bolaget became one place (founder decision 2026-10-30): the overview at
+// Bolaget became one place (product decision 2026-10-30): the overview at
 // /bolaget, Avtal och åtaganden at /bolaget/avtal, and /commitments sending
 // old links there. None of it may open outside BOLAGET_COMPANY_IDS.
 

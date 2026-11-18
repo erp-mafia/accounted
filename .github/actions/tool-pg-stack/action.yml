@@ -1,11 +1,11 @@
 name: Postgres and PostgREST with every migration
 description: >-
   Waits for the job's Postgres service on localhost:5432, replays the bootstrap
-  and every migration, then starts PostgREST on the host network: the
-  .tool-pg-stack template of .gitlab-ci.yml. The job declares the Postgres
-  service and the DATABASE_URL, TOOL_PG_REST_URL and PGPASSWORD variables, and
-  ends with a step that removes the postgrest container (if: always()): a
-  composite action has no step that runs after the job's own steps.
+  and every migration, then starts PostgREST on the host network. The job
+  declares the Postgres service and the DATABASE_URL, TOOL_PG_REST_URL and
+  PGPASSWORD variables, and ends with a step that removes the postgrest
+  container (if: always()): a composite action has no step that runs after
+  the job's own steps.
 
 runs:
   using: composite

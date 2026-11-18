@@ -1,1 +1,0 @@
-[2026-11-01] Recurring schedule lines store only article_id; each run copies the article's number, revenue account and (for a line without its own rate, adoption-gated) VAT rate onto the new invoice line, as the editor does at write time, so article edits apply from the next run (accounted#52).

@@ -1,1 +1,0 @@
-[2026-10-15] GET /companies/{companyId}/capabilities uses scope companies:read: it reads the company profile like GET /companies and settings.get, and is in the default OAuth grant, so every agent can ask before it calls a module; agent:read would hide it from REST integrations.

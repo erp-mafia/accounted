@@ -460,13 +460,6 @@ export default function BankingSettingsPanel() {
     setConnectingBankName(bank.name)
 
     try {
-      console.log('[enable-banking] Initiating bank connection', {
-        bankName: bank.name,
-        bankCountry: bank.country,
-        psuTypeOverride,
-        forceNew,
-      })
-
       const body: Record<string, string | boolean> = { aspsp_name: bank.name, aspsp_country: bank.country }
       if (psuTypeOverride) body.psu_type = psuTypeOverride
       // Deliberate second connection to a bank this company is already
@@ -506,10 +499,6 @@ export default function BankingSettingsPanel() {
         throw new Error(getErrorMessage(data))
       }
 
-      console.log('[enable-banking] Redirecting to bank authorization', {
-        connectionId: data.connection_id,
-        hasAuthUrl: !!data.authorization_url,
-      })
       window.location.href = data.authorization_url
     } catch (error) {
       console.error('[enable-banking] Connect flow failed', {
@@ -594,8 +583,6 @@ export default function BankingSettingsPanel() {
     const timeout = setTimeout(() => controller.abort(), 180_000)
 
     try {
-      console.log('[enable-banking] Starting sync', { connectionId })
-
       const response = await fetch('/api/extensions/ext/enable-banking/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -614,12 +601,6 @@ export default function BankingSettingsPanel() {
         })
           throw new Error(getErrorMessage(data, { fallback: 'Synkronisering misslyckades' }))
       }
-
-      console.log('[enable-banking] Sync completed', {
-        connectionId,
-        imported: data.imported,
-        duplicates: data.duplicates,
-      })
 
       // A bank that refused the requested window answered a narrower one:
       // say from which date the sync is complete instead of presenting a
@@ -718,8 +699,6 @@ export default function BankingSettingsPanel() {
     if (!ok) return
 
     try {
-      console.log('[enable-banking] Disconnecting bank', { connectionId })
-
       const response = await fetch('/api/extensions/ext/enable-banking/disconnect', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -737,7 +716,6 @@ export default function BankingSettingsPanel() {
         throw new Error(getErrorMessage(data, { fallback: 'Disconnect failed' }))
       }
 
-      console.log('[enable-banking] Bank disconnected', { connectionId })
       toast(
         neverCompleted
           ? { title: 'Försöket borttaget', description: 'Du kan starta bankkopplingen på nytt när du vill.' }
@@ -1031,8 +1009,8 @@ export default function BankingSettingsPanel() {
       {/* Connect new bank. Collapsed behind one outline button whenever the
           company already has a connection (renewing the existing row is the
           primary path); the full group is the page's main content only when
-          nothing is connected yet. Non-payers keep seeing the group
-          (conversion surface) but the bank list is replaced by an upgrade
+          nothing is connected yet. Companies without the capability still see
+          the group, but the bank list is replaced by an upgrade
           note: the server gate would 403 the connect anyway. The former "Om
           bankintegration (PSD2)" card lives on as group-level help. */}
       {!connectNewExpanded ? (

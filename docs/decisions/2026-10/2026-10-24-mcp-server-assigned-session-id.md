@@ -1,1 +1,0 @@
-[2026-10-24] The MCP server assigns an Mcp-Session-Id at initialize (never required, looked up or refused), and an unattended run marks its key as well as its session: no client sent one before, and a session-only mark would not follow a client that reconnects mid-run.

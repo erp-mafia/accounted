@@ -1,1 +1,0 @@
-[2026-10-26] Successiv vinstavräkning and the färdigställandemetod post one year_end verifikat of the change in positions (1620/2450/2290/1471/2431) against a company-chosen class 3 account outside every momsdeklaration ruta: upparbetad intäkt is no supply, and on 3001 it would move ruta 05.

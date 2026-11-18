@@ -2,7 +2,7 @@ export default {
   rule: 'payment-without-bank-row-account',
   says: "A payment with no bank row of its own books on the company's primary bank account when nothing else names one, and a line builder is told its account.",
   home: 'src/lib/bookkeeping/settlement-account.ts: resolvePrimaryBankAccount (choice: src/lib/cash-accounts/primary.ts paymentBankRow; dialogs: usePaymentBankLedger)',
-  why: 'Doors defaulted to the literal 1930: 181 companies have another primary and 129 of them no enabled 1930 account, so a payment could land on an account the company does not use.',
+  why: 'Doors defaulted to the literal 1930: a company can have another primary and no enabled 1930 account, so a payment could land on an account the company does not use.',
   match: [
     /\?\?\s*'1930'/,
     /\|\|\s*'1930'/,

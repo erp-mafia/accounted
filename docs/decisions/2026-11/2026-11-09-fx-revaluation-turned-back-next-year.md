@@ -1,1 +1,0 @@
-[2026-11-09] The balansdag currency revaluation is turned back on the next year's first day (a currency_revaluation verifikat naming it in source_id), not measured from the last revalued rate: payments and the monthly revaluation run from the original rate (accounted#58).

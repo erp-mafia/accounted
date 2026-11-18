@@ -1,1 +1,0 @@
-[2026-10-27] The kind='bank' NULL-row fallback count is restated in capture_bank_booking_context too, not only the two functions the design named: it computes the same settlement_account the guard checks, so the three would disagree and refuse every unbound booking.

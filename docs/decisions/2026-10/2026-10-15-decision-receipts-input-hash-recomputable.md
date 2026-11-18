@@ -1,1 +1,0 @@
-[2026-10-15] input_hash covers the suggestions as stored (minus matches_final), the bank-line fields and the document's sha256_hash, not the raw assistant read or extraction: what is hashed must be recomputable from the row and the records it names, and a read is overwritten.

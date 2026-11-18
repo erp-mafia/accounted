@@ -1,1 +1,0 @@
-[2026-10-07] Ruta 05 follows a kundförlust through the bases each decision records (invoice_write_offs.vat_by_rate), dated by its voucher, instead of mapping 6351 and 3950 to ruta 05: 6351 also holds the non-VAT part of a loss (export, reverse charge, exempt) and manual write-offs, which must not move ruta 05. 3950 left the "revenue without a ruta" warning for the same reason.

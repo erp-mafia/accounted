@@ -1,1 +1,0 @@
-[2026-10-15] crm#1238: a bank Open Payments already reads is refused at the Enable Banking connect, before BankID, instead of letting the callback take its accounts across services: one check up front, no third supersession path in the finalize RPC.

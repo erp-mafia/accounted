@@ -12,7 +12,7 @@ import { classifyUnclassifiedDocuments } from '../classify'
 /**
  * The backfill never asks the model twice about one document. A document it
  * already classified stays untyped only when its row refuses the update (a
- * locked period), so asking again only spends a call: prod 2026-09-24, 29
+ * locked period), so asking again only spends a call: seen 2026-09-24, 29
  * such documents were classified about 300 times each in one day.
  */
 type JobRow = { document_id: string; status: string; result: string | null; attempts: number; max_attempts: number; run_after: string | null; locked_at: string | null }

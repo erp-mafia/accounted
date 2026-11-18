@@ -1,1 +1,0 @@
-[2026-10-22] The transactions batch asks the person to name the reverse-charge box (21, 22 or 20) for the selection instead of reading it per row: a bank row carries no seller, as in the single-row review where the box is also picked; per-row reading from an attached underlag is a follow-up.

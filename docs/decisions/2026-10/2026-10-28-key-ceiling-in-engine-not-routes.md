@@ -1,1 +1,0 @@
-[2026-10-28] An API key's unattended ceiling rides on the request's commit actor and binds in the engine (every verifikat), the v1 operation door (priced as its staged twin) and the attest service, not per route (#125); staged-operation dispatch runs without it, its preview was priced.

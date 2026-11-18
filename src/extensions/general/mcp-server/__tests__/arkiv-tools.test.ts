@@ -367,7 +367,7 @@ describe('Arkiv tools', () => {
     expect(mock.findCalls('invoice_underlag', 'eq')).toEqual(expect.arrayContaining([['company_id', CO], ['document_id', DOC]]))
   })
 
-  // Replays the bare "Record not found" (32 calls, 10 companies, 2026-10-29..
+  // Replays the bare "Record not found" (32 calls, 2026-10-29..
   // 11-11): the kind it looked under, the id and where a right id comes from.
   // Each sentence names only tools that return that kind: gnubok_search_records
   // returns documents, agreements and facts (no parties), and a party's ref
@@ -547,7 +547,7 @@ describe('gnubok_ask_document', () => {
     })
   })
 
-  // The format refusal met 26 calls in 2026-11-01..12 (11 companies; 9 were
+  // The format refusal met 26 calls in 2026-11-01..12 (9 were
   // followed by another refusal). A bare uuid, the form the other document
   // tools hand ids out in, is read as the document.
   it('reads a bare document uuid, as the other document tools hand it out', async () => {

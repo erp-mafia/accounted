@@ -24,7 +24,8 @@
  *     `-C react-server`, or `'--conditions', 'react-server'` in an argument
  *     list). Lines continued with a trailing backslash count as one line.
  *     Scanned: package.json scripts, Markdown outside node_modules, and the
- *     source and shell files under scripts/ and docker/, plus .gitlab-ci.yml.
+ *     source and shell files under scripts/ and docker/, plus the workflow
+ *     and action files under .github/.
  *   - shebang: an init script's own `#!` line that runs tsx names the
  *     condition too.
  *   - direct-register: a file under scripts/ that calls registerInitLoader()
@@ -145,7 +146,7 @@ export function findScriptInitConditionFindings(root) {
     ...walk(root, (name) => name.endsWith('.md')),
     ...walk(path.join(root, 'scripts'), (name) => SCANNED_EXT_RE.test(name)),
     ...walk(path.join(root, 'docker'), (name) => SCANNED_EXT_RE.test(name)),
-    path.join(root, '.gitlab-ci.yml'),
+    ...walk(path.join(root, '.github'), (name) => name.endsWith('.yml')),
   ]
   const checkLine = (file, line, text) => {
     for (const { path: script } of initScripts) {

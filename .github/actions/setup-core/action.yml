@@ -1,9 +1,8 @@
 name: Set up core toolchain
 description: >-
   Node 20, npm dependencies through the shared npm cache and, by default, a
-  zero-extension registry: the prologue the CI jobs share (the .setup-core and
-  .npm templates in .gitlab-ci.yml). Check the repository out first: a local
-  action resolves from the workspace.
+  zero-extension registry: the prologue the CI jobs share. Check the repository
+  out first: a local action resolves from the workspace.
 
 inputs:
   zero-extensions:

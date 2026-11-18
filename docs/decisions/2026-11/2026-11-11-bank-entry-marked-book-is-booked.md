@@ -1,1 +1,0 @@
-[2026-11-11] A bank entry marked BOOK is booked without a booking_date (value_date, else transaction_date): the PH 221 skip reasons showed PayPal sends every settled entry so; a bank row in another currency than its account is set aside and counted, not a failed batch (crm#1767).

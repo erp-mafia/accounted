@@ -341,7 +341,7 @@ function looksLikeXml(bytes: Uint8Array): boolean {
 /**
  * JSON has no binary magic number either. For the declared type
  * application/json (raw PSD2 responses archived as räkenskapsinformation per
- * BFL 7 kap) the content must parse as JSON with an object or array root — a
+ * BFL 7 kap) the content must parse as JSON with an object or array root - a
  * prose placeholder is not valid JSON, and a bare quoted string still fails
  * the root check, so the anti-placeholder defense stays intact. Consulted
  * ONLY for that declared type.
@@ -1439,7 +1439,7 @@ export async function deleteDocument(
 
   if (deleteError) {
     // block_document_deletion() raises "Cannot delete document linked to a
-    // <status> journal entry (Bokforingslagen)" (no ö in prod's text) or
+    // <status> journal entry (Bokforingslagen)" (no ö in production's text) or
     // "... within 7-year retention period": match either spelling.
     const msg = (deleteError as { message?: string }).message ?? ''
     if (/Bokf[öo]ringslagen|retention/.test(msg)) {

@@ -11,7 +11,7 @@ const rateLimiter = createTokenRateLimiter({ max: 20, windowMs: 60_000 })
 /**
  * GET /api/payslip/[token]/pdf
  *
- * Public payslip PDF download. The token IS the authentication — the code
+ * Public payslip PDF download. The token IS the authentication - the code
  * path is the only guard (strict hash equality, revocation/expiry checks,
  * per-token rate limit). Salary PII: masked personnummer only, no-store,
  * and the raw token is never logged.

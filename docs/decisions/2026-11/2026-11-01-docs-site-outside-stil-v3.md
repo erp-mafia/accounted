@@ -1,1 +1,0 @@
-[2026-11-01] The public /docs site keeps the website's brand (serif headings, tracked section labels) and is outside the Stil v3 app restyle: it is the marketing site's surface, styled with accounted.se, not the app.

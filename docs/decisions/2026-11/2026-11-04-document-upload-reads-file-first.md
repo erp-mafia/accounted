@@ -1,1 +1,0 @@
-[2026-11-04] Document uploads read the picked file into memory before sending; a file the browser cannot read is refused as DOC_UPLOAD_FILE_UNREADABLE instead of failing as a network error: the request no longer depends on the file on disk (crm#1664)

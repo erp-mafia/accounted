@@ -15,7 +15,7 @@ import type { DecisionReceipt } from './receipts'
  * also writes) is not "no suggestions were offered", and the model's own
  * confidence number is never shown.
  *
- * Receipts from step 2 (MR !463) carry rule_version, policy_version,
+ * Receipts from step 2 carry rule_version, policy_version,
  * confidence_band and checks. They are optional here, so rows read before
  * that lands, and rows recorded before it, simply show fewer facts.
  */
@@ -342,7 +342,7 @@ const KNOWN_FIELDS = new Set<string>([
   'accounts',
 ])
 
-/** The check ids step 2 records (suggestion-log/checks.ts on !463); any other id shows as recorded. */
+/** The check ids step 2 records (suggestion-log/checks.ts); any other id shows as recorded. */
 const KNOWN_CHECKS = new Set<string>([
   'already_booked',
   'duplicate',

@@ -112,7 +112,7 @@ describe('SIE durable input boundaries', () => {
 
   it('lets a line-less voucher dated outside the fiscal year through: it is skipped as empty, never posted', () => {
     // One #BTRANS-only voucher dated in the previous year refused the same
-    // file three times (Easy Online Stores, 2026-09-16).
+    // file three times (reported 2026-09-16).
     const source = '#RAR 0 20260101 20261231\n' + content +
       '\n#VER "LESSLIE" 2 20250102 "Tomt verifikat"\n{\n#BTRANS 1930 {} 100 20250102\n}'
     expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings, options)).not.toThrow()

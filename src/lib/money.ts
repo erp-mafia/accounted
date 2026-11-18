@@ -60,7 +60,7 @@ function shiftDecimal(n: number, exp: number): number {
  * -1.00, not -1.01. That is `Math.round`'s own asymmetry and it is deliberate,
  * pinned by a test. Symmetric away-from-zero rounding on negatives would move
  * credit notes and reversals by one öre relative to the invoices they cancel,
- * so changing it is a founder decision, not a refactor.
+ * so changing it is a product decision, not a refactor.
  *
  * Zero is special-cased so negative-zero inputs preserve their sign through the
  * round trip; non-finite inputs pass through untouched because the decimal

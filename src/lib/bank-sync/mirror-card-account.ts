@@ -8,7 +8,7 @@
  * customers. It has no IBAN, no BBAN, and reports the main account's balance.
  * Every card purchase arrives on both: the real row on the main account and
  * an opposite-sign row on the card account, which can be neither booked
- * meaningfully nor deleted (feed rows are ignore-only). Prod 2026-09-13: 17
+ * meaningfully nor deleted (feed rows are ignore-only). Seen 2026-09-13: 17
  * Svea companies, 547 such rows, 543 with an opposite-sign twin on the main
  * account, 0 ever booked (issue #2565).
  *

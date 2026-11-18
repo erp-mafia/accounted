@@ -24,7 +24,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // These five reads only depend on `run` (already fetched) + companyId, so
-    // fire them concurrently — the detail GET is on the hot path for every
+    // fire them concurrently - the detail GET is on the hot path for every
     // status transition, and serial round-trips dominated its latency.
     type PreviousRun = {
       id: string
@@ -36,7 +36,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const [employeesResult, arbetsgivare, previousRun, correctedByRunId, deliveriesResult] =
       await Promise.all([
         // Employees with line items. A failed embed here (e.g. a schema/column
-        // mismatch on the joined tables) must surface — silently returning an
+        // mismatch on the joined tables) must surface - silently returning an
         // empty list makes the run look employee-less, which then lets the
         // client offer an already-added employee and get a confusing 409.
         supabase
@@ -50,7 +50,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
           log.warn('arbetsgivare id unavailable', { error: err instanceof Error ? err.message : String(err) })
           return null
         }),
-        // Latest booked run before this period — powers the Δ-vs-last-month
+        // Latest booked run before this period - powers the Δ-vs-last-month
         // column. Effective values (overrides coalesced) so the diff matches
         // what was actually booked and AGI-reported.
         (async (): Promise<PreviousRun | null> => {

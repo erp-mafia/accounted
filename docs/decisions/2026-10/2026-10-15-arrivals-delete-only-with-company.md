@@ -1,1 +1,0 @@
-[2026-10-15] arrivals and arrival_outputs refuse every UPDATE and DELETE except the cascade from a deleted company (the guard checks the company row is gone), not a sandbox-teardown flag: the companies cascade covers the teardown and a removed company without rewriting cleanup_sandbox_user.

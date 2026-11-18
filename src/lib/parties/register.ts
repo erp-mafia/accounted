@@ -1,7 +1,7 @@
 /**
  * Parties, phase 1: the read model behind "Förslag från bokföringen".
  *
- * The user's registers are Leverantörer and Kunder (founder decision
+ * The user's registers are Leverantörer and Kunder (product decision
  * 2026-09-03: no third noun). This model serves the queue in front of them:
  * suggested parties with a reason per row and the role each will become,
  * and observed parties the ledger names but nothing owns yet. Money, rhythm

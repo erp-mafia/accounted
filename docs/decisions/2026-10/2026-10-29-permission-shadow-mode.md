@@ -1,1 +1,0 @@
-[2026-10-29] Permission shadow mode logs only disagreements, deduped, after the response; commit seam split to W2c: approvals need an approver kind and credential from every caller, a change to commit paths that shadowing the doors does not need.

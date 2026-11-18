@@ -1,1 +1,0 @@
-[2026-11-10] query_journal's totals_note reads an opening_balance verifikat as the IB only on a fiscal year's first day (account_ib_floor's rule) and names any other as ordinary movement; a failed fiscal period read drops the advisory note instead of guessing (crm#1731).

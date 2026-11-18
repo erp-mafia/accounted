@@ -370,7 +370,7 @@ describe('known limit: twins that came through another channel', () => {
   // by them and, being skipped, left no trace. A third fee then arrives alone:
   // nothing stored says the file's two rows are already spoken for, so one of
   // them absorbs it. Closing this needs the absorbed id to be remembered on
-  // the stored row (see DECISIONS.md 2026-10-11). Until then the row is at
+  // the stored row. Until then the row is at
   // least named, with the stored row it matched.
   it('absorbs a new stable-id row that arrives alone, and names it', async () => {
     const db = createFakeDb()

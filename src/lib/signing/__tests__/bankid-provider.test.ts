@@ -53,7 +53,7 @@ describe('resolveBankIdSigning', () => {
   })
 })
 
-const ARCIM = 'ED461BC1-DBB5-4568-AE20-9337515878E2'
+const ARCIM = 'C0000000-0000-4000-8000-0000000000A1'
 const OTHER = '00000000-0000-4000-8000-0000000000aa'
 
 describe('signingEnabledFor', () => {

@@ -2,8 +2,8 @@
 -- Included by seed.sql with :bg_tenants set. Each tenant is a copy of the
 -- measured company's ledger, registers and documents under ids derived from
 -- the tenant number, so the shared tables carry other companies' rows: six
--- make the measured company about 14 % of the verifikat (the largest company
--- in production holds about 7 %; more tenants cost about 25 s each). Triggers
+-- make the measured company about 14 % of the verifikat (more than one company
+-- would hold in production; more tenants cost about 25 s each). Triggers
 -- are off (session_replication_role) because this is bulk filler that no
 -- benchmark reads, and for the same reason they are not built onto the
 -- ledger summaries.

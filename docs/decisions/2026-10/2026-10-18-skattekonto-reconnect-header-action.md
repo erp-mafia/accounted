@@ -1,1 +1,0 @@
-[2026-10-18] Skattekonto: while a reconnect is needed the header action is Anslut igen and the reconnect attn line is gone (the reason sits in its tooltip and in a toast on a failed sync), so the one attn slot goes to the shortfall line.

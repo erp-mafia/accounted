@@ -240,7 +240,7 @@ describe('the operations', () => {
     expect(plain).not.toHaveProperty('secondSignatureViaApi')
   })
 
-  // Production, 2026-10-20: RJCT with PSU_RIGHTS_MISSING, three days after the signing.
+  // Seen 2026-10-20: RJCT with PSU_RIGHTS_MISSING, three days after the signing.
   it('names the reason of a refused payment from its first message, and only of a refused one', async () => {
     const rjct = { providerStatus: 'RJCT', status: 'rejected', messages: ['PSU_RIGHTS_MISSING'] }
     expect(await provider(fetchAnswering(200, rjct)).getPaymentState(CTX, 'pay-1', 'swedish-giro')).toEqual({ ...rjct, refusalCode: 'PSU_RIGHTS_MISSING' })

@@ -580,7 +580,7 @@ describe('gnubok_update_account', () => {
 })
 
 describe('gnubok_list_accounts: compact detail and paging', () => {
-  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // An agent evaluation brief 2026-09-16, F6: 379 accounts came back as 88 kB
   // in one answer. Both options are opt-in so every existing caller keeps the
   // rows it had; `total` rides along on every answer.
   const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!

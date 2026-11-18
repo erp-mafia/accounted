@@ -1,6 +1,6 @@
-# Payroll: pay derived from vacation days taken (issue #85)
+# Payroll: pay derived from vacation days taken
 
-Status: decided 2026-10-23 for the build in the merge request that closes #85. This is not legal advice; the law text was read on riksdagen.se the same day and every rule below cites it. One-line decision record: `docs/decisions/2026-10/2026-10-23-semester-derived-pay.md`.
+Status: decided 2026-10-23. This is not legal advice; the law text was read on riksdagen.se the same day and every rule below cites it.
 
 ## Sources
 
@@ -18,7 +18,7 @@ Secondary (practice, never the rule itself):
 
 ## What the calculation reads today
 
-- A vacation row is a manual payslip line: `item_type 'vacation'`, `quantity` = days off, `vacation_category` in `paid | extra_paid | saved | unpaid | advance` (NULL = paid), amount optional (0 kr when only days are given, !738).
+- A vacation row is a manual payslip line: `item_type 'vacation'`, `quantity` = days off, `vacation_category` in `paid | extra_paid | saved | unpaid | advance` (NULL = paid), amount optional (0 kr when only days are given).
 - The engine sums it in Step 3 (absence) with its amount. A days-only row contributes 0 kr: the monthly salary runs on under every rule, nothing else changes.
 - Each run accrues the semesterlöneskuld: sammalöneregeln `månadslön × semestertillagg_rate × vacation_days_per_year / 12` (plus 12 % of rörliga lönedelar, #60 B, already built), procentregeln `semesterunderlag × resolveVacationPayRate`. Debit 7290/7090, credit 2920; avgifter 7519/2940. Payouts never relieve 2920; the semesterårsavslut (`semesterberedning.ts`) trues 2920/2940 up to the day-valued liability.
 
@@ -38,9 +38,9 @@ Rule (16 a § första och andra stycket): "Semesterlön enligt sammalöneregeln 
 - Månadslön: the run's monthly salary × employment_degree / 100, i.e. the salary the employee actually has at the semestertillfälle. A part-timer's tillägg is on the part-time salary (the statute names the employee's månadslön; part time changes nothing else). Not prorated for a partial month: the statute names the månadslön, not the month's pay.
 - Fasta lönetillägg would raise the base (16 a § andra stycket, last sentence). Accounted refuses recurring additions (`recurring-lines.ts`), so none exist; nothing to add.
 - Paid days: days off × the payslip's paid-days-per-day-off factor (12 a §, nettometoden: 1,25 at four days a week). The tillägg is "för varje betald semesterdag", so it follows paid days, not days off.
-- Rate: `employees.semestertillagg_rate` (DB default 0,0043; a kollektivavtal raises it, 0,8 % is common). It is the field the monthly accrual already reads, so the payout and the provision cannot disagree. All active employees in production are at 0,0043 (read-only 2026-10-23). A stored rate below 0,43 % is used as stored: 2 a § andra stycket allows a central kollektivavtal to deviate from 16 a §, so it is not invalid on its face (see the open questions below).
+- Rate: `employees.semestertillagg_rate` (DB default 0,0043; a kollektivavtal raises it, 0,8 % is common). It is the field the monthly accrual already reads, so the payout and the provision cannot disagree. A stored rate below 0,43 % is used as stored: 2 a § andra stycket allows a central kollektivavtal to deviate from 16 a §, so it is not invalid on its face (see the open questions below).
 - Which days carry it: `paid`, `extra_paid` and `saved` (Decision 6). `advance` carries none and `unpaid` is a deduction (Decisions 5 and 7).
-- Hourly pay on sammalöneregeln stops the line: 16 § andra stycket 1 puts "lön som inte är bestämd per vecka eller månad" on procentregeln, and there is no månadslön to take 0,43 % of. None exist in production.
+- Hourly pay on sammalöneregeln stops the line: 16 § andra stycket 1 puts "lön som inte är bestämd per vecka eller månad" on procentregeln, and there is no månadslön to take 0,43 % of.
 
 Worked example: 40 000 kr, 5 paid days, 0,43 %: 172,00 kr per day, 860,00 kr.
 
@@ -125,7 +125,7 @@ Rejected: relieving 2920/2940 on every payout (debit 2920 per derived row). It i
 
 ## Decision 10: booked runs never change; drafts recalculate
 
-- `runSalaryCalculation` refuses every run that is not a draft, so an approved, paid or booked run keeps its stored lines and figures. The 4 booked days-only lines in production stay as booked; whether to settle them (a correction run, or a line on a later run) is the byrå's call, not this change's.
+- `runSalaryCalculation` refuses every run that is not a draft, so an approved, paid or booked run keeps its stored lines and figures. Days-only lines booked before this change stay as booked; whether to settle them (a correction run, or a line on a later run) is the company's call.
 - A draft recalculates on the next "Beräkna": the derived rows are deleted by provenance and written again, so repeated calculations never stack them. A correction run copies provenance (`correct-run.ts`), so the copied rows are replaced, not doubled.
 
 ## Decision 11: data model
@@ -140,7 +140,7 @@ Rejected: relieving 2920/2940 on every payout (debit 2920 per derived row). It i
 1. Calendar basis (sammanfallande semesterår) under procentregeln: the day value comes from the previous calendar year, and a partial previous year stops. The law has no sammanfallande year; the employer's kollektivavtal decides. Confirm the reading or name the agreement rule to follow.
 2. The avdrag per vacation day and per obetald day is the engine's dagslön (månadslön / 21 at five days a week, 4,76 %). Tjänstemannaavtal use 4,6 %. Add it as a company calculation convention (`salary_calculation_policy`, a migration and a settings option) if customers ask; until then the amount override covers it.
 3. Förskott days get no tillägg and no derived pay. If a customer's agreement pays the tillägg on förskott days, that is an amount on the line today.
-4. Procentregeln stops until a whole base year is in Accounted, and today that is nobody: 266 companies with procentregeln employees are on the calendar basis (4 on the statutory one) and the first counted payslip in production is from January 2026 (read-only count, 2026-10-23). So every procentregeln days-only line in 2026 is refused and has to be priced by hand, which is what the operator had to do before this change, now said out loud instead of paying the salary through the leave. The real fix is an opening-balance field for the previous system's semesterlönegrundande lön of the base year (and, if wanted, its earned days), set with the other cutover figures. Not built here: it widens the opening-balance doors (v1, MCP, the panel). The alternative until then, letting the salary run on with a warning, pays a monthly employee roughly 0,43 % of the salary per day too little and an hourly employee nothing for the day.
+4. Procentregeln stops until a whole base year is in Accounted, and in 2026 that is nobody: the first payslips counted are from January 2026. So every procentregeln days-only line in 2026 is refused and has to be priced by hand, which is what the operator had to do before this change, now said out loud instead of paying the salary through the leave. The real fix is an opening-balance field for the previous system's semesterlönegrundande lön of the base year (and, if wanted, its earned days), set with the other cutover figures. Not built here: it widens the opening-balance doors (v1, MCP, the panel). The alternative until then, letting the salary run on with a warning, pays a monthly employee roughly 0,43 % of the salary per day too little and an hourly employee nothing for the day.
 5. A `semestertillagg_rate` below 0,43 % is used as stored. Enforce 0,43 % as a floor (as `resolveVacationPayRate` floors 12 %) or keep allowing the 2 a § deviation.
 6. Per-payout relief of 2920/2940 (Decision 9) instead of the year-close true-up.
 

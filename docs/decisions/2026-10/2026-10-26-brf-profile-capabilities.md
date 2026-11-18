@@ -1,1 +1,0 @@
-[2026-10-26] Legal-form profiles gain equity.maintenanceFund (2088, K3 38.14), filings.cashFlowStatement (always for BRF, ÅRL 2:1) and filings.housingKeyRatios (ÅRL 6:3a) so the K3 disclosure matrix reads capabilities, not form names; upplåtelseavgifter get no account until BAS has one.

@@ -30,7 +30,7 @@ import { DimensionCodeSchema, DimensionKeySchema } from '@/lib/bookkeeping/dimen
 import { RETAG_MODES } from '@/lib/dimensions/retag-service'
 
 /**
- * 500-line cap per staged retag (dev_docs plan §3): keeps the approval
+ * 500-line cap per staged retag: keeps the approval
  * preview reviewable by a human and bounds the per-line RPC loop at commit.
  */
 export const RETAG_MAX_LINES = 500

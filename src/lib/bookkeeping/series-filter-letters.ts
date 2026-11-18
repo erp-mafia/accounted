@@ -41,7 +41,7 @@ export function seriesFilterLetters(
 /**
  * Every series the company has numbered vouchers in: one read of
  * voucher_sequences, a row per räkenskapsår and series (at most 125 rows per
- * company in prod, far under a PostgREST page).
+ * company in production, far under a PostgREST page).
  */
 export async function readSeriesInUse(supabase: SupabaseDataClient, companyId: string): Promise<Array<string | null>> {
   const { data, error } = await supabase

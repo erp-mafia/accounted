@@ -8,9 +8,8 @@ import { idOf } from './subscription-items'
  * STRIPE_PRICE_YEARLY) and nothing else.
  *
  * A session opened without a configuration uses the account's default one,
- * whose plan list is kept by hand in the Stripe Dashboard. After the
- * 2026-10-22 price raise it still offered the old 199 a month and 1 999 a
- * year, and a customer on 249 a month switched to a year at 1 999 through it.
+ * whose plan list is kept by hand in the Stripe Dashboard and can offer
+ * retired prices after a price change.
  * Here the list comes from the env checkout reads: a configuration is looked
  * up by the prices it offers and made on first use after a price change, so
  * the portal and checkout cannot disagree. A configuration someone edits in

@@ -1,1 +1,0 @@
-[2026-10-16] Kassa day, webbshop order and milersättning events carry no subject: a subject must be a typed handle and those records have none; the linked verifikat's source_id names the day and the order. A handle prefix is a separate, permanent decision.

@@ -8,7 +8,7 @@ const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupaba
 beforeEach(() => reset())
 
 const file = (slug: string, extra: Partial<Parameters<typeof toCommunitySkillMd>[0]> = {}) => toCommunitySkillMd({
-  slug, title: `Titel ${slug}`, description: 'Beskrivning.', kind: 'workflow', author: 'jakob', body: `# Titel ${slug}\n\n1. Gör något.\n`,
+  slug, title: `Titel ${slug}`, description: 'Beskrivning.', kind: 'workflow', author: 'anna', body: `# Titel ${slug}\n\n1. Gör något.\n`,
   submissionId: '00000000-0000-4000-8000-000000000009', ...extra,
 })
 
@@ -25,7 +25,7 @@ function fakeGitHub(files: Record<string, string | null>, folders = Object.keys(
 const SUBMISSION = '00000000-0000-4000-8000-000000000009'
 const withoutSubmission = (slug: string) => file(slug).replace(/\nsubmission: .*\n/, '\n')
 const sha = (text: string) => communityBodySha(text)
-const signalsFor = (slug: string, approved: string | null) => ({ kind: 'workflow', author: 'jakob', industries: [], source: `https://github.com/erp-mafia/accounted-skills/tree/main/community/${slug}`, submission: null, approved_sha: approved })
+const signalsFor = (slug: string, approved: string | null) => ({ kind: 'workflow', author: 'anna', industries: [], source: `https://github.com/erp-mafia/accounted-skills/tree/main/community/${slug}`, submission: null, approved_sha: approved })
 
 describe('syncCommunityFromRepo', () => {
   it('publishes a file the reviewer approved, links its submission, and switches off what was removed', async () => {
@@ -37,7 +37,7 @@ describe('syncCommunityFromRepo', () => {
     const result = await syncCommunityFromRepo(supabase as never, fakeGitHub({ 'ny-rutin': file('ny-rutin') }))
     expect(result).toMatchObject({ published: ['community/ny-rutin'], updated: [], deactivated: ['community/old'], linked: [SUBMISSION], pending: [], skipped: [] })
     const upsert = findCall('agent_atom_registry', 'upsert')?.[0] as Record<string, unknown>
-    expect(upsert).toMatchObject({ id: 'community/ny-rutin', tier: 'community', version: 1, is_active: true, mcp_exposed: true, trigger_signals: { kind: 'workflow', author: 'jakob', industries: [], approved_sha: sha(file('ny-rutin')) } })
+    expect(upsert).toMatchObject({ id: 'community/ny-rutin', tier: 'community', version: 1, is_active: true, mcp_exposed: true, trigger_signals: { kind: 'workflow', author: 'anna', industries: [], approved_sha: sha(file('ny-rutin')) } })
     expect(upsert.reviewed_at).toEqual(expect.any(String))
     expect(findCall('company_skills', 'update')?.[0]).toMatchObject({ share_status: 'published', published_atom_id: 'community/ny-rutin' })
   })

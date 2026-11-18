@@ -1,1 +1,0 @@
-[2026-11-08] A deleted company (archived_at set) is entitled to nothing in the bulk entitlement read that the bank-sync, Open Payments and skattekonto crons use, bypass included: its trial or byrå team grant outlives the delete, so its bank feed kept syncing (#198).

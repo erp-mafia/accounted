@@ -1,1 +1,0 @@
-[2026-10-30] The Kundorder switch lives under Fakturering; the API keeps creating sales orders while it is off: like quotes, proforma and mileage the flag gates the menu only, and a refusal would break API-first migrations (crm#1513).

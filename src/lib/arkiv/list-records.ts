@@ -114,7 +114,7 @@ export async function listRecords(supabase: SupabaseClient, companyId: string, o
 /**
  * The earliest archived copy of each document that has one, by the same file (byte hash) or the same text
  * (content hash): id -> original id. Used wherever documents are listed to an agent (list_records, a
- * verifikat's attachments, search hits), so a sum counts each document once (prod 2026-09-25: verifikat A82
+ * verifikat's attachments, search hits), so a sum counts each document once (seen 2026-09-25: verifikat A82
  * carried one invoice twice, and a naive sum doubled it).
  */
 export async function originalsOf(
@@ -160,7 +160,7 @@ export async function originalsOf(
     }
   }
 
-  // The same file sent twice has the same bytes, whatever a reader made of a photo each time (prod: one
+  // The same file sent twice has the same bytes, whatever a reader made of a photo each time (seen: one
   // receipt photo archived four times, read four slightly different ways, so its text hashes differed).
   const byteOriginal = new Map<string, { id: string; created_at: string }>()
   const byteHashes = [...new Set(rows.map((r) => r.sha256_hash).filter((h): h is string => !!h))]

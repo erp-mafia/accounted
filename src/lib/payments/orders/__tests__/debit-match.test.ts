@@ -18,7 +18,7 @@ function debitOf(row: Transaction): OrderDebit {
   }
 }
 
-/** Row 7af13560: Swedbank's debit of order 4e42c482, no end-to-end id, bankgiro zero-padded in the text. */
+/** Row 0d1d0000: Swedbank's debit of order 40e40000, no end-to-end id, bankgiro zero-padded in the text. */
 const SWEDBANK = debitOf(arcimDebit())
 /** The same debit as a bank that writes nothing a matcher can read would report it. */
 const BARE = { ...SWEDBANK, description: 'UTBETALNING', reference: null }

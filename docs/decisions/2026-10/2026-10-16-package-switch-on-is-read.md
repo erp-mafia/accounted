@@ -1,1 +1,0 @@
-[2026-10-16] Package switches turned on (enabled = true) are read beside those turned off, so a company choice wins over the profile both ways; a config row that is not enabled = true still turns its key off, exactly as the old enabled = false filter decided.

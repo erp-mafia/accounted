@@ -38,7 +38,7 @@ export const CompanySetupSchema = z
     vat_registered: z.boolean(),
     moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
     /**
-     * Optional since 2026-08-26 (founder call: minimal onboarding input is
+     * Optional since 2026-08-26 (product call: minimal onboarding input is
      * orgnr + moms period). When omitted it defaults by form in
      * planCompanySetup: aktiebolag → 'accrual' (the norm; kontantmetoden is
      * rare for AB), enskild firma → 'cash' (the common small-EF choice;

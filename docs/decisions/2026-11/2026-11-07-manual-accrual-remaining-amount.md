@@ -1,1 +1,0 @@
-[2026-11-07] A manual periodisering may spread what remains on its balance account: the ledger balance from the latest IB on, less pending months of other active plans there, at most what the origin or IB put there, so months dissolved by hand or by imported vouchers are not booked twice.

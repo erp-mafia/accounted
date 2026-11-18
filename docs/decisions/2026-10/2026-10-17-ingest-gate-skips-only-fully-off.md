@@ -1,1 +1,0 @@
-[2026-10-17] INGEST_PACKAGE_GATING skips a package's ingest matchers only when it is off with nothing open: a winding-down package keeps them, since its open invoices and begäran must still match; flag off or a failed switch read runs everything.

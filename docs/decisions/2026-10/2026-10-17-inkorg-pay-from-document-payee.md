@@ -1,1 +1,0 @@
-[2026-10-17] Inkorg pay-from-document holds the giro when the payee rules call it a change from the matched supplier card; the check runs in the component because lib/inkorg (inbox) may not import lib/payments (boundary ratchet).

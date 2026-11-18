@@ -10,8 +10,7 @@ import {
 } from './fixtures'
 
 /**
- * Invariants for the verifikat_without_documents RPC (mcp_optimization_plan
- * P0-2). The predecessor applied min_amount in memory after the DB page:
+ * Invariants for the verifikat_without_documents RPC. The predecessor applied min_amount in memory after the DB page:
  * total_count ignored the filter and consecutive pages overlapped. These
  * tests pin the SQL-side behavior: filter-respecting total, disjoint and
  * complete pages, since and until filters, doc/draft exclusion, tenant guard.

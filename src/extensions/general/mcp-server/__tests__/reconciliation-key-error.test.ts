@@ -1,7 +1,7 @@
 /**
  * The reconciliation services answer null for an account key they cannot
  * resolve, and the MCP tools used to turn every null into the same
- * `Unknown account_key` string. Easy Online Stores (brief 2026-09-16, F6)
+ * `Unknown account_key` string. An agent evaluation (brief 2026-09-16, F6)
  * hit it for "skattekonto" before Skatteverket was connected and had to guess
  * why. One helper now explains the null: the skattekonto cause by name, and
  * for any other key the keys that do exist.
@@ -114,7 +114,7 @@ describe('unknownAccountKeyError', () => {
 
   it('no account_key at all: says it is required and lists the keys, never "undefined"', async () => {
     // Replays gnubok_reconcile_match / gnubok_list_reconciliation_items called
-    // without account_key (15 calls, 12 companies, 2026-10-29..11-12).
+    // without account_key (15 calls, 2026-10-29..11-12).
     listMock.mockResolvedValue([{ account_key: BANK_KEY }, { account_key: 'skattekonto' }])
     for (const missing of [undefined, null, '', '  ']) {
       const error = await unknownAccountKeyError(supabase, COMPANY, missing)

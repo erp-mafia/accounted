@@ -1,1 +1,0 @@
-[2026-10-15] A multipart v1 body is hashed for Idempotency-Key by its parts (text values, each file's name, type, size and SHA-256), not its raw text: every client encodes a fresh random boundary, so a resent upload answered IDEMPOTENCY_KEY_REUSE instead of replaying.

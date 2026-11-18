@@ -1,1 +1,0 @@
-[2026-11-17] With a seal certificate set, the signed copy carries the original and a manifest and gets a PAdES seal with timestamps (B-LTA): it then proves itself without our database. The BankID signatures stay in the evidence package, named by SHA-256 (2026-10-25 holds).

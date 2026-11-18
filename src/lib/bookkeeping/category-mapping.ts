@@ -345,7 +345,7 @@ export function buildMappingResultFromCategory(
 
   // A supplier refund under reverse charge books gross on this path, no
   // reversed set: the Swedish skills state no posting for it, and changing
-  // that is a tax decision for the founders (decision of 2026-10-10, crm#1136).
+  // that is a tax decision for the operators (decision of 2026-10-10, crm#1136).
   // Money out on an income category is a refund of a sale that carried no
   // Swedish moms, so it books none either.
   const nature = categoryNature(category)

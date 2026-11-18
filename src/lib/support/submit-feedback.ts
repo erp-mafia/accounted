@@ -17,7 +17,7 @@ export interface SubmitFeedbackInput {
  * Delivery channels.
  *
  * 'ticket' - PostHog Support conversation, linked to the person and their
- *            session replay. Since 2026-09-14 this is the inbox the founders
+ *            session replay. Since 2026-09-14 this is the inbox the operators
  *            answer in, and the reply shows up in the same dialog
  *            (components/ui/support-link.tsx), so it is the delivery for a
  *            plain message.
@@ -142,7 +142,8 @@ function noteInAnalytics(
  * Unlike the analytics breadcrumb this DOES carry the message body: a support
  * ticket the user deliberately wrote is the one place their words are the
  * point. That makes tickets a distinct processing purpose from analytics, so
- * it is declared separately in .compliance/ropa.yaml and on the privacy page.
+ * it is declared separately in the record of processing activities and on the
+ * privacy page.
  *
  * Never throws and never blocks: if conversations are unavailable (support
  * disabled, no analytics, older SDK) the user still gets the email path.

@@ -181,8 +181,8 @@ describe('gnubok_vat_close_check: reconciliation scope', () => {
   })
 
   it('reconciles the primary cash account when the company has no 1930 row at all', async () => {
-    // The worst instance of #1290, measured on prod: 2 companies run two SEK
-    // cash accounts each (1935+1936 and 1932+1935), have NO 1930 cash_accounts
+    // The worst instance of #1290: a company runs two SEK
+    // cash accounts (1935+1936 or 1932+1935), has NO 1930 cash_accounts
     // row and ZERO journal_entry_lines on 1930. Scoped to '1930' they compared
     // their whole SEK bank volume (2026: 120104.43 kr and -22347.00 kr) against
     // an empty GL side, i.e. a high-severity bank_unreconciled blocker with

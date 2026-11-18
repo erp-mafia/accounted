@@ -16,7 +16,7 @@ import { readerForMime } from '@/lib/documents/read/types'
  * A structured archive (a bank response, an XML payload) is the record
  * itself and is never read into pages: it gets no job. Before 2026-09-24 the
  * bank sync's JSON files took a read slot each and a person's PDF waited
- * behind a hundred no-ops (prod: 112 queued for one company, 3 a minute).
+ * behind a hundred no-ops (seen: 112 queued for one company, 3 a minute).
  */
 export function registerDocumentReadHandler(): () => void {
   return eventBus.on('document.uploaded', enqueueDocumentRead)

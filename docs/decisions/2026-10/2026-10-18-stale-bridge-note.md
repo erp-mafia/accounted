@@ -1,1 +1,0 @@
-[2026-10-18] A client whose older tools/list lacks gnubok_stage_tool gets a refresh/reconnect note (search, briefing, call_tool refusal, instructions) rather than gnubok_call_tool carrying staged writes: keeps the read/write bridge split of #2825; the server cannot see the copy.

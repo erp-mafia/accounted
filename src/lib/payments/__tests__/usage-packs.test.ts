@@ -8,7 +8,7 @@ import { BANK_PAYMENTS_PER_PACK, allowanceOf, getBankPaymentsUsage, readBankPaym
 import { bankPaymentsAllowanceRefusal } from '../allowance'
 
 /**
- * The cap with bank payment packs (issue #132): the base (a founder's
+ * The cap with bank payment packs (issue #132): the base (an operator's
  * override, else 10) plus 100 per pack the company bought on its
  * subscription. One definition, read by the counter and both signing doors.
  */
@@ -20,7 +20,7 @@ function sent(n: number) {
 }
 
 describe('allowanceOf', () => {
-  it('adds the packs to the default, and to a founder\'s override', () => {
+  it('adds the packs to the default, and to an operator\'s override', () => {
     expect(BANK_PAYMENTS_PER_PACK).toBe(100)
     expect(allowanceOf(null)).toEqual({ base: 10, packs: 0, included: 10 })
     expect(allowanceOf({ monthly_payments: null, purchased_packs: 1 })).toEqual({ base: 10, packs: 1, included: 110 })

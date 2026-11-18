@@ -1,1 +1,0 @@
-[2026-10-16] POSTING_EVENTS defaults to off; shadow logs an event failure and posts; strict (stop before a voucher number) is wired and tested but not to be enabled until step 2 coverage holds: only the pilot writes events yet.

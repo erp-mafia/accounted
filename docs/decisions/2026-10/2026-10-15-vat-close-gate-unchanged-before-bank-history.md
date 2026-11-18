@@ -1,1 +1,0 @@
-[2026-10-15] crm#1221: the VAT close gate keeps reading verifikat before the bank history as verifikat without a bank row (crm#185 unchanged): Stäm av may call such a period avstämt from history_start, the momsperiod stays closed until the bank rows are imported.

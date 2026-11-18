@@ -469,7 +469,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             </div>
             {shownBanks.length === 0 ? <p className="jny-qsub">{t('bank_no_matches')}</p> : null}
             {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
-            {/* The way out sits under the banks, quiet: connecting is the point of the step (founder direction 2026-09-14). */}
+            {/* The way out sits under the banks, quiet: connecting is the point of the step (product direction 2026-09-14). */}
             <div className="bank-exit">
               <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
                 {t('bank_manual')}

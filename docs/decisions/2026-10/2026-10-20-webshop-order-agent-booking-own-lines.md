@@ -1,1 +1,0 @@
-[2026-10-20] crm#1032 agents book a webshop order only with lines they send (gnubok_book_webshop_order, no default to the suggestion): the suggestion is Swedish 30xx/26xx, wrong for OSS/VOEC, so an omitted field must not book it; dialog and agent share bookWebshopOrder().

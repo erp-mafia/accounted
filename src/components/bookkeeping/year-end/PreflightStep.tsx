@@ -69,7 +69,7 @@ export function PreflightStep({ report, isLoading, error, onRetry, onContinue }:
   return (
     <div className="space-y-8">
       {/* Readiness: muted text for the normal state, chip only when the
-          period deviates (design.md: chips mark exceptions). The period
+          period deviates (chips mark exceptions). The period
           itself is named by the picker in the top bar, so no second title. */}
       <div className="px-1">
         {report.ready ? (

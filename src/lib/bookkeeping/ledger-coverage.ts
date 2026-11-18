@@ -12,7 +12,7 @@
  * Two kinds of voucher say the books already hold the money:
  * - the migrated ledger (fetchMigrationCoverageEnd): every affärshändelse up
  *   to the last imported voucher is in it, on whatever account the old system
- *   used (prod: Stripe and POS sales migrated on 1510/1580/1930, never 1686);
+ *   used (seen: Stripe and POS sales migrated on 1510/1580/1930, never 1686);
  * - a hand-entered voucher on the connector's settlement account, such as a
  *   samlingsverifikat for a range of Stripe sales on 1686. Counted even when
  *   a feed row was later linked to it: linking does not make it a feed

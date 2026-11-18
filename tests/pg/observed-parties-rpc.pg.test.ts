@@ -275,7 +275,7 @@ describe('get_observed_parties (pg)', () => {
   it('does not leak across companies and returns [] for an empty company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
-    await insertPostedJournalEntry({ userId: a.userId, companyId: a.companyId, fiscalPeriodId: a.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Dahls Bageri AB (167)', lines: expense('4000', 100) })
+    await insertPostedJournalEntry({ userId: a.userId, companyId: a.companyId, fiscalPeriodId: a.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Exempelbageriet AB (167)', lines: expense('4000', 100) })
     expect(await observed(b.companyId, b.userId)).toEqual([])
     // A member of company b asking for company a's rows sees nothing: RLS.
     const cross = await withUserContext(b.userId, async (client) => {

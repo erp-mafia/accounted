@@ -1,1 +1,0 @@
-[2026-10-22] Register imports check a detected column against the file: when 2+ filled cells all fail the field (e-post, org-nr, land, IBAN) the column is unmapped and the mapping step opens, not trusted from its header: PH 204, a Spiris export dead-ended on rows it could not fix.

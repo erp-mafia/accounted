@@ -306,7 +306,7 @@ describe('registerExpenseClaim', () => {
     expect(findCall('expense_claims', 'insert')).toBeUndefined()
   })
 
-  it('refuses an utlägg of an item whose other half is booked already (SofClo 2026-10-15), before writing anything', async () => {
+  it('refuses an utlägg of an item whose other half is booked already (reported 2026-10-15), before writing anything', async () => {
     refuseWhenPairBookedMock.mockResolvedValueOnce({
       ok: false,
       code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',

@@ -1,1 +1,0 @@
-[2026-10-16] Inkorg register-and-settle opens the registration form with the bank row fixed instead of booking without a form: the reading never proposes an account or a supplier for sure, and a guessed account would post unseen; the form's one confirm does both.

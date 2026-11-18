@@ -77,7 +77,7 @@ export function isProviderOverload(err: unknown): boolean {
  * True when a Bedrock stream failure is transient: the identical request can
  * succeed on an immediate retry without any input change. Covers throttling
  * (429), server errors (5xx), transport cuts (timeout/reset/socket), the two
- * known SDK stream-corruption signatures observed in prod on the pinned
+ * known SDK stream-corruption signatures observed in production on the pinned
  * 0.29.x SDK ("Unexpected event order", "request ended without sending any
  * chunks"), and the provider's own transient error events inside a stream
  * (`overloaded_error`, `api_error`): those arrive after the HTTP 200, so the

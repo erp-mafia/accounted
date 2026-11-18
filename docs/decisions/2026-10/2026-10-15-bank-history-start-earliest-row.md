@@ -1,1 +1,0 @@
-[2026-10-15] crm#1221: bank history_start is the earliest bank row of the cash account (any source, ignored rows too), not the stored first-sync window: the window says what was asked for, the row what the bank delivered; an imported older file moves it with nothing stored.

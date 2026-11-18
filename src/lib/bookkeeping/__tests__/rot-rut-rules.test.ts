@@ -520,7 +520,7 @@ describe('parseArticleHouseworkType (articles.housework_type vocabularies)', () 
   })
 
   it('anything else is not a housework flag', () => {
-    // '0'/'1' are what a boolean "Rot" CSV column produced on prod.
+    // '0'/'1' are what a boolean "Rot" CSV column produced in production.
     for (const v of ['0', '1', 'Ja', 'SNICKERI', '', null, undefined]) {
       expect(parseArticleHouseworkType(v)).toEqual({ deductionType: null, workType: null })
     }

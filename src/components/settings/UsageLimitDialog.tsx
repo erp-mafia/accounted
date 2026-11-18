@@ -15,7 +15,7 @@ const MESSAGE_MAX = 2000
 /**
  * Where a paid service reaches what the month includes: the person asks for
  * more (POST /api/billing/usage/requests), support gets the request with the
- * company's numbers, and a founder opens the charge for the company. Bank
+ * company's numbers, and an operator opens the charge for the company. Bank
  * payments ask through their own dialog (RequestMorePaymentsDialog).
  */
 export function UsageLimitDialog({

@@ -49,7 +49,7 @@ interface Props {
  * and add replacement lines in the SAME verifikat, without an
  * ändringsverifikation. The struck originals stay visible (strikethrough)
  * in the verifikat via the immutable rättelse log. Stays Swedish
- * (verifikat surface, .claude/rules/i18n.md).
+ * (verifikat surface).
  */
 export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected, filedVat }: Props) {
   const { toast } = useToast()

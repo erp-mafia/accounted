@@ -15,7 +15,7 @@ import { isOutboxNotDeployed } from '@/lib/events/outbox-dispatcher'
  *   window made it impossible to tell whether a tool or skill change actually
  *   moved failure rates.
  *
- * Retention is declared in .compliance/ropa.yaml (id: mcp.telemetry).
+ * Retention is declared in the record of processing activities (id: mcp.telemetry).
  *
  * The steps are independent, so one failing does not stop the others, and the
  * run answers with an error when any of them failed:

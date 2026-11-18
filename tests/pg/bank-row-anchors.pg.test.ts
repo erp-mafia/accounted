@@ -182,7 +182,7 @@ describe('cash_account_booked_rows', () => {
 
   it('reads the anchors once and probes the lines per anchor, not per bank row', async () => {
     // On a generic plan the EXISTS over anchors joined to lines ran every
-    // anchor's line probe again for each bank row (prod 2026-11-12: 1 071
+    // anchor's line probe again for each bank row (seen 2026-11-12: 1 071
     // rows with 181 anchors took 2 s and 1.5 million buffers). The rows being
     // counted must be scanned on their own, with no join above them, and a
     // member gets the same count as the owner of the data.

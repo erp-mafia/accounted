@@ -271,7 +271,7 @@ describe('gnubok_call_tool bridge', () => {
   })
 
   // Agents that copy the tools/call shape send `name`, some `tool_name`; each
-  // was refused "requires a tool argument" and none got through (prod, 30 days).
+  // was refused "requires a tool argument" and none got through (seen over 30 days).
   it('reads the tool from `name` when an agent copies the tools/call shape', async () => {
     const eventPromise = captureNextToolCalled()
 
@@ -737,7 +737,7 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
     }
   })
   it('routes a bridged read to the API key default company when company_id is omitted', async () => {
-    // Easy Online Stores brief 2026-09-16, F6: a bridged gnubok_sie_import_status
+    // An agent evaluation brief 2026-09-16, F6: a bridged gnubok_sie_import_status
     // without company_id reached Postgres as uuid "undefined". The company
     // half was never the bug (the dispatcher resolves the key default before
     // execute); this pins that so the tool-side fix cannot be mistaken for it.
@@ -872,8 +872,7 @@ describe('bridge company_id next to tool', () => {
   })
 })
 
-// Guessed names from prod telemetry (82 unknown_tool calls, 22 companies, 30
-// days): the answer names the real tool first, with how to reach it.
+// Guessed names seen in telemetry: the answer names the real tool first, with how to reach it.
 describe('unknown tool: did you mean', () => {
   beforeEach(() => {
     vi.clearAllMocks()

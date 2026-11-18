@@ -26,7 +26,7 @@
  * the text in src/messages/sv.json and en.json and read it with t().
  *
  * SWEDISH_BY_DESIGN lists the files that are Swedish in both locales on
- * purpose (.claude/rules/i18n.md, "Stays Swedish"), each with its reason.
+ * purpose (statutory and regulatory surfaces), each with its reason.
  * Data that is Swedish in every locale (BAS account names, a bank's name)
  * belongs in lib/, which this check does not read.
  */
@@ -41,10 +41,10 @@ const ts = require('typescript')
 
 /** Files that stay Swedish in both locales, with the reason. */
 export const SWEDISH_BY_DESIGN = new Map([
-  // .claude/rules/i18n.md: statutory bokslut terminology, English would mislead.
-  ['app/(dashboard)/bookkeeping/year-end/page.tsx', 'year-end wizard (i18n.md)'],
-  // .claude/rules/i18n.md: verifikat, voucher numbers and BAS are regulatory.
-  ['app/(dashboard)/bookkeeping/[id]/page.tsx', 'journal entry editor (i18n.md)'],
+  // Statutory bokslut terminology, English would mislead.
+  ['app/(dashboard)/bookkeeping/year-end/page.tsx', 'year-end wizard (statutory terms)'],
+  // Verifikat, voucher numbers and BAS are regulatory.
+  ['app/(dashboard)/bookkeeping/[id]/page.tsx', 'journal entry editor (regulatory terms)'],
   // The published legal texts are Swedish documents, edited as a whole.
   ['app/(public)/privacy/page.tsx', 'privacy policy, a Swedish legal document'],
   ['app/(public)/dpa/page.tsx', 'data processing agreement, a Swedish legal document'],
@@ -178,7 +178,7 @@ export const SWEDISH_UI_LITERAL_HINT = [
   'src/messages/sv.json and src/messages/en.json and read it with t() (useTranslations in a',
   'client component, getTranslations on the server). Pass translated strings into canvas',
   'engines and label maps rather than writing them there. A surface that stays Swedish in',
-  'both locales by rule (.claude/rules/i18n.md) goes in SWEDISH_BY_DESIGN in',
+  'both locales by rule goes in SWEDISH_BY_DESIGN in',
   'scripts/checks/swedish-ui-literal.mjs with its reason.',
 ]
 

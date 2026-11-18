@@ -1,1 +1,0 @@
-[2026-10-15] Skattekonto book dialog probes match-candidates on open and opens on the twin answer, rather than only reacting to the server's LEDGER_TWIN_EXISTS on submit: the dialog stopped offering a booking the server would refuse; the server refusal stays the guard.

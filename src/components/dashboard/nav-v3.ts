@@ -185,7 +185,7 @@ export const NAV_V3_AREAS: NavV3Area[] = [
           { href: '/transactions', module: 'transactions', labelKey: 'v3_bank_rows', icon: ListBulletIcon },
           // One account's reconciliation (/reconciliation?account=) opens from
           // this list and has no row of its own: the bare /reconciliation
-          // redirects here (founder decision 2026-10-18, next.config.ts).
+          // redirects here (product decision 2026-10-18, next.config.ts).
           { href: '/accounts', module: 'ledger', labelKey: 'v3_accounts_balance', icon: BuildingLibraryIcon, match: ['/reconciliation'] },
         ],
       },
@@ -362,7 +362,7 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     labelKey: 'v3_company',
     icon: BuildingOfficeIcon,
     rail: 3,
-    // The Bolaget pages are rows here (founder call 2026-11-15; they shared a
+    // The Bolaget pages are rows here (product call 2026-11-15; they shared a
     // tab bar before). Each row carries the gate its tab had in
     // lib/bolaget/hub.ts: the overview where the hub is open, a register
     // where the form keeps an aktiebok inside the rollout, Avtal inside the
@@ -403,7 +403,7 @@ export const NAV_V3_AREAS: NavV3Area[] = [
     icon: SparklesIcon,
     rail: 'foot',
     // Koppla en agent opens /settings/api. The page has no row (the button is
-    // its one place in the sidebar, founder decision 2026-11-16): `owns` keeps
+    // its one place in the sidebar, product decision 2026-11-16): `owns` keeps
     // it lighting Agenter, and areaCreatePage lists it where there is no
     // button (the phone menu, the command palette, the assistant's UI map).
     create: [{ href: '/settings/api', module: 'agent', labelKey: 'v3_connect_agent', requiresMcpExtension: true }],
@@ -430,7 +430,7 @@ export const NAV_V3_AREAS: NavV3Area[] = [
         ],
       },
       {
-        // The built-in chat will be removed (founder decision 2026-11-17): a
+        // The built-in chat will be removed: a
         // customer's own assistant connects over MCP instead (Koppla en agent
         // above). Until then the row stays, behind the switch that takes the
         // chat away (ASSISTANT_CHAT_ENABLED, on unless switched off).

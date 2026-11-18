@@ -1,1 +1,0 @@
-[2026-10-16] The bank check compares the bank-reported balance with the books on the Stockholm date the balance was fetched, not today: a balance fetched days ago would otherwise show every later verifikat as a difference.

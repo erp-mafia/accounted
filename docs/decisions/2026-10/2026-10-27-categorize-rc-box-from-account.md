@@ -1,1 +1,0 @@
-[2026-10-27] Categorize reverse-charge summary reports the box a self-reporting cost account (4531, or a reverse-charge momskod) books, and an explicitly named box that contradicts it is refused at the MCP door: the account decides the declaration, so the summary must not claim the EU default (crm#1454, 0 past staged ops would have been refused).

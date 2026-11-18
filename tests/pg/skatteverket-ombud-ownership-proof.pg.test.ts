@@ -1,5 +1,5 @@
 /**
- * Ombud connection on a contested org number (founder decision 2026-11-08,
+ * Ombud connection on a contested org number (product decision 2026-11-08,
  * migration 20261108074117_skatteverket_audit_auth_mode.sql), against real
  * Postgres: the real connection-store reads company_settings, companies,
  * company_members and skatteverket_api_audit_log through supabase-js.

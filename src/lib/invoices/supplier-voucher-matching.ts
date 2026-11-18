@@ -265,7 +265,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     windowDays,
     // The ankomstnummer is Accounted's own sequence (1, 2, 3, ...): no bank or
     // source system writes it on a payment, so it counts only when the amount
-    // corroborates it. All 31 arrival-number auto-links in prod on 2026-09-16
+    // corroborates it. All 31 arrival-number auto-links in production on 2026-09-16
     // were of the kind "14" inside "(1814)" with an unrelated amount (desk crm#64).
     references: [
       { label: 'Fakturanummer', value: invoice.supplier_invoice_number, countsWithoutAmount: true },

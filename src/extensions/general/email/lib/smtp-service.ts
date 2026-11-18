@@ -64,7 +64,7 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
  * VERIFIED brand sender domains (WL-13): "<fromName> <fromAddress>". Otherwise
  * the platform default: "<fromName> <SMTP_FROM_EMAIL>" or
  * "<App> <SMTP_FROM_EMAIL>". A fromName WITHOUT an explicit address shows the
- * name ALONE (founder call 2026-08-05: no "via <platform>" in the display
+ * name ALONE (product call 2026-08-05: no "via <platform>" in the display
  * name; the platform stays visible in the actual From address until a sender
  * domain is verified). A malformed explicit sender falls through to the
  * platform default rather than failing the send.

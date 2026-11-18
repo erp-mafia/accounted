@@ -34,7 +34,7 @@ interface AgentPromoProps {
  * Shape: one quiet sentence with the action link at the end and the same
  * "Dölj" text control the Skatteverket promo uses, not a boxed card. It is
  * an optional offer, not an exception, so it stays muted (convention 6/12).
- * Non-payers keep seeing it (conversion surface) but it routes to billing
+ * Companies without the ai capability still see it; it links to billing
  * instead of a build flow that would 403.
  */
 export function AgentPromo({ companyId }: AgentPromoProps) {

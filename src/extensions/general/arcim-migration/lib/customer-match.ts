@@ -136,7 +136,7 @@ const words = (name: string | undefined): Set<string> =>
 /**
  * A customer number is free text on the card. When the user numbered the
  * cards their own way, the same number on another customer would pass for a
- * match; a renamed customer ("Sam Nylander" and "Sam Daniel Nylander") still
+ * match; a renamed customer ("Anna Berg" and "Anna Maria Berg") still
  * shares a word with itself, two unrelated customers do not.
  */
 const namesShareAWord: Predicate = (card, facts) => {

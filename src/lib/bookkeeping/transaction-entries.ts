@@ -442,7 +442,7 @@ export async function createTransactionJournalEntry(
   // businessEvent: the door's side of the business event (posting port).
   options: { rubricVersion?: string; businessEvent?: TransactionBusinessEventContext } = {},
 ): Promise<JournalEntry | null> {
-  // Build lines first — throws InvalidMappingResultError on a broken mapping
+  // Build lines first - throws InvalidMappingResultError on a broken mapping
   // before any period lookup, preserving the original validation order.
   const lines = buildTransactionEntryLines(transaction, mappingResult)
 

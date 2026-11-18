@@ -641,7 +641,7 @@ function BillingCoreContent({ reason }: { reason: UpgradeReason | null }) {
 /**
  * The bank payments add-on under the plan (issue #132): the packs the
  * company holds and, for the owner, Köp fler / Ändra. Rendered only where
- * packs are sold and bank payments are open to the company; until a founder
+ * packs are sold and bank payments are open to the company; until an operator
  * sets the pack price nothing shows.
  */
 function PaymentPacksRow() {

@@ -145,7 +145,7 @@ export function initialState(entry: BooksEntry): BooksState {
     return { ...base, step: 'skv', skvPhase: entry.skvConnected ? 'back' : 'open' }
   }
   // The server's word beats the query string from here: a running import
-  // is followed, existing books open on the genomlysning (founder direction
+  // is followed, existing books open on the genomlysning (product direction
   // 2026-09-14: a reload must never restart at "Var fanns bokföringen?").
   if (entry.resumeImportId) return { ...base, step: 'resume', path: 'migration' }
   if (entry.landedFromProvider || (entry.provider && !SIE_FIRST_PROVIDERS.has(entry.provider))) {

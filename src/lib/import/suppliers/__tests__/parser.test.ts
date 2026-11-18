@@ -80,7 +80,7 @@ describe('parseSuppliersFile', () => {
 
   it('preserves Swedish characters when reading a UTF-8 CSV', async () => {
     const csv = new TextEncoder().encode(
-      'Namn,Ort\nDinel AB,GÖTEBORG\nHisings AB,HISINGS KÄRRA\n',
+      'Namn,Ort\nExempel AB,GÖTEBORG\nKärra AB,HISINGS KÄRRA\n',
     ).buffer
     const result = await parseSuppliersFile(csv, 'lev.csv')
     expect(result.rows[0].city).toBe('GÖTEBORG')

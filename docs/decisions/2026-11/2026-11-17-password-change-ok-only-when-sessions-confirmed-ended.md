@@ -1,1 +1,0 @@
-[2026-11-17] A password change answers ok only when the other sessions are confirmed ended (logout scope others, 3 attempts); else a 500 says the password is saved and to sign out everywhere. Supersedes 2026-10-23-password-change-ends-other-sessions: CASA 2.2.2 fails ok with revocation unconfirmed.

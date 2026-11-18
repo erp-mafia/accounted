@@ -86,7 +86,7 @@ describe('applyDimensionRules', () => {
     ]
 
     // normalize folds cost_center into key '1', so the default has nothing to
-    // fill — nothing applies and the SAME array comes back.
+    // fill - nothing applies and the SAME array comes back.
     expect(applyDimensionRules(lines, rules)).toBe(lines)
     expect(lines[0].cost_center).toBe('KS-ALIAS')
   })
@@ -138,7 +138,7 @@ describe('applyDimensionRules', () => {
     expect(out).not.toBe(lines)
     expect(out[0]).not.toBe(lines[0])
     expect(out[0].dimensions).toEqual({ '6': 'P001' })
-    // The 1930 line has no rule — the exact same object rides through.
+    // The 1930 line has no rule - the exact same object rides through.
     expect(out[1]).toBe(lines[1])
   })
 
@@ -146,7 +146,7 @@ describe('applyDimensionRules', () => {
     const lines: TestLine[] = [{ account_number: '4010' }]
 
     expect(applyDimensionRules(lines, [])).toBe(lines)
-    // 'required' rules carry no value — they never apply at draft time.
+    // 'required' rules carry no value - they never apply at draft time.
     expect(
       applyDimensionRules(lines, [
         makeRule({ rule_type: 'required', value_code: null }),

@@ -1,1 +1,0 @@
-[2026-10-15] Inline rättelse attribution (actor on journal_entry_rattelse_log) waits for a follow-up: both RPCs need restating with new defaulted parameters (old signatures dropped), five call sites changed and a pre-migration fallback; too large to ride along before pg-real has run.

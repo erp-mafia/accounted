@@ -1,1 +1,0 @@
-[2026-10-15] The four SQL posting RPCs (match_batch_allocate, create_expense_payout_batch, both link-voucher RPCs) take only the actor pair and leave commit_method NULL: WHO was the gap; HOW would be a third parameter as bulk_book_transactions takes, a follow-up if wanted.

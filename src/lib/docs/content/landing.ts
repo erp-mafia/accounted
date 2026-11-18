@@ -80,7 +80,7 @@ Every response has the same shape:
 }
 \`\`\`
 
-Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` block — the \`request_id\` moves inside \`error\`):
+Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` block - the \`request_id\` moves inside \`error\`):
 
 \`\`\`json
 {

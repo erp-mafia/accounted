@@ -3,9 +3,8 @@
  * removed and the bank does not end its consent, the consent stays named on
  * the removed row (consent_attempt.unended_consent_id), and the company's
  * next connect attempt ends it first (releaseHeldConsents in ./service.ts).
- * A company that never comes back would keep it live until it expires: Open
- * Payments bills per active consent, and Connect counts it as the company's
- * one bank connection. Once a day this asks again for every such row,
+ * A company that never comes back would keep it live until it expires, and
+ * Connect counts it as the company's one bank connection. Once a day this asks again for every such row,
  * through the same endUnendedConsent the connect path uses:
  *
  *   - ended now, or already gone (ended earlier under the revocation claim,

@@ -621,7 +621,7 @@ describe('accounted#213: "Skapa faktura nu" records its run as the hourly run do
   })
 })
 
-describe('accounted#213, review of !1529: the cuts the first version still let through', () => {
+describe('accounted#213: the cuts the first version still let through', () => {
   const says = () => String(db.schedule.last_run_warning ?? '')
   /** A person who reads "Ingen faktura skapades" on the schedule bills it by hand. */
   async function personActsOnTheSchedule(instant: string) {

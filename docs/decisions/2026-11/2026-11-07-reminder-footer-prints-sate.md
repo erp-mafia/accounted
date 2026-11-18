@@ -1,1 +1,0 @@
-[2026-11-07] Payment reminders print säte too: the reminder e-mail footer shows a legal person's stored registered_office next to the org.nr through the same helper as the invoice footers (2026-11-03), since ABL 28 kap. 5 § covers an aktiebolag's letters as well as its invoices.

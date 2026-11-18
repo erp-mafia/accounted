@@ -1,1 +1,0 @@
-[2026-11-09] An SIE undo's time is stamped by a trigger on job_state 'undone' (sie_imports.undone_at), not in the two chunk RPCs; reset_fiscal_year refuses a year with a completed durable import (undo it first) rather than writing job_state: one storno track, no 280-line RPC copy.

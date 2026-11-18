@@ -395,7 +395,7 @@ export type OmbudClaimStanding = 'clear' | 'unproven' | 'proven_twice'
 
 /**
  * The one definition of who may hold the ombud connection on an org number
- * (founder decision 2026-11-08). Org-number reuse is allowed in the product
+ * (product decision 2026-11-08). Org-number reuse is allowed in the product
  * and org numbers are public, but the ombud path binds Skatteverket's
  * system-credential access to the number: a tenant that typed a victim's
  * number must never inherit the victim's grant. Only a live claimant of the

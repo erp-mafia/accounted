@@ -1,1 +1,0 @@
-[2026-11-12] get_bank_balance_facts and cash_account_booked_rows read their set once and test membership in the select list (hashed subplan), not by join: on a generic plan the join re-ran the view per bank row, 4 657 rows timed out.

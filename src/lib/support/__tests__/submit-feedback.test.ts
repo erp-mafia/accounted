@@ -214,7 +214,7 @@ describe('submitFeedback', () => {
       expect(result).toEqual({ ok: true, channels: ['email'] })
     })
 
-    // Since 2026-09-14 the founders answer in PostHog and the reply shows in
+    // Since 2026-09-14 the operators answer in PostHog and the reply shows in
     // the app, so the ticket IS the delivery; email is not even attempted.
     it('reports success on the ticket alone and leaves email untouched', async () => {
       const fetchSpy = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) })

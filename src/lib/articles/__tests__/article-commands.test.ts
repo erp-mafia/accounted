@@ -15,7 +15,7 @@ import { createArticle, updateArticle } from '../article-commands'
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn() } }))
 
 const base = { name: 'EU-konsulting', price_excl_vat: 950 }
-const ARTICLE_ID = '3a9ac4d2-163a-4d43-8fa3-1b32827505fa'
+const ARTICLE_ID = '0d1d0000-0000-4000-8000-000000000002'
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as never
 
 describe('CreateArticleSchema: the agent path\'s inputs', () => {

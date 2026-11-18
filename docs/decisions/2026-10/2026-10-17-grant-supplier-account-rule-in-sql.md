@@ -1,1 +1,0 @@
-[2026-10-17] Which accounts a supplier rule's lines may use (cost accounts, never representation 607x/763x, a balance account or class 8) is stated once, in grant_item_account_allowed: the TypeScript schema keeps no BAS literals (bas-account-literal guard) and defers to it.

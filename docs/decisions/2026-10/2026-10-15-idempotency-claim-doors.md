@@ -1,1 +1,0 @@
-[2026-10-15] The webhook-delivery retry claims its key too, a fourth door beyond the three asked for, so the v1 docs hold for every keyed write. MCP staging keeps storing after the fact: an overlapping repeat stages a second pending operation that still needs its own approval.

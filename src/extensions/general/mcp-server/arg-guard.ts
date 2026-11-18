@@ -40,7 +40,7 @@ export function findUnknownArgKeys(
  * The shortest worked example a tool publishes, serialized for an error
  * message, or '' when it has none or the shortest is too long to help.
  *
- * "Valid parameters: period_id" told DueCue's agent which key was wrong but
+ * "Valid parameters: period_id" told one agent which key was wrong but
  * not what a correct call looks like, and the same rejected call repeated for
  * seven days (604 of them). One example costs nothing in tools/list, because
  * it only ships on the response to a call that already failed.

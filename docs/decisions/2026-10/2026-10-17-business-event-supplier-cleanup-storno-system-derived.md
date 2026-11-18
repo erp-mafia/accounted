@@ -1,1 +1,0 @@
-[2026-10-17] The stornos a supplier invoice door makes of its own verifikat after a failed link or a lost race record ledger.storno with link basis system_derived, dated the day: no one chose them; an uncredit, which a person asks for, records user_created.

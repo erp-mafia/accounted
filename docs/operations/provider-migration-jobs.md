@@ -1,23 +1,10 @@
-# Resumable provider registers (#2690)
+# Provider migration jobs
 
 The wizard now submits customers, suppliers, sales invoices and supplier invoices
 as one persisted job. It restores unfinished jobs when reopened and offers the
 latest completed result. The existing company-information, asset, SIE and document
 flows retain their own paths. Direct integrations using the legacy `/migrate`
 register flags must adopt the job API to obtain resumable execution.
-
-## Why this change
-
-Large registers exceeded a single HTTP invocation. Repeating the request also
-repeated discovery and earlier writes. Increasing the request ceiling or merely
-splitting the four register requests cannot bound a large individual register.
-
-The worker uses the existing Supabase database and scheduler. Encrypted provider
-snapshots, persisted page cursors, short batches, worker leases with attempt
-fencing, and transactional source-ID receipts make a restart safe without adding
-a queue dependency. Invoice headers and their rows commit together. Payment
-candidates are persisted for the whole job before settlement, so conflicting
-candidates in different batches cannot each consume the same voucher.
 
 ## Execution and limits
 
@@ -59,8 +46,8 @@ candidates in different batches cannot each consume the same voucher.
 - Transient provider failures back off. Exhausted detail failures and malformed
   records get explicit attention outcomes while healthy records continue.
   Authorization failures pause the job and expose reconnect in the wizard.
-- Snapshot encryption uses `PERSONNUMMER_ENCRYPTION_KEY`. All workers sharing the
-  staging database must use the same configured key. Every runtime refuses to
+- Snapshot encryption uses `PERSONNUMMER_ENCRYPTION_KEY`. All workers sharing a
+  database must use the same configured key. Every runtime refuses to
   work without it; test harnesses explicitly supply their own fixture key.
   Job state is operational; source-ID mappings are included in the
   company archive alongside the imported registers.
@@ -101,7 +88,7 @@ against the NEGATED total, because its verifikat debits 2440. A supplier credit
 note the company already holds in the shape written before #2838 (the provider's
 negative total on an unflagged row) is skipped with reason
 `creditNoteInOldShape` instead of being inserted a second time; rewriting those
-rows is a separate, founder-approved repair.
+rows is a separate, approved repair.
 
 There is no snapshot purge or TTL job. A pending or failed snapshot remains
 available for retry. The archive includes customers, suppliers, invoices, their
@@ -118,7 +105,7 @@ to issue the next invoice under them (`INVOICE_NUMBER_SERIES_BEHIND`, migration
 20261012161600) and the first issue asks where the series continues: the number
 after the highest imported one, or a new prefix. Nothing is used up meanwhile.
 
-## ROT, RUT and grön teknik on Visma invoices (crm#1144)
+## ROT, RUT and grön teknik on Visma invoices
 
 The import has no slot for a household deduction, and Visma's SIE keeps the
 whole invoice on 1510. An open Visma invoice issued under fakturamodellen
@@ -171,40 +158,3 @@ again from Accounted.
 The new mapper also gives a part-paid sales invoice of any provider
 `partially_paid` (payment date empty, as on a native partial payment) instead
 of `sent`.
-
-## Local session with staging
-
-Use a checkout containing the provider migration worker, with Node 22 and environment configuration
-pointing to `erp-base` **staging**, never the production database. No local
-Supabase or Docker is needed. Do not copy the main checkout’s `.env.local`.
-
-Start the app through its usual `npm run dev` command after configuring staging.
-The open progress screen nudges the worker, so a local cron process is optional.
-Without a local scheduler, a closed browser resumes on reopening once the current
-worker invocation ends. Hosted background continuation relies on the cron route.
-
-Check a sandbox-provider import whose SIE data is already present:
-
-1. Import the four registers and inspect saved counts while work continues.
-2. Reload or close/reopen the page; the same job and receipts should return.
-3. Stop/restart the local server during import. Wait for the expired lease, then
-   reopen the job; successful documents and lines must not duplicate.
-4. Test an expired connection, reconnect, and resume.
-5. Review any failed records, then repeat the import and compare source mappings,
-   invoice counts, invoice-line counts and payment links.
-
-## Verification and rollout
-
-The SQL assertions in `tests/pg/sql/provider-migration-jobs.sql` run as one
-rollback-only transaction. They exercise the service-role RPCs and authenticated
-RLS on the staging database, including worker fencing, response-loss retries,
-number-less draft invoices, supplier credit notes sharing display numbers,
-atomic row completion and payment contention across batches. The matching
-`provider-migration-jobs.pg.test.ts` runs the same assertions in pg-real CI.
-
-The six migrations for provider jobs have been applied to staging and verified
-byte-for-byte against its migration history. The application and scheduler are
-not deployed by this worktree. Browser testing with a real provider account is
-still the joint local verification step. Production rollout requires merging and
-deploying the application and explicitly approving the production migrations.
-The affected production company’s repair is separate and has not been executed.

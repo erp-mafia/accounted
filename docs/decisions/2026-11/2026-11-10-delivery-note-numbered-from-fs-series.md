@@ -1,1 +1,0 @@
-[2026-11-10] A följesedel without a number takes the next FS- number when issued (ensureInvoiceNumber), never one from generate_invoice_number: that put it in the F series, whose position counts invoices only, a permanent hole (ML 17 kap 24 §, accounted#58). A quote without an OF- number is refused.

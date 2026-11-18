@@ -1,1 +1,0 @@
-[2026-10-28] A rule learned from an imported history (source sie_import) asks for a review until one booking on it is reviewed in Accounted, existing imported rules included (founder decision): people booked that history in another program, nobody reviewed it here.

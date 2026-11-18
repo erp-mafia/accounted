@@ -1,1 +1,0 @@
-[2026-10-18] One bank row settles up to 499 invoices or verifikat, not 200: Skatteverket pays a day's beslut in one transfer, and 499 is the most a batch verifikat (two lines per invoice plus the bank line) holds and still reads in one 1000-row select; batch-commit routes get 300 s (crm#1297).

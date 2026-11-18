@@ -46,8 +46,8 @@ describe('splitRail', () => {
   })
 
   it('reads the payer out of a Stripe payment and keeps the fee on Stripe', () => {
-    expect(splitRail('Stripe-betalning Erik Hellqvist')).toMatchObject({ rail: 'Stripe', subMerchant: 'Erik Hellqvist' })
-    expect(splitRail('Stripe-avgift (Stripe-betalning Erik Hellqvist)')).toMatchObject({ railCounterpart: 'Stripe' })
+    expect(splitRail('Stripe-betalning Erik Exempel')).toMatchObject({ rail: 'Stripe', subMerchant: 'Erik Exempel' })
+    expect(splitRail('Stripe-avgift (Stripe-betalning Erik Exempel)')).toMatchObject({ railCounterpart: 'Stripe' })
     expect(splitRail('Stripe: Automatic Taxes (2026-08-20): Automatic tax')).toMatchObject({ railCounterpart: 'Stripe' })
   })
 
@@ -86,7 +86,7 @@ describe('extractDomain', () => {
 
 describe('preclean', () => {
   it('produces the template key as alias key and the classifier label', () => {
-    const p = preclean('Lön Jakob Juni Överföring via internet')
+    const p = preclean('Lön Anna Juni Överföring via internet')
     expect(p.label).toBe('payroll')
     expect(p.aliasKey.length).toBeGreaterThan(0)
   })

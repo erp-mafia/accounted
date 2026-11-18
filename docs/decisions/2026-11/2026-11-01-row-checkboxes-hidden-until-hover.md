@@ -1,1 +1,0 @@
-[2026-11-01] Row selection checkboxes hide until row hover or while selecting (Stil v3 polish P2, approved 2026-10-31), reversing the always-visible .5 rest state; the widened 32px hit area that answered the "sjukt pilligt" near-miss feedback stays, and touch keeps them visible.

@@ -2,7 +2,7 @@
  * A refusal the database raises on purpose (PT409 conflict, period lock) is
  * an expected answer the doors turn into a 4xx: the engine logs it at warn,
  * so Vercel's runtime errors keep only real failures. Anything else stays an
- * error (prod 2026-10-27: CASH_ACCOUNT_OPERATION_BUSY logged as an error).
+ * error (seen 2026-10-27: CASH_ACCOUNT_OPERATION_BUSY logged as an error).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

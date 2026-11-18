@@ -5,7 +5,7 @@
  * sending domain, resolveInvoiceSender) and `fromAddress` (verified brand
  * sender domain, WL-04/WL-13 via lib/email/brand-sender.ts). A fromName
  * without either rides the platform address and shows the name ALONE:
- * no "via <platform>" (founder call 2026-08-05).
+ * no "via <platform>" (product call 2026-08-05).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events'

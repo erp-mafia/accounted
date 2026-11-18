@@ -29,7 +29,7 @@ describe('SKV_NEEDS_RECONSENT_MESSAGE', () => {
   })
 
   it('states the real session length: about ten hours per BankID login, not one hour (crm#1442)', () => {
-    // Prod data: the hourly cron keeps a consent alive until Skatteverket
+    // Observed: the hourly cron keeps a consent alive until Skatteverket
     // refuses refreshes ~10 h after the BankID login (median 10.5 h). The old
     // "ca 1 timme" made a user who reconnects every morning think something
     // was broken on his side. The settings panel says the same thing.

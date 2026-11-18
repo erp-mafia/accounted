@@ -1,1 +1,0 @@
-[2026-10-17] The posting port gains postJournalEntrySet (the design's postSet): one event for a set of verifikat, its link passed to every draft inside createJournalEntries, so order and all-or-nothing stay as they were and every link lands before the first number is drawn.

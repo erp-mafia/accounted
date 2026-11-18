@@ -2,7 +2,7 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
-// Stil v3 (founder decision 2026-10-29, "no cards inside the panel"): the
+// Stil v3 (product decision 2026-10-29, "no cards inside the panel"): the
 // full-bleed page panel is already the card, so a Card on it is a flat
 // section: no border, no fill, no inset, its content on the page's 24px
 // gutter, sections apart by the page's spacing. Only a single object (a

@@ -1,1 +1,0 @@
-[2026-10-28] API key scope picker: read stays ticked and locked with a reason while an elevated scope in its group is ticked, instead of unticking read silently clearing the group; the brief's label fix was moot, PostHog shows label clicks already toggle.

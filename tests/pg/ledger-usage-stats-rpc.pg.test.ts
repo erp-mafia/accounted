@@ -349,7 +349,7 @@ describe('get_ledger_usage_stats', () => {
     // calc input VAT (2645) + calc output VAT (2614) + bank (1930), tying at
     // equal counts. The dominant contra must be the expense 5420, NOT the low
     // VAT number 2614 that the account_number tiebreak would otherwise pick
-    // (regression for 20260708110000; observed on prod as 2614).
+    // (regression for 20260708110000; observed in production as 2614).
     let rcVoucher = 20
     for (const d of ['2026-05-20', '2026-06-18']) {
       const transactionId = await insertBookedTransaction({

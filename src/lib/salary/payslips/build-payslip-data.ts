@@ -2,7 +2,7 @@
  * Shared PayslipData assembly.
  *
  * The per-employee PDF route and the payslip send/link surfaces must render
- * identical payslips — override coalescing, breakdown steps and masking live
+ * identical payslips - override coalescing, breakdown steps and masking live
  * here so the logic can't drift between callers.
  *
  * The one deliberate difference is the audience. The employer's own view of
@@ -62,7 +62,7 @@ export interface PayslipEmployeeSource {
   f_skatt_status?: string | null
 }
 
-/** salary_run_employees row with joined line_items — loose shape by design
+/** salary_run_employees row with joined line_items - loose shape by design
  * (the callers select `*`), narrowed field-by-field below. */
 export type PayslipSreSource = Record<string, unknown> & {
   line_items?: Array<Record<string, unknown>> | null

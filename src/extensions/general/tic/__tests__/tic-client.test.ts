@@ -120,7 +120,7 @@ describe('tic-client', () => {
     })
 
     // Enskild firma: Lens only resolves the 12-digit (century-prefixed) form,
-    // so a 10-digit personnummer must be expanded before the query. Björn's
+    // so a 10-digit personnummer must be expanded before the query:
     // 860101-1235 → born 1986 → prefix 19.
     it('expands a 10-digit personnummer to the 12-digit form before querying', async () => {
       const mockFetch = vi.mocked(fetch)

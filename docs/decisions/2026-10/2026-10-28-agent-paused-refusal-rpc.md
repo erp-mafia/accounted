@@ -1,1 +1,0 @@
-[2026-10-28] A paused agent's key gets no row from validate_and_increment_api_key and a new api_key_refusal RPC names AGENT_PAUSED for the 403, the service-account suspension pattern: code deployed before the migration still fails closed (401).

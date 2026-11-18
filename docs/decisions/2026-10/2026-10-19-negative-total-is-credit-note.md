@@ -1,1 +1,0 @@
-[2026-10-19] accounted#58 a document totalling below zero counts as a credit note (isCreditNoteDocument) and is never credited, linked or not: imported credit notes often lack credited_invoice_id and older imports say 'paid', so the link alone let 3 213 through.

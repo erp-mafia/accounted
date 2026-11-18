@@ -1,1 +1,0 @@
-[2026-10-15] A byrå user in the booking summary is a company_members row with source 'team' on a company whose team is kind 'byra', named with the team's name: what the byrå team sync writes. A consultant invited directly reads as a plain person.

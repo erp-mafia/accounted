@@ -1,1 +1,0 @@
-[2026-10-17] An async event consumer may run from a few seconds (the after() kick) up to one minute (the per-minute dispatch cron) after the emit: accepted for consumers taken off the request path (Jakob).

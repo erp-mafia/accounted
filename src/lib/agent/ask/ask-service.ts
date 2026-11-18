@@ -85,7 +85,7 @@ export interface AskResult {
 // back with empty text by default. The earlier 5400 was the chat's former
 // no-thinking reply ceiling, so a question the model reasoned hard
 // about spent the whole budget on thinking and came back with no text at all:
-// prod 2026-10-17..23, single turns ending at exactly 5400 output tokens.
+// seen 2026-10-17..23, single turns ending at exactly 5400 output tokens.
 // 16000 is what the streaming chat gives the same model at the same effort
 // (MAX_TOKENS_STANDARD in lib/agent/composer/client.ts). It is a ceiling, not
 // a spend: only generated tokens are billed.

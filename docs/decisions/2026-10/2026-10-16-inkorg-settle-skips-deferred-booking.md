@@ -1,1 +1,0 @@
-[2026-10-16] Inkorg register-and-settle leaves an invoice of a company that books supplier invoices in a separate Bokför step registered and unpaid: settling would clear 2440 for a debt never booked, and Bokför refuses a paid invoice, so the cost would never be booked.

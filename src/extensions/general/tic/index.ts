@@ -1080,7 +1080,7 @@ export const ticExtension: Extension = {
 
           const host = forwardedHost(request)
 
-          // Invite-only brand domain gate (founder decision 2026-08-27):
+          // Invite-only brand domain gate (product decision 2026-08-27):
           // same rule POST /api/auth/signup enforces on the email path. Runs
           // AFTER the existing-identity check so a returning user's login is
           // never blocked, and before anything is created or consumed:

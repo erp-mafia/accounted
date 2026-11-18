@@ -2,7 +2,7 @@
  * Digital mailboxes (Kivra, Billo): the one shape both providers are read
  * and written through, so the Inkorg sync, the invoice send and the payslip
  * send never branch on the provider. Provider specifics live in kivra.ts
- * and billo.ts; references in docs/integrations/{kivra,billo}.md.
+ * and billo.ts.
  */
 
 export const DIGITAL_MAILBOX_PROVIDERS = ['kivra', 'billo'] as const

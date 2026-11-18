@@ -118,7 +118,7 @@ export interface SkattekontoMatchCandidate {
   joins_linked_count?: number
 }
 
-/** Swedish month names exactly as SKV writes them in prod transaktionstext. */
+/** Swedish month names exactly as SKV writes them in production transaktionstext. */
 export const SWEDISH_MONTH_NUMBERS: Record<string, number> = {
   januari: 1,
   februari: 2,
@@ -151,8 +151,8 @@ const MONTH_NAME_PERIOD_RE = new RegExp(
  *   "Arbetsgivardeklaration 202605"      (test environment)
  *   "arbetsgivardeklaration 2026-05"
  *   "AGI 202605"
- *   "Avdragen skatt maj 2026"            (production)
- *   "Arbetsgivaravgift maj 2026"         (production)
+ *   "Avdragen skatt maj 2026"            (in production)
+ *   "Arbetsgivaravgift maj 2026"         (in production)
  *   "Beslut 260703 arbetsgivaravgift mars 2026"  (production beslut rows)
  *
  * Beslut rows parsing to their period is intentional (audited): it lets match
@@ -417,7 +417,7 @@ function sharedPeriodStart(rows: Array<{ transaktionstext?: string | null }>): s
  * ("Avdragen skatt maj 2026" + "Arbetsgivaravgift maj 2026" accept a
  * verifikat dated in May, 2026-05-01 onward). An AGI liability is commonly
  * booked in the salary month while Skatteverket draws it on the 12th of the
- * next month, a 31-day gap on prod (crm#128).
+ * next month, a 31-day gap in production (crm#128).
  */
 export function combinedMatchWindow(
   eventDate: string,
@@ -677,7 +677,7 @@ export async function findMatchSuggestionsBulk(
 
   // Candidates per row, then a one-to-one assignment across rows: two rows
   // that each see "exactly one candidate" must not both be proposed the same
-  // verifikat (12 same-day-same-amount groups on prod would have done that).
+  // verifikat (12 same-day-same-amount groups in production would have done that).
   // Rows are assigned in date order; AGI-period matches win inside a row.
   const ordered = [...unmatched].sort((a, b) =>
     a.transaktionsdatum < b.transaktionsdatum
@@ -829,7 +829,7 @@ export async function findMatchSuggestionsBulk(
   // sees, cannot be told apart: whichever row links to whichever verifikat,
   // the ledger ends up the same. Assign them one to one instead of proposing
   // nothing. Two 1 kr interest rows against two imported 1 kr verifikat got
-  // no proposal on prod and were booked a second time. A row that sees more
+  // no proposal in production and were booked a second time. A row that sees more
   // verifikat than there are identical rows (different dates, say) stays
   // ambiguous and unproposed; more identical rows than verifikat leaves the
   // surplus rows (events the ledger lacks) unproposed.

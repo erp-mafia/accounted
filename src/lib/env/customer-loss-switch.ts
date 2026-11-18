@@ -1,7 +1,7 @@
 /**
  * CUSTOMER_LOSS_ENABLED: the kundförlust menu, route and operation, and with
  * them every new write to the written_off status. Unset = off (F14: off until
- * the founder decides, after the accountant has seen real cases).
+ * the operator decides, after the accountant has seen real cases).
  *
  * Kundförlust is provider-independent: it does not depend on the collections
  * gates, and a closed collection case only changes where the menu shows.

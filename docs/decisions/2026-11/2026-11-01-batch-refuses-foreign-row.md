@@ -1,1 +1,0 @@
-[2026-11-01] match_batch_allocate refuses a foreign bank row (BATCH_FOREIGN_CURRENCY), as bulk book and the expense payout do, rather than converting it: the columns are kronor and the raw figure balanced, so no trigger saw it. Prod holds no such verifikat; one invoice at a time books the row.

@@ -1,1 +1,0 @@
-[2026-11-12] The recurring cron records the invoice on the schedule (next run, period, count) before the auto-send, not by a lookup in the stale roll: an invoice carries no link to its schedule, so a lookup would guess. A run killed while sending leaves a warning to check the invoice.

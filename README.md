@@ -20,22 +20,22 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 
 ## Features
 
-- **Double-entry bookkeeping** -- BAS 2026 chart of accounts, draft/commit workflow, sequential voucher numbering
-- **Invoicing** -- Create, send, and track invoices with mixed VAT rates and PDF generation
-- **Bank reconciliation** -- PSD2 bank connection via Enable Banking, 4-pass automatic matching
-- **VAT declaration** -- SKV 4700 form mapping, per-rate breakdown, EU/export handling
-- **Tax reports** -- NE-bilaga, INK2, SRU export for Skatteverket
-- **Payroll** -- Salary runs, payslips, and AGI (arbetsgivardeklaration) employer declarations
-- **Supplier invoices** -- Registration, payment tracking, input VAT deduction
-- **Supplier payment files (betalfil)** -- Batch supplier payments into ISO 20022 pain.001 files for upload to the bank, rendered byte-identical on every download
-- **E-invoicing (Peppol)** -- Send and receive Peppol BIS Billing 3 e-invoices through Qvalia, a certified Swedish Access Point; received documents land in the supplier invoice inbox
-- **Skattekonto** -- Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
-- **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
-- **SIE import/export** -- Standard Swedish accounting interchange format
-- **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
-- **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor
-- **Command line** -- `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
-- **Extension system** -- Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
+- **Double-entry bookkeeping**: BAS 2026 chart of accounts, draft/commit workflow, sequential voucher numbering
+- **Invoicing**: Create, send, and track invoices with mixed VAT rates and PDF generation
+- **Bank reconciliation**: PSD2 bank feeds, 4-pass automatic matching
+- **VAT declaration**: SKV 4700 form mapping, per-rate breakdown, EU/export handling
+- **Tax reports**: NE-bilaga, INK2, SRU export for Skatteverket
+- **Payroll**: Salary runs, payslips, and AGI (arbetsgivardeklaration) employer declarations
+- **Supplier invoices**: Registration, payment tracking, input VAT deduction
+- **Supplier payment files (betalfil)**: Batch supplier payments into ISO 20022 pain.001 files for upload to the bank, rendered byte-identical on every download
+- **E-invoicing (Peppol)**: Send and receive Peppol BIS Billing 3 e-invoices through Qvalia, a certified Swedish Access Point; received documents land in the supplier invoice inbox
+- **Skattekonto**: Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
+- **Document archive**: SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
+- **SIE import/export**: Standard Swedish accounting interchange format
+- **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
+- **Claude connector and plugin**: Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor
+- **Command line**: `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
+- **Extension system**: Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
 
 ## Agent skills
 
@@ -144,7 +144,7 @@ See [contributing guide](.github/CONTRIBUTING.md) for the full development workf
 - **Framework**: Next.js 16 (App Router), React 19, TypeScript (strict)
 - **Database**: Supabase (PostgreSQL + Row Level Security + email/password auth + TOTP MFA)
 - **Styling**: Tailwind CSS 4 + shadcn/ui
-- **Integrations**: Enable Banking (PSD2), Qvalia (Peppol), Skatteverket, Kivra and Billo (digital mailboxes), Anthropic SDK on Amazon Bedrock (eu-north-1; direct Anthropic or any OpenAI-compatible endpoint for self-hosted via the Vercel AI SDK), Resend, JSZip
+- **Integrations**: bank feeds over PSD2 (Enable Banking, or Open Payments through Accounted Connect), Qvalia (Peppol), Skatteverket, Kivra and Billo (digital mailboxes), Anthropic SDK on Amazon Bedrock (eu-north-1; direct Anthropic or any OpenAI-compatible endpoint for self-hosted via the Vercel AI SDK), Resend, JSZip
 
 The Kivra and Billo integrations are Accounted's own code, built on the providers' public developer documentation. They are not official Kivra or Billo products, and neither provider supports them or answers for their security. Running them takes your own agreement and credentials with each provider.
 
@@ -157,7 +157,7 @@ The Kivra and Billo integrations are Accounted's own code, built on the provider
 | [`supabase/`](supabase/) | Database configuration and migration history |
 | [`tests/`](tests/) | Shared fixtures, database suites, and cross-cutting tests; unit tests also live beside their code |
 | [`scripts/`](scripts/README.md), [`docker/`](docker/) | Development tools and self-hosting internals |
-| [`docs/`](docs/README.md) | Architecture, hosting, operations, and project history |
+| [`docs/`](docs/README.md) | Architecture, hosting, and operations |
 
 [`packs/`](packs/README.md) holds bookkeeping templates, [`registry/`](registry/README.md) holds community content, and [`skills/`](skills/) holds installable agent skills. These are maintained inputs, not generated build folders.
 
@@ -181,7 +181,7 @@ The [documentation index](docs/README.md) groups the repository guides by task.
 
 Contributions are welcome. See [contributing guide](.github/CONTRIBUTING.md) for the full guide.
 
-All commits require a [DCO sign-off](.github/DCO) (`git commit -s`).
+Your first pull request asks you to accept the [Contributor License Agreement](CLA.md) once; the bot links it.
 
 ## License
 

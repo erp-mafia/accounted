@@ -5,7 +5,7 @@ import type { CustomerLossView } from '@/lib/customer-loss/view'
 import { formatLossAmount } from '@/lib/customer-loss/text'
 
 /**
- * The invoice page's kundförlust line (founder decision F3): "Befarad
+ * The invoice page's kundförlust line (product decision F3): "Befarad
  * kundförlust bokförd" while a reserve is held (the invoice keeps its status,
  * the claim still stands), and the written-off note once the loss is
  * konstaterad. Renders nothing otherwise.

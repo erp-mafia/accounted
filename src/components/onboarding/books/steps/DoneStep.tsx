@@ -182,7 +182,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </div>
       )}
 
-      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (founder direction 2026-09-14). */}
+      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (product direction 2026-09-14). */}
       <div className="done-door">
         <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}

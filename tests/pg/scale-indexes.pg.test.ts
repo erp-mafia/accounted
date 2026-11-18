@@ -17,7 +17,7 @@ import { getClient, getPool } from './setup'
  * runs in production, with sequential scans, bitmap scans and sorts priced
  * out, and the plan must name the index. The tables are nearly empty here, so
  * nothing is said about speed: the before and after plans from production
- * are in the migrations and the merge request.
+ * are in the migrations.
  */
 
 interface PlanNode {
@@ -89,7 +89,7 @@ const NO_ONE = `'00000000-0000-4000-8000-000000000001'::uuid`
 
 describe('document_attachments: lookups and cron scans', () => {
   it('finds the document behind a proxied download by its storage path', async () => {
-    // GET /api/storage/[...path]: every document view read all 363 000 rows (prod, 1 430 ms cold).
+    // GET /api/storage/[...path]: every document view read the whole table (1 430 ms cold at 363 000 rows).
     const indexes = await statementIndexes(
       `SELECT mime_type, file_name FROM public.document_attachments WHERE storage_path = $1 LIMIT $2 OFFSET $3`,
       ['text', 'int', 'int'],
@@ -120,7 +120,7 @@ describe('document_attachments: lookups and cron scans', () => {
 
   it('hands the read cron its unread documents without the structured archives', async () => {
     // The function is planned with its limit as an unknown parameter. While idx_document_attachments_pages_unread
-    // (unread rows by created_at, archives included: 92 579 of its 109 395 entries on prod)
+    // (unread rows by created_at, archives included: most of its entries)
     // existed, production's plan was a parallel scan of it. 20261115130917 dropped it, so the
     // function's own predicate must be enough for the planner to take the narrower index.
     const { rows } = await getPool().query<{ dropped: boolean }>(
@@ -187,7 +187,7 @@ describe('document_classifications', () => {
 
 describe('foreign-key checks when a document, a company or a user is deleted', () => {
   // The lookup Postgres runs per deleted parent row. Without an index on the
-  // key each one read the child table whole (prod: 1.4 s per deleted sandbox user).
+  // key each one read the child table whole (seen: 1.4 s per deleted sandbox user).
   const checks: Array<[table: string, key: string, index: string]> = [
     ['document_classifications', 'document_id', 'idx_document_classifications_document_id'],
     ['document_classifications', 'company_id', 'idx_document_classifications_company_created'],

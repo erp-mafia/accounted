@@ -1,1 +1,0 @@
-[2026-10-29] Hard blocks match only bookings of a bank row (bank_transaction, or a manual samlingsverifikat with bank_booking_context): commit_journal_entry can judge counterparty and amount only where a bank row stands behind the draft. Inkorg supplier invoices are a follow-up.

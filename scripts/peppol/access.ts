@@ -1,9 +1,9 @@
 /**
- * Operator tool for Peppol access (service role; .env.local points at prod).
+ * Operator tool for Peppol access (service role).
  *
  *   npx tsx --env-file=.env.local scripts/peppol/access.ts list
  *       Open requests first, then every company with a row (status, monthly cap, sends this month).
- *   npx tsx --env-file=.env.local scripts/peppol/access.ts enable <company_id|orgnr> [--max-sends N] [--receive] [--by you@accounted.se] [--note "..."]
+ *   npx tsx --env-file=.env.local scripts/peppol/access.ts enable <company_id|orgnr> [--max-sends N] [--receive] [--by you@example.com] [--note "..."]
  *       Grants sending (capped at N transmissions per calendar month, omit for no cap) and, with
  *       --receive, the right to publish the company's identifier (one contracted
  *       tenant slot). Re-running adjusts the same row.

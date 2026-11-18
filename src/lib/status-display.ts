@@ -3,7 +3,7 @@
  * return (lib/invoices/status-display.ts, lib/supplier-invoices/
  * status-display.ts, lib/salary/run-status-display.ts).
  *
- * Chips mark exceptions (design.md convention 5): a normal state is muted
+ * Chips mark exceptions: a normal state is muted
  * text (`chip: null`), a deviating one a Badge of the given variant.
  */
 export type StatusChip = 'secondary' | 'outline' | 'warning' | 'destructive'

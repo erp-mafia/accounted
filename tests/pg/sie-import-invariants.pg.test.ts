@@ -187,7 +187,7 @@ describe('check_sie_import_duplicate_vouchers', () => {
 
   it('does not count a reused source number on another date in the same fiscal year: that is another voucher', async () => {
     // A first fiscal year longer than twelve months, where the old system
-    // restarted its numbering each calendar year (prod, 2026-11-16).
+    // restarted its numbering each calendar year (seen 2026-11-16).
     const f = await seedCompany()
     const job = await importJob(f, f.period, 'completed')
     await importedVoucher(f, { voucherNumber: 1, sourceNumber: 1, date: '2026-01-05' })

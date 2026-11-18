@@ -172,7 +172,7 @@ export interface OperationMcpBinding {
      * For a pending type that existed before its operation did: rewrites
      * params staged in the old shape into the operation's input, so a row
      * staged before the switch still commits. Runs before validation.
-     * Removal rule (DECISIONS.md 2026-10-12): delete an upgrade 30 days after
+     * Removal rule: delete an upgrade 30 days after
      * the switch reached production, once no pending row of the type is
      * older than the switch; an older row is then rejected as
      * VALIDATION_ERROR and re-staged.

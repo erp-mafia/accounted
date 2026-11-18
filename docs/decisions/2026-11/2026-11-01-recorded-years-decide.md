@@ -1,1 +1,0 @@
-[2026-11-01] Recorded räkenskapsår decide the next year on every door, deadlines and helårsmoms included; fiscal_year_start_month only fills what nothing records. A year is re-laid by recording it, not by the setting.

@@ -7,10 +7,10 @@ import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompany } from '@/tests/pg/fixtures'
 import { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } from '@/lib/entitlements/keys'
 
-// The collections capability was PAID-PLAN ONLY from 20261012030000 (founder
+// The collections capability was PAID-PLAN ONLY from 20261012030000 (product
 // decision 2026-10-04): its backfill mirrored only the paid and operator
 // sources of each email_send grant (stripe, manual, comp). Since
-// 20261022120000 (founder decision 2026-10-22) it is part of the trial: the
+// 20261022120000 (product decision 2026-10-22) it is part of the trial: the
 // company-creation trial seeds it, and that migration's backfill gives every
 // running trial a collections grant ending with the trial.
 

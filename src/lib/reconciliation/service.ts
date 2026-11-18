@@ -287,7 +287,7 @@ function stateOf(status: ReconciliationStatus | null): ReconciliationAccount['st
 /**
  * Every account with an outside truth, as the side list shows them: enabled
  * cash accounts (deduplicated per IBAN + currency, the reconnect-duplicate
- * case measured at 25 rows in 17 companies) plus the skattekonto when the
+ * case) plus the skattekonto when the
  * company has a saldo snapshot or rows.
  */
 export async function listReconciliationAccounts(

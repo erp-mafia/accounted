@@ -24,7 +24,7 @@ type LoadState =
  * between the årsredovisning and INK2/NE can still be fixed before filing.
  * The figures, notes and disagreement texts come from
  * lib/reports/statement-reconciliation.ts; this panel only lays them out.
- * Swedish like the rest of the year-end wizard (.claude/rules/i18n.md).
+ * Swedish like the rest of the year-end wizard.
  */
 export function StatementReconciliationPanel({ periodId }: StatementReconciliationPanelProps) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })

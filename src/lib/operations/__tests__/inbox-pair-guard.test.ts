@@ -4,7 +4,7 @@ import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers
 import { pairAlreadyBookedMessages, pairSiblingAlreadyBooked, refuseWhenPairBooked } from '../inbox-pair-guard'
 
 const COMPANY = 'company-1'
-// The SofClo case (2026-10-15): one Anthropic mail, its invoice and its receipt, each booked as an utlägg.
+// The reported case (2026-10-15): one vendor mail, its invoice and its receipt, each booked as an utlägg.
 const INVOICE_READ = {
   documentKind: 'supplier_invoice',
   supplier: { name: 'Anthropic, PBC' },

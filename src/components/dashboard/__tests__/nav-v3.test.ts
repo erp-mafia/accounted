@@ -266,7 +266,7 @@ describe('the tree', () => {
     }
   })
 
-  it('has the Agenter menu of the founder decision 2026-11-16: Styr, Vad agenten vet, Chatt', () => {
+  it('has the Agenter menu of the product decision 2026-11-16: Styr, Vad agenten vet, Chatt', () => {
     const agents = NAV_V3_AREAS.find((a) => a.id === 'agents')!
     const nav = sv.nav as Record<string, string>
     const enNav = en.nav as Record<string, string>

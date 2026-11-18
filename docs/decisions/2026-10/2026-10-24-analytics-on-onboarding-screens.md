@@ -1,1 +1,0 @@
-[2026-10-24] PostHog starts on the signed-in onboarding screens under the dashboard's rule (on unless switched off): since 2026-10-22 only the dashboard started it, so the company journey went unmeasured, while the privacy policy says analytics is on when signed in.

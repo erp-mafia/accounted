@@ -12,7 +12,7 @@
  * or admin and writes the dated line behandlingshistorik shows. A direct v1
  * call without ?stage=true answers PACKAGE_SWITCH_STAGE_ONLY.
  *
- * Refusals only for plan, country and legal form (the founder's rule):
+ * Refusals only for plan, country and legal form (the operator's rule):
  * switching on refuses a package the plan, the country or the legal form
  * does not offer; switching off is never refused for what is still open in
  * the package, which winds down instead, and the dry run says what will

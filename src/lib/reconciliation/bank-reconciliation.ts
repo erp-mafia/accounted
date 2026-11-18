@@ -247,7 +247,7 @@ export interface ReconciliationStatus {
    * `get_account_gl_lines_for_matching` returns only `status='posted'` entries
    * and excludes storno outright, so an unlinked storno moves this account's
    * movement while staying invisible in "Omatchade verifikationer".
-   * Measured on prod 2026-08-20 over the 206 single-1930-account companies with
+   * Measured 2026-08-20 over 206 single-1930-account ledgers with
    * >=10 transactions: 136 reconcile to exactly 0,00, 63 land >=100 kr out, and
    * the unlinked-hidden-line buckets behind that are posted/storno (127
    * companies), reversed/bank_transaction (66) and posted/correction (49). The

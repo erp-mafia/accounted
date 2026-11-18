@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
- * The top bar every Bolaget page shares (founder call 2026-10-30): the title
+ * The top bar every Bolaget page shares (product call 2026-10-30): the title
  * with one short subtitle line, the long explanation behind the "?" and the
  * page's one primary. The pages are rows in the Företaget sidebar (they
  * shared a tab bar until 2026-11-15). What scopes the page sits in one

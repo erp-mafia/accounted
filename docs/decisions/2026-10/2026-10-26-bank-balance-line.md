@@ -1,1 +1,0 @@
-[2026-10-26] The reconciliation page compares the bank's reported balance with the books on the bank's day and stops saying "stämmer" when they differ; verdict and sign-off stay movement-based for now: 993 of 1,479 accounts differ from the bank, 160 only by opening balance or ignored rows.

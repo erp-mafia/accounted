@@ -86,7 +86,7 @@ export async function createCompanyFromOnboarding(params: {
   } catch (err) {
     // Defensive top-level catch: a thrown error escapes to the client as
     // an opaque Next.js server-action exception with no message in dev
-    // and a redacted message in prod. Logging the full error here gives
+    // and a redacted message in production. Logging the full error here gives
     // us a server-side trace and returns a localized fallback to the UI.
     console.error('[createCompanyFromOnboarding] unexpected error', err)
     return { error: getErrorMessage(err, { context: 'settings' }) }

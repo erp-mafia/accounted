@@ -349,7 +349,7 @@ describe('ambiguous-embed: pair derivation from the migration history', () => {
   })
 
   it('matches the live schema on the real migration history', () => {
-    // Verified against prod (pwxtzglxptnnvjrpixpg) on 2026-09-03 with the
+    // Verified against a live database on 2026-09-03 with the
     // pg_constraint query in ambiguous-embed.mjs: the same 17 pairs.
     const pairs = deriveAmbiguousPairs(
       path.join(__dirname, '..', '..', '..', 'supabase', 'migrations'),

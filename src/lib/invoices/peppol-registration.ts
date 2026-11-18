@@ -249,8 +249,8 @@ function isPassthroughCode(code: string | null): code is PassthroughCode {
 
 /**
  * How many companies may publish a receiving identifier through our provider
- * account. The Qvalia partner contract is priced per tenant (10 to start), so
- * the product refuses the eleventh instead of silently exceeding the contract.
+ * account: a configured cap. Over the cap the next registration is refused
+ * instead of silently exceeding it.
  * Unset or invalid means no cap (self-hosted with an own provider account).
  */
 export function getPeppolReceivingCap(env: Record<string, string | undefined> = process.env): number | null {

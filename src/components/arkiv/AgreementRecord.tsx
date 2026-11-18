@@ -16,7 +16,7 @@ import { DefList, DefRow, Section, SourceLink, inlineHref, shortFileName } from 
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
- * The agreement page (canvas artboard Avtal): facts with their source page,
+ * The agreement page: facts with their source page,
  * what the agreement is tied to, the excerpt the amount was read from,
  * expected payments, the dates in Viktiga datum, the history of readings
  * and what refers to the agreement.

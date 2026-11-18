@@ -137,7 +137,7 @@ describe('syncAccountTransactions in connector mode', () => {
       exchange_rate: { exchange_rate: 11.11 },
       balance_after: { balance_after: 20500.5 },
       is_enriched: { is_enriched: true },
-      // The Bankgirot split lands nowhere yet: the parts MR stores it.
+      // The Bankgirot split lands nowhere yet: a later change stores it.
       parts: {},
     }
     h.upload.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })

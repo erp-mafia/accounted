@@ -1,1 +1,0 @@
-[2026-10-27] Återinsjuknande numbers the 14 sjuklön days over sick spells only (SjLL 7 §): a gap holding a scheduled working day without a sick row ends a spell, a five-day week is Mon-Fri less public holidays, other schedules split only past 8 - w days; no backfill.

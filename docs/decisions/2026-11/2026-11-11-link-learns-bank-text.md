@@ -1,1 +1,0 @@
-[2026-11-11] A bank row linked onto one manual or imported verifikat teaches its bank text, at once when a person or agent chose the pair, after a repeat when the matcher did, never from 151x/244x, invoice or samlingsverifikat: links taught nothing (crm#1746, accounted#36).

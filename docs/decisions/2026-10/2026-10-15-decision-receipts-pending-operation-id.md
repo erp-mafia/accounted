@@ -1,1 +1,0 @@
-[2026-10-15] suggestion_log.pending_operation_id has no FK and comes from an AsyncLocalStorage scope set in commitPendingOperation: SET NULL needs an UPDATE the append-only guard refuses, RESTRICT blocks teardown, CASCADE deletes decisions; the scope reaches every door unthreaded.

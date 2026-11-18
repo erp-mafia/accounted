@@ -1,1 +1,0 @@
-[2026-11-01] ledger_account_days build cron: a lock-wait timeout (55P03) stays a warning, any other failure is log.error each run; no cross-run backoff, since no failure state exists and a counter needs a migration (accounted#115).

@@ -1,5 +1,5 @@
 /**
- * Återvunnen kundförlust (build spec 4.2 H, founder decision F3).
+ * Återvunnen kundförlust (build spec 4.2 H, product decision F3).
  *
  * A payment on a written-off claim is income, never a silent reopening of the
  * invoice: Dr the account the money reached / Cr 3950 Återvunna, tidigare

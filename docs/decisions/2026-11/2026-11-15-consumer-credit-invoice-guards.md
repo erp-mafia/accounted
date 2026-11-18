@@ -1,1 +1,0 @@
-[2026-11-15] Invoices to private persons dated from 2026-11-20 are refused past 50 days or with an invoice fee, not warned: outside the särskild fakturakredit exemption (konsumentkreditlag 2026:1011, 1 kap. 3 §) the seller owes a credit assessment per invoice, which we cannot support.

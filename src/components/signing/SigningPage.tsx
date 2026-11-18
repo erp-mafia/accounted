@@ -806,7 +806,7 @@ function withStop(title: string): string {
 /** Legal-form suffixes that say nothing about who the company is. */
 const FORM_SUFFIXES = new Set(['ab', 'hb', 'kb', '(publ)'])
 
-/** Up to two initials for a name: "Arcim Technology AB" is AT, "Jakob Wennberg" JW. */
+/** Up to two initials for a name: "Exempel Bolaget AB" is EB, "Anna Andersson" AA. */
 function initials(name: string): string {
   const words = name
     .trim()

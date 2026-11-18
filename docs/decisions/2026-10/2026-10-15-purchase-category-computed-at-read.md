@@ -1,1 +1,0 @@
-[2026-10-15] An inbox item's purchase category is computed when read (exact-name template, supplier default account, the reading) and never stored, except a person's choice in extracted_data.purchaseCategory; an item with no reading of its own refuses one (INBOX_ITEM_NO_READING).

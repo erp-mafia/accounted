@@ -1,1 +1,0 @@
-[2026-10-25] An årsredovisning version is signed one way: BankID in Accounted for every slot, or evidence recorded by hand for every slot, never a mix: Bolagsverket has not confirmed that a mixed paper and electronic original is valid, and only RSM says it is not.

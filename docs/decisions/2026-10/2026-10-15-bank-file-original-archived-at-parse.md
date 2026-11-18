@@ -1,1 +1,0 @@
-[2026-10-15] A bank file's original is archived at parse under documents/{company}/arrivals/bank_file/{file_hash}/, its arrival recorded at execute: execute gets only parsed rows, a second upload would double the body against the 4.5 MB limit, and the hash key lets previews reuse one object.

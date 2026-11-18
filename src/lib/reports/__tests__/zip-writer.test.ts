@@ -73,7 +73,7 @@ describe('writeZip', () => {
     expect(new DataView(zip.buffer).getUint32(zip.length - 42, true)).not.toBe(0x07064b50)
   })
 
-  // An archive past 4 GiB (the largest company is close) or 65,535 entries
+  // An archive past 4 GiB or 65,535 entries
   // must switch to ZIP64 instead of wrapping its offsets. The thresholds are
   // lowered so the records are exercised without writing gigabytes.
   it('switches to ZIP64 records once an offset or the entry count overflows', async () => {

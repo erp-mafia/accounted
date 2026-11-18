@@ -1,1 +1,0 @@
-[2026-11-07] use_proposals on a bank account links the listing's bucket proposed, covering sets as one 1:N pair each at the same threshold, not only the persisted 1:1 column, over a clearer refusal (crm#1668): as the skattekonto plan (2026-10-14); the unattended sweep stays 1:1.

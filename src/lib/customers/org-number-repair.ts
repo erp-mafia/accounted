@@ -40,7 +40,7 @@ export interface OrgNumberRepairRow {
  *   org_number is cleared.
  * - `clear_differ`: personal_number holds a different personnummer; the
  *   stored one wins (it was entered in the field meant for it) and
- *   org_number is cleared. Counted so the founder sees how many.
+ *   org_number is cleared. Counted so the operator sees how many.
  * - `skip_unreadable`: the stored personal_number cannot be decrypted, so
  *   same and differ cannot be told apart; the row is left alone.
  * - `skip_not_personal_number`: org_number is not a personnummer (a business

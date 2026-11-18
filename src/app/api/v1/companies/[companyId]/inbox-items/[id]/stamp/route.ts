@@ -51,11 +51,11 @@ registerEndpoint({
     'Stamping with a different journal_entry_id than the one already set returns CONFLICT: the item is already resolved.',
   ],
   example: {
-    request: { journal_entry_id: 'dcccb3c5-b44a-4536-82fa-f0b9bb77f900' },
+    request: { journal_entry_id: '0d1d0000-0000-4000-8000-000000000004' },
     response: {
       data: {
         id: '4d2fcdbb-13b3-4ff3-911f-a4cc82f1f6db',
-        created_journal_entry_id: 'dcccb3c5-b44a-4536-82fa-f0b9bb77f900',
+        created_journal_entry_id: '0d1d0000-0000-4000-8000-000000000004',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },

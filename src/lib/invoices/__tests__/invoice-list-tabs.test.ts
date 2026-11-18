@@ -72,7 +72,7 @@ describe('matchesInvoiceListTab', () => {
 
   // Obetalda is the owed population (lib/invoices/overdue.ts isInvoiceOwed).
   // It read sent and overdue only, and the first consolidation of the owed
-  // statuses pinned that for the founders to settle: a partly paid invoice
+  // statuses pinned that for the operators to settle: a partly paid invoice
   // with money left was missing from the view and its count, and sat under
   // the settled section, while Att göra, the reminders and the reskontra
   // counted it as owed.

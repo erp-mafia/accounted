@@ -16,7 +16,7 @@ const RequestSchema = z.object({
 /**
  * POST /api/billing/usage/requests { kind, message? }: Begär fler. Stores the
  * request and mails support with the company, the requester and the month's
- * usage; a founder opens the charge for the company by hand
+ * usage; an operator opens the charge for the company by hand
  * (lib/usage/consent.ts). 201 with the request id; 409 USAGE_REQUEST_OPEN
  * while an unanswered request for the kind is younger than a day. A kind with
  * no price to open answers 400. Bank payments ask through

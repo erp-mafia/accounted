@@ -244,7 +244,7 @@ const SkattekontoGroupMatchSchema = z.object({
  * - SKATTEVERKET_APIGW_CLIENT_ID
  * - SKATTEVERKET_APIGW_CLIENT_SECRET
  * - SKATTEVERKET_TOKEN_ENCRYPTION_KEY (openssl rand -base64 32; never reuse
- *   the test-env key in prod)
+ *   the test-env key in production)
  *
  * Optional:
  * - SKATTEVERKET_ENV                            : 'test' | 'production'.
@@ -1129,7 +1129,7 @@ export const skatteverketExtension: Extension = {
       handler: async (_request: Request, ctx: ExtensionContext) => {
         // An availability read: a company without the Skatteverket feature
         // hears "not available", the answer it gets with system auth off, not
-        // a refusal (docs/decisions/2026-11/2026-11-12-availability-reads-answer-200.md).
+        // a refusal.
         const entitled = (await requireSkvCapability(ctx)) === null
         const mode = getSystemAuthMode()
         const available = entitled && mode !== 'off' && isSystemAuthConfigured()

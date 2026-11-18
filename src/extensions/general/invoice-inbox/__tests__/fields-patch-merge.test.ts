@@ -53,7 +53,7 @@ function fullExtraction(): InvoiceExtractionResult {
     suggestedTemplateId: 'tmpl-representation',
     pages: { total: 1, analyzed: 1 },
     supplier: {
-      name: 'Restaurang Riddaren AB',
+      name: 'Restaurang Exempel AB',
       orgNumber: '556812-9930',
       vatNumber: null,
       address: null,
@@ -93,7 +93,7 @@ describe('PATCH /items/:id/fields', () => {
 
     const ctx = buildCtx(mock.supabase)
     // The smallest possible edit: one character of the supplier name.
-    const res = await fieldsRoute.handler(makeReq({ supplier: { name: 'Restaurang Riddaren' } }), ctx)
+    const res = await fieldsRoute.handler(makeReq({ supplier: { name: 'Restaurang Exempel' } }), ctx)
     expect(res.status).toBe(200)
 
     const update = mock.calls.find((c) => c.method === 'update')
@@ -140,7 +140,7 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.totals?.total).toBe(2500)
     // A partial edit to one sub-object leaves its siblings intact.
     expect(merged.totals?.vatAmount).toBe(135.85)
-    expect(merged.supplier?.name).toBe('Restaurang Riddaren AB')
+    expect(merged.supplier?.name).toBe('Restaurang Exempel AB')
   })
 
   it('clears totalSource when the user edits TOTALT', async () => {

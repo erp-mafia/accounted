@@ -1,1 +1,0 @@
-[2026-10-16] Only an owner or admin approving in the app accepts a grant: create_grant is web-only, the executor and create_company_grant require actor user. No agent accepts its own authority, as no prod key has an unattended ceiling set.

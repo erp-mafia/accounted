@@ -18,7 +18,7 @@
  *
  *  - Any change is refused while an open customer or supplier invoice lacks
  *    its own verifikat (#93: also in a year with nothing posted yet, and
- *    with no fiscal year at all; !763 checked it only before a correction).
+ *    with no fiscal year at all; an earlier guard checked it only before a correction).
  *  - Otherwise, while the current fiscal year has no posted verifikat, the
  *    change is free (the onboarding fix of a wrong choice).
  *  - It has posted verifikat: the change is allowed only as a correction of a

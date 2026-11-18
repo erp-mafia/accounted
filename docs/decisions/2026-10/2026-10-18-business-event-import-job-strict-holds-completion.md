@@ -1,1 +1,0 @@
-[2026-10-18] An SIE import job writes its one event just before complete_sie_import_job; under strict a refused write holds the completion (job reconciling, retried) instead of stopping vouchers already numbered in SQL, so every completed import has its event and no gap.

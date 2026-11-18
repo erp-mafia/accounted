@@ -1,1 +1,0 @@
-[2026-10-19] The public personnummer dev key is used only under vitest or, outside production, against a localhost Supabase; an empty key anywhere else throws, with no opt-in for remote test projects: an opt-in stays set when the URL changes, a real key costs one line (accounted#5).

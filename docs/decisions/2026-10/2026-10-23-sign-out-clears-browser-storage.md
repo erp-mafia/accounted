@@ -1,1 +1,0 @@
-[2026-10-23] Every sign-out empties sessionStorage and localStorage except five display preferences, and tells other tabs over a BroadcastChannel (CASA 6.6.1): drafts, company-keyed choices and NE figures must not outlive the session on a shared computer.

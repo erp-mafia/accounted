@@ -1,1 +1,0 @@
-[2026-11-01] importBankFile is the one bank file import. The ledger checks stay with the door where a person picks one; v1 picks nothing, so the file's account just binds and cannot refuse it. A v1 import whose record cannot be written now fails instead of landing outside undo.

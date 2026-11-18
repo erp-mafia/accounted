@@ -1,1 +1,0 @@
-[2026-11-12] A v1 operation still running, or an MCP task still working, 15 min after it started is answered as failed (OPERATION_ABANDONED for the operation): the request that ran it was killed and wrote nothing, so clients polled forever; the work may be partly done and the message says so.

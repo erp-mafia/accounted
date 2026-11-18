@@ -172,7 +172,7 @@ export function sellerChargedVat(reading: ChargedVatReading | null | undefined):
  * purchase is then still the buyer's to tax in Sweden (ML 2023:200 16 kap.
  * 9 §), on everything the seller was paid, the foreign VAT included (8 kap.
  * 2, 3 and 13 §§), and that VAT is never ingående moms (13 kap. 4 §, 2 kap.
- * 12 §). Sources: docs/decisions/2026-11/2026-11-12-reverse-charge-with-foreign-seller-vat.md.
+ * 12 §).
  */
 export const FOREIGN_SELLER_VAT_FLAG = 'confirm_foreign_seller_vat'
 

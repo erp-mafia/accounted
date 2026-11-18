@@ -1,1 +1,0 @@
-[2026-11-03] Terms v2, DPA, subprocessors and privacy go live without counsel review (founder choice). Terms 1.4: the DPA wins on personal data. Signup acceptance record is deleted with the account (listed in privacy). Billo verified: 559138-6718, Binero Cloud Sweden.

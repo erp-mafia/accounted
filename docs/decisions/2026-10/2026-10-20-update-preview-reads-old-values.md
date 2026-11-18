@@ -1,1 +1,0 @@
-[2026-10-20] The approval card reads an update's old values from the shapes staging tools already use (current, previous, { from, to }) rather than moving every tool to one shape: the staged preview is also the MCP response agents read, so reshaping it would break their contract (crm#1300).

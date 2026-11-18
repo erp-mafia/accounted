@@ -66,7 +66,7 @@ describe('renderUiGrounding: the page line', () => {
     expect(svMenuPath('/settings/api')).toBe(`${nav.v3_agents} → ${nav.v3_connect_agent}`)
   })
 
-  it('names the Agenter rows as the menu does (founder decision 2026-11-16)', () => {
+  it('names the Agenter rows as the menu does (product decision 2026-11-16)', () => {
     expect(svMenuPath('/rules')).toBe('Agenter → Bokföringsregler')
     expect(svMenuPath('/skills')).toBe('Agenter → Arbetssätt')
     expect(svMenuPath('/wiki?view=skills', gateContext({ agentsEnabled: false }))).toBe('Agenter → Arbetssätt')

@@ -1,1 +1,0 @@
-[2026-10-15] The MCP OAuth key is classified from its reserved name before the label becomes the client's display name (ActorContext.oauthKey): comparing labels stamped claude.ai and ChatGPT commits as api_key. Crons commit as { type: 'cron', label: <operation> } via withCronContext.

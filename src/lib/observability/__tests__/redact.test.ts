@@ -25,7 +25,7 @@ describe('redactString', () => {
     expect(redactString(s)).toBe(s)
   })
 
-  it('scrubs gnubok API keys in place, keeping the rest of the line', () => {
+  it('scrubs API keys in place, keeping the rest of the line', () => {
     expect(redactString('auth failed for key gnubok_sk_live_abc123 on /v1')).toBe(
       'auth failed for key [REDACTED_API_KEY] on /v1',
     )

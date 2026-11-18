@@ -1,1 +1,0 @@
-[2026-10-28] CI checks fetch main's tsc/ESLint state as checks-cache artifacts, not the runner cache: that cache is per runner slot (10 on one host) and main's writer was mostly cancelled, so tsc ran cold. resource_group on checks was rejected: it serializes about 180 jobs a day.

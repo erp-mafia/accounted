@@ -1,1 +1,0 @@
-[2026-11-16] The Agenter menu drops Instruktioner and the duplicate Koppla en agent row; Regler is named Bokföringsregler and Kompetens Arbetssätt (founder decision 2026-11-16): /settings/assistant redirects into the wiki and its assistant button switch is a row of Ditt konto.

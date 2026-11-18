@@ -1,1 +1,0 @@
-[2026-10-16] gnubok_set_inbox_purchase_category is the mcp binding of operation inbox-items.set-purchase-category, not a hand-written tool: one run() serves v1 and the approval, search-only costs no tools/list budget, and with no verifikat posted no suggestion_log receipt is written.

@@ -21,7 +21,7 @@ const ENRICHMENT_TTL_DAYS = 7
  * has a company opens that company, like any other login, crm#1034). It
  * renders only when there is something to choose: companies the user's
  * BankID says they run (CompanyRoles) that still exist and are not in
- * Accounted yet. Everything else goes straight through (founder direction
+ * Accounted yet. Everything else goes straight through (product direction
  * 2026-09-14): no new engagements means the onboarding journey, or the
  * company the user already has. Companies the user already belongs to are
  * never listed here; opening one is the in-app switcher's job.

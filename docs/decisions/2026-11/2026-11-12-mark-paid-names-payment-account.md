@@ -1,1 +1,0 @@
-[2026-11-12] Customer mark-paid takes an optional payment_account (19xx, one of the company's enabled cash accounts) on every door; omitted it books as before. Refusing an unnamed call on a multi-account company is not built: it moves where existing payments book (crm#1823).

@@ -1,1 +1,0 @@
-[2026-11-11] A 0 kr bolagsskatt preview names the proposals that zero it by their effect on the result, not an attributed tax each; only överavskrivning and avsättning are offered as skippable (SLP is owed), and the tax without them shows only when no mandatory återföring is pending (#180).

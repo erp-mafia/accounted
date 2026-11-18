@@ -1,1 +1,0 @@
-[2026-10-20] The CUSTOMER_LOSS_ENABLED and CASH_PARTIAL_PAYMENTS_ENABLED readers move to the shared lib/env: the systemdokumentation reads them, and the ledger imports nothing from the invoicing block (Phase 2's exit check). One definition each; no caller passes a copy.

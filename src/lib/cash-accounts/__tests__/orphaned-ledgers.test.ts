@@ -218,8 +218,8 @@ describe('same-connection re-registration twins (#1643, deliberately out of scop
   it('keeps two enabled rows on ONE active connection sharing IBAN+currency BOTH live: neither is orphaned and a transfer to that IBAN pairs with nothing', async () => {
     // The bank re-registered the account under a new external_uid, so two
     // enabled rows sit on the same active connection. No liveness signal
-    // has held up on prod (balance_updated_at, accounts_data uid presence),
-    // so the rows are not ranked: both stay live until the founder decides
+    // has held up in production (balance_updated_at, accounts_data uid presence),
+    // so the rows are not ranked: both stay live until the operator decides
     // how to model the shape.
     const twins = () => [
       row({ id: 'ca-old', ledger_account: '1930', external_uid: 'uid-old' }),

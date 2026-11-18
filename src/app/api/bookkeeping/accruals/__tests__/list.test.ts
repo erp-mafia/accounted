@@ -1,5 +1,5 @@
 /**
- * Tests for GET /api/bookkeeping/accruals — status filter validation and the
+ * Tests for GET /api/bookkeeping/accruals - status filter validation and the
  * due_count derivation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

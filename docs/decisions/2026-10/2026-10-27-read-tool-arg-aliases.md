@@ -1,1 +1,0 @@
-[2026-10-27] Argument aliases now cover read tools beyond the reports (list_verifikat_without_documents, list_accounts, load_skill, get_record) on the same rules: read-only, explicit mappings with value guards, conflicts refused. 474 agent sessions in 30 days were refused over a parameter name.

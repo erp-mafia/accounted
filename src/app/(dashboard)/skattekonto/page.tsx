@@ -262,7 +262,7 @@ export default function SkattekontoPage() {
       setNotConnected(false)
 
       // A non-auth failure must NOT fall through to the "inget saldo hämtat
-      // ännu"-tomvy — that reads as "not configured" when the truth is "the
+      // ännu"-tomvy - that reads as "not configured" when the truth is "the
       // fetch broke". Surface it as an error with a retry instead.
       if (!saldoRes.ok) {
         setLoadError(true)
@@ -349,7 +349,7 @@ export default function SkattekontoPage() {
       if (!res.ok) {
         // 401 covers several distinct auth states (see handleSkvError in the
         // skatteverket extension). Only NOT_CONNECTED means "no connection
-        // exists" — the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
+        // exists" - the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
         // …) fire while Inställningar truthfully shows the stored token as
         // "Ansluten". Showing the full "inte anslutet"-tomvy for those
         // contradicts the settings panel; show the server's actual reason

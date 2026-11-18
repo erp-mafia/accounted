@@ -1,1 +1,0 @@
-[2026-10-30] Verifikat list: the "Visa storno- och rättade poster" switch becomes a three-way choice (fold corrected groups, default; hide every storno and Omförd; show all), since the switch only folded correction groups (PH 231). Default stays gapless (#3149).

@@ -1,1 +1,0 @@
-[2026-10-15] suggestion_log.checks lists only the guards a door ran, in order: absent means it did not apply, warn an override or a guard that could not run, [] none ran, null the door does not report. Engine and trigger invariants every voucher passes are implied, not listed.

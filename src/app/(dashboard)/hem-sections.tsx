@@ -96,7 +96,7 @@ export async function HemNoticesSection({
 /**
  * Notice categories Hem leaves out of its notice slot. The Skatteverket
  * reconnect has its own places (the Konton row and the Skattekonto page); a
- * line about it over every visit to Att göra was noise (founder feedback
+ * line about it over every visit to Att göra was noise (feedback
  * 2026-09-09). The bank switch and the expiring consent are Att göra rows
  * (the switch rows and the Bevaka consent row in AttGoraSection), fed by the
  * same computations as the notices (switchStateFor, expiringBankConnectionsFrom),

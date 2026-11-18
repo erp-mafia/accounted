@@ -1,1 +1,0 @@
-[2026-11-15] One proposal is reviewed on one fixed template (drawer and /pending/[id]): head, underlag as the file, typed fields with the verifikat, one reason, history, fixed footer. A proposal lacking a required field holds its primary there; list approve is unchanged.

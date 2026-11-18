@@ -1,1 +1,0 @@
-[2026-11-16] Deadlines get v1 endpoints (GET /deadlines, POST /deadlines/{id}/complete) and eight v1-only reads become search-only MCP tools: the operations existed with one door only, and an API client or agent could not see what the other could.

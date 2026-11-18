@@ -1,1 +1,0 @@
-[2026-10-26] Uppskrivning (ÅRL 4:6) is not built in K3 phase 2: it needs a judged reliable, lasting value, a 2085 credit net of deferred tax (K3 29.22) and fund release as it depreciates (4:8), and BAS has no accumulated-revaluation account. Follow-up after deferred tax.

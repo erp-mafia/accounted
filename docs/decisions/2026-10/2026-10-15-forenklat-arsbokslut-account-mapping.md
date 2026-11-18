@@ -1,1 +1,0 @@
-[2026-10-15] Förenklat årsbokslut (#46): BAS accounts map to BFNAR 2010:1 bilaga 2 posts in one table of our own (none exists), cross-checked against the BAS INK3R coupling; 3902-3909 carry övriga verksamhetsintäkter. An accountant reviews the table before the förening flag opens.

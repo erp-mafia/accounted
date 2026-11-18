@@ -1,1 +1,0 @@
-[2026-10-17] A supplier-invoice grant always requires the inbox item's own document in the archive: no company setting asks for underlag, and BFL 5 kap. 6-7 §§ require it for every verifikat, so a missing one waits for a person.

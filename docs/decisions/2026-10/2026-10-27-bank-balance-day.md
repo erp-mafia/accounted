@@ -1,1 +1,0 @@
-[2026-10-27] The bank balance check reads both sides on the bank's own day for its balance (cash_accounts.balance_reference), trusted only while its fetched_at equals balance_updated_at, else the fetch day: closingBooked is an earlier close, and other writers copy balances without the day.

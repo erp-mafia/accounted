@@ -207,7 +207,7 @@ describe('refreshInboxItemBankMatch', () => {
   })
 
   describe('the card the purchase was paid with', () => {
-    // The X subscription (prod, company Arcim): the invoice and its receipt came in one mail.
+    // The X subscription (a real case): the invoice and its receipt came in one mail.
     const X_INVOICE_READ = {
       documentKind: 'supplier_invoice',
       supplier: { name: 'X Corp.' },

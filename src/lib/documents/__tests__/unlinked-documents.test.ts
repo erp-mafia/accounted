@@ -29,7 +29,7 @@ const doc = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 describe('UNDERLAG_MIME_TYPES', () => {
   it('excludes application/json, which on this surface is only the PSD2 archive', () => {
-    // Measured on production 2026-08-27: of the document rows referenced by
+    // Measured 2026-08-27: of the document rows referenced by
     // nothing, application/json was 11 309 of 11 309 archived PSD2 bank-API
     // responses, and 0 of 4 495 pdf/png/jpeg/heic rows were. Those archives are
     // unlinked BY DESIGN. Admitting them here would hand an agent 11 309 items

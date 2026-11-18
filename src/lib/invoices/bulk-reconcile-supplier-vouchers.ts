@@ -165,7 +165,7 @@ const SELECT_COLUMNS =
  * exist yet. With a recurring supplier (the same amount every month) last
  * month's payment, already settling last month's invoice in the source
  * system, scores as this invoice's exact amount and name (PH 241: 79 of 130
- * auto-links in prod on 2026-11-03). An unattended link never takes one; a
+ * auto-links in production on 2026-11-03). An unattended link never takes one; a
  * person still can, from the review list.
  */
 export function paidBeforeInvoice(

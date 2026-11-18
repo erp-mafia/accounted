@@ -26,7 +26,7 @@ import type { ReportDataStatusResult } from '@/lib/reports/data-status'
 import type { KPIReport, KPIPreferences } from '@/types'
 
 /**
- * Nyckeltal in the founder-picked "Instrumentbrädan" layout: a grid of
+ * Nyckeltal in the chosen "Instrumentbrädan" layout: a grid of
  * bordered instrument panes (monthly result bars + the preference-driven
  * KPIs) with the cost story as quiet rows below. Plain SVG bars: no
  * charting bundle on this page anymore.

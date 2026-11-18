@@ -226,7 +226,7 @@ Readers:
 ## Winding down and the start doors
 
 "Off" closes the doors that start new work and keeps the obligations
-running (the founder's rule). Three pieces:
+running (the operator's rule). Three pieces:
 
 - `obligations.ts`: one small read-only probe per obligation, per switchable
   package: Bank (a live connection), Kundfakturor (unpaid invoices, active
@@ -297,7 +297,7 @@ never changes what any company can use. Declare a code dependency in `uses`;
 put it in `dependsOn` only when the product truly cannot work without the
 other module.
 
-The layers today (2026-10-19, `docs/decisions/2026-10/2026-10-19-module-layers.md`):
+The layers today:
 
 | Layer | Modules |
 | --- | --- |
@@ -434,7 +434,7 @@ link failed, a credit taken back after a failed link or a lost race, and
 Ångra kreditering) go through `reverseJournalEntry` as `ledger.storno`.
 `link_supplier_invoice_to_voucher` waits for an event id, like the other SQL
 posting functions, and the supplier payments (mark-paid, bank match, voucher
-matching) and the inbox book-direct follow in their own merge request; their
+matching) and the inbox book-direct follow separately; their
 proof is `tests/pg/posting-parity-supplier-invoices.pg.test.ts` and the
 producers' `*.engine-input.test.ts`.
 
@@ -453,7 +453,7 @@ verifikat through `cancel_orphaned_entry`, which posts nothing).
 `link_invoice_to_voucher` waits for an event id, like the other SQL posting
 functions, and the invoice payments (mark-paid, the kontantfaktura at issue,
 bank match, voucher matching) and ROT/RUT (payout, reclaim, the migrated
-deduction's reclassification) follow in their own merge request; their proof
+deduction's reclassification) follow separately; their proof
 is `tests/pg/posting-parity-invoices.pg.test.ts`, which also runs the payment
 sync and RUT reclaim reversal hooks on invoices booked through the port, and
 `invoice-entries.engine-input.test.ts`.
@@ -659,14 +659,12 @@ taken before the move); the kontantmetod cut-off's correction of a cash
 verifikat goes through `correctJournalEntry` and records `ledger.storno` and
 `ledger.correction` of that verifikat as every rättelse does (its
 engine-input fixture unchanged, the events asserted there and in
-`tests/pg/posting-parity-year-end.pg.test.ts`); and the two scripts post
-through the port (`scripts/undo-year-end-closing.ts` with the in-app
-reopen's `ledger.storno`, `scripts/sie-import/acceptance-manual-review.ts`
-with a `ledger.opening_balance`). A new edge fails, and `--update` never adds
+`tests/pg/posting-parity-year-end.pg.test.ts`); and `scripts/undo-year-end-closing.ts` posts
+through the port with the in-app reopen's `ledger.storno`. A new edge fails, and `--update` never adds
 one. The guard reads imports, not database calls: a direct `.rpc()` of a
 posting function is outside it. The other half of step 3, the engine's
 reversal hooks as a registry, landed before it (`src/lib/bookkeeping/reversal-hooks.ts`
-and `src/lib/composition/reversal-hooks.ts`, !533); `reverseEntry` still runs
+and `src/lib/composition/reversal-hooks.ts`); `reverseEntry` still runs
 its own mirrors beside it, by hand (for `year_end` the kontantmetod carry's
 storno guard and the asset register's release; for any storno the release
 of its bank lines and of a period's IB link), and `correctEntry` runs no
