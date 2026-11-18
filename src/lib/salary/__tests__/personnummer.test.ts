@@ -66,7 +66,7 @@ describe('validatePersonnummer', () => {
       // offset must not become a way to skip the checksum.
       const result = validatePersonnummer('199001619808')
       expect(result.valid).toBe(false)
-      expect(result.error).toContain('Luhn')
+      expect(result.error).toBe('Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.')
     })
 
     it('rejects days 32-60, which are neither a day nor an offset day', () => {

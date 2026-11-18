@@ -60,10 +60,12 @@ export function validatePersonnummer(personnummer: string): { valid: boolean; er
     return { valid: false, error: 'Ogiltig dag' }
   }
 
-  // Luhn check on digits 3-12 (YYMMDDNNNN, 10 digits)
+  // Luhn check on digits 3-12 (YYMMDDNNNN, 10 digits). The message names the
+  // personnummer itself: it is often refused in the same call as a bank
+  // account, whose kontonummer has check digits of its own.
   const luhnDigits = digits.slice(2)
   if (!luhnValidate(luhnDigits)) {
-    return { valid: false, error: 'Ogiltigt kontrollnummer (Luhn)' }
+    return { valid: false, error: 'Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.' }
   }
 
   return { valid: true }

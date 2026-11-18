@@ -117,7 +117,8 @@ describe('gnubok_create_employee', () => {
     const error = await refusal('gnubok_create_employee', { ...VALID_EMPLOYEE, personnummer: '190001010000' }, supabase)
 
     expect(error.code).toBe('VALIDATION_ERROR')
-    expect(error.message_sv).toBe('personnummer: Ogiltigt kontrollnummer (Luhn)')
+    expect(error.message_sv).toBe('personnummer: Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.')
+    expect(error.message_en).toBe('Invalid employee: personnummer: is not a valid personnummer')
     expect(JSON.stringify(error)).not.toContain('190001010000')
   })
 })

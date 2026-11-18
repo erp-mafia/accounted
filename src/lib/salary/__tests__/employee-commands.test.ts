@@ -272,7 +272,7 @@ describe('sealPersonnummer', () => {
     expect(sealPersonnummer(null)).toMatchObject({ ok: false })
     expect(sealPersonnummer('19000101-XXXX')).toMatchObject({ ok: false, message: expect.stringContaining('Maskerat') })
     const wrong = sealPersonnummer('190001010000')
-    expect(wrong).toEqual({ ok: false, message: 'Ogiltigt kontrollnummer (Luhn)' })
+    expect(wrong).toEqual({ ok: false, message: 'Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.' })
   })
 })
 
