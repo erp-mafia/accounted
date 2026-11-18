@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { seedCompany } from './fixtures'
+import { runInBaseDatabase } from './parallel'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
+
+// pg_cron keeps its jobs in one database of the server, so on several workers
+// this file runs in that one and not in a copy.
+runInBaseDatabase()
 
 /**
  * pg-real coverage for migration 20261112183702_cron_runs.

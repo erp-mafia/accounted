@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
+import { workerCount } from './tests/pg/parallel'
 
 const alias = {
   '@/tests': path.resolve(__dirname, 'tests'),
@@ -41,6 +42,8 @@ const unitProject = {
   },
 }
 
+const pgRealWorkers = workerCount()
+
 const pgRealProject = {
   resolve: { alias },
   test: {
@@ -51,10 +54,16 @@ const pgRealProject = {
     // `.next/standalone` holds a traced copy of these files after a local
     // build; 128 of them match this project's glob.
     exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
-    setupFiles: ['tests/pg/setup.ts'],
-    // One-connection-at-a-time to avoid cross-file DB contention.
-    fileParallelism: false,
-    testTimeout: 15000,
+    // worker-database.ts first: it decides which database setup.ts opens.
+    setupFiles: ['tests/pg/worker-database.ts', 'tests/pg/setup.ts'],
+    globalSetup: ['tests/pg/global-setup.ts'],
+    // The files commit rows, so each needs a database to itself: one file at
+    // a time, or with PG_REAL_WORKERS set, one worker per copy of the
+    // database (tests/pg/parallel.ts).
+    fileParallelism: pgRealWorkers > 0,
+    // Side by side every test waits longer for the server and the processor,
+    // so the limits double: they are there to end a hang, not to time a test.
+    ...(pgRealWorkers > 0 ? { maxWorkers: pgRealWorkers, testTimeout: 30000, hookTimeout: 20000 } : { testTimeout: 15000 }),
   },
 }
 

@@ -10,14 +10,17 @@ registerInitLoader(() => import('@/lib/init').then((m) => m.ensureInitialized())
 // Shared pool for the pg-real project. DATABASE_URL must point at a Postgres
 // instance that already has every migration from supabase/migrations/ applied
 // and that includes the Supabase `auth` schema (supabase/postgres image).
-const databaseUrl =
-  process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/postgres'
-
+// Read when the pool is first used, not when this file loads: on several
+// workers tests/pg/worker-database.ts points the variable at this file's own
+// database, and a test file may move it back (runInBaseDatabase).
 let pool: Pool | null = null
 
 export function getPool(): Pool {
   if (!pool) {
-    pool = new Pool({ connectionString: databaseUrl, max: 8 })
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/postgres',
+      max: 8,
+    })
   }
   return pool
 }
@@ -160,7 +163,7 @@ beforeAll(async () => {
     if (missing.length > 0) {
       throw new Error(
         `pg-real schema sanity check failed. Missing: ${missing.join(', ')}. ` +
-          `Did every migration in supabase/migrations/ apply cleanly to ${databaseUrl}?`,
+          `Did every migration in supabase/migrations/ apply cleanly to ${process.env.DATABASE_URL ?? 'the default local database'}?`,
       )
     }
   } finally {

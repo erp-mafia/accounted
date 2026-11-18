@@ -190,7 +190,8 @@ describe('two bookings of one row at once', () => {
       for (let tries = 0; ; tries++) {
         const { rows } = await getPool().query(
           `SELECT count(*)::int AS n FROM pg_stat_activity
-            WHERE wait_event_type = 'Lock' AND query LIKE '%commit_journal_entry%' AND pid <> $1`,
+            WHERE wait_event_type = 'Lock' AND query LIKE '%commit_journal_entry%' AND pid <> $1
+              AND datname = current_database()`,
           [(await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid],
         )
         if (rows[0].n > 0) break

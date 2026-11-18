@@ -258,6 +258,9 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       PGPASSWORD: postgres
+      # The suite runs on this many workers, each in its own copy of the
+      # migrated database (tests/pg/parallel.ts).
+      PG_REAL_WORKERS: '4'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
