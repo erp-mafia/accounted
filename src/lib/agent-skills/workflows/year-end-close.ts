@@ -138,7 +138,7 @@ Do not call \`gnubok_lock_period\`, \`gnubok_close_period\` or \`gnubok_set_open
 
 A revisor is required when the company exceeded at least two of these in each of the last two years: more than 3 employees on average, more than 1.5 MSEK balansomslutning, more than 3 MSEK nettoomsättning. Check against \`gnubok_get_balance_sheet\` and \`gnubok_get_income_statement\`, but ask the user: a company may also have a revisor voluntarily.
 
-When there is a revisor or an accounting firm, or any stop condition below applies: \`gnubok_audit_package({ fiscal_period_id, estimate_only: true })\` for the size, then without \`estimate_only\` for the zip (SIE-4, reports, receipts, audit log, voucher gaps). The \`download_url\` is valid one hour: give it to the user at once. Tell them what is done and what is left for the professional.
+When there is a revisor or an accounting firm, or any stop condition below applies: \`gnubok_audit_package({ fiscal_period_id, estimate_only: true })\` for the size, then without \`estimate_only\` for the zip (SIE-4, reports, receipts, audit log, voucher gaps). Give the user \`app_url\` at once: it builds and downloads the package in their browser when they are signed in to Accounted as owner or admin. The \`download_url\` (valid one hour, sent with \`download_headers\`) is for a client that fetches the zip itself and does not open as a link in a browser. Tell them what is done and what is left for the professional.
 
 ## If the company reports under K3
 

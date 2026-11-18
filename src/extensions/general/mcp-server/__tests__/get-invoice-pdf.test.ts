@@ -5,7 +5,7 @@
  * delivery when Accounted sent the invoice, else a fresh render through the
  * v1 download's loader. Either way the agent gets a signed URL, never bytes.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { ALL_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
@@ -36,6 +36,10 @@ function storageOf(supabase: { storage: { from: ReturnType<typeof vi.fn> } }) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 describe('gnubok_get_invoice_pdf: registration', () => {
@@ -79,6 +83,7 @@ describe('gnubok_get_invoice_pdf: execute', () => {
   })
 
   it('an emailed invoice gets the archived file the customer received, signed, never re-rendered', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: INVOICE_ID, status: 'sent', invoice_number: '1042' } })
     enqueue({
@@ -98,7 +103,11 @@ describe('gnubok_get_invoice_pdf: execute', () => {
       reason: null,
       document_id: DOCUMENT_ID,
       size_bytes: 2048,
+      // Not our Storage host: the raw signed URL, with no header to send.
       signed_url: 'https://example.com/signed',
+      signed_url_headers: {},
+      // For the user: the session route of exactly this delivery's archived file.
+      app_url: `https://app.accounted.se/api/invoices/${INVOICE_ID}/archived-pdf?delivery=${DELIVERY_ID}`,
     })
     expect(typeof result.expires_at).toBe('string')
     expect(supabase.rpc).toHaveBeenCalledWith('list_invoice_delivery_summaries_for_service', {
@@ -133,6 +142,75 @@ describe('gnubok_get_invoice_pdf: execute', () => {
     const path = `${USER_ID}/invoice-pdfs/${INVOICE_ID}.pdf`
     expect(storage.upload).toHaveBeenCalledWith(path, expect.any(Uint8Array), { contentType: 'application/pdf', upsert: true })
     expect(storage.createSignedUrl).toHaveBeenCalledWith(path, 3600)
+  })
+
+  // CASA 2.1.1: served from the app origin, the signed token travels in
+  // signed_url_headers and never in the URL.
+  it('serves the PDF from the app origin with the token in signed_url_headers, not in the URL', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: INVOICE_ID, status: 'draft', invoice_number: null } })
+      enqueue({ data: [] })
+      mockRenderStored.mockResolvedValue({ ok: true, buffer: Buffer.from('%PDF'), filename: 'utkast.pdf', invoice: {} })
+      const path = `${USER_ID}/invoice-pdfs/${INVOICE_ID}.pdf`
+      supabase.storage.from.mockReturnValue({
+        upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+        createSignedUrl: vi.fn().mockResolvedValue({
+          data: { signedUrl: `https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/sign/documents/${path}?token=tok` },
+          error: null,
+        }),
+      })
+
+      const result = await run(supabase)
+
+      expect(result.signed_url).toBe(`https://app.accounted.se/api/storage/sign/documents/${path}`)
+      expect(result.signed_url_headers).toEqual({ Authorization: 'Bearer tok' })
+      expect(tool.description).toContain('signed_url_headers')
+      expect((tool.outputSchema as { required: string[] }).required).toContain('signed_url_headers')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // The signed link answers 400 in a browser (its token is in a header), so
+  // the answer also carries the link a user can click: the session route.
+  it('a rendered invoice gets an app_url the user opens signed in: the session render, on the app origin, with no token', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: INVOICE_ID, status: 'draft', invoice_number: null } })
+    enqueue({ data: [] })
+    mockRenderStored.mockResolvedValue({ ok: true, buffer: Buffer.from('%PDF'), filename: 'utkast.pdf', invoice: {} })
+    supabase.storage.from.mockReturnValue({
+      upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: `https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/sign/documents/${USER_ID}/invoice-pdfs/${INVOICE_ID}.pdf?token=tok` },
+        error: null,
+      }),
+    })
+
+    const result = await run(supabase)
+
+    expect(result.app_url).toBe(`https://app.accounted.se/api/invoices/${INVOICE_ID}/pdf?disposition=inline`)
+    expect(result.app_url).not.toContain('tok')
+    expect(result.signed_url).not.toContain('tok')
+    expect(tool.description).toContain('app_url')
+    expect((tool.outputSchema as { required: string[] }).required).toContain('app_url')
+  })
+
+  it('answers the path as app_url on a deployment that does not know its origin, beside the raw signed link', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: INVOICE_ID, status: 'draft', invoice_number: null } })
+    enqueue({ data: [] })
+    mockRenderStored.mockResolvedValue({ ok: true, buffer: Buffer.from('%PDF'), filename: 'utkast.pdf', invoice: {} })
+
+    const result = await run(supabase)
+
+    expect(result.app_url).toBe(`/api/invoices/${INVOICE_ID}/pdf?disposition=inline`)
+    expect(result).toMatchObject({ signed_url: 'https://example.com/signed', signed_url_headers: {} })
   })
 
   it('a draft is rendered as not sent yet', async () => {

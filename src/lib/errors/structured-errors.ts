@@ -6251,8 +6251,24 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
   },
   STORAGE_PROXY_TOKEN_REQUIRED: {
     httpStatus: 400,
-    message_sv: 'Länken saknar sin signerade token.',
-    message_en: 'The link is missing its signed token.',
+    message_sv: 'Anropet saknar sin signerade token. Skicka den i Authorization-headern.',
+    message_en:
+      'The request is missing its signed token. Send the headers returned next to the URL (upload_headers, signed_url_headers, download_headers, original_url_headers): Authorization: Bearer <token>.',
+  },
+  // CASA 2.1.1: a credential never rides in a URL this application serves.
+  STORAGE_PROXY_TOKEN_IN_URL: {
+    httpStatus: 400,
+    message_sv: 'Token får inte skickas i adressen. Skicka den i Authorization-headern i stället.',
+    message_en:
+      'The token must not be sent in the URL. Remove the token query parameter and send it in the header instead: Authorization: Bearer <token>. Fetch the URL again from the tool or endpoint that gave it: the answer carries the headers to send.',
+  },
+  // An Accounted API key (or MCP refresh token) sent where the storage token
+  // belongs: refused before anything is forwarded to Storage.
+  STORAGE_PROXY_API_KEY_REFUSED: {
+    httpStatus: 400,
+    message_sv: 'Det här är en API-nyckel, inte filens signerade token. Skicka headern som följde med adressen.',
+    message_en:
+      'This is an Accounted API key, not the file\'s signed token. Send the headers returned next to the URL (upload_headers, signed_url_headers, download_headers, original_url_headers), not your API key.',
   },
   STORAGE_PROXY_BODY_TOO_LARGE: {
     httpStatus: 413,

@@ -65,19 +65,19 @@ Paper receipts (restaurants, taxis, shops, trips) are photographed, not mailed: 
 1. **Find the receipt photos.** \`osascript -e 'tell application "Photos" to search for "kvitto"'\` returns what Photos itself tags as a receipt, the same as its search field ("kvitto" on a Swedish Mac, "receipt" on an English one); read each hit's \`id\`, \`date\` and \`filename\`. Keep the photos taken from the earliest worklist date until today: receipts are often photographed in a batch weeks after the purchase.
 2. **Export them** to a new, empty temporary folder with Photos' \`export\` command, at most six at a time and without \`with using originals\`: originals kept in iCloud time out with error -609. Drop the \`.mov\` halves of Live Photos.
 3. **Read them.** Run text recognition on each photo (macOS Vision, \`VNRecognizeTextRequest\`, from a short Swift script) and match merchant, total and date exactly as for a mail hit in Step 3, the tip and card-abroad exceptions included. A receipt photographed twice is one receipt: use one photo. When the card descriptor names another business than the receipt (the operating company, a café inside a venue), the amount, the date and the card's last four digits decide.
-4. **Bring the matches in.** Convert each to JPEG (\`sips -s format jpeg -Z 2400\`), name it after its verifikat ("A428-kvitto-indigo.jpg"), then \`gnubok_create_document_upload\`, PUT the file with curl, \`gnubok_complete_document_upload\`, and continue at "Step 5: Stage the links" with the returned \`document_id\`.
+4. **Bring the matches in.** Convert each to JPEG (\`sips -s format jpeg -Z 2400\`), name it after its verifikat ("A428-kvitto-indigo.jpg"), then \`gnubok_create_document_upload\`, PUT the file with curl (sending \`upload_headers\`), \`gnubok_complete_document_upload\`, and continue at "Step 5: Stage the links" with the returned \`document_id\`.
 5. **Clean up.** Delete the temporary folder. A photo that answers no worklist item is never uploaded, described or kept: the library is the user's private album.`
 }
 
 const CLAUDE_PORTAL_BRING_IN = `   - Find the address of the invoice PDF, usually a link on the invoice's row. When the button opens a popup or a new tab instead, read the address it requests (the page's network requests show it) rather than clicking again.
    - Call \`gnubok_create_document_upload({ file_name })\` right before you need it (the URL is short-lived).
-   - If you have a shell and the address is a hosted invoice link that opens without the portal's session (Stripe's do), download the PDF there and PUT the file to \`upload_url\` (\`curl -X PUT --data-binary @file\`).
-   - Otherwise, in the portal tab, run JavaScript that fetches the invoice PDF with the page's own session (\`fetch(pdfUrl, { credentials: "include" })\`) and PUTs the bytes unchanged to \`upload_url\` with its \`Content-Type\`.
-   - Check that the PUT answered 200, then call \`gnubok_complete_document_upload\` with the same \`upload_id\` and \`file_name\`.
+   - If you have a shell and the address is a hosted invoice link that opens without the portal's session (Stripe's do), download the PDF there and PUT the file to \`upload_url\` with the headers in \`upload_headers\` (\`curl -X PUT -H "Authorization: <upload_headers.Authorization>" --data-binary @file "<upload_url>"\`).
+   - Otherwise, in the portal tab, run JavaScript that fetches the invoice PDF with the page's own session (\`fetch(pdfUrl, { credentials: "include" })\`) and PUTs the bytes unchanged to \`upload_url\` with its \`Content-Type\` and the headers in \`upload_headers\`.
+   - Check that the PUT answered 200 (a 400 naming the token means \`upload_headers\` was not sent), then call \`gnubok_complete_document_upload\` with the same \`upload_id\` and \`file_name\`.
    - If the portal blocks the fetch or the PUT, do not work around it: no other sites, no pasting file contents or base64 into a tool call. Give the user the invoice's place in the portal and ask them to drop the PDF into the Accounted inbox.`
 
 const LOCAL_PORTAL_BRING_IN = `   - When the invoice has a download address that opens without the portal's session (Stripe-hosted invoice links do), fetch it in the shell with curl. Otherwise download the PDF in the browser (it asks the user to allow it).
-   - Upload the saved file exactly as in "Transport" above: \`gnubok_create_document_upload\`, PUT the bytes with curl, \`gnubok_complete_document_upload\`.
+   - Upload the saved file exactly as in "Transport" above: \`gnubok_create_document_upload\`, PUT the bytes with curl and \`upload_headers\`, \`gnubok_complete_document_upload\`.
    - If the download is refused or the file never appears, give the user the invoice's place in the portal and ask them to drop the PDF into the Accounted inbox.`
 
 const HARNESS_BLOCKS: Record<KvittojaktenHarness, string> = {
@@ -110,7 +110,7 @@ ${photosSection()}`,
 
 - **Mail**: use whichever mail MCP server is connected (Gmail, Outlook). Search **every** mailbox reachable, not only the first one you find.
 - **Where mail gets connected**: the client's own MCP server list (for Claude Code, \`claude mcp add\`). Name that in step 0.
-- **Transport**: you have a shell, so move the file directly. Save the attachment to a temporary file, call \`gnubok_create_document_upload({ file_name })\`, PUT the raw bytes to the returned \`upload_url\` (\`curl -X PUT --data-binary @file\`), then \`gnubok_complete_document_upload\` with the same \`upload_id\` and \`file_name\`. The result carries the new \`document_id\`, so you can skip the wait in step 4. When the mail connector cannot give you the bytes, forward the mail to \`inbox_address\` instead. Delete the temporary files when done.
+- **Transport**: you have a shell, so move the file directly. Save the attachment to a temporary file, call \`gnubok_create_document_upload({ file_name })\`, PUT the raw bytes to the returned \`upload_url\` with the headers in \`upload_headers\` (\`curl -X PUT -H "Authorization: <upload_headers.Authorization>" --data-binary @file "<upload_url>"\`), then \`gnubok_complete_document_upload\` with the same \`upload_id\` and \`file_name\`. The result carries the new \`document_id\`, so you can skip the wait in step 4. When the mail connector cannot give you the bytes, forward the mail to \`inbox_address\` instead. Delete the temporary files when done.
 - **Approval**: list the staged links in the terminal and ask the user. On a clear yes, call \`gnubok_approve_pending_operation\` per operation; otherwise point them to Granskning in Accounted.
 
 ${portalSection(LOCAL_PORTAL_BRING_IN)}

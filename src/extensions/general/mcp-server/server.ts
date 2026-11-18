@@ -748,7 +748,16 @@ import {
   buildPendingDocumentStoragePath,
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
-import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
+import {
+  appUrl,
+  auditPackageAppUrl,
+  auditPackageDownloadNote,
+  documentAppUrl,
+  invoicePdfAppUrl,
+  rotRutAppUrl,
+  rotRutDownloadNote,
+} from './file-links'
 import { resolveInvoicePdfSource, type InvoicePdfDelivery } from '@/lib/invoices/invoice-pdf-source'
 import { renderStoredInvoicePdf } from '@/lib/invoices/stored-invoice-pdf'
 import { documentUploadLimits } from './document-upload-limits'
@@ -2422,7 +2431,7 @@ const APPROVE_SCOPE_FALLBACK =
  * knows its origin, so the agent can hand the user a link, else the path.
  */
 function pendingReviewLink(): string {
-  return process.env.NEXT_PUBLIC_APP_URL ? `${getCanonicalBaseUrl()}/pending` : '/pending'
+  return appUrl('/pending')
 }
 
 /**
@@ -4155,7 +4164,7 @@ async function resolveSieToolContent(
         'NOT_FOUND',
         // The pending key carries the company: an upload_id made for one
         // company is not found from another, so name that cause too.
-        'No uploaded file found for this upload_id in this company. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename), and pass the company_id that upload was created for.'
+        'No uploaded file found for this upload_id in this company. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first, with its upload_headers (same upload_id and filename), and pass the company_id that upload was created for.'
       )
     }
     const buffer = Buffer.from(await data.arrayBuffer())
@@ -4172,7 +4181,7 @@ async function resolveSieToolContent(
     if (!sha256 && args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
       throw codedError(
         'VALIDATION_ERROR',
-        'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url) and pass the upload_id here, or include sha256 of the raw bytes.'
+        'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url with its upload_headers) and pass the upload_id here, or include sha256 of the raw bytes.'
       )
     }
     const buffer = Buffer.from(args.file_content_base64, 'base64')
@@ -4185,7 +4194,7 @@ async function resolveSieToolContent(
     if (args.file_content.length > MAX_INLINE_SIE_CHARS) {
       throw codedError(
         'VALIDATION_ERROR',
-        'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
+        'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url with its upload_headers, and pass the upload_id here instead.'
       )
     }
     return args.file_content
@@ -12495,7 +12504,7 @@ export const tools: McpTool[] = [
     keywords: ['faktura-pdf', 'fakturapdf', 'ladda ner faktura', 'spara faktura', 'kreditfaktura pdf', 'pdf'],
     title: 'Get Invoice PDF',
     description:
-      "An invoice's PDF as a 1-hour signed URL to download. An invoice Accounted emailed gives the archived file the customer got; anything else (draft, marked sent, older) a fresh render, and source says which.",
+      "An invoice's PDF: app_url for the user, or GET signed_url (1 hour) with signed_url_headers. An invoice Accounted emailed gives the archived file the customer got; anything else (draft, marked sent, older) a fresh render, and source says which.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12517,10 +12526,12 @@ export const tools: McpTool[] = [
         },
         document_id: { type: ['string', 'null'], description: 'The archived document, when source is archived.' },
         size_bytes: { type: ['number', 'null'] },
-        signed_url: { type: 'string' },
+        signed_url: { type: 'string', description: 'Carries no token: answers 400 without signed_url_headers, so it is not a link to open in a browser.' },
+        signed_url_headers: { type: 'object', description: 'Send with every request to signed_url.' },
+        app_url: { type: 'string', description: 'For the user: opens the same PDF in their browser when they are signed in to Accounted with this company active. Carries no token.' },
         expires_at: { type: 'string' },
       },
-      required: ['invoice_id', 'file_name', 'source', 'signed_url', 'expires_at'],
+      required: ['invoice_id', 'file_name', 'source', 'signed_url', 'signed_url_headers', 'app_url', 'expires_at'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     // A file fetch, not a list-time need: found by search (invoice pdf).
@@ -12557,15 +12568,21 @@ export const tools: McpTool[] = [
       if (source.kind === 'unavailable') throw dbError(deliveriesError!)
 
       const SIGNED_URL_TTL_SECONDS = 3600
-      const sign = async (storagePath: string): Promise<{ signed_url: string; expires_at: string }> => {
+      const sign = async (
+        storagePath: string,
+      ): Promise<{ signed_url: string; signed_url_headers: Record<string, string>; expires_at: string }> => {
         const { data: signed, error: signError } = await supabase.storage
           .from('documents')
           .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
         if (signError || !signed) {
           throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
         }
+        // Served from the app origin with the token in a header, never in
+        // the URL. See storage-proxy.ts.
+        const file = toSameOriginStorageRequest(signed.signedUrl)
         return {
-          signed_url: toSameOriginStorageUrl(signed.signedUrl),
+          signed_url: file.url,
+          signed_url_headers: file.headers,
           expires_at: new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString(),
         }
       }
@@ -12589,6 +12606,8 @@ export const tools: McpTool[] = [
           document_id: doc.id,
           size_bytes: doc.file_size_bytes ?? null,
           ...(await sign(doc.storage_path)),
+          // The archived file of this delivery, through the session route.
+          app_url: invoicePdfAppUrl(invoiceId, source.deliveryId),
         }
       }
 
@@ -12614,6 +12633,8 @@ export const tools: McpTool[] = [
         document_id: null,
         size_bytes: rendered.buffer.length,
         ...(await sign(storagePath)),
+        // The session route renders the invoice afresh, as this did.
+        app_url: invoicePdfAppUrl(invoiceId),
       }
     },
   },
@@ -17843,7 +17864,7 @@ export const tools: McpTool[] = [
     // The last sentence is for an agent whose sandbox reaches the MCP host
     // only: no proxy helps a client that may make no outbound request at
     // all, and such an agent found the inline tool by trial (crm#1919).
-    description: 'Model-free document upload: PUT the raw file bytes (see max_bytes) to upload_url, then call gnubok_complete_document_upload with the upload_id. If your sandbox cannot reach upload_url, use gnubok_upload_document instead.',
+    description: 'Model-free document upload: PUT the raw file bytes (see max_bytes) to upload_url with upload_headers, then gnubok_complete_document_upload(upload_id). If your sandbox cannot reach upload_url, use gnubok_upload_document instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17861,8 +17882,9 @@ export const tools: McpTool[] = [
         },
       },
       required: ['file_name'],
-      // Step 1 of 2: PUT the bytes to upload_url, then complete with the SAME
-      // upload_id (the name rides along in the reservation).
+      // Step 1 of 2: PUT the bytes to upload_url with upload_headers, then
+      // complete with the SAME upload_id (the name rides along in the
+      // reservation).
       examples: [{ file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
@@ -17889,15 +17911,18 @@ export const tools: McpTool[] = [
         fileName,
       )
       // Served from the app origin: agent sandboxes (Claude Desktop) only
-      // reach the MCP host, not <project>.supabase.co. See storage-proxy.ts.
-      // The size fields (crm#1455) are undeclared in outputSchema: every
-      // byte there is charged to the tools/list ceiling.
-      const uploadUrl = toSameOriginStorageUrl(reservation.signedUrl)
+      // reach the MCP host, not <project>.supabase.co. The token travels in
+      // upload_headers, never in upload_url. See storage-proxy.ts.
+      // upload_headers and the size fields (crm#1455) are undeclared in
+      // outputSchema: every byte there is charged to the tools/list ceiling,
+      // which is frozen. The description names upload_headers.
+      const upload = toSameOriginStorageRequest(reservation.signedUrl)
       return {
         upload_id: reservation.uploadId,
-        upload_url: uploadUrl,
+        upload_url: upload.url,
+        upload_headers: upload.headers,
         expires_at: reservation.expiresAt,
-        ...documentUploadLimits(reservation.signedUrl, uploadUrl),
+        ...documentUploadLimits(reservation.signedUrl, upload.url),
         // Injected by the dispatcher for a key that reaches several
         // companies (crm#1862). Undeclared in outputSchema, like the size
         // fields above.
@@ -18293,7 +18318,7 @@ export const tools: McpTool[] = [
       if (!data) throw new Error('Inbox item not found')
 
       // How it came in: each delivery's sender, text and the original as it came.
-      const arrivals = await readInboxItemArrivals(supabase, companyId, data, { rewriteUrl: toSameOriginStorageUrl })
+      const arrivals = await readInboxItemArrivals(supabase, companyId, data, { toRequest: toSameOriginStorageRequest })
       const purchaseCategories = await resolveInboxPurchaseCategories(supabase, companyId, [data])
       // The one reading (lib/documents/reading): every field with its source
       // and evidence level. Undeclared in the outputSchema, which costs the
@@ -19705,7 +19730,7 @@ export const tools: McpTool[] = [
     // (payload-size.bench.test.ts): document_id lost its restating note,
     // the output its required list, and what the parts carry is said in
     // the response (text.hint, reading.note, notice), declared nowhere.
-    description: "A document's 5-minute signed URL (vision). include adds page text (from_page, max_chars), type and model reading, links (verifikat, bank, inbox, supplier invoice), arrivals.",
+    description: "A document's 5-minute signed_url + signed_url_headers (vision), app_url for the user. include adds page text (from_page, max_chars), type and model reading, links (verifikat, bank, inbox, supplier invoice), arrivals.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -19798,16 +19823,24 @@ export const tools: McpTool[] = [
         include: parts,
         fromPage: args.from_page as number | undefined,
         maxChars: args.max_chars as number | undefined,
-        rewriteUrl: toSameOriginStorageUrl,
-        hints: { file: 'signed_url', readNow: 'gnubok_read_document reads it now (a scan or photo by the model)' },
+        toRequest: toSameOriginStorageRequest,
+        hints: { file: 'signed_url (sent with signed_url_headers)', readNow: 'gnubok_read_document reads it now (a scan or photo by the model)' },
       })
 
+      // The token travels in signed_url_headers, never in signed_url, so
+      // the link does not open in a browser: app_url is the one for the
+      // user, the session route of the same document. Both are undeclared in
+      // the outputSchema like the parts below (the tools/list budget is
+      // frozen); the description names them.
+      const file = toSameOriginStorageRequest(signed.signedUrl)
       return {
         document_id: doc.id,
         file_name: doc.file_name,
         mime_type: doc.mime_type,
         size_bytes: doc.file_size_bytes,
-        signed_url: toSameOriginStorageUrl(signed.signedUrl),
+        signed_url: file.url,
+        signed_url_headers: file.headers,
+        app_url: documentAppUrl(doc.id),
         expires_at: expiresAt,
         ...detail,
       }
@@ -23463,7 +23496,7 @@ export const tools: McpTool[] = [
     keywords: ['rotavdrag', 'rutavdrag', 'husarbete', 'utbetalningsfil'],
     title: 'Generate Rot/Rut Payout File',
     description:
-      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag) from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns download_url (1 h) for the user.',
+      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag) from paid deduction invoices. Call list_only=true first for eligible invoices and blockers. Generating records an active begäran per invoice and returns app_url for the user.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -23537,6 +23570,8 @@ export const tools: McpTool[] = [
           file_name: null,
           file_document_id: null,
           download_url: null,
+          download_headers: {},
+          app_url: null,
           requested_total: candidates.eligible.reduce((sum, e) => sum + e.begart_belopp, 0),
           other_type_counts: candidates.other_type_counts,
           warnings: [],
@@ -23557,6 +23592,8 @@ export const tools: McpTool[] = [
           file_name: null,
           file_document_id: null,
           download_url: null,
+          download_headers: {},
+          app_url: null,
           requested_total: 0,
           other_type_counts: candidates.other_type_counts,
           warnings: ['Inga fakturor är redo att begäras. Se blocked för orsaker per faktura.'],
@@ -23617,6 +23654,14 @@ export const tools: McpTool[] = [
         warnings.push('Filen är arkiverad men länken kunde inte skapas: hämta en ny med gnubok_get_document_content (file_document_id) eller med Hämta fil under Fakturor > Begär utbetalning.')
       }
 
+      // The token travels in download_headers, never in download_url, so
+      // that link does not open in the user's browser. app_url does: the
+      // page where the begäran is listed with Hämta fil, or, should the file
+      // not have been linked to its begäran, the document itself. It needs
+      // no signed link, so it is there even when signing failed. The note
+      // says which link is whose. All three are undeclared in outputSchema
+      // (the tools/list budget is frozen); the description names app_url.
+      const file = signed && !signError ? toSameOriginStorageRequest(signed.signedUrl) : null
       return {
         deduction_type: type,
         eligible: candidates.eligible,
@@ -23625,7 +23670,10 @@ export const tools: McpTool[] = [
         request_id: requestId,
         file_name: result.file.file_name,
         file_document_id: archived.documentId,
-        download_url: signed && !signError ? toSameOriginStorageUrl(signed.signedUrl) : null,
+        download_url: file?.url ?? null,
+        download_headers: file?.headers ?? {},
+        app_url: archived.linked ? rotRutAppUrl() : documentAppUrl(archived.documentId),
+        ...rotRutDownloadNote(file?.headers ?? {}),
         requested_total: result.file.requested_total,
         arenden: result.file.arenden,
         other_type_counts: candidates.other_type_counts,
@@ -24150,7 +24198,7 @@ export const tools: McpTool[] = [
     outputSchema: {
       type: 'object',
       properties: {
-        download_url: { type: ['string', 'null'], description: 'Signed download URL, valid 1 hour, on the app origin (direct Storage URL only when NEXT_PUBLIC_APP_URL is unset); null when estimate_only=true.' },
+        download_url: { type: ['string', 'null'], description: 'GET with download_headers; for the user: app_url. Null when estimate_only=true.' },
         storage_path: { type: ['string', 'null'] },
         file_name: { type: 'string' },
         size_bytes: { type: 'number' },
@@ -24209,9 +24257,16 @@ export const tools: McpTool[] = [
 
       const fileName = `arkiv_${period.name.replace(/[^\w-]/g, '_')}_${fiscalPeriodId.slice(0, 8)}.zip`
 
+      // For the user: the session route that builds this period's archive
+      // on the click. It needs no stored package, so it is there for an
+      // estimate too, and it has no size cap.
+      const appLink = auditPackageAppUrl(fiscalPeriodId, includeDocuments)
+
       if (estimateOnly) {
         return {
           download_url: null,
+          download_headers: {},
+          app_url: appLink,
           storage_path: null,
           file_name: fileName,
           size_bytes: sizeBytes,
@@ -24296,8 +24351,17 @@ export const tools: McpTool[] = [
 
       const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString()
 
+      // The token travels in download_headers, never in download_url, so
+      // that link does not open in the user's browser: app_url does, and
+      // the note says which link is whose. All three are undeclared in
+      // outputSchema (the tools/list budget is frozen); download_url's
+      // description names the headers and app_url.
+      const file = toSameOriginStorageRequest(signed.signedUrl)
       return {
-        download_url: toSameOriginStorageUrl(signed.signedUrl),
+        download_url: file.url,
+        download_headers: file.headers,
+        app_url: appLink,
+        ...auditPackageDownloadNote(file.headers),
         storage_path: storagePath,
         file_name: fileName,
         size_bytes: zipBuffer.byteLength,
@@ -26214,7 +26278,7 @@ export const tools: McpTool[] = [
     keywords: ['sie', 'sie-fil', 'importera bokföring'],
     title: 'Create SIE Upload',
     description:
-      'SIE-file intake: on claude.ai/Desktop a DRAG-AND-DROP card reads exact bytes, preflights and imports into the company it names: call it first. Else: PUT raw bytes to upload_url (see max_bytes), pass upload_id + sha256 to preflight/import. reports:read suffices.',
+      'SIE intake: on claude.ai/Desktop a DRAG-AND-DROP card reads exact bytes, preflights and imports into the company it names: call it first. Else: PUT raw bytes to upload_url with upload_headers (see max_bytes), pass upload_id + sha256 to preflight/import. reports:read suffices.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -26265,17 +26329,20 @@ export const tools: McpTool[] = [
         ),
       ])
       // Served from the app origin: agent sandboxes only reach the MCP host,
-      // not <project>.supabase.co. See storage-proxy.ts.
-      const uploadUrl = toSameOriginStorageUrl(reservation.signedUrl)
+      // not <project>.supabase.co. The token travels in upload_headers, never
+      // in upload_url (undeclared in outputSchema like the fields below; the
+      // description names it). See storage-proxy.ts.
+      const upload = toSameOriginStorageRequest(reservation.signedUrl)
       return {
         upload_id: reservation.uploadId,
-        upload_url: uploadUrl,
+        upload_url: upload.url,
+        upload_headers: upload.headers,
         expires_at: reservation.expiresAt,
         // What upload_url carries on hosted (4 MB) and, beside it, the raw
         // Storage URL for a multi-year SIE file up to the import's limit:
         // the documents' answer (crm#1455). Undeclared in outputSchema, as
         // target_company below.
-        ...documentUploadLimits(reservation.signedUrl, uploadUrl, SIE_LIMITS.fileBytes),
+        ...documentUploadLimits(reservation.signedUrl, upload.url, SIE_LIMITS.fileBytes),
         // The company this card imports into (crm#1201). The card shows it
         // and passes its company_id on the preflight and the import, so a
         // card opened for one company never lands a file in the default one.

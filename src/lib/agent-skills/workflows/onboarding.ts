@@ -172,7 +172,8 @@ reaches far enough back anyway.
    DRAG-AND-DROP card: the user drops the file on it and the card itself
    runs the preflight and stages the import with exact bytes; you only
    narrate the verdict and handle the approval. Without the card: PUT the
-   raw bytes to \`upload_url\` (from your code sandbox), compute sha256,
+   raw bytes to \`upload_url\` with the headers in \`upload_headers\` (from
+   your code sandbox), compute sha256,
    and call \`gnubok_sie_preflight\` with \`upload_id\` + \`sha256\` +
    \`filename\`; smaller files may go inline as \`file_content_base64\` +
    \`sha256\`. NEVER reproduce a large file token by token: unhashed

@@ -112,8 +112,9 @@ describe('MCP model-free document upload tools', () => {
 
   // Claude Desktop's sandbox only reaches the MCP host: a signed URL on
   // <project>.supabase.co was refused there (2026-08-21), so the tool hands
-  // out the same-origin /api/storage proxy URL instead.
-  it('serves the upload URL from the app origin when the signed URL points at our Storage host', async () => {
+  // out the same-origin /api/storage proxy URL instead. The signed token
+  // travels in upload_headers, never in the URL (CASA 2.1.1).
+  it('serves the upload URL from the app origin, with the token in upload_headers and not in the URL', async () => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
     mocks.createPendingDocumentUpload.mockResolvedValue({
@@ -123,17 +124,18 @@ describe('MCP model-free document upload tools', () => {
       expiresAt: '2026-08-03T12:00:00.000Z',
     })
 
-    const result = await findTool('gnubok_create_document_upload').execute(
+    const result = (await findTool('gnubok_create_document_upload').execute(
       { file_name: 'invoice.pdf' },
       companyId,
       userId,
       {} as never,
-    )
+    )) as Record<string, unknown>
 
     expect(result).toMatchObject({
-      upload_url:
-        'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/invoice.pdf?token=signed',
+      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/invoice.pdf',
+      upload_headers: { Authorization: 'Bearer signed' },
     })
+    expect(result.upload_url).not.toContain('token')
   })
 
   // crm#1455: on hosted the proxy runs in a function, and the platform
@@ -156,8 +158,10 @@ describe('MCP model-free document upload tools', () => {
     )) as Record<string, unknown>
 
     expect(result).toMatchObject({
-      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/kvitto.png?token=signed',
+      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/kvitto.png',
+      upload_headers: { Authorization: 'Bearer signed' },
       max_bytes: 4 * 1024 * 1024,
+      // Storage's own URL, token in its query as Storage requires: no headers go with it.
       direct_upload_url: signedUrl,
       direct_max_bytes: 10 * 1024 * 1024,
     })
@@ -165,7 +169,7 @@ describe('MCP model-free document upload tools', () => {
     const photoBytes = 5.2 * 1000 * 1000
     expect(photoBytes).toBeGreaterThan(result.max_bytes as number)
     expect(photoBytes).toBeLessThan(result.direct_max_bytes as number)
-    expect(result.notice).toMatch(/at most 4 MB.*up to 10 MB.*direct_upload_url/)
+    expect(result.notice).toMatch(/at most 4 MB.*up to 10 MB.*direct_upload_url, without upload_headers/)
   })
 
   it('self-hosted: the proxy has no platform cap, so upload_url carries the archive limit and no second URL', async () => {
@@ -185,7 +189,8 @@ describe('MCP model-free document upload tools', () => {
       {} as never,
     )) as Record<string, unknown>
 
-    expect(result.upload_url).toBe('https://books.self-hosted.example/api/storage/upload/sign/documents/co/user/pending/up/a.pdf?token=signed')
+    expect(result.upload_url).toBe('https://books.self-hosted.example/api/storage/upload/sign/documents/co/user/pending/up/a.pdf')
+    expect(result.upload_headers).toEqual({ Authorization: 'Bearer signed' })
     expect(result.max_bytes).toBe(10 * 1024 * 1024)
     expect(result).not.toHaveProperty('direct_upload_url')
     expect(result).not.toHaveProperty('notice')
@@ -209,7 +214,9 @@ describe('MCP model-free document upload tools', () => {
     )
     expect(result).toEqual({
       upload_id: uploadId,
+      // Not our Storage host, so not rewritten: the raw signed URL, and no header to send.
       upload_url: 'https://storage.example/upload?token=signed',
+      upload_headers: {},
       expires_at: '2026-08-03T12:00:00.000Z',
       // Not rewritten onto the proxy: nothing caps the PUT below the archive limit.
       max_bytes: 10 * 1024 * 1024,
@@ -851,12 +858,13 @@ describe('gnubok_create_sie_upload: the real limit and the direct Storage URL', 
 
     expect(result).toMatchObject({
       upload_id: uploadId,
-      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/export.se?token=signed',
+      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/export.se',
+      upload_headers: { Authorization: 'Bearer signed' },
       max_bytes: 4 * 1024 * 1024,
       direct_upload_url: signedUrl,
       direct_max_bytes: 50 * 1024 * 1024,
     })
-    expect(result.notice).toMatch(/at most 4 MB.*up to 50 MB.*direct_upload_url/)
+    expect(result.notice).toMatch(/at most 4 MB.*up to 50 MB.*direct_upload_url, without upload_headers/)
   })
 
   it('self-hosted: upload_url carries the import limit and no second URL', async () => {
@@ -871,9 +879,17 @@ describe('gnubok_create_sie_upload: the real limit and the direct Storage URL', 
 
     const result = await run()
 
+    expect(result.upload_url).toBe('https://books.self-hosted.example/api/storage/upload/sign/documents/co/user/pending/up/export.se')
+    expect(result.upload_headers).toEqual({ Authorization: 'Bearer signed' })
     expect(result.max_bytes).toBe(50 * 1024 * 1024)
     expect(result).not.toHaveProperty('direct_upload_url')
     expect(result).not.toHaveProperty('notice')
+  })
+
+  // CASA 2.1.1: both upload tools say where the token goes before the agent PUTs.
+  it('names upload_headers in both upload descriptions', () => {
+    expect(sieUpload().description).toContain('upload_url with upload_headers')
+    expect(findTool('gnubok_create_document_upload').description).toContain('upload_url with upload_headers')
   })
 
   it('states the limit by reference, not a false fixed number', () => {

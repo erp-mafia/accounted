@@ -515,6 +515,13 @@ export interface ArrivalSummary {
   original_file_name: string | null
   /** Short-lived signed URL of the original, when one was asked for and could be made. */
   original_url: string | null
+  /**
+   * Headers every request to original_url must carry: the signed token when
+   * the URL is served from this app's origin, where no token rides in a URL;
+   * empty for a raw signed Storage URL and when there is no URL. On every
+   * summary made with toRequest (the agent and API doors), absent otherwise.
+   */
+  original_url_headers?: Record<string, string>
   /** What this arrival produced, so a reader can tell the attachment from the mail body. */
   outputs: Array<{ kind: ArrivalOutputKind; id: string; role: ArrivalOutputRole }>
 }
@@ -602,6 +609,15 @@ export function arrivalOriginalBucket(arrival: Pick<ArrivalRow, 'company_id' | '
 /** Seconds a signed original URL lives: long enough to open, short enough not to leak. */
 export const ARRIVAL_ORIGINAL_URL_TTL_SEC = 300
 
+/**
+ * Turns the signed Storage URL of an original into the request a reader
+ * makes: the URL and the headers that go with it. The agent and API doors
+ * pass toSameOriginStorageRequest (lib/core/documents/storage-proxy.ts),
+ * which serves the original from this app's origin with its token in a
+ * header; without one the raw signed URL is handed out, with no headers.
+ */
+export type ArrivalOriginalRequest = (signedUrl: string) => { url: string; headers: Record<string, string> }
+
 const originalKey = (companyId: string, path: string) => `${companyId}\n${path}`
 
 /**
@@ -661,12 +677,13 @@ async function signableDocumentOriginals(
  */
 export async function summariseArrivals(
   arrivals: Array<ArrivalRow & { outputs: ArrivalSummary['outputs'] }>,
-  opts: { storageClient?: SupabaseClient; ttlSec?: number; rewriteUrl?: (url: string) => string } = {},
+  opts: { storageClient?: SupabaseClient; ttlSec?: number; toRequest?: ArrivalOriginalRequest } = {},
 ): Promise<ArrivalSummary[]> {
   const signableDocuments = opts.storageClient ? await signableDocumentOriginals(opts.storageClient, arrivals) : new Set<string>()
   return Promise.all(
     arrivals.map(async (arrival) => {
       let url: string | null = null
+      let headers: Record<string, string> = {}
       const fileName = originalFileName(arrival.original_path)
       const bucket = arrivalOriginalBucket(arrival)
       const signable =
@@ -680,7 +697,9 @@ export async function summariseArrivals(
               download: fileName ?? true,
             })
           if (error) throw new Error(error.message)
-          url = data?.signedUrl ? (opts.rewriteUrl ? opts.rewriteUrl(data.signedUrl) : data.signedUrl) : null
+          if (data?.signedUrl) {
+            ;({ url, headers } = opts.toRequest ? opts.toRequest(data.signedUrl) : { url: data.signedUrl, headers: {} })
+          }
         } catch (err) {
           log.warn('arrival original could not be signed', {
             companyId: arrival.company_id,
@@ -702,6 +721,7 @@ export async function summariseArrivals(
         original_size: arrival.original_size,
         original_file_name: fileName,
         original_url: url,
+        ...(opts.toRequest ? { original_url_headers: headers } : {}),
         outputs: arrival.outputs,
       }
     }),
@@ -717,14 +737,14 @@ export async function readInboxItemArrivals(
   supabase: SupabaseClient,
   companyId: string,
   item: { id: string; document_id?: string | null },
-  opts: { storageClient?: SupabaseClient; rewriteUrl?: (url: string) => string } = {},
+  opts: { storageClient?: SupabaseClient; toRequest?: ArrivalOriginalRequest } = {},
 ): Promise<ArrivalSummary[]> {
   try {
     const arrivals = await listArrivalsForOutputs(supabase, companyId, [
       { kind: 'inbox_item', id: item.id },
       ...(item.document_id ? [{ kind: 'document' as const, id: item.document_id }] : []),
     ])
-    return await summariseArrivals(arrivals, { storageClient: opts.storageClient ?? supabase, rewriteUrl: opts.rewriteUrl })
+    return await summariseArrivals(arrivals, { storageClient: opts.storageClient ?? supabase, toRequest: opts.toRequest })
   } catch (err) {
     log.warn('inbox item arrivals could not be read', {
       companyId,

@@ -458,7 +458,7 @@ export const invoiceInboxExtension: Extension = {
             fileName,
           )
           // The RAW Storage URL, deliberately not the same-origin proxy the
-          // MCP tools hand out (toSameOriginStorageUrl): that proxy buffers
+          // MCP tools hand out (toSameOriginStorageRequest): that proxy buffers
           // the PUT body inside a function and so sits under the very
           // ceiling this route exists to get around. CSP connect-src
           // already allows the Storage host.

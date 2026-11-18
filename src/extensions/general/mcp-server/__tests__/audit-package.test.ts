@@ -5,7 +5,7 @@
  * size-limit guard. The full archive generation is exercised by
  * lib/reports/full-archive-export tests.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { tools } from '../server'
 import { toToolError } from '../tool-result'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
@@ -147,12 +147,19 @@ describe('gnubok_audit_package: execute', () => {
     )) as {
       estimate_only: boolean
       download_url: string | null
+      download_headers: Record<string, string>
+      app_url: string
       size_bytes: number
       within_limit: boolean
     }
 
     expect(result.estimate_only).toBe(true)
     expect(result.download_url).toBeNull()
+    // Always an object, so a client can pass it along without looking.
+    expect(result.download_headers).toEqual({})
+    // The session route builds the archive on the click, so the user's link
+    // is there for an estimate too.
+    expect(result.app_url).toMatch(/\/api\/reports\/full-archive\?scope=period&period_id=p1$/)
     expect(result.size_bytes).toBe(5 * 1024 * 1024)
     expect(result.within_limit).toBe(true)
     expect(generateFullArchive).not.toHaveBeenCalled()
@@ -205,6 +212,93 @@ describe('gnubok_audit_package: execute', () => {
         'company-1', 'user-1', supabase,
       ),
     ).rejects.toThrow(/Fiscal period not found/)
+  })
+})
+
+// CASA 2.1.1: the link is served from the app origin and its signed token
+// travels in download_headers, never in the URL.
+describe('gnubok_audit_package: the download link carries no token', () => {
+  const SUPABASE = 'https://pwxtzglxptnnvjrpixpg.supabase.co'
+
+  function makeSignedMock(signedUrl: string) {
+    const supabase = makePeriodMock({
+      id: 'p1', name: '2026',
+      period_start: '2026-01-01', period_end: '2026-12-31',
+    }) as unknown as { storage: { from: ReturnType<typeof vi.fn> } }
+    supabase.storage.from.mockReturnValue({
+      upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+      remove: vi.fn(),
+      createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl }, error: null }),
+    })
+    return supabase as never
+  }
+
+  const run = (supabase: never, args: Record<string, unknown> = {}) =>
+    tools.find((t) => t.name === 'gnubok_audit_package')!.execute({ fiscal_period_id: 'p1', ...args }, 'company-1', 'user-1', supabase) as Promise<{
+      download_url: string
+      download_headers: Record<string, string>
+      download_note?: string
+      app_url: string
+    }>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 1024 } as never)
+    vi.mocked(generateFullArchive).mockResolvedValue(new ArrayBuffer(8))
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('answers the app-origin URL without the token, the token in download_headers, and how the zip reaches the user', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE)
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+
+    const result = await run(makeSignedMock(`${SUPABASE}/storage/v1/object/sign/documents/user-1/audit-packages/1_arkiv_2026_p1.zip?token=tok`))
+
+    expect(result.download_url).toBe('https://app.accounted.se/api/storage/sign/documents/user-1/audit-packages/1_arkiv_2026_p1.zip')
+    expect(result.download_headers).toEqual({ Authorization: 'Bearer tok' })
+    // The link for the user: the session route that builds the same period
+    // archive, behind their own login, with no token in it.
+    expect(result.app_url).toBe('https://app.accounted.se/api/reports/full-archive?scope=period&period_id=p1')
+    expect(result.app_url).not.toContain('tok')
+    expect(result.download_note).toMatch(/^Give the user app_url.*owner or admin/)
+    expect(result.download_note).toMatch(/download_url with download_headers is for a client.*does not open as a link in a browser/)
+  })
+
+  it('asks the session route for the same package: without documents when the call left them out', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE)
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+
+    const result = await run(
+      makeSignedMock(`${SUPABASE}/storage/v1/object/sign/documents/user-1/audit-packages/1_arkiv_2026_p1.zip?token=tok`),
+      { include_documents: false },
+    )
+
+    expect(result.app_url).toBe('https://app.accounted.se/api/reports/full-archive?scope=period&period_id=p1&include_documents=false')
+  })
+
+  it('hands out the raw signed URL with no headers and no note where it cannot be rewritten (self-host without NEXT_PUBLIC_APP_URL)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE)
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    const signedUrl = `${SUPABASE}/storage/v1/object/sign/documents/user-1/audit-packages/1_arkiv_2026_p1.zip?token=tok`
+
+    const result = await run(makeSignedMock(signedUrl))
+
+    expect(result.download_url).toBe(signedUrl)
+    expect(result.download_headers).toEqual({})
+    expect(result).not.toHaveProperty('download_note')
+    // No origin is known: the path, never a localhost URL.
+    expect(result.app_url).toBe('/api/reports/full-archive?scope=period&period_id=p1')
+  })
+
+  it('says in the schema that the link needs download_headers and that app_url is the one for the user', () => {
+    const properties = (tools.find((t) => t.name === 'gnubok_audit_package')!.outputSchema as {
+      properties: Record<string, { description?: string }>
+    }).properties
+    expect(properties.download_url.description).toContain('download_headers')
+    expect(properties.download_url.description).toContain('for the user: app_url')
   })
 })
 

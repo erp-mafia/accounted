@@ -27,7 +27,7 @@ import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/paginatio
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { canDeleteDocument, documentDeleteRefusal, inboxItemsLeftEmpty, readDocumentDeletePins } from '@/lib/documents/deletion'
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { toSameOriginStorageRequest } from '@/lib/core/documents/storage-proxy'
 import type { DocumentDetail, DocumentDetailPart, readDocumentDetail } from '@/lib/documents/read/document-detail'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -239,7 +239,7 @@ export async function getDocumentMetadata(
           include: request.include,
           fromPage: request.fromPage,
           maxChars: request.maxChars,
-          rewriteUrl: toSameOriginStorageUrl,
+          toRequest: toSameOriginStorageRequest,
           hints: { file: 'the file (GET /documents/{id}/download)' },
         },
       )

@@ -4,7 +4,7 @@ import { dbError } from '@/lib/errors/db-error'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { readerForMime } from '@/lib/documents/read/types'
-import { listArrivalsForOutputs, summariseArrivals, type ArrivalSummary } from '@/lib/intake/arrivals'
+import { listArrivalsForOutputs, summariseArrivals, type ArrivalOriginalRequest, type ArrivalSummary } from '@/lib/intake/arrivals'
 
 /**
  * Everything about one document an agent or an API client can ask for on
@@ -155,7 +155,11 @@ export interface DocumentLinksPart {
   records?: Array<{ record_ref: string; basis: string; method: string }>
 }
 
-export type DocumentArrival = ArrivalSummary & { message_text_truncated?: true }
+/** An arrival as this read answers it: the headers of its original are always there, empty when the URL needs none. */
+export type DocumentArrival = ArrivalSummary & {
+  original_url_headers: Record<string, string>
+  message_text_truncated?: true
+}
 
 export interface DocumentDetail {
   text?: DocumentTextPart
@@ -172,7 +176,8 @@ export interface DocumentDetailOptions {
   maxChars?: number
   /** Signs arrival originals; the row reads above it are the authorization. */
   storageClient?: SupabaseClient
-  rewriteUrl?: (url: string) => string
+  /** How an arrival's original is requested (lib/intake/arrivals.ts); the raw signed URL without it. */
+  toRequest?: ArrivalOriginalRequest
   /**
    * How this door names the file and a read on the spot, for the text
    * part's hint: MCP says signed_url and gnubok_read_document, v1 the
@@ -560,11 +565,12 @@ async function readArrivalsPart(
   )
   const summaries = await summariseArrivals(arrivals, {
     storageClient: options.storageClient ?? supabase,
-    rewriteUrl: options.rewriteUrl,
+    toRequest: options.toRequest,
   })
-  return summaries.map((arrival) =>
-    arrival.message_text && arrival.message_text.length > DOCUMENT_ARRIVAL_TEXT_CHARS
+  return summaries.map((summary) => {
+    const arrival = { ...summary, original_url_headers: summary.original_url_headers ?? {} }
+    return arrival.message_text && arrival.message_text.length > DOCUMENT_ARRIVAL_TEXT_CHARS
       ? { ...arrival, message_text: arrival.message_text.slice(0, DOCUMENT_ARRIVAL_TEXT_CHARS), message_text_truncated: true as const }
-      : arrival,
-  )
+      : arrival
+  })
 }

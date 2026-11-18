@@ -370,6 +370,8 @@ describe('read path', () => {
       original_url: 'https://example.com/signed',
     })
     expect(createSignedUrl).toHaveBeenCalledWith(`documents/${COMPANY}/arrivals/${ARRIVAL_ID}/em_1.eml`, 300, { download: 'em_1.eml' })
+    // The dashboard's read: the raw signed URL, and no headers field at all.
+    expect(summary).not.toHaveProperty('original_url_headers')
   })
 
   it('leaves the URL out when signing fails, and asks nothing for no outputs', async () => {
@@ -381,6 +383,32 @@ describe('read path', () => {
     expect(summary!.original_url).toBeNull()
     expect(summary!.has_original).toBe(true)
     expect(await listArrivalsForOutputs(supabase, COMPANY, [{ kind: 'document', id: 'nope' }])).toEqual([])
+  })
+
+  // The agent and API doors: the URL and the headers that go with it travel together.
+  it('hands the signed URL to toRequest and answers its URL and headers, an empty object when there is no URL', async () => {
+    const toRequest = vi.fn((signedUrl: string) => ({
+      url: `${signedUrl}/without-token`,
+      headers: { Authorization: 'Bearer t' },
+    }))
+    const rows = [
+      { ...arrivalRow({ id: 'a-signed', original_path: `documents/${COMPANY}/arrivals/x/a.eml` }), outputs: [] },
+      { ...arrivalRow({ id: 'a-none', original_path: null }), outputs: [] },
+    ]
+
+    const summaries = await summariseArrivals(rows, { storageClient: supabase, toRequest })
+
+    expect(toRequest).toHaveBeenCalledTimes(1)
+    expect(toRequest).toHaveBeenCalledWith('https://example.com/signed')
+    expect(summaries.map((s) => [s.original_url, s.original_url_headers])).toEqual([
+      ['https://example.com/signed/without-token', { Authorization: 'Bearer t' }],
+      [null, {}],
+    ])
+
+    // A signing that fails leaves no URL and no header to send.
+    createSignedUrl.mockResolvedValueOnce({ data: null, error: { message: 'not found' } })
+    const [failed] = await summariseArrivals([rows[0]!], { storageClient: supabase, toRequest })
+    expect([failed!.original_url, failed!.original_url_headers]).toEqual([null, {}])
   })
 })
 

@@ -32,7 +32,8 @@ function db(arrivals: { data?: unknown; error?: unknown }) {
   })
   const createSignedUrl = vi.fn().mockResolvedValue({
     data: {
-      signedUrl: `https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/sign/documents/${companyId}/arrivals/${arrivalId}/em_1.eml?token=t`,
+      // As Storage signs it for summariseArrivals: the token, then the download name.
+      signedUrl: `https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/sign/documents/${companyId}/arrivals/${arrivalId}/em_1.eml?token=t&download=em_1.eml`,
     },
     error: null,
   })
@@ -68,7 +69,7 @@ describe('gnubok_get_inbox_item arrivals', () => {
     vi.unstubAllEnvs()
   })
 
-  it('adds how the item came in, with the original served from the app origin', async () => {
+  it('adds how the item came in, with the original served from the app origin and its token in original_url_headers', async () => {
     const { client, findCalls } = db({ data: [ARRIVAL_ROW] })
     const result = (await tool.execute({ inbox_item_id: itemId }, companyId, userId, client)) as Record<string, unknown>
 
@@ -81,7 +82,9 @@ describe('gnubok_get_inbox_item arrivals', () => {
         message_text: 'Hej!',
         has_original: true,
         original_mime: 'message/rfc822',
-        original_url: `https://app.accounted.se/api/storage/sign/documents/${companyId}/arrivals/${arrivalId}/em_1.eml?token=t`,
+        // No token in the URL; the download name stays.
+        original_url: `https://app.accounted.se/api/storage/sign/documents/${companyId}/arrivals/${arrivalId}/em_1.eml?download=em_1.eml`,
+        original_url_headers: { Authorization: 'Bearer t' },
       }),
     ])
     // Asked through both the item and its document, scoped to the company.

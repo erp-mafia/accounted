@@ -294,7 +294,7 @@ describe('readDocumentDetail', () => {
           ? { data: [{ arrival_id: ARRIVAL, output_kind: 'document', output_id: DOC, role: 'attachment', position: 0 }] }
           : { data: [{ arrival_id: ARRIVAL }] }
       const mock = db({ arrival_outputs: outputs, arrivals: { data: [arrivalRow(messageText)] } })
-      const createSignedUrl = vi.fn().mockResolvedValue({ data: { signedUrl: 'https://example.supabase.co/storage/v1/object/sign/documents/x.eml?token=t' }, error: null })
+      const createSignedUrl = vi.fn().mockResolvedValue({ data: { signedUrl: 'https://example.supabase.co/storage/v1/object/sign/documents/x.eml?token=t&download=x.eml' }, error: null })
       Object.assign(mock.supabase, { storage: { from: vi.fn(() => ({ createSignedUrl })) } })
       return mock
     }
@@ -303,7 +303,11 @@ describe('readDocumentDetail', () => {
       const { client, findCalls } = arrivalsDb('Hej!')
       const detail = await readDocumentDetail(client, COMPANY, row({ original_id: ORIGINAL }), {
         include: ['arrivals'],
-        rewriteUrl: (url) => url.replace('https://example.supabase.co/storage/v1/object', 'https://app.example/api/storage'),
+        // As toSameOriginStorageRequest answers: the URL without its token, the token in a header.
+        toRequest: (url) => ({
+          url: url.replace('https://example.supabase.co/storage/v1/object', 'https://app.example/api/storage').replace('token=t&', ''),
+          headers: { Authorization: 'Bearer t' },
+        }),
       })
 
       expect(detail.arrivals).toEqual([
@@ -313,7 +317,8 @@ describe('readDocumentDetail', () => {
           subject: 'Faktura 1001',
           message_text: 'Hej!',
           has_original: true,
-          original_url: 'https://app.example/api/storage/sign/documents/x.eml?token=t',
+          original_url: 'https://app.example/api/storage/sign/documents/x.eml?download=x.eml',
+          original_url_headers: { Authorization: 'Bearer t' },
           outputs: [{ kind: 'document', id: DOC, role: 'attachment' }],
         }),
       ])
