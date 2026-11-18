@@ -226,13 +226,17 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
   const total = resourceCounts.reduce((n, c) => n + Number(c.needs_attention ?? 0), 0)
   const acceptable = job.phase === 'completed' && job.state === 'needs_attention'
   const truncated = reviewable && issues.length < total
+  // Invoices declined as outside the imported years before more years were
+  // imported: a retry judges them again (crm#2002).
+  const staleOutsideYears = resourceCounts.reduce((n, c) => n + Number(c.outside_years_stale ?? 0), 0)
   // Nothing changed: every record failed again the same way, and none for a
-  // passing reason. Another retry would only repeat this outcome. The listed
-  // records decide first; the rest are read only when those all repeated.
-  const unchanged = acceptable && total > 0
+  // passing reason, and no declined invoice has years to be judged against
+  // anew. Another retry would only repeat this outcome. The listed records
+  // decide first; the rest are read only when those all repeated.
+  const unchanged = acceptable && total > 0 && staleOutsideYears === 0
     && issues.every(issue => issue.repeated && !isTransientIssueCode(issue.error_code))
     && (!truncated || await everyRecordRepeated(ctx, job.id))
-  return { job, counts: resourceCounts, issues, review: { total, acceptable, truncated, unchanged } }
+  return { job, counts: resourceCounts, issues, review: { total, acceptable, truncated, unchanged, staleOutsideYears } }
 }
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [

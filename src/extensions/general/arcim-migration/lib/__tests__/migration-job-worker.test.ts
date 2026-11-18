@@ -36,6 +36,7 @@ vi.mock('../entity-mapper', () => ({
 }))
 import { mapCustomer, mapSalesInvoice, mapSupplier, mapSupplierInvoice } from '../entity-mapper'
 import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
+import { SIE_IMPORT_IN_PLACE_JOB_FILTER } from '@/lib/bookkeeping/sie-import-in-place'
 
 function database(overrides: Partial<ProviderMigrationJob> = {}) {
   const job = { id: 'job', company_id: 'company', user_id: 'user', consent_id: 'consent', provider: 'visma',
@@ -49,10 +50,13 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
   // The company's customer register and the job's source map, read by the
   // customer match before each commit (crm#1294).
   // And the chart a supplier's proposed default account is read against (crm#1744).
+  // And the company's SIE imports, which the invoices are judged by (crm#2002).
   const register: { customers: Record<string, unknown>[]; suppliers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[];
-    chart_of_accounts: Record<string, unknown>[] } = {
-    customers: [], suppliers: [], migration_source_records: [], chart_of_accounts: [],
+    chart_of_accounts: Record<string, unknown>[]; sie_imports: Record<string, unknown>[] } = {
+    customers: [], suppliers: [], migration_source_records: [], chart_of_accounts: [], sie_imports: [],
   }
+  // The `or` filters asked, per table: the in-place reading of an SIE import.
+  const orFilters: { table: string; filter: string }[] = []
   // As the RPCs: a register's last page, or its refusal, moves the cursor to
   // the next register, and past the last one discovery ends.
   const nextRegister = () => {
@@ -119,6 +123,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     },
       update: (value: Record<string, unknown>) => { payload = value; return chain },
       in: (key: string, values: unknown[]) => { within[key] = values; return chain },
+      or: (filter: string) => { orFilters.push({ table, filter }); return chain },
       is: (key: string, value: unknown) => { if (value === null) empty.push(key); return chain }, lt: () => chain, range: () => chain,
       order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
       then: (resolve: (data: unknown) => void) => resolve(payload ? updated() : { data: table === 'migration_jobs'
@@ -127,7 +132,7 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
     return chain
   } } as unknown as SupabaseClient
-  return { supabase, rpc, job, rows, register, updates, failUpdates: () => { failUpdates = true } }
+  return { supabase, rpc, job, rows, register, updates, orFilters, failUpdates: () => { failUpdates = true } }
 }
 const customer = (id: number) => ({ id: `customer-${id}`, active: true, party: { name: `Customer ${id}` } })
 
@@ -966,6 +971,76 @@ describe('paid Fortnox supplier invoices on request (crm#1114)', () => {
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [{ id: cancelled.id, skip: 'cancelled' }],
     }))
+  })
+})
+
+/**
+ * crm#2002: a job created after the first fiscal years of a migration were
+ * imported judged every invoice by those years, so the invoices of the years
+ * imported next were declined as outside the imported years. An invoice is
+ * judged by the years imported when it is processed.
+ */
+describe('the fiscal years an invoice is judged by', () => {
+  const firstRun = { start: '2017-05-01', end: '2023-04-30' }
+  const year = (start: string, end: string, extra: Record<string, unknown> = {}) =>
+    ({ company_id: 'company', status: 'completed', fiscal_year_start: start, fiscal_year_end: end, ...extra })
+  function seed(db: ReturnType<typeof database>, issueDate: string, paid = false) {
+    const dto = { ...mapBokioToSalesInvoice({ id: `inv-${issueDate}`, invoiceDate: issueDate, customerRef: { id: 'customer', name: 'Customer' },
+      totalAmount: 125, totalTax: 25, lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100, taxRate: 25 }] }) }
+    dto.paymentStatus = { ...dto.paymentStatus, paid }
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    return dto
+  }
+  const committed = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => name === 'commit_provider_migration_records')
+    .flatMap(([, args]) => args.p_records as Record<string, unknown>[])
+
+  it('imports an invoice of a year imported after the job was created', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2018-04-30'), year('2022-05-01', '2023-04-30'), year('2025-05-01', '2026-04-30'))
+    const dto = seed(db, '2025-09-14')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrate).toHaveBeenCalledOnce()
+    expect(committed(db)).toEqual([expect.objectContaining({ id: dto.id, row: expect.any(Object) })])
+  })
+
+  it('still declines an invoice issued after the last year imported now, without fetching its detail', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2018-04-30'), year('2025-05-01', '2026-04-30'))
+    const dto = seed(db, '2026-05-02')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrate).not.toHaveBeenCalled()
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+  })
+
+  it('reads the company\'s imports in place, and only those', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    // Another company's year, and a year whose import failed, widen nothing.
+    db.register.sie_imports.push(year('2017-05-01', '2023-04-30'),
+      year('2025-05-01', '2026-04-30', { company_id: 'other' }), year('2025-05-01', '2026-04-30', { status: 'failed' }))
+    const dto = seed(db, '2025-09-14')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+    expect(db.orFilters).toEqual([{ table: 'sie_imports', filter: SIE_IMPORT_IN_PLACE_JOB_FILTER }])
+  })
+
+  it('falls back to the years stored on the job when no import has bounds to read', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2023-04-30'), year('2025-05-01', '2026-04-30', { fiscal_year_end: null }))
+    const dto = seed(db, '2025-09-14')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+  })
+
+  it('reads no imports for a batch without invoices', async () => {
+    const db = database({ phase: 'import', resources: ['customers'], fiscal_year_scope: firstRun })
+    db.rows.push({ id: 'c1', source_id: 'c1', resource: 'customers', state: 'pending', ...sealMigrationPayload(customer(1)) })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.orFilters).toEqual([])
   })
 })
 

@@ -8,8 +8,11 @@ export type MigrationJobPhase = 'discover' | 'import' | 'link' | 'reconcile' | '
 
 /**
  * Which invoices a job imports (migration_jobs.fiscal_year_scope). start and
- * end are the migrated fiscal years, which bound the paid invoices a job takes
- * in; a scope built from SIE imports without bounds has none.
+ * end are the migrated fiscal years as imported when the job was created; the
+ * worker judges each invoice by the years imported when it processes it, and
+ * these bounds stand in only when no import has bounds to read then
+ * (invoiceScopeNow, crm#2002). A scope built from SIE imports without bounds
+ * has none.
  * allSupplierInvoices is the member's request, for this sync, for Fortnox's
  * paid supplier invoices too (crm#1114): Fortnox is otherwise listed unpaid
  * only, and every other provider always lists the whole register.
@@ -76,6 +79,12 @@ export interface MigrationResourceCounts {
   credit_notes_unlinked: number
   /** Credit notes paired with the invoice they credit. Absent before migration 20260920190600. */
   credit_notes_linked?: number
+  /**
+   * Invoices declined as outside the imported fiscal years before an SIE
+   * import last completed: a retry judges them again against the years
+   * imported now. Absent before migration 20261118221500.
+   */
+  outside_years_stale?: number
 }
 
 /** The phase a record stopped in. 'import' means it is not in Accounted at all. */
@@ -148,6 +157,12 @@ export interface ProviderMigrationReview {
   unchanged: boolean
   /** Fewer records are listed than need attention. */
   truncated: boolean
+  /**
+   * Invoices declined as outside the imported fiscal years before more years
+   * were imported (outside_years_stale, every register): a retry judges them
+   * again, so it is offered even when every listed record repeated.
+   */
+  staleOutsideYears: number
 }
 
 export interface ProviderMigrationStatus {

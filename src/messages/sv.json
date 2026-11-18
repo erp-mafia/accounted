@@ -9651,6 +9651,7 @@
     "ext_arcim_review_lede": "Allt annat är importerat. Posterna nedan importerades inte eller kunde inte kopplas, med orsaken ovanför varje grupp. Godkänn importen för att avsluta: posterna finns kvar i listan och hos {provider}.",
     "ext_arcim_review_accept": "Godkänn importen",
     "ext_arcim_review_retry": "Försök igen med {count, plural, one {# post} other {# poster}}",
+    "ext_arcim_review_stale_outside_years": "{count, plural, one {# faktura hoppades} other {# fakturor hoppades}} över innan du importerade fler räkenskapsår. Försök igen tar med dem som nu hör till ett importerat år.",
     "ext_arcim_review_unchanged": "Ett nytt försök gav samma resultat: posterna behöver ändras hos {provider} eller i Accounted innan ett nytt försök kan lyckas.",
     "ext_arcim_review_unchanged_next": "Har du ändrat dem? Godkänn importen och kör en ny import. Det som redan finns importeras inte igen.",
     "ext_arcim_review_accept_failed": "Importen kunde inte godkännas. Inget har ändrats, försök igen.",

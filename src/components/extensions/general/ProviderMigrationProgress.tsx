@@ -108,6 +108,10 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         {status.counts.some(row => row.skipped > 0) && (
           <p className="text-sm text-muted-foreground">{t('ext_arcim_job_skipped_explanation')}</p>
         )}
+        {/* Years imported since: the retry judges those invoices again (crm#2002). */}
+        {review && review.staleOutsideYears > 0 && (
+          <p className="text-sm">{t('ext_arcim_review_stale_outside_years', { count: review.staleOutsideYears })}</p>
+        )}
       </>}
       {disconnected && <p className="text-sm text-muted-foreground">{t('ext_arcim_job_connection')}</p>}
       {review && status && <div className="space-y-6">
@@ -123,7 +127,7 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
         <div className="flex flex-col-reverse gap-3 border-t-hairline pt-6 sm:flex-row sm:justify-end">
           {!review.unchanged && <Button variant="outline" onClick={() => void act('retry')}
             loading={busy === 'retry'} disabled={busy !== null}>
-            {t('ext_arcim_review_retry', { count: review.total })}
+            {t('ext_arcim_review_retry', { count: review.total + review.staleOutsideYears })}
           </Button>}
           <Button onClick={() => void act('accept')} loading={busy === 'accept'} disabled={busy !== null}>
             {t('ext_arcim_review_accept')}

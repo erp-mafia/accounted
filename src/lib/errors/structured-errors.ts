@@ -6217,6 +6217,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'Customers, suppliers and invoices cannot be fetched: the provider did not return the company\'s organisation number, so Accounted cannot check that the registers belong to this company. The bookkeeping already imported is unaffected. Reconnect and try again; if the provider refuses again, contact support.',
   },
+  // create_provider_migration_job: the company's earlier register fetch is
+  // still open (running, or finished and waiting for its review), and one
+  // runs at a time. The migration workspace opens that fetch instead
+  // (crm#1660); every other caller shows this sentence (crm#2002).
+  MIGRATION_ALREADY_ACTIVE: {
+    httpStatus: 409,
+    message_sv:
+      'Kunder, leverantörer och fakturor hämtas en gång i taget, och en tidigare hämtning är inte avslutad. Bokföringen du har importerat finns kvar. Öppna den (Bokföring › Import och flytt › Hämta från annat system) och låt den bli klar. Väntar den på granskning tar Försök igen med fakturorna från år du har importerat sedan dess, och Godkänn importen avslutar den så att du kan köra importen igen.',
+    message_en:
+      'Customers, suppliers and invoices are fetched one at a time, and an earlier fetch has not finished. The bookkeeping you imported is kept. Open it (Bookkeeping › Import and migration › Import from another system) and let it finish. If it is waiting for review, Retry takes in the invoices of years you have imported since, and Accept the import finishes it so you can run the import again.',
+  },
   // /migrate no longer imports customers, suppliers or invoices: the
   // background import job does, reading every record in full (crm#1436).
   // Only a client from before that change sends them.

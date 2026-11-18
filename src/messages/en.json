@@ -9651,6 +9651,7 @@
     "ext_arcim_review_lede": "Everything else is imported. The records below were not imported or could not be linked, with the reason above each group. Accept the import to finish: the records stay in this list and in {provider}.",
     "ext_arcim_review_accept": "Accept the import",
     "ext_arcim_review_retry": "Retry {count, plural, one {# record} other {# records}}",
+    "ext_arcim_review_stale_outside_years": "{count, plural, one {# invoice was} other {# invoices were}} skipped before you imported more fiscal years. Retry takes in those that now belong to an imported year.",
     "ext_arcim_review_unchanged": "A new attempt gave the same result: the records need to change in {provider} or in Accounted before another attempt can succeed.",
     "ext_arcim_review_unchanged_next": "Changed them already? Accept the import and run a new import. What is already here is not imported again.",
     "ext_arcim_review_accept_failed": "The import could not be accepted. Nothing has changed, try again.",

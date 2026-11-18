@@ -160,6 +160,21 @@ describe('source identity before the job is created', () => {
     expect(after).not.toHaveBeenCalled()
   })
 
+  // crm#2002: the onboarding import read "Importen kunde inte fortsätta" when
+  // an earlier register fetch still waited for its review.
+  it('says why a new fetch waits for the open one, and where to finish it', async () => {
+    const { ctx, mockResult } = context(); mockResult(imports)
+    serviceRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'MIGRATION_ALREADY_ACTIVE' } })
+    const response = await route('POST')(request({ consentId: id, resources: ['salesInvoices'] }), ctx)
+    expect(response.status).toBe(409)
+    const { error } = await response.json()
+    expect(error.code).toBe('MIGRATION_ALREADY_ACTIVE')
+    expect(error.message).toBe(getErrorEntry('MIGRATION_ALREADY_ACTIVE')!.message_sv)
+    expect(error.message).toContain('Import och flytt')
+    expect(error.message).not.toContain('kunde inte fortsätta')
+    expect(after).not.toHaveBeenCalled()
+  })
+
   it('fills the identity of a renewed consent before resuming a job with it', async () => {
     const { ctx, mockResult } = context()
     mockResult({ data: { id, state: 'needs_attention', resources: ['customers'], fiscal_year_scope: null } })

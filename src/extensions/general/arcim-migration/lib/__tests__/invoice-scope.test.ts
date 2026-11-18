@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { MigrationJobScope } from '@/lib/providers/migration-contract'
-import { fiscalYearScopeFromImports, invoiceWithinScope } from '../invoice-scope'
+import { fiscalYearScopeFromImports, invoiceScopeNow, invoiceWithinScope } from '../invoice-scope'
 
 /**
  * #2469: the migration used to pay a detail fetch for every invoice in the
@@ -113,5 +113,38 @@ describe('fiscalYearScopeFromImports', () => {
       { fiscal_year_start: '2026-01-01', fiscal_year_end: '2026-12-31' },
       { fiscal_year_start: null, fiscal_year_end: null },
     ])).toBeNull()
+  })
+})
+
+/**
+ * crm#2002: the years a job was created with are a snapshot. A company that
+ * imported the rest of its years after the first run had every invoice of
+ * those years declined as outside the imported years.
+ */
+describe('invoiceScopeNow', () => {
+  const created = { start: '2017-05-01', end: '2023-04-30' }
+  const now = { start: '2017-05-01', end: '2027-04-30' }
+
+  it('judges by the years imported now, not the years the job was created with', () => {
+    const scope = invoiceScopeNow(created, now)
+    expect(scope).toEqual(now)
+    expect(invoiceWithinScope(dto('2025-09-14', true), created)).toBe(false)
+    expect(invoiceWithinScope(dto('2025-09-14', true), scope)).toBe(true)
+    expect(invoiceWithinScope(dto('2026-11-07', false), scope)).toBe(true)
+  })
+
+  it('narrows too: a year no longer imported no longer counts', () => {
+    expect(invoiceScopeNow(now, created)).toEqual(created)
+  })
+
+  it('keeps the member\'s request for paid supplier invoices (crm#1114)', () => {
+    const stored: MigrationJobScope = { ...created, allSupplierInvoices: true }
+    expect(invoiceScopeNow(stored, now)).toEqual({ ...now, allSupplierInvoices: true })
+  })
+
+  it('stands in the stored years only when no import has bounds to read', () => {
+    expect(invoiceScopeNow(created, null)).toEqual(created)
+    expect(invoiceScopeNow(null, null)).toBeNull()
+    expect(invoiceScopeNow(undefined, now)).toEqual(now)
   })
 })

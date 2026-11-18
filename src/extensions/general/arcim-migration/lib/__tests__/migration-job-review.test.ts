@@ -104,7 +104,7 @@ describe('the review a finished import stops for', () => {
     enqueue(counts(1))
     const status = await readMigrationStatus(ctx, jobId)
     expect(status?.issues).toEqual([])
-    expect(status?.review).toEqual({ total: 1, acceptable: false, unchanged: false, truncated: false })
+    expect(status?.review).toEqual({ total: 1, acceptable: false, unchanged: false, truncated: false, staleOutsideYears: 0 })
     expect(calls.some(c => c.table === 'migration_job_chunks')).toBe(false)
   })
   it('names each record from its own snapshot and says whether it reached Accounted', async () => {
@@ -129,8 +129,10 @@ describe('the review a finished import stops for', () => {
         // An unreadable snapshot falls back to the receipt the import wrote.
         label: { number: '1003', date: '2026-03-02', amount: 11200, currency: 'SEK', party: null } }),
     ])
-    expect(status?.review).toEqual({ total: 2, acceptable: true, unchanged: false, truncated: false })
+    expect(status?.review).toEqual({ total: 2, acceptable: true, unchanged: false, truncated: false, staleOutsideYears: 0 })
   })
+  // The counts here carry no outside_years_stale, as before migration
+  // 20261118221500: read as none.
   it('says a retry changed nothing once every record failed again the same way', async () => {
     const { ctx, enqueue } = context()
     enqueue({ data: job() })
@@ -141,6 +143,23 @@ describe('the review a finished import stops for', () => {
     const status = await readMigrationStatus(ctx, jobId)
     expect(status?.issues.every(issue => issue.repeated)).toBe(true)
     expect(status?.review.unchanged).toBe(true)
+  })
+  // crm#2002: the remaining fiscal years were imported while the job waited
+  // for its review; its invoices of those years had been declined as outside
+  // the imported years, and the review stopped offering the retry.
+  it('keeps the retry, and says what it judges again, once years were imported after invoices were declined', async () => {
+    const { ctx, enqueue } = context()
+    enqueue({ data: job() })
+    enqueue({ data: [
+      { ...counts(2).data[0], resource: 'salesInvoices', skipped: 540, outside_years_stale: 532 },
+      { ...counts(0).data[0], skipped: 3, outside_years_stale: 3 },
+    ] })
+    enqueue({ data: ['a', 'b'].map(id => ({ id, resource: 'salesInvoices', source_id: id, error_code: 'MIGRATION_REGISTRATION_REVIEW',
+      error_phase: 'link', target_id: `invoice-${id}`, receipt: { previous_error_code: 'MIGRATION_REGISTRATION_REVIEW' } })) })
+    enqueue({ data: [] })
+    const status = await readMigrationStatus(ctx, jobId)
+    expect(status?.issues.every(issue => issue.repeated)).toBe(true)
+    expect(status?.review).toEqual({ total: 2, acceptable: true, unchanged: false, truncated: false, staleOutsideYears: 535 })
   })
   it.each([
     ['a record failed differently this time', 'MIGRATION_INVOICE_AMBIGUOUS', 'MIGRATION_INVOICE_NUMBER_TAKEN'],
@@ -192,7 +211,7 @@ describe('the review a finished import stops for', () => {
 
   it('stops offering the retry for a long review too, once every record failed again the same way', async () => {
     const { status, reads, mock } = await longReview(repeated('a'), [repeated('a'), repeated('b'), repeated('c', '23502')])
-    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: true, truncated: true })
+    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: true, truncated: true, staleOutsideYears: 0 })
     // The unlisted records are read for their codes only, in this company's job.
     expect(reads).toEqual(['id,resource,source_id,error_code,error_phase,target_id,receipt', 'id,payload', 'id,error_code,receipt'])
     expect(mock.findCalls('migration_job_chunks', 'eq').filter(args => args[0] === 'company_id')).toHaveLength(3)
@@ -204,11 +223,11 @@ describe('the review a finished import stops for', () => {
     ['failed for a passing reason', repeated('z', 'MIGRATION_DETAIL_RETRY')],
   ])('keeps the retry for a long review when an unlisted record %s', async (_label, unlisted) => {
     const { status } = await longReview(repeated('a'), [repeated('a'), unlisted])
-    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true })
+    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true, staleOutsideYears: 0 })
   })
   it('does not read the unlisted records when a listed one already keeps the retry', async () => {
     const { status, reads } = await longReview(repeated('a', '23502', null), [])
-    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true })
+    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true, staleOutsideYears: 0 })
     expect(reads).toHaveLength(2)
   })
 })

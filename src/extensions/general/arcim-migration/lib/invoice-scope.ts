@@ -23,9 +23,15 @@
  * balance carries it: it would land as an unbooked invoice the ledger knows
  * nothing about, and it would hold its number against the user who left
  * that year out to start it over in Accounted (crm#1660).
+ *
+ * The years are the ones imported when the invoice is judged, not when its
+ * job was created: a year imported while the job runs, or after it stopped
+ * for review, counts for every invoice judged after it (invoiceScopeNow), and
+ * a retry judges again the invoices declined before it (crm#2002).
  */
 
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
+import type { MigrationJobScope } from '@/lib/providers/migration-contract'
 
 /** Inclusive ISO date bounds (YYYY-MM-DD) of the migrated fiscal years. */
 export interface FiscalYearScope {
@@ -88,4 +94,19 @@ export function fiscalYearScopeFromImports(
     if (end === null || row.fiscal_year_end > end) end = row.fiscal_year_end
   }
   return start && end ? { start, end } : null
+}
+
+/**
+ * The scope a job's invoices are judged by now: the bounds of the fiscal
+ * years the company has imported at this moment (`imported`, from
+ * fiscalYearScopeFromImports), with the job's own request for Fortnox's paid
+ * supplier invoices kept. The bounds stored on the job are the ones read when
+ * it was created; they stand in only when no import has bounds to read now.
+ */
+export function invoiceScopeNow(
+  stored: MigrationJobScope | null | undefined,
+  imported: FiscalYearScope | null,
+): MigrationJobScope | null {
+  if (!imported) return stored ?? null
+  return { ...stored, start: imported.start, end: imported.end }
 }

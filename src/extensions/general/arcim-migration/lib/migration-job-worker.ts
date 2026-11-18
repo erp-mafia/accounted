@@ -8,7 +8,7 @@ import { classifyProviderError, providerRefusalReason } from '@/lib/providers/wi
 import { readProviderRefusal } from '@/lib/providers/read-refusal'
 import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
 import { fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, hydrateSuppliers, type HydrationReport, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
-import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
+import { migrationRetrySeconds, type MigrationJobScope, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
@@ -17,9 +17,10 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex, proposedExpenseAccount } from './entity-mapper'
 import { bokioSupplierSource } from './bokio-supplier-source'
-import { invoiceWithinScope } from './invoice-scope'
+import { fiscalYearScopeFromImports, invoiceScopeNow, invoiceWithinScope } from './invoice-scope'
 import { adoptExistingCustomers, customerRegisterFacts, salesInvoicePartyFacts, type PartyCandidate } from './customer-match'
 import {
   buildCustomerMetadataEnrichment,
@@ -172,11 +173,12 @@ function activeAccountsOf(supabase: SupabaseClient, job: ProviderMigrationJob, d
 
 /**
  * `parties` collects the source customer behind each prepared record, keyed by
- * chunk id, for adoptExistingCustomers to match before the commit.
+ * chunk id, for adoptExistingCustomers to match before the commit. `scope` is
+ * the one an invoice is judged by (importedInvoiceScope).
  */
 async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
   connection: ResolvedConsent, deadline: number, parties: Map<string, PartyCandidate>,
-  activeAccounts: ActiveAccounts): Promise<Record<string, unknown>> {
+  activeAccounts: ActiveAccounts, scope: MigrationJobScope | null): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
@@ -206,7 +208,7 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   if (c.resource === 'supplierInvoices' && job.provider === 'fortnox' && listed.status === 'cancelled') {
     return { id: c.id, skip: 'cancelled' }
   }
-  if (!invoiceWithinScope(listed, job.fiscal_year_scope)) return { id: c.id, skip: 'outsideFiscalYears' }
+  if (!invoiceWithinScope(listed, scope)) return { id: c.id, skip: 'outsideFiscalYears' }
   const provider = job.provider as ProviderName
   const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
   if (budget < 1000) throw new Error('MIGRATION_DEADLINE')
@@ -542,12 +544,29 @@ export async function enrichCommittedParties(supabase: SupabaseClient, job: Prov
   if (filled > 0 || changed > 0) log.info('matched cards filled from the register', { jobId: job.id, filled, changed })
 }
 
+/**
+ * The scope this batch's invoices are judged by: the fiscal years the company
+ * has imported as they stand now (invoiceScopeNow). A job created after the
+ * first years of a migration judged every later invoice by those years, and
+ * declined the invoices of the years imported next as outside them (crm#2002).
+ * A failed read fails the batch for a retry, like any other read here.
+ */
+async function importedInvoiceScope(supabase: SupabaseClient, job: ProviderMigrationJob,
+  deadline: number): Promise<MigrationJobScope | null> {
+  const { data, error } = await withinMigrationDeadline(whereSieImportInPlace(supabase.from('sie_imports')
+    .select('fiscal_year_start,fiscal_year_end').eq('company_id', job.company_id)), deadline)
+  if (error) throw new Error(error.message)
+  return invoiceScopeNow(job.fiscal_year_scope, fiscalYearScopeFromImports(data))
+}
+
 async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[],
   connection: ResolvedConsent, deadline: number, onCommit: () => void): Promise<void> {
   let batch: Record<string, unknown>[] = []
   let bytes = 0
   const parties = new Map<string, PartyCandidate>()
   const activeAccounts = activeAccountsOf(supabase, job, deadline)
+  const scope = chunks.some(c => c.resource === 'salesInvoices' || c.resource === 'supplierInvoices')
+    ? await importedInvoiceScope(supabase, job, deadline) : job.fiscal_year_scope
   const partyChunkIds = new Map<string, PartyResource>()
   for (const c of chunks) if (c.resource === 'customers' || c.resource === 'suppliers') partyChunkIds.set(c.id, c.resource)
   const commit = async () => {
@@ -569,7 +588,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
     for (const c of chunks) {
       if (Date.now() >= deadline - 5000) break
       let record: Record<string, unknown>
-      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties, activeAccounts) }
+      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties, activeAccounts, scope) }
       catch (error) {
         const code = failureCode(error)
         if (['MIGRATION_DEADLINE', 'PROVIDER_AUTH_EXPIRED'].includes(code)
