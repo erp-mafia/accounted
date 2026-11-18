@@ -9,7 +9,8 @@ import type { InvoiceMatchPool } from '@/lib/invoices/invoice-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { amountToOre, contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds } from '@/lib/transactions/external-id'
+import { amountToOre, BANK_REDATE_MAX_DAYS, contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds } from '@/lib/transactions/external-id'
+import { addDaysIso } from '@/lib/dates/iso'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
@@ -73,6 +74,12 @@ export type BucketEntry = {
    * "the same feed" in isOtherBookingOfSameFeed.
    */
   bankConnectionId: string | null
+  /**
+   * The bank's own id for the stored row (provider_transaction_id): pairs a
+   * re-read of the same bank entry with it, also when the bank re-dated the
+   * entry (reconcileStableExternalIds).
+   */
+  providerTransactionId: string | null
 }
 
 /**
@@ -128,6 +135,7 @@ function addToBucket(
   currency: string | null,
   externalId: string | null,
   bankConnectionId: string | null,
+  providerTransactionId: string | null,
 ): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
@@ -139,6 +147,7 @@ function addToBucket(
     currency,
     externalId,
     bankConnectionId,
+    providerTransactionId,
   }
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
@@ -179,12 +188,17 @@ type StoredDedupRow = {
   bank_connection_id: string | null
   currency: string | null
   external_id: string | null
+  provider_transaction_id?: string | null
 }
 
 /**
  * Build the (date, öre)-bucketed maps of already-stored transactions in the
  * batch's date range: the stored-row universe every content-dedup layer works
- * against.
+ * against. The range reaches BANK_REDATE_MAX_DAYS beyond the batch on both
+ * sides, so the stored row of an entry the bank has since re-dated is there
+ * for the bank-id pairing (reconcileStableExternalIds). Rows on those extra
+ * days sit in buckets and id families no incoming row shares, which no other
+ * layer reads.
  *
  * Exported for the read-only duplicate PREVIEW
  * (`lib/transactions/dedup-preview.ts`): the preview must see exactly the
@@ -208,14 +222,23 @@ export async function buildExistingTransactionMaps(
   if (rawTransactions.length === 0) return { booked, unbookedImported, bucketKeyByExternalId }
 
   const dates = rawTransactions.map((t) => t.date).sort()
-  const dateFrom = dates[0]
-  const dateTo = dates[dates.length - 1]
+  const widen = (date: string, days: number) => {
+    try {
+      return addDaysIso(date, days)
+    } catch {
+      // Safe to ignore: a date that is no real date stays as sent, so the
+      // read filters on it exactly as before this window was widened.
+      return date
+    }
+  }
+  const dateFrom = widen(dates[0], -BANK_REDATE_MAX_DAYS)
+  const dateTo = widen(dates[dates.length - 1], BANK_REDATE_MAX_DAYS)
 
   try {
     const bookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
       supabase
         .from('transactions')
-        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id, provider_transaction_id')
         .eq('company_id', companyId)
         .not('journal_entry_id', 'is', null)
         .gte('date', dateFrom)
@@ -241,6 +264,7 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
         tx.bank_connection_id ?? null,
+        tx.provider_transaction_id?.trim() || null,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -257,7 +281,7 @@ export async function buildExistingTransactionMaps(
     const unbookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
       supabase
         .from('transactions')
-        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id, provider_transaction_id')
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
         .not('import_source', 'is', null)
@@ -284,6 +308,7 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
         tx.bank_connection_id ?? null,
+        tx.provider_transaction_id?.trim() || null,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -320,6 +345,8 @@ export type DedupRow = {
   currency?: string | null
   import_source?: string | null
   bank_connection_id?: string | null
+  /** The bank's own id for the row, when the feed sent one. */
+  provider_transaction_id?: string | null
 }
 
 /**
@@ -340,7 +367,13 @@ export function rekeyIncomingExternalIds<T extends DedupRow>(
   // stored row by description would turn a new booking into a Layer-1 hit.
   if (stableExternalIds) return rows
   const reconciledIds = reconcileStableExternalIds(
-    rows.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
+    rows.map((raw) => ({
+      external_id: raw.external_id,
+      description: normalizeImportedDescription(raw.description),
+      source: raw.import_source ?? null,
+      bankConnectionId: raw.bank_connection_id ?? null,
+      providerTransactionId: raw.provider_transaction_id ?? null,
+    })),
     [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
   )
   return rows.map((raw, i) =>

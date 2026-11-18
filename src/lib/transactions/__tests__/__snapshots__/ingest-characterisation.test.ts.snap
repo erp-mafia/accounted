@@ -19,8 +19,8 @@ exports[`ingestTransactions suggestion passes (characterisation) > a raw insert:
     },
   ],
   "reads": [
-    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-05"; lte date "2026-10-13"",
-    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-05"; lte date "2026-10-13"",
+    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-01"; lte date "2026-10-17"",
+    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-01"; lte date "2026-10-17"",
     "transactions: eq company_id "company-ch"; in external_id ["op-split-complete","op-swedbank","op-ocr","op-reread-ocr"]",
     "transactions: eq company_id "company-ch"; in external_id ["op-reread-ocr"]",
     "cash_accounts: eq company_id "company-ch"",
@@ -328,8 +328,8 @@ exports[`ingestTransactions suggestion passes (characterisation) > an Open Payme
     },
   ],
   "reads": [
-    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-05"; lte date "2026-10-14"",
-    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-05"; lte date "2026-10-14"",
+    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-01"; lte date "2026-10-18"",
+    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-01"; lte date "2026-10-18"",
     "supplier_invoices: eq company_id "company-ch"; in status ["registered","approved","overdue","partially_paid"]; gt remaining_amount 0",
     "transactions: eq company_id "company-ch"; in external_id ["op-split-complete","op-ocr","op-ocr-again","op-claimed-by-split","op-split-incomplete","op-rotrut-single","op-rotrut-set","op-rotrut-hint-fails","op-scorer-throws","op-split-throws","op-zero","op-e2e","op-swedbank","op-refused","op-refused-hint-fails","op-supplier-strong","op-supplier-strong-again","op-supplier-weak","op-supplier-ambiguous","op-split-supplier","op-claimed-supplier","op-after-settle","op-mapping","op-mapping-review","op-reread-ocr","op-reread-stands","op-reread-e2e","op-reread-supplier","op-reread-booked","op-reread-split","op-reread-same"]",
     "transactions: eq company_id "company-ch"; in external_id ["op-reread-ocr","op-reread-stands","op-reread-e2e","op-reread-supplier","op-reread-booked","op-reread-split","op-reread-same"]",
@@ -2153,8 +2153,8 @@ exports[`ingestTransactions suggestion passes (characterisation) > failures: an 
     },
   ],
   "reads": [
-    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-14"; lte date "2026-10-14"",
-    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-14"; lte date "2026-10-14"",
+    "transactions: eq company_id "company-ch"; not.is journal_entry_id null; gte date "2026-10-10"; lte date "2026-10-18"",
+    "transactions: eq company_id "company-ch"; is journal_entry_id null; not.is import_source null; neq import_source "manual"; neq import_source "mcp"; gte date "2026-10-10"; lte date "2026-10-18"",
     "supplier_invoices: eq company_id "company-ch"; in status ["registered","approved","overdue","partially_paid"]; gt remaining_amount 0",
     "transactions: eq company_id "company-ch"; in external_id ["fail-income-1","fail-income-2","fail-settle","fail-mapping"]",
     "cash_accounts: eq company_id "company-ch"",

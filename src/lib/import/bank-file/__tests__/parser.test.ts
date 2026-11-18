@@ -1744,6 +1744,20 @@ describe('parseBankFile: camt.053 as other systems save it (crm#1160)', () => {
     expect(parse().stats.total_income).toBe(4500)
   })
 
+  it('dates a DtTm with an offset on the Swedish day it fell on, a local DtTm as written', () => {
+    const entry = (bookingDate: string) => `<?xml version="1.0"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt>
+<Ntry><NtryRef>1</NtryRef><Amt Ccy="SEK">99.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><DtTm>${bookingDate}</DtTm></BookgDt></Ntry>
+</Stmt></BkToCstmrStmt></Document>`
+    const dateOf = (bookingDate: string) => parseBankFile(entry(bookingDate), 'statement.xml').transactions[0]?.date
+    // 00:01 on 1 September in Stockholm, written as UTC.
+    expect(dateOf('2026-08-31T22:01:00Z')).toBe('2026-09-01')
+    expect(dateOf('2026-09-01T00:01:00+02:00')).toBe('2026-09-01')
+    expect(dateOf('2026-09-01T00:01:00')).toBe('2026-09-01')
+    // Winter: 00:30 on 16 November in Stockholm.
+    expect(dateOf('2026-11-15T23:30:00Z')).toBe('2026-11-16')
+  })
+
   it('gives each entry a stable external id from its bank reference', () => {
     const [ocr] = parse().transactions
     expect(generateExternalId(ocr, 'camt053', 0)).toBe('camt053_2026-01-02_ACSR-0001')

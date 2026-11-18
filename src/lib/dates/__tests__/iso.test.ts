@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   addDaysIso,
   addMonthsIso,
+  bankBookingDay,
   daysBetweenIso,
   endOfDayIsoStockholm,
   hasEnded,
@@ -44,6 +45,52 @@ describe('todayIsoStockholm', () => {
 
   it('defaults to now and returns a YYYY-MM-DD string', () => {
     expect(todayIsoStockholm()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+describe('bankBookingDay', () => {
+  it('keeps a date-only value as the bank wrote it', () => {
+    expect(bankBookingDay('2026-09-01')).toBe('2026-09-01')
+    expect(bankBookingDay(' 2026-08-31 ')).toBe('2026-08-31')
+  })
+
+  it('keeps a date with a zone, and a local date-time, on the day written', () => {
+    expect(bankBookingDay('2026-01-05+01:00')).toBe('2026-01-05')
+    expect(bankBookingDay('2026-01-05Z')).toBe('2026-01-05')
+    expect(bankBookingDay('2026-09-01T00:01:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-09-01 00:01')).toBe('2026-09-01')
+  })
+
+  it('dates 00:01 on 1 September in Stockholm on 1 September, however the instant is written (summer, UTC+2)', () => {
+    expect(bankBookingDay('2026-08-31T22:01:00Z')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T22:01:00.000+00:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-09-01T00:01:00+02:00')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T23:01:00+0100')).toBe('2026-09-01')
+    expect(bankBookingDay('2026-08-31T22:01+00')).toBe('2026-09-01')
+    // One minute before midnight in Stockholm is still the last of August.
+    expect(bankBookingDay('2026-08-31T21:59:00Z')).toBe('2026-08-31')
+  })
+
+  it('moves to the next day one hour later in winter (UTC+1)', () => {
+    expect(bankBookingDay('2026-11-15T23:01:00Z')).toBe('2026-11-16')
+    expect(bankBookingDay('2026-11-15T22:59:00Z')).toBe('2026-11-15')
+    expect(bankBookingDay('2026-11-16T00:01:00+01:00')).toBe('2026-11-16')
+    expect(bankBookingDay('2026-01-02T00:00:00.000+01:00')).toBe('2026-01-02')
+  })
+
+  it('reads the offset in force on the day clocks change', () => {
+    // 01:30 CET on 29 March, half an hour before summer time.
+    expect(bankBookingDay('2026-03-29T00:30:00Z')).toBe('2026-03-29')
+    // 00:30 CEST on 25 October, before the clocks go back.
+    expect(bankBookingDay('2026-10-24T22:30:00Z')).toBe('2026-10-25')
+  })
+
+  it('is null for a value that does not start with a real date', () => {
+    expect(bankBookingDay(null)).toBeNull()
+    expect(bankBookingDay(undefined)).toBeNull()
+    expect(bankBookingDay('')).toBeNull()
+    expect(bankBookingDay('31/08/2026')).toBeNull()
+    expect(bankBookingDay('2026-02-31')).toBeNull()
   })
 })
 

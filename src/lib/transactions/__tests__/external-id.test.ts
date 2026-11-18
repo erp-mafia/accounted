@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   amountToOre,
+  BANK_REDATE_MAX_DAYS,
   bankFeedIbanOf,
   buildStableExternalIds,
   contentBucketKey,
@@ -278,6 +279,137 @@ describe('reconcileStableExternalIds', () => {
   })
 })
 
+describe('reconcileStableExternalIds: the bank\'s own id (crm#2024)', () => {
+  const SCOPE = 'eb_SE0000000000000000000001'
+  const feedId = (date: string, ore: number, n: number) => `${SCOPE}_${date}_${ore}_${n}`
+  const ref = (ptid: string | null, over: Record<string, unknown> = {}) => ({
+    source: 'open_payments',
+    bankConnectionId: 'bc-1',
+    providerTransactionId: ptid,
+    ...over,
+  })
+  const incomingRow = (date: string, ore: number, n: number, ptid: string | null, description = 'Fee', over: Record<string, unknown> = {}) =>
+    ({ external_id: feedId(date, ore, n), description, ...ref(ptid, over) })
+  const storedRow = (date: string, ore: number, n: number, ptid: string | null, desc = 'fee', over: Record<string, unknown> = {}) =>
+    ({ externalId: feedId(date, ore, n), desc, ...ref(ptid, over) })
+
+  // The observed shape: three fees and a payment stored on the 15th; a later
+  // read dates one fee and the payment on the 16th under the same bank ids,
+  // next to a new fee of the 16th.
+  const storedDay15 = [
+    storedRow('2026-11-15', -99, 0, 'fee-1'),
+    storedRow('2026-11-15', -125000, 0, 'pay-1', 'överföring'),
+    storedRow('2026-11-15', -99, 1, 'fee-2'),
+    storedRow('2026-11-15', -99, 2, 'fee-3'),
+  ]
+  const reread = [
+    incomingRow('2026-11-16', -99, 0, 'fee-4'),
+    incomingRow('2026-11-16', -99, 1, 'fee-1'),
+    incomingRow('2026-11-16', -125000, 0, 'pay-1', 'Överföring'),
+    incomingRow('2026-11-15', -99, 0, 'fee-2'),
+    incomingRow('2026-11-15', -99, 1, 'fee-3'),
+  ]
+
+  it('pairs an entry the bank re-dated by a day with its stored row, and each same-day fee with its own', () => {
+    expect(reconcileStableExternalIds(reread, storedDay15)).toEqual([
+      feedId('2026-11-16', -99, 0), // new
+      feedId('2026-11-15', -99, 0), // fee-1, stored on the 15th
+      feedId('2026-11-15', -125000, 0), // pay-1, stored on the 15th
+      feedId('2026-11-15', -99, 1), // fee-2
+      feedId('2026-11-15', -99, 2), // fee-3
+    ])
+  })
+
+  it('without bank ids, keeps the occurrence pairing it had (the re-dated rows stay new)', () => {
+    const bare = reread.map((row) => ({ ...row, providerTransactionId: null }))
+    expect(reconcileStableExternalIds(bare, storedDay15)).toEqual([
+      feedId('2026-11-16', -99, 0),
+      feedId('2026-11-16', -99, 1),
+      feedId('2026-11-16', -125000, 0),
+      feedId('2026-11-15', -99, 0),
+      feedId('2026-11-15', -99, 1),
+    ])
+  })
+
+  it('pairs same-day rows by bank id before the occurrence index', () => {
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -99, 0, 'fee-2'), incomingRow('2026-11-15', -99, 1, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1'), storedRow('2026-11-15', -99, 1, 'fee-2')],
+    )).toEqual([feedId('2026-11-15', -99, 1), feedId('2026-11-15', -99, 0)])
+  })
+
+  it('never takes a stored row across days while a row of its own day could still be it', () => {
+    // A bank that hands its ids out by position: the stored fee comes back on
+    // its own day under a new id, and a new fee of the 16th takes the old id.
+    const ids = reconcileStableExternalIds(
+      [incomingRow('2026-11-16', -99, 0, 'id-1'), incomingRow('2026-11-15', -99, 0, 'id-2')],
+      [storedRow('2026-11-15', -99, 0, 'id-1')],
+    )
+    expect(ids).toEqual([feedId('2026-11-16', -99, 0), feedId('2026-11-15', -99, 0)])
+  })
+
+  it('leaves the row new when the read does not cover the stored row\'s day', () => {
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-16', -99, 0)])
+  })
+
+  it('leaves the row new past BANK_REDATE_MAX_DAYS, when the text changed, or under another amount', () => {
+    const far = `2026-11-${String(15 + BANK_REDATE_MAX_DAYS + 1)}`
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow(far, -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId(far, -99, 0)])
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow('2026-11-16', -99, 0, 'fee-1', 'Ränta')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId('2026-11-16', -99, 0)])
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow('2026-11-16', -98, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId('2026-11-16', -98, 0)])
+  })
+
+  it('trusts no bank id the read repeats or two stored rows share', () => {
+    const covering = incomingRow('2026-11-15', -1, 0, 'other')
+    expect(reconcileStableExternalIds(
+      [covering, incomingRow('2026-11-16', -99, 0, 'fee-1'), incomingRow('2026-11-16', -99, 1, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([covering.external_id, feedId('2026-11-16', -99, 0), feedId('2026-11-16', -99, 1)])
+    expect(reconcileStableExternalIds(
+      [covering, incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1'), storedRow('2026-11-14', -99, 0, 'fee-1')],
+    )).toEqual([covering.external_id, feedId('2026-11-16', -99, 0)])
+  })
+
+  it('pairs only within one feed, one connection and one account scope', () => {
+    const covering = incomingRow('2026-11-15', -1, 0, 'other')
+    const stored = [storedRow('2026-11-15', -99, 0, 'fee-1')]
+    for (const over of [{ bankConnectionId: 'bc-2' }, { source: 'enable_banking' }, { source: 'csv_lunar' }]) {
+      expect(reconcileStableExternalIds([covering, incomingRow('2026-11-16', -99, 0, 'fee-1', 'Fee', over)], stored))
+        .toEqual([covering.external_id, feedId('2026-11-16', -99, 0)])
+    }
+    expect(reconcileStableExternalIds(
+      [covering, { ...incomingRow('2026-11-16', -99, 0, 'fee-1'), external_id: 'eb_SE99_2026-11-16_-99_0' }],
+      stored,
+    )).toEqual([covering.external_id, 'eb_SE99_2026-11-16_-99_0'])
+  })
+
+  it('keeps one row per entry when the stored day also gets a new look-alike', () => {
+    // fee-1 moved to the 16th and a fee with a bank id never seen lands on
+    // the 15th: from the ids alone it could be fee-1 under a new id. The move
+    // is refused; the 15th's row stands for the stored one by its index and
+    // the 16th's is stored: two rows for two entries, on the days the bank
+    // now states, and nothing swallowed.
+    const ids = reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -99, 0, 'fee-9'), incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )
+    expect(ids).toEqual([feedId('2026-11-15', -99, 0), feedId('2026-11-16', -99, 0)])
+  })
+})
+
 describe('dropRepeatedBankRows (crm#1295)', () => {
   type Row = { ptid?: string | null; date: string; amount: number | string; description: string }
   const swish = (ptid: string | null, description = `Swish ${ptid}`, amount: number | string = 250): Row =>
@@ -451,6 +583,17 @@ describe('idsProveDistinctBookings: bank feeds and bank files (crm#1312)', () =>
       feed('eb_SE00_2026-10-14_39500_7', { provider_transaction_id: 'ref-a' }),
       feed('eb_SE00_2026-10-14_39500_2', { provider_transaction_id: ' ref-a ' }),
     )).toBe(false)
+  })
+
+  it('proves nothing for two rows under one bank id, whatever their dates (a re-dated entry, crm#2024)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-11-15_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-1' }),
+      feed('eb_SE00_2026-11-16_-125000_0', { import_source: 'open_payments', provider_transaction_id: ' pay-1' }),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-11-15_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-1' }),
+      feed('eb_SE00_2026-11-16_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-2' }),
+    )).toBe(true)
   })
 
   it('proves nothing for same-day rows of one amount without two bank ids', () => {

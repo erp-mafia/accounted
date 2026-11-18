@@ -951,6 +951,11 @@ describe('convertTransaction', () => {
     }
   }
 
+  it('dates a booking or value time with an offset on the Swedish day it fell on', () => {
+    const out = convertTransaction(makeTx({ booking_date: '2026-08-31T22:01:00Z', value_date: '2026-09-01T00:01:00+02:00' }), 'SEK')
+    expect(out).toMatchObject({ date: '2026-09-01', booking_date: '2026-09-01', value_date: '2026-09-01' })
+  })
+
   // Required<Transaction>: a field added to the type must be added here, and
   // the toEqual below then says whether convertTransaction keeps it.
   it('keeps every field of a full transaction that the ledger stores', () => {

@@ -20,6 +20,7 @@ import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { bankBookingDay } from '@/lib/dates/iso'
 import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
 import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
 import { syncOpenPaymentsAccount } from '@/lib/bank-feed/sync'
@@ -272,8 +273,9 @@ function isNotBookedStatus(status: string | undefined): boolean {
 const countOtherCurrency = (byCurrency: Record<string, number> | undefined) =>
   Object.values(byCurrency ?? {}).reduce((sum, rows) => sum + rows, 0)
 
+/** A date the bank sent, as the Swedish day (bankBookingDay); a value that is no date passes as sent. */
 const trimmedDate = (value: string | null | undefined) =>
-  typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+  typeof value === 'string' && value.trim() !== '' ? bankBookingDay(value) ?? value.trim() : null
 
 /**
  * The day a fetched entry is booked on, or null when it is not booked (and

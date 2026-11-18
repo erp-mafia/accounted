@@ -26,6 +26,7 @@ import type { BankFileAccountIdentity, BankFileFormat, BankFileParseResult, Pars
 import { prepareContent } from '../../shared/encoding'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { parseSwedishAmount } from '@/lib/money'
+import { bankBookingDay } from '@/lib/dates/iso'
 import { accountIdentity, sharedAccountIdentity } from '../account-identity'
 
 /** Markers of a camt.053 statement: its namespace, root element or long name. */
@@ -255,13 +256,12 @@ function stripNamespacePrefixes(xml: string): string {
 }
 
 /**
- * The calendar date of <BookgDt> or <ValDt>: an ISODate in <Dt>, or the date
- * part of an ISODateTime in <DtTm>. The date is read as written; banks state
- * booking times in local time.
+ * The calendar date of <BookgDt> or <ValDt>: an ISODate in <Dt>, or the
+ * ISODateTime in <DtTm>, as the Swedish day (bankBookingDay). A local time is
+ * read as written; a time with an offset is the day it fell on in Stockholm.
  */
 function extractEntryDate(entry: string, parentTag: string): string | null {
-  const raw = extractNestedText(entry, parentTag, 'Dt') || extractNestedText(entry, parentTag, 'DtTm')
-  return raw?.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null
+  return bankBookingDay(extractNestedText(entry, parentTag, 'Dt') || extractNestedText(entry, parentTag, 'DtTm'))
 }
 
 const NAMED_XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }

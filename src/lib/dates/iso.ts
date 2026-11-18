@@ -11,6 +11,8 @@
  * hand-written forms of one. In SQL the same day is public.stockholm_today().
  */
 
+import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
+
 /** Add `days` to a `YYYY-MM-DD` string in pure UTC and return `YYYY-MM-DD`. */
 export function addDaysIso(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z')
@@ -70,6 +72,40 @@ const STOCKHOLM_DATE = new Intl.DateTimeFormat('sv-SE', {
  */
 export function todayIsoStockholm(now: Date = new Date()): string {
   return STOCKHOLM_DATE.format(now)
+}
+
+/** A real `YYYY-MM-DD` calendar date (2026-02-31 is not one). */
+function isCalendarDay(iso: string): boolean {
+  if (!ISO_DATE_RE.test(iso)) return false
+  const d = new Date(`${iso}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso
+}
+
+/** `[T ]hh:mm[:ss[.fff]]` followed by an offset: `Z`, `+hh`, `+hh:mm` or `+hhmm`. */
+const TIME_WITH_OFFSET = /^[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)$/i
+
+/**
+ * The Swedish calendar day a bank stated for a booking, as YYYY-MM-DD, or
+ * null when the value does not start with a real date. A date is the day as
+ * written, with or without a zone (`2026-01-05`, `2026-01-05+01:00`). A
+ * date-time without an offset is the bank's own local time, so its date is
+ * the day. A date-time with an offset is an instant, and the day is the one
+ * it fell on in Stockholm: `2026-08-31T22:01:00Z` is 00:01 on 2026-09-01.
+ * Never the UTC date of an instant, and never the process zone's. Every
+ * reader of a bank's booking or value date goes through this rule.
+ */
+export function bankBookingDay(value: string | null | undefined): string | null {
+  const text = (value ?? '').trim()
+  const day = text.slice(0, 10)
+  if (!isCalendarDay(day)) return null
+  const time = TIME_WITH_OFFSET.exec(text.slice(10))
+  if (!time) return day
+  const [, hours, minutes, seconds, zone] = time
+  const offset = zone.toUpperCase() === 'Z'
+    ? 'Z'
+    : `${zone.slice(0, 3)}:${zone.length > 3 ? zone.slice(-2) : '00'}`
+  const at = Date.parse(`${day}T${hours}:${minutes}:${seconds ?? '00'}${offset}`)
+  return Number.isNaN(at) ? day : todayIsoStockholm(new Date(at))
 }
 
 /** This year and month (1-12) on the Swedish calendar. */

@@ -1251,6 +1251,12 @@ describe('bookedDateOf (crm#1767)', () => {
     expect(bookedDateOf({ status: 'BOOK' })).toBeNull()
   })
 
+  it('dates a booking time with an offset on the Swedish day it fell on', () => {
+    expect(bookedDateOf({ booking_date: '2026-08-31T22:01:00Z' })).toBe('2026-09-01')
+    expect(bookedDateOf({ booking_date: '2026-11-16T00:01:00+01:00' })).toBe('2026-11-16')
+    expect(bookedDateOf({ status: 'BOOK', value_date: '2026-11-15T23:30:00Z' })).toBe('2026-11-16')
+  })
+
   it('keeps an undated entry without that status out', () => {
     expect(bookedDateOf({ value_date: '2026-11-04' })).toBeNull()
     expect(bookedDateOf({ status: 'OTHR', transaction_date: '2026-11-03' })).toBeNull()

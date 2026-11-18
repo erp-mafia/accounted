@@ -23,7 +23,7 @@ import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
 import { isPsuHeaderRefusal, type PsuHeaders } from './psu-headers'
 import { usableCurrency } from './account-currency'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { bankBookingDay, todayIsoStockholm } from '@/lib/dates/iso'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -1485,10 +1485,15 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
   const proprietaryBankTransactionCode =
     normalizeBankTransactionCode(tx.proprietary_bank_transaction_code) ?? undefined
 
+  // The bank's dates as Swedish days (bankBookingDay): a date as written, a
+  // date-time with an offset on the day it fell on in Stockholm.
+  const bookingDate = bankBookingDay(tx.booking_date)
+  const valueDate = bankBookingDay(tx.value_date)
+
   return {
     id: tx.entry_reference || tx.transaction_id || `${tx.booking_date}_${rawAmount}`,
-    date: tx.value_date || tx.booking_date || todayIsoStockholm(),
-    booking_date: tx.booking_date || tx.value_date || todayIsoStockholm(),
+    date: valueDate || bookingDate || todayIsoStockholm(),
+    booking_date: bookingDate || valueDate || todayIsoStockholm(),
     amount,
     currency: tx.transaction_amount.currency || accountCurrency,
     // Fallback chain: bank's payment message → counterparty name → a Swedish
@@ -1507,7 +1512,7 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
                  FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
     reference: tx.reference_number?.trim() || undefined,
-    value_date: tx.value_date || undefined,
+    value_date: valueDate || undefined,
     provider_transaction_id: tx.entry_reference || tx.transaction_id || undefined,
     counterparty_account: isCredit
       ? pickAccountIdentifier(tx.debtor_account, tx.debtor_account_additional_identification)
