@@ -244,6 +244,28 @@ export function documentOAuthProblemFromReason(
   }
 }
 
+/**
+ * What the underlag panel shows when the Fortnox login of a document
+ * reconnect came back refused in the popup: the problem that started the
+ * reconnect, now saying why the login failed (a missing licence, a cancelled
+ * login, a state the callback rejected). The panel replayed that problem
+ * with its own prompt and dropped the reason, so a customer whose Fortnox
+ * lacks the licence for the files read "godkänn åtkomsten till Arkiv och
+ * Koppla fil" after every attempt (Fortnox answered error_missing_license
+ * twice in prod, 2026-11-16 and 11-17). The problem stays the prior one: the
+ * connection is as it was, so its heading, its reference and the way forward
+ * (log in again) still hold. A full-page return has no prior problem and
+ * reads the reason alone (documentOAuthProblemFromReason).
+ */
+export function documentReconnectRefused(
+  action: 'discover' | 'import',
+  reason: string,
+  prior: ArcimDocumentImportProblem | null,
+): Extract<ArcimDocumentImportAction, { type: 'discovery-failed' | 'import-failed' }> {
+  const problem = { ...(prior ?? { code: null, requestId: null, reconnectRequired: true }), message: reason }
+  return action === 'discover' ? { type: 'discovery-failed', problem } : { type: 'import-failed', problem }
+}
+
 export type ArcimDocumentImportPhase =
   | 'hidden'
   | 'discovering'

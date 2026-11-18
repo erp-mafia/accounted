@@ -161,13 +161,40 @@ import {
 
 const log = createLogger('extensions/arcim-migration/import-documents')
 
+/**
+ * Fortnox refused the voucher files. Thrown for any refusal
+ * (isFortnoxPermissionError): a token without the archive/connectfile scopes,
+ * but also a company without the licence or a Fortnox user without the right,
+ * which a reconnect does not change. `refusal` keeps what Fortnox answered,
+ * for the log line of whoever catches it: without it nothing recorded which
+ * of the three it was.
+ */
 export class FortnoxDocumentScopesRequiredError extends Error {
   readonly code = 'PROVIDER_DOCUMENT_SCOPES_REQUIRED'
+  readonly refusal: FortnoxDocumentRefusal | undefined
 
-  constructor() {
-    super('Fortnox consent lacks archive/connectfile scope: reconnect required')
+  constructor(cause?: unknown) {
+    super('Fortnox consent lacks archive/connectfile scope: reconnect required', { cause })
     this.name = 'FortnoxDocumentScopesRequiredError'
+    this.refusal =
+      cause instanceof FortnoxApiError
+        ? {
+            providerStatus: cause.statusCode,
+            providerCode: fortnoxApiErrorCode(cause) ?? null,
+            providerMessage: fortnoxErrorMessage(cause),
+            reason: providerRefusalReason(cause),
+          }
+        : undefined
   }
+}
+
+/** Fortnox's answer behind a FortnoxDocumentScopesRequiredError, as the log keeps it. */
+export interface FortnoxDocumentRefusal {
+  providerStatus: number
+  providerCode: string | null
+  providerMessage: string | null
+  /** 'license' when Fortnox names a missing licence, else 'permission'. */
+  reason: ProviderRefusalReason
 }
 
 /**
@@ -721,7 +748,7 @@ function fortnoxSource(
         })
       } catch (error) {
         if (isFortnoxPermissionError(error)) {
-          throw new FortnoxDocumentScopesRequiredError()
+          throw new FortnoxDocumentScopesRequiredError(error)
         }
         throw error
       }
@@ -1568,7 +1595,7 @@ export async function importProviderDocuments(
           refuseSupplierInvoiceScope('archive', error)
           continue
         }
-        throw new FortnoxDocumentScopesRequiredError()
+        throw new FortnoxDocumentScopesRequiredError(error)
       }
 
       result.failed++

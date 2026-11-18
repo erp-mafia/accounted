@@ -445,6 +445,7 @@ async function continueRun(worker: Worker, row: RunRow, run: DocumentImportRunSu
       log.warn('underlag run on the server stopped: the provider refused the connection', {
         companyId: row.company_id,
         provider: current.provider,
+        ...(sliceError instanceof FortnoxDocumentScopesRequiredError ? sliceError.refusal : {}),
       })
     } else {
       holding = false

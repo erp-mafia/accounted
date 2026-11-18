@@ -13,6 +13,7 @@ import {
   documentImportProgress,
   documentImportRunNote,
   documentOAuthProblemFromReason,
+  documentReconnectRefused,
   fetchResumableDocumentImport,
   parseArcimDocumentResumeMarker,
   mergeArcimDocumentImportResults,
@@ -367,6 +368,41 @@ describe('document scope OAuth recovery', () => {
       requestId: null,
       reconnectRequired: false,
       message: 'Leverantören är tillfälligt nere',
+    })
+  })
+
+  // The login of a document reconnect came back refused in the popup. The
+  // panel keeps the problem that started the reconnect (its heading, its
+  // reference, the reconnect button) and says why the login failed: with the
+  // reason dropped, a company without the Fortnox licence read the same
+  // "approve the access" prompt after every attempt.
+  it('answers a refused document reconnect with the prior problem and the reason the login came back with', () => {
+    const licence =
+      'Fortnox nekade inloggningen: Fortnox-företaget saknar licens för något som Accounted bad om att få läsa. ' +
+      'Anslutningen du redan har påverkas inte.'
+    const prior = { code: PROVIDER_DOCUMENT_SCOPES_REQUIRED, requestId: 'req-1', reconnectRequired: true }
+    const stuck = arcimDocumentImportReducer(
+      arcimDocumentImportReducer(
+        { ...INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, phase: 'discovery-error', problem: prior },
+        { type: 'reconnect-started' },
+      ),
+      documentReconnectRefused('discover', licence, prior),
+    )
+    expect(stuck.phase).toBe('discovery-error')
+    expect(stuck.problem).toEqual({ ...prior, message: licence })
+
+    // Whatever the reason reads like, a new login stays the way forward: one
+    // the callback rejected (a spent state) changed nothing on the connection.
+    expect(documentReconnectRefused('import', 'Ingen giltig migrationssession hittades', prior)).toEqual({
+      type: 'import-failed',
+      problem: { ...prior, message: 'Ingen giltig migrationssession hittades' },
+    })
+    // No problem on record: still a reconnect, with the reason.
+    expect(documentReconnectRefused('import', licence, null).problem).toEqual({
+      code: null,
+      requestId: null,
+      reconnectRequired: true,
+      message: licence,
     })
   })
 

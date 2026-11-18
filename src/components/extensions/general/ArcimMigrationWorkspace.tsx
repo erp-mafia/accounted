@@ -57,6 +57,7 @@ import {
   documentImportProgress,
   documentImportRunNote,
   documentOAuthProblemFromReason,
+  documentReconnectRefused,
   fetchResumableDocumentImport,
   parseArcimDocumentResumeMarker,
   PROVIDER_CONNECTION_REFUSED_CODES,
@@ -3648,22 +3649,16 @@ export default function ArcimMigrationWorkspace({
       if (reconnectAction) {
         documentReconnectActionRef.current = null
         clearDocumentOAuthResume()
-        // Started from a note: nothing failed, the panel goes back to it.
+        // Started from a note: nothing failed, the panel goes back to it. A
+        // refusal still says why (a missing licence); the customer's own
+        // cancel needs no telling.
         const returnTo = documentReconnectReturnRef.current
         if (returnTo) {
           dispatchDocumentImport({ type: 'reconnect-cancelled', phase: returnTo })
+          if (data.cancelled !== true) toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
           return
         }
-        const problem = documentImportState.problem ?? {
-          code: null,
-          requestId: null,
-          reconnectRequired: true,
-        }
-        dispatchDocumentImport(
-          reconnectAction === 'discover'
-            ? { type: 'discovery-failed', problem }
-            : { type: 'import-failed', problem },
-        )
+        dispatchDocumentImport(documentReconnectRefused(reconnectAction, reason, documentImportState.problem))
         return
       }
       // access_denied at the provider arrives flagged `cancelled` by the

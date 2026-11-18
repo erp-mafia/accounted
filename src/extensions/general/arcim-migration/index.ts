@@ -2319,6 +2319,9 @@ export const arcimMigrationExtension: Extension = {
               cursor,
               providerStatus:
                 error instanceof ProviderConnectionRefusedError ? error.providerStatus : undefined,
+              // What Fortnox answered when it refused the files: a missing
+              // scope, licence or user right all end here as "reconnect".
+              ...(error instanceof FortnoxDocumentScopesRequiredError ? error.refusal : {}),
             })
             if (!dryRun && ctx.settings) {
               const resolvedProvider =
@@ -2360,6 +2363,7 @@ export const arcimMigrationExtension: Extension = {
           log.error('arcim import-documents failed', error as Error, {
             providerStatus,
             providerMessage,
+            ...(error instanceof FortnoxDocumentScopesRequiredError ? error.refusal : {}),
             providerBody:
               error instanceof FortnoxApiError ? error.body?.slice(0, 500) : undefined,
           })

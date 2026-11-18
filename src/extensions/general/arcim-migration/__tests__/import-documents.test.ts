@@ -31,7 +31,11 @@ import {
 } from '@/lib/invoices/invoice-deliveries'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
-import { importProviderDocuments, ProviderConnectionRefusedError } from '../lib/import-documents'
+import {
+  FortnoxDocumentScopesRequiredError,
+  importProviderDocuments,
+  ProviderConnectionRefusedError,
+} from '../lib/import-documents'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 
 // The Bokio client is constructed but never called directly (the attachments
@@ -994,6 +998,44 @@ describe('importProviderDocuments', () => {
         consentId: 'c1',
       }),
     ).rejects.toThrow('Fortnox consent lacks archive/connectfile scope: reconnect required')
+  })
+
+  // The error says "reconnect" for every refusal. What Fortnox answered rides
+  // along for the log: the only thing that tells a token without the scopes
+  // from a company without the licence, which no reconnect changes.
+  it('keeps what Fortnox answered on the refusal, for the listing and for a download', async () => {
+    const licence = new FortnoxApiError(
+      'bad request',
+      400,
+      JSON.stringify({
+        ErrorInformation: { error: 1, message: 'Det finns ingen aktiv licens för önskat scope', code: 2001101 },
+      }),
+    )
+    const run = (supabase: SupabaseClient) =>
+      importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' }).catch(
+        (error: unknown) => error,
+      )
+
+    const listing = wireFortnox()
+    mockFetchFortnoxFinancialYears.mockRejectedValue(licence)
+    const refusedListing = await run(listing)
+    expect(refusedListing).toBeInstanceOf(FortnoxDocumentScopesRequiredError)
+    expect((refusedListing as FortnoxDocumentScopesRequiredError).refusal).toEqual({
+      providerStatus: 400,
+      providerCode: '2001101',
+      providerMessage: 'Det finns ingen aktiv licens för önskat scope',
+      reason: 'license',
+    })
+
+    const download = wireFortnox()
+    mockDownloadFortnoxArchiveFile.mockRejectedValue(new FortnoxApiError('forbidden', 403))
+    const refusedDownload = await run(download)
+    expect((refusedDownload as FortnoxDocumentScopesRequiredError).refusal).toEqual({
+      providerStatus: 403,
+      providerCode: null,
+      providerMessage: null,
+      reason: 'permission',
+    })
   })
 
   it('explains that a Fortnox archive-download 403 requires reconnecting', async () => {
