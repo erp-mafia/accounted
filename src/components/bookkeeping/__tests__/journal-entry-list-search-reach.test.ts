@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { cn } from '@/lib/utils'
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '../JournalEntryList.tsx'), 'utf8')
 const readMessages = (locale: string) =>
@@ -16,8 +18,8 @@ const readMessages = (locale: string) =>
  * bounded set (isBoundedVerifikatScope). With "Visa saknade underlag" on, an
  * RPC reads the list and takes the text and the voucher label only. A
  * placeholder that promised amounts in all three sent people looking for
- * verifikat the box could not find. The repo does not render components in
- * tests, so pin the source shape and the texts.
+ * verifikat the box could not find. This component is not rendered in a
+ * test, so pin the source shape and the texts.
  */
 describe('JournalEntryList search box', () => {
   it('takes its placeholder, tooltip and accessible name from the state of the list', () => {
@@ -52,7 +54,7 @@ describe('JournalEntryList search box', () => {
   it('names in each text only what that state finds, in both locales', () => {
     const words = {
       sv: { amount: 'belopp', date: 'datum', account: 'konto', number: /ver\.nr|verifikatnummer/, text: 'text' },
-      en: { amount: 'amount', date: 'date', account: 'account', number: /no\.|voucher number/, text: 'text' },
+      en: { amount: 'amount', date: 'date', account: 'account', number: /voucher/, text: 'text' },
     }
     for (const locale of ['sv', 'en'] as const) {
       const list = readMessages(locale).journal_list as Record<string, string>
@@ -93,15 +95,35 @@ describe('JournalEntryList search box', () => {
     }
   })
 
-  it('keeps every placeholder short enough for the 240 px box', () => {
-    // The box leaves 180 px for the text (32 px for the magnifier, 28 px for
-    // the clear button). Measured in the app's Inter at 13 px: the 25
-    // characters of "Sök ver.nr, belopp, datum" are 157 px, and the 32 of
-    // "Sök ver.nr, belopp, datum, konto" were 199 px, cut off at the end.
+  it('keeps the box at its 240 px on every screen, on a row of its own where the first has no room', () => {
+    // The shared toolbar class lets a search box share a row from 160 px
+    // below 640 px, which leaves its text 100 px. Between about 440 and
+    // 550 px that cut this placeholder (measured 2026-11-18: in a 160 px box
+    // "Ver.nr, belopp, datum" needs 162 px at 16 px and has 100). This list's
+    // box keeps 240 px and wraps instead, as it already did at 400 px.
+    expect(SRC).toContain("<div className={cn('relative', TOOLBAR_SEARCH_END_CLASS, 'min-w-60')}>")
+    const classes = cn('relative', TOOLBAR_SEARCH_END_CLASS, 'min-w-60').split(' ')
+    expect(classes).toContain('min-w-60')
+    expect(classes).not.toContain('min-w-40')
+    // The shared rule otherwise: it fills its row on a phone, and is 240 px from 640 px up.
+    expect(classes).toEqual(expect.arrayContaining(['flex-1', 'sm:w-60', 'sm:flex-none']))
+  })
+
+  it('keeps every placeholder short enough for the 240 px box, also at the 16 px of a touch screen', () => {
+    // The box is 240 px or wider and leaves 180 px for the text (32 px for
+    // the magnifier, 28 px for the clear button). A field renders at
+    // 13 px, and at 16 px on a touch screen (globals.css, pointer: coarse).
+    // Measured in the app's Inter as Chrome lays it out, at 16 px:
+    // "Ver.nr, belopp, datum" is 162 px and "Voucher, amount, date" 170 px,
+    // 21 characters each. The 25 of "Sök ver.nr, belopp, datum" were 193 px
+    // there and lost their last letter, and the 32 of "Sök ver.nr, belopp,
+    // datum, konto" were 199 px already at 13 px. The magnifier in the box
+    // says "search", so the verb is what went. A count of characters is a
+    // tripwire, not a measure: measure a longer text before raising it.
     for (const locale of ['sv', 'en']) {
       const list = readMessages(locale).journal_list as Record<string, string>
       for (const key of ['search_placeholder', 'search_placeholder_all_years', 'search_placeholder_missing']) {
-        expect(list[key].length, `${locale}.${key}: ${list[key]}`).toBeLessThanOrEqual(26)
+        expect(list[key].length, `${locale}.${key}: ${list[key]}`).toBeLessThanOrEqual(21)
       }
     }
   })

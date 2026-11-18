@@ -393,6 +393,12 @@ function PagedLedgerLines({ account, linesQuery, controls }: { account: GeneralL
 // table's: no side padding, and the height of their 32px button, which is
 // what the plain heads beside them come to.
 const LEDGER_SORT_TH_CLASS = 'h-auto px-0'
+// A head on the left ends in its sort arrow, flush with the edge of its
+// cell, and the cells of this table have no side padding: on a phone, where
+// every column is as narrow as its content, the arrow met the next head. It
+// keeps 8px after the arrow. A head on the right starts with its button's
+// own 8px, so only the plain balance head after the last arrow needs its own.
+const LEDGER_SORT_TH_START_CLASS = 'h-auto pl-0 pr-2'
 
 function LedgerLinesTable({ account, lines, controls, found, loading = false }: {
   account: GeneralLedgerAccount
@@ -418,12 +424,12 @@ function LedgerLinesTable({ account, lines, controls, found, loading = false }: 
     <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
       <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
         <tr className="border-b text-left">
-          <SortableTh label={t('th_voucher')} {...sortHead('voucher')} className={`${LEDGER_SORT_TH_CLASS} w-16`} />
-          <SortableTh label={t('th_date')} {...sortHead('date')} className={`${LEDGER_SORT_TH_CLASS} w-24`} />
+          <SortableTh label={t('th_voucher')} {...sortHead('voucher')} className={`${LEDGER_SORT_TH_START_CLASS} w-16`} />
+          <SortableTh label={t('th_date')} {...sortHead('date')} className={`${LEDGER_SORT_TH_START_CLASS} w-24`} />
           <th className="py-2">{t('th_description')}</th>
           <SortableTh label={t('th_debit')} {...sortHead('debit')} align="right" className={`${LEDGER_SORT_TH_CLASS} w-24 text-right`} />
           <SortableTh label={t('th_credit')} {...sortHead('credit')} align="right" className={`${LEDGER_SORT_TH_CLASS} w-24 text-right`} />
-          <th className="py-2 w-28 text-right">
+          <th className="py-2 pl-2 w-28 text-right">
             {balanceRuns ? t('th_balance') : (
               <InfoTooltip content={t('balance_hidden_hint')} side="top" align="end">
                 {t('th_balance')}

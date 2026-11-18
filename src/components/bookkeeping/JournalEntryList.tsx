@@ -1319,8 +1319,13 @@ export default function JournalEntryList({
           </DialogContent>
         </Dialog>
         {/* Search sits at the right end, after the view and the filter (V7 list
-            toolbars); the density toggle follows it as the last thing. */}
-        <div className={cn('relative', TOOLBAR_SEARCH_END_CLASS)}>
+            toolbars); the density toggle follows it as the last thing. Below
+            640px the shared class lets the box share a row from 160px, which
+            leaves its text 100px: enough for "Sök verifikat", not for a
+            placeholder that names what the box finds. Here it keeps the
+            240px it has on a wide screen, and takes a row of its own when
+            the first has no room for that, as it already did on a phone. */}
+        <div className={cn('relative', TOOLBAR_SEARCH_END_CLASS, 'min-w-60')}>
           <ToolbarSearch
             type="text"
             inputMode="search"
