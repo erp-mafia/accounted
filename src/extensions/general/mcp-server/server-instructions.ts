@@ -22,6 +22,16 @@ import { RECONNECT_ADVICE } from './tool-reach'
  */
 export const CLIENT_INSTRUCTIONS_CUT = 4096
 
+/**
+ * The call the anonymous instructions tell an agent to make when the user
+ * already has an account. Our initialize answers without a token (lazy
+ * authentication, issue #1814), so a client never gets the usual 401 that
+ * starts its sign-in; an agent has to make one protected call to get it, and
+ * an existing user should not be routed through create_company. Must stay
+ * outside PUBLIC_TOOLS (lazy-auth.test.ts checks that it challenges).
+ */
+export const CONNECT_TRIGGER_TOOL = 'gnubok_list_companies'
+
 export type ServerInstructionsOptions = {
   isAnonymous: boolean
   canApprove: boolean
@@ -37,13 +47,20 @@ export type ServerInstructionsOptions = {
 export function buildServerInstructionParts(o: ServerInstructionsOptions): { head: string; reference: string } {
   const { isAnonymous, canApprove, approvalView, pinnedCompanyId, pinnedCompanyName, simpleCompanyMode, companyId, toolNamespace } = o
   const multiCompany = !pinnedCompanyId && !simpleCompanyMode
+  // Before the user connects, the server cannot know their companies; saying
+  // "no company yet" there sent existing users to create_company.
+  const noCompany = isAnonymous
+    ? 'not known until the user connects, so do not conclude they have none'
+    : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'
 
   const head = [
     'Accounted: Swedish double-entry bookkeeping via conversation.',
     '',
     ...(isAnonymous
       ? [
-          'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt. A user who has no account creates one right there (BankID or e-mail, about a minute), and the call is then retried automatically. To set up bookkeeping for a company that is not in Accounted yet, load the "onboarding" skill (gnubok_load_skill) and follow it: gnubok_create_company is the first protected call and triggers the connect step.',
+          'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt, and the call is then retried automatically.',
+          `• The user already has an Accounted account (they say so, or ask about their own books, companies or invoices): call ${CONNECT_TRIGGER_TOOL} with no arguments. It returns the authentication challenge; once they have signed in, it lists their companies.`,
+          '• No account yet: the same Connect prompt creates one (BankID or e-mail, about a minute). To set up bookkeeping for a company that is not in Accounted yet, load the "onboarding" skill (gnubok_load_skill) and follow it: gnubok_create_company is the first protected call and triggers the connect step.',
           '',
         ]
       : []),
@@ -69,10 +86,10 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
       ? [
           companyId
             ? '• Company: this account has one company and every tool runs for it; company_id is never needed.'
-            : '• Company: this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup.',
+            : `• Company: ${noCompany}.`,
         ]
       : [
-        `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
+        `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : noCompany}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
         ]),
   ].join('\n')
 

@@ -1,0 +1,1 @@
+[2026-11-18] Anonymous MCP initialize keeps answering 200 (lazy auth stays, for onboarding) and its instructions name list_companies with no arguments as the call that starts sign-in for an existing account: an integrator found no way to trigger the 401 from the text alone.

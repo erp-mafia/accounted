@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
 import {
   CLIENT_INSTRUCTIONS_CUT,
+  CONNECT_TRIGGER_TOOL,
   buildServerInstructionParts,
   buildServerInstructions,
   type ServerInstructionsOptions,
@@ -79,6 +80,23 @@ describe('server instructions survive a client that cuts at 4096 characters', ()
     expect(head).toContain(`${p}list_skills`)
     expect(head).toMatch(/• Compan(y|ies):/)
     if (o.isAnonymous) expect(head).toContain('NOT CONNECTED YET')
+  })
+
+  // From the anonymous initialize alone, an integrator could not tell how to
+  // start sign-in for an existing account (2026-11-18): name the call.
+  it.each(variants.filter(([, o]) => o.isAnonymous))('%s: the head tells an existing user how to connect', (_name, o) => {
+    const { head } = render(o)
+    const trigger = projectToolReferencesInText(CONNECT_TRIGGER_TOOL, o.toolNamespace, canonical)
+    expect(head).toContain('already has an Accounted account')
+    expect(head).toContain(`call ${trigger} with no arguments. It returns the authentication challenge`)
+    expect(head).not.toContain('this account has no company yet')
+  })
+
+  it('names a connect trigger that exists, and keeps the no-company advice for a connected account', () => {
+    expect(canonical.has(CONNECT_TRIGGER_TOOL)).toBe(true)
+    const keyed = render({ toolNamespace: 'gnubok', isAnonymous: false, canApprove: true, approvalView: false, ...COMPANY_MODES['multi, no company'] }).head
+    expect(keyed).toContain('this account has no company yet')
+    expect(keyed).not.toContain('NOT CONNECTED YET')
   })
 
   it('keeps discovery detail and workflow recipes after the head', () => {

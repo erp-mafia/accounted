@@ -51,6 +51,8 @@ vi.mock('../skills', async (importOriginal) => {
 
 import { handleMcpRequest } from '../server'
 import { findSkill } from '../skills'
+import { CONNECT_TRIGGER_TOOL } from '../server-instructions'
+import { isPublicTool } from '../public-tools'
 
 const ENDPOINT = 'http://localhost:3000/api/extensions/ext/mcp-server/mcp'
 
@@ -196,6 +198,20 @@ describe('MCP lazy authentication', () => {
       /^Bearer resource_metadata="http:\/\/localhost:3000\/\.well-known\/oauth-protected-resource"$/
     )
   })
+
+  // The anonymous initialize tells an agent to make this call to start sign-in
+  // for an existing account; it only works while the call is challenged.
+  it.each([CONNECT_TRIGGER_TOOL, CONNECT_TRIGGER_TOOL.replace(/^gnubok_/, 'accounted_')])(
+    'challenges %s, the call the anonymous instructions name to connect an existing account',
+    async (name) => {
+      const init = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+      expect((await init.json()).result.instructions).toContain(`call ${CONNECT_TRIGGER_TOOL} with no arguments`)
+      expect(isPublicTool(CONNECT_TRIGGER_TOOL)).toBe(false)
+      const response = await handleMcpRequest(rpc('tools/call', { name, arguments: {} }))
+      expect(response.status).toBe(401)
+      expect(response.headers.get('WWW-Authenticate')).toContain('resource_metadata')
+    }
+  )
 
   it.each([
     ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
