@@ -256,6 +256,25 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
         'Do not commit, edit or copy this draft: nothing was posted. It was left by an accrual run that did not finish. The nightly accrual run posts the month together with its schedule row and cancels the draft; a person can post due months now with Bokför förfallna under Periodiseringar in Accounted.',
     },
   },
+  // guard_bank_booking_context refuses (23514) to post a verifikat with
+  // source_type 'bank_transaction' whose bank_booking_context does not name
+  // its source row: a draft left from before the context existed, or made
+  // without it. BookkeepingDatabaseError answers the raised name with this
+  // code. As BOOKKEEPING_DATABASE_ERROR it read "Verifikationen kunde inte
+  // sparas. Försök igen.", and no retry posts it (2026-11-16, two tries).
+  BANK_BOOKING_CONTEXT_REQUIRED: {
+    httpStatus: 409,
+    message_sv:
+      'Utkastet kommer från en banktransaktion men saknar kopplingen till den, så det kan inte bokföras härifrån. Öppna transaktionen under Transaktioner och bokför den där. Är den redan bokförd behövs inte utkastet.',
+    message_en:
+      'This draft comes from a bank transaction but lacks the link to it, so it cannot be posted from here. Open the transaction under Transaktioner and book it there. If it is already booked, the draft is not needed.',
+    retryable: false,
+    remediation: {
+      description:
+        "Nothing was posted. The draft's source_type is bank_transaction, but its bank_booking_context does not name its source_id. Book the bank transaction (source_id) with gnubok_categorize_transaction instead, or create the draft again with a bank_booking_context entry for that transaction.",
+      tool: 'gnubok_categorize_transaction',
+    },
+  },
   BOOKING_REVIEW_WEB_ONLY: {
     httpStatus: 403,
     message_sv:
@@ -5406,6 +5425,26 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
       'SIE-importen kan inte ångras eller återupptas just nu: en annan körning pågår, perioden är låst eller en rättelse av ett importerat verifikat behöver granskas först.',
     message_en:
       'The SIE import cannot be undone or resumed right now: another run is in progress, the period is locked, or a correction of an imported voucher needs review first.',
+  },
+  // start_sie_import_job and start_sie_append_job refuse a new import while
+  // another import of the company is queued, running or stopped mid-way, or
+  // another run holds the year (55000 "SIE import is unfinished: resume or
+  // undo it", mapped in lib/import/sie-jobs.ts). As CONFLICT it read "En
+  // konflikt uppstod" on the import page and "Ett oväntat serverfel uppstod"
+  // on an approval: SIE imports approved one after another while the first
+  // still ran, six refusals in two days (2026-11-16 and 17).
+  SIE_IMPORT_UNFINISHED: {
+    httpStatus: 409,
+    message_sv:
+      'En annan SIE-import för företaget är inte klar än. Vänta tills den är klar, eller öppna den under Bokföring > Importera/Exportera > Importhistorik och tryck Fortsätt eller Ångra import. Starta sedan den här importen igen.',
+    message_en:
+      'Another SIE import of the company is not finished yet. Wait until it completes, or open it under Bokföring > Importera/Exportera > Importhistorik and resume or undo it. Then start this import again.',
+    retryable: false,
+    remediation: {
+      description:
+        "Another SIE import of the company is queued, running or stopped mid-way, or another run holds the fiscal year. Read it with gnubok_sie_import_status: a running import finishes on its own, and resuming or undoing a stopped one is the user's decision. Start this import again once that one is completed or undone.",
+      tool: 'gnubok_sie_import_status',
+    },
   },
   // The undo, the resume of an undo and the replacement refuse before anything
   // is queued when a date they must write is locked (migration

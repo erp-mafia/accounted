@@ -168,12 +168,15 @@ const REGISTER_BOOKED_BULK_KEYS = {
 // fixable-refusals.ts (the list of codes lives there; the words live here).
 // The toast says the refusal's own sentence (it names the numbers) unless
 // noteInToast: Skatteverket's "Sessionen har gått ut. Logga in med BankID
-// igen." names neither Skatteverket nor where to log in.
+// igen." names neither Skatteverket nor where to log in, and the unfinished
+// SIE import's registry sentence ends "Starta sedan den här importen igen.",
+// where here the way on is approving the same proposal again.
 const FIXABLE_REFUSAL_COPY: Record<string, { note: string; link: string; noteInToast?: boolean }> = {
   SKATTEVERKET_NOT_CONNECTED: { note: 'refusal_fix_skatteverket', link: 'refusal_fix_skatteverket_link', noteInToast: true },
   INVOICE_NUMBER_SERIES_BEHIND: { note: 'refusal_fix_invoice_series', link: 'refusal_fix_invoicing_link' },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: { note: 'refusal_fix_payment_details', link: 'refusal_fix_invoicing_link' },
   INVOICE_SEND_VAT_NUMBER_MISSING: { note: 'refusal_fix_vat_number', link: 'refusal_fix_tax_link' },
+  SIE_IMPORT_UNFINISHED: { note: 'refusal_fix_sie_import', link: 'refusal_fix_sie_import_link', noteInToast: true },
 }
 
 function bulkActionKey(op: PendingOperation): string {

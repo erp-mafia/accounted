@@ -1140,6 +1140,45 @@ describe('commitPendingOperation: import_sie', () => {
     expect(result.data).toMatchObject({ remediation: { tool: 'gnubok_sie_import_status' } })
   })
 
+  // 2026-11-16: SIE imports approved one after another while the first still
+  // ran. The executor rethrew the CONFLICT, the dispatcher answered 500 with
+  // the database's English and closed the proposal; the page said "Ett
+  // oväntat serverfel uppstod" six times in two days.
+  describe('another import of the company not finished', () => {
+    const unfinished = () => jobDatabaseError({ code: '55000', message: 'SIE import is unfinished: resume or undo it' })
+
+    it("keeps the proposal for the app's single approval, with the code and the sentence that says what to do", async () => {
+      vi.mocked(submitSIEJob).mockRejectedValueOnce(unfinished())
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // back to pending
+
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sieOp(true), {
+        commitMethod: 'user_accept', keepFixableRefusals: true,
+      })
+
+      expect(result).toMatchObject({
+        status: 'failed',
+        http_status: 409,
+        code: 'SIE_IMPORT_UNFINISHED',
+        operation_status: 'pending',
+        data: { remediation: { tool: 'gnubok_sie_import_status' } },
+      })
+      expect(result.error).toMatch(/^En annan SIE-import för företaget är inte klar än\./)
+    })
+
+    it('closes it at any other door, still with the code instead of a server error', async () => {
+      vi.mocked(submitSIEJob).mockRejectedValueOnce(unfinished())
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // dispatcher's reject update
+
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', sieOp(true))
+
+      expect(result).toMatchObject({ status: 'rejected', http_status: 409, code: 'SIE_IMPORT_UNFINISHED' })
+    })
+  })
+
   // Issue #108: an append staged with on_existing_year reaches the job as
   // onExistingPeriod 'append'; its refusal answers with the planner's sentence.
   const appendOp = (extra: Record<string, unknown> = {}) => makePendingOp({

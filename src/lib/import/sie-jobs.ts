@@ -189,6 +189,10 @@ const JOB_REFUSALS: Record<string,string> = {
   'SIE undo requires review: an append batch is live':'SIE_IMPORT_HAS_LIVE_APPEND',
   // start_sie_append_job: the year's import is gone or not finished.
   'SIE append requires a completed base import of the year':'SIE_IMPORT_APPEND_NO_BASE',
+  // start_sie_import_job and start_sie_append_job: another import of the
+  // company is queued, running or stopped mid-way, or another run holds the
+  // year. Waiting for it, or resuming or undoing it, is the way on.
+  'SIE import is unfinished: resume or undo it':'SIE_IMPORT_UNFINISHED',
 }
 
 /**

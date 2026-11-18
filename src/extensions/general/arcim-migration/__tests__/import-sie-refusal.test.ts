@@ -142,11 +142,21 @@ describe('POST /import-sie: job refusals', () => {
 
   it('409 CONFLICT for any other guard, never the existing-import sentence', async () => {
     ;(submitSIEJob as Mock).mockRejectedValueOnce(jobDatabaseError({
-      code: '55000', message: 'SIE import is unfinished: resume or undo it',
+      code: '55000', message: 'Fiscal period is locked or closed',
     }))
     const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))
     expect(status).toBe(409)
     expect(body.error.code).toBe('CONFLICT')
+  })
+
+  it('409 SIE_IMPORT_UNFINISHED while another import of the company is not finished, never the existing-import sentence', async () => {
+    ;(submitSIEJob as Mock).mockRejectedValueOnce(jobDatabaseError({
+      code: '55000', message: 'SIE import is unfinished: resume or undo it',
+    }))
+    const { status, body } = await parseJsonResponse<Envelope>(await post(BODY))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SIE_IMPORT_UNFINISHED')
+    expect(body.error.message).toMatch(/^En annan SIE-import för företaget är inte klar än\./)
   })
 
   it('503 TRANSIENT_ERROR for a lock that is not available: a retry, not an existing import', async () => {

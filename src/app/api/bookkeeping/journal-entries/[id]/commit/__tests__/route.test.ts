@@ -6,7 +6,7 @@ import {
   createMockRouteParams,
   makeJournalEntry,
 } from '@/tests/helpers'
-import { AccrualDraftPostedByScheduleError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { AccrualDraftPostedByScheduleError, BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
 const mockCreateClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
@@ -177,6 +177,23 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
     expect(body.error.details).toEqual({ journal_entry_id: 'entry-1' })
     // Through the one generic commit, which is where the refusal lives.
     expect(mockCommitEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', 'user_accept')
+  })
+
+  it('answers a bank-row draft without its bank link with 409 and where to book it, not a database error', async () => {
+    // 2026-11-16: guard_bank_booking_context refused it (23514) and the
+    // person read "Verifikationen kunde inte sparas. Försök igen.", twice.
+    mockCreateClient.mockResolvedValue(clientWithDraft({ entry_date: '2026-09-02', description: 'Kortköp', source_type: 'bank_transaction', lines: [] }))
+    mockCommitEntry.mockRejectedValue(new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_CONTEXT_REQUIRED', '23514'))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/commit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_BOOKING_CONTEXT_REQUIRED')
+    expect(body.error.message).toBe(
+      'Utkastet kommer från en banktransaktion men saknar kopplingen till den, så det kan inte bokföras härifrån. ' +
+      'Öppna transaktionen under Transaktioner och bokför den där. Är den redan bokförd behövs inte utkastet.')
   })
 
   describe('booking-time voucher warnings on a typed draft', () => {

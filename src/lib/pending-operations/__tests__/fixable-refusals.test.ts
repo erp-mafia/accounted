@@ -17,6 +17,10 @@ describe('fixable refusals', () => {
     expect(fixableRefusalFor('convert_to_invoice', 'INVOICE_NUMBER_SERIES_BEHIND')).toBeNull()
     expect(fixableRefusalFor('send_invoice', 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')).not.toBeNull()
     expect(fixableRefusalFor('send_invoice', 'INVOICE_SEND_VAT_NUMBER_MISSING')?.fixHref).toBe('/settings/tax')
+    // Another SIE import in the way: the job RPC rolled back, the proposal
+    // waits, and the link opens the import history.
+    expect(fixableRefusalFor('import_sie', 'SIE_IMPORT_UNFINISHED')?.fixHref).toBe('/import?history=sie')
+    expect(fixableRefusalFor('create_voucher', 'SIE_IMPORT_UNFINISHED')).toBeNull()
   })
 
   it('is null for an unlisted code, no code, and an inherited property name', () => {

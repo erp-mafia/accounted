@@ -1137,6 +1137,8 @@
     "refusal_fix_vat_number": "The company has no VAT number. Add it, then approve the proposal.",
     "refusal_fix_invoicing_link": "Invoicing settings",
     "refusal_fix_tax_link": "Tax settings",
+    "refusal_fix_sie_import": "Another SIE import is not finished yet. Wait until it completes, or resume or undo it under Importhistorik, then approve the proposal.",
+    "refusal_fix_sie_import_link": "Show imports",
     "empty_pending_title": "All clear.",
     "empty_committed_title": "No approved operations",
     "empty_rejected_title": "No rejected operations",

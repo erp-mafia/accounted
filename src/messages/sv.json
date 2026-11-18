@@ -1137,6 +1137,8 @@
     "refusal_fix_vat_number": "Företaget saknar momsregistreringsnummer. Lägg till det och godkänn sedan förslaget.",
     "refusal_fix_invoicing_link": "Fakturainställningar",
     "refusal_fix_tax_link": "Skatteinställningar",
+    "refusal_fix_sie_import": "En annan SIE-import är inte klar än. Vänta tills den är klar, eller fortsätt eller ångra den under Importhistorik, och godkänn sedan förslaget.",
+    "refusal_fix_sie_import_link": "Visa importer",
     "empty_pending_title": "Allt klart.",
     "empty_committed_title": "Inga godkända operationer",
     "empty_rejected_title": "Inga avvisade operationer",

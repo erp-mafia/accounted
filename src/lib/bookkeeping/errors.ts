@@ -39,6 +39,8 @@ export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const TX_MISSING_SEK_VALUE = 'TX_MISSING_SEK_VALUE' as const
 export const TX_LINES_NOT_BALANCED = 'TX_LINES_NOT_BALANCED' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
+/** guard_bank_booking_context's refusal of a bank row's verifikat that does not name its row (23514). */
+export const BANK_BOOKING_CONTEXT_REQUIRED = 'BANK_BOOKING_CONTEXT_REQUIRED' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
 export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
 export const NO_OPEN_PERIOD_FOR_DATE = 'NO_OPEN_PERIOD_FOR_DATE' as const
@@ -1076,7 +1078,10 @@ export type BookkeepingOperation =
   | 'link_business_event'
 
 export class BookkeepingDatabaseError extends Error {
-  readonly code: typeof BOOKKEEPING_DATABASE_ERROR | ReturnType<typeof conflictCode>
+  readonly code:
+    | typeof BOOKKEEPING_DATABASE_ERROR
+    | typeof BANK_BOOKING_CONTEXT_REQUIRED
+    | ReturnType<typeof conflictCode>
   constructor(
     public readonly operation: BookkeepingOperation,
     public readonly cause: string | undefined,
@@ -1085,8 +1090,16 @@ export class BookkeepingDatabaseError extends Error {
     super(cause ? `Database operation "${operation}" failed: ${cause}` : `Database operation "${operation}" failed`)
     this.name = 'BookkeepingDatabaseError'
     // A PT409 refusal keeps the name the database raised it with, so the
-    // user reads what was refused rather than a generic conflict.
-    this.code = pgCode === 'PT409' ? conflictCode(cause) : BOOKKEEPING_DATABASE_ERROR
+    // user reads what was refused rather than a generic conflict. So does
+    // the bank-booking guard's 23514 for a bank row's verifikat that does not
+    // name its row: no retry posts it, and "Verifikationen kunde inte sparas.
+    // Försök igen." sent a person round that loop (2026-11-16).
+    this.code =
+      pgCode === 'PT409'
+        ? conflictCode(cause)
+        : pgCode === '23514' && cause === BANK_BOOKING_CONTEXT_REQUIRED
+          ? BANK_BOOKING_CONTEXT_REQUIRED
+          : BOOKKEEPING_DATABASE_ERROR
   }
 }
 

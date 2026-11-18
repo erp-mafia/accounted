@@ -21,6 +21,7 @@
  * Client-safe: plain constants, read by the dispatcher (commit.ts) and by
  * the approvals page for the link to the fix.
  */
+import { IMPORT_HISTORY_HREF } from '@/lib/onboarding-books/skip'
 
 export interface FixableRefusal {
   /** The operation types whose executor refuses with this code before any write; 'any' when the dispatcher itself answers it. */
@@ -62,6 +63,15 @@ export const FIXABLE_REFUSALS: Readonly<Record<string, FixableRefusal>> = {
   // The company is VAT-registered without a VAT number, which the invoice
   // must carry (ML 17 kap. 24 §). The person adds it.
   INVOICE_SEND_VAT_NUMBER_MISSING: { operationTypes: ['mark_invoice_sent', 'send_invoice'], fixHref: '/settings/tax' },
+  // import_sie: another SIE import of the company is queued, running or
+  // stopped mid-way (start_sie_import_job and start_sie_append_job refuse,
+  // lib/import/sie-jobs.ts). The job RPC rolled back, so nothing was queued
+  // or booked. What submitSIEJob writes before it is found again by the
+  // second approval: the file archive is content-addressed and
+  // ensureFiscalPeriod returns the year it created. The other import lies
+  // outside the proposal; once it is done the same proposal is right. The
+  // link opens the import history, where Fortsätt and Ångra import are.
+  SIE_IMPORT_UNFINISHED: { operationTypes: ['import_sie'], fixHref: IMPORT_HISTORY_HREF },
 }
 
 /** The fix for a refusal of this operation type, or null when the refusal is not one a person fixes around the proposal. */

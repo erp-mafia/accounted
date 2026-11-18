@@ -131,6 +131,21 @@ describe('SIE lock refusal', () => {
     expect(userFacingCode(error)).toBeNull()
   })
 
+  // 2026-11-16: SIE imports approved one after another while the first still
+  // ran. As CONFLICT the import page said "En konflikt uppstod" and the
+  // approval "Ett oväntat serverfel uppstod"; neither says what is in the way.
+  it('names another unfinished import SIE_IMPORT_UNFINISHED, a 409 whose sentence says to wait, resume or undo it', async () => {
+    const error = jobDatabaseError({ code: '55000', message: 'SIE import is unfinished: resume or undo it' })
+    expect(error).toMatchObject({ code: 'SIE_IMPORT_UNFINISHED', pgCode: '55000' })
+    const response = errorResponse(error, log as never, { requestId: 'req-1' })
+    expect(response.status).toBe(409)
+    const body = await response.json()
+    expect(body.error.code).toBe('SIE_IMPORT_UNFINISHED')
+    expect(body.error.message).toBe(
+      'En annan SIE-import för företaget är inte klar än. Vänta tills den är klar, eller öppna den under ' +
+      'Bokföring > Importera/Exportera > Importhistorik och tryck Fortsätt eller Ångra import. Starta sedan den här importen igen.')
+  })
+
   it('keeps every other 55000 refusal a CONFLICT', () => {
     const error = jobDatabaseError({ code: '55000', message: 'Another SIE execution must finish before undo' })
     expect(error.code).toBe('CONFLICT')

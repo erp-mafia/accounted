@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { SalesOrder, SalesOrderItem } from '@/types'
+import type { InvoiceDocumentType, SalesOrder, SalesOrderItem } from '@/types'
 import { maskEmbeddedCustomer } from '@/lib/customers/protect-personal-number'
 import { deliveryProgress, invoicingProgress, withInvoicedQuantities } from './progress'
 import { fail, failDb, type ServiceResult } from './result'
@@ -46,6 +46,39 @@ export async function loadSalesOrder(
   if (!invoiced.ok) return failDb(invoiced.dbError)
 
   return { ok: true, order: decorate(maskEmbeddedCustomer(data as SalesOrder), invoiced.byItem) }
+}
+
+/** The proforma or offert an order was created from: what its "Skapad från" row names. */
+export interface SalesOrderSourceDocument {
+  document_type: InvoiceDocumentType
+  invoice_number: string | null
+}
+
+/**
+ * The order's source document, read in the company like the order itself.
+ * The order page asked GET /api/invoices/{id} for it, which the invoice
+ * route never answered (405), so the row never showed; the order's GET now
+ * carries it. Null when the order has none or the document is gone; a read
+ * error is returned for the caller to log, never to fail the order.
+ */
+export async function loadSalesOrderSourceDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceInvoiceId: string | null,
+): Promise<{ document: SalesOrderSourceDocument | null; error: unknown }> {
+  if (!sourceInvoiceId) return { document: null, error: null }
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('document_type, invoice_number')
+    .eq('id', sourceInvoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { document: null, error }
+  const row = data as { document_type?: InvoiceDocumentType | null; invoice_number?: string | null } | null
+  return {
+    document: row?.document_type ? { document_type: row.document_type, invoice_number: row.invoice_number ?? null } : null,
+    error: null,
+  }
 }
 
 export function decorate(order: SalesOrder, invoiced: Map<string, number>): SalesOrder {

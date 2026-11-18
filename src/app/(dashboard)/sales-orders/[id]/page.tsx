@@ -37,6 +37,7 @@ import {
   formatQty,
 } from '@/components/sales-orders/labels'
 import type { Invoice, SalesOrder, SalesOrderItem } from '@/types'
+import type { SalesOrderSourceDocument } from '@/lib/sales-orders/load'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
@@ -103,8 +104,9 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   const { settings: companySettings } = useCompanySettings()
 
   // The source document (proforma or offert) the order was created from:
-  // only its type and number, for the "Skapad från" row.
-  const [sourceDoc, setSourceDoc] = useState<{ document_type: string; invoice_number: string | null } | null>(null)
+  // only its type and number, for the "Skapad från" row. The order's GET
+  // carries it (source_document).
+  const [sourceDoc, setSourceDoc] = useState<SalesOrderSourceDocument | null>(null)
 
   const fetchOrder = useCallback(async () => {
     try {
@@ -117,17 +119,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
       const { data } = await res.json()
       setOrder(data as SalesOrder)
       setOrderLoadFailed(false)
-      const sourceId = (data as SalesOrder).source_invoice_id
-      if (sourceId) {
-        const sourceRes = await fetch(`/api/invoices/${sourceId}`).catch(() => null)
-        const sourceJson = sourceRes?.ok ? await sourceRes.json().catch(() => null) : null
-        const source = (sourceJson?.data ?? sourceJson) as { document_type?: string; invoice_number?: string | null } | null
-        setSourceDoc(
-          source?.document_type ? { document_type: source.document_type, invoice_number: source.invoice_number ?? null } : null,
-        )
-      } else {
-        setSourceDoc(null)
-      }
+      setSourceDoc((data as { source_document?: SalesOrderSourceDocument | null }).source_document ?? null)
     } catch {
       setOrderLoadFailed(true)
     } finally {
