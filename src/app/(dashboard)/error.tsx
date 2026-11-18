@@ -24,7 +24,7 @@ export default function DashboardError({
       <h2 className="text-[15px] font-medium leading-[22px] text-strong">Något gick fel</h2>
       <p className="text-[13px] text-muted-foreground">
         Ett oväntat fel uppstod. Försök igen eller{' '}
-        <SupportLink variant="inline" subject="Oväntat fel">kontakta support</SupportLink>{' '}
+        <SupportLink variant="inline" subject="Oväntat fel" assistant={false}>kontakta support</SupportLink>{' '}
         om problemet kvarstår.
       </p>
       <div className="mt-3">

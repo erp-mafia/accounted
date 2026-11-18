@@ -117,6 +117,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./p
 # booking-template sync and the MCP booking-packs resource. The lines above
 # copy only the standalone server, so the catalogue ships on its own.
 COPY --from=builder --chown=nextjs:nodejs /app/packs ./packs
+# The support assistant's page texts are written by the build (package.json
+# prebuild, scripts/generate-support-page-texts.ts) and read off disk at
+# runtime, relative to the working directory
+# (src/lib/agent/support/page-texts.ts). Same reason as the packs above.
+COPY --from=builder --chown=nextjs:nodejs /app/src/lib/agent/support/_generated ./src/lib/agent/support/_generated
 
 # Baked-in templates for runtime population of the writable mounts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next /opt/gnubok-template/.next

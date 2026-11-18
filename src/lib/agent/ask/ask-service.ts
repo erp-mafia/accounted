@@ -130,7 +130,7 @@ function systemPrompt(hasTools: boolean, locale: Locale | undefined): string {
 }
 
 /** Read the company's own basic profile for grounding. Company-scoped: never another tenant's data. */
-async function companyProfileLine(supabase: SupabaseClient, companyId: string): Promise<string> {
+export async function companyProfileLine(supabase: SupabaseClient, companyId: string): Promise<string> {
   const { data } = await supabase
     .from('companies')
     .select('name, entity_type')

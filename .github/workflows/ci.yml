@@ -196,6 +196,16 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-core
       - run: npm run build
+      # The support assistant reads its page texts off disk at run time
+      # (src/lib/agent/support/page-texts.ts). The build writes them (prebuild
+      # in package.json) and next.config.ts names them for the function that
+      # reads them. Both halves are checked here, so a build that would ship
+      # the assistant without them fails instead of answering from the menu
+      # alone in production.
+      - name: Support page texts are built and traced
+        run: |
+          test -s src/lib/agent/support/_generated/page-texts.json
+          test -s .next/standalone/src/lib/agent/support/_generated/page-texts.json
       # The JavaScript each of the most visited pages ships on a hard load,
       # held to scripts/perf/page-budgets.json: a page over its budget fails
       # the job with the numbers.

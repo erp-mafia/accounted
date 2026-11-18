@@ -65,13 +65,16 @@ export async function buildLedgerTools(
   companyId: string,
   userId: string,
   conversationId?: string,
+  // The support assistant adds the skill readers to the list
+  // (lib/agent/support/service.ts); the filter below holds for any list.
+  names: readonly string[] = LEDGER_READ_TOOLS,
 ): Promise<AiToolDef[]> {
   const actor: AgentActorContext = {
     type: 'agent_chat',
     ...(conversationId ? { id: conversationId } : {}),
   }
 
-  return (await agentToolRegistry.getMany([...LEDGER_READ_TOOLS]))
+  return (await agentToolRegistry.getMany([...names]))
     // Belt-and-suspenders on top of the curated whitelist: never expose a tool
     // the registry itself marks writable or destructive, even if it somehow
     // ended up on the list.

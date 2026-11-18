@@ -64,6 +64,11 @@ supabase/.temp/
 # scripts/inject-public-branding.mjs: runs via predev/prebuild)
 /public/sw.js
 
+# generated page texts for the support assistant (built from the pages and
+# the message files by scripts/generate-support-page-texts.ts: runs via
+# predev/prebuild, read at run time by src/lib/agent/support/page-texts.ts)
+/src/lib/agent/support/_generated/
+
 # Local internal notes and private fixtures stay untracked. Published reference
 # inputs for taxonomy generation and golden tests live in docs/reference/.
 /dev_docs/*

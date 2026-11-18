@@ -110,7 +110,40 @@ export interface GenerateTextRequest {
   maxSteps?: number
   /** Ends the call when it fires: every model turn of it is aborted and not retried. */
   signal?: AbortSignal
+  /**
+   * Reasoning depth, for a backend that takes one (the Anthropic family:
+   * output_config.effort). Absent leaves the model's own default, and the
+   * request exactly as it was. Ignored by the other backends.
+   */
+  effort?: AiEffort
+  /**
+   * Mark the prompt for the backend's prompt cache (the Anthropic family):
+   * the tool definitions and the system prompt as one prefix every caller
+   * with the same ones shares, and the conversation so far on each turn of a
+   * tool loop, so a later turn reads at the cached price what an earlier turn
+   * sent. Absent leaves the request exactly as it was. Ignored by the other
+   * backends.
+   */
+  cachePrompt?: boolean
+  /**
+   * Told what happens while the answer is produced, for a caller that shows
+   * it as it comes. A backend that cannot stream never calls it: the result
+   * is the answer either way, and the caller must not depend on the events.
+   */
+  onProgress?: (event: AiProgressEvent) => void
 }
+
+export type AiEffort = 'low' | 'medium' | 'high'
+
+export type AiProgressEvent =
+  /** Visible answer text, as it is generated. */
+  | { type: 'text'; delta: string }
+  /**
+   * The model turn ended in tool calls. Text received since the last such
+   * event was a remark before the calls ("Jag hämtar..."), not the answer:
+   * the result never contains it, so a caller showing text drops it here.
+   */
+  | { type: 'tools'; names: string[] }
 
 export interface GenerateTextResult {
   text: string

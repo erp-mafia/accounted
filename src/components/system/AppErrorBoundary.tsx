@@ -103,7 +103,7 @@ export function AppErrorBoundary({
       title={t('error_boundary_title')}
       body={t.rich('error_boundary_body', {
         support: (chunks) => (
-          <SupportLink variant="inline" subject={t('error_boundary_support_subject')}>
+          <SupportLink variant="inline" subject={t('error_boundary_support_subject')} assistant={false}>
             {chunks}
           </SupportLink>
         ),

@@ -113,6 +113,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/onboarding/books/exit': uiOnly('onboarding wizard UI state (first-session gate cookie)'),
   'POST /api/sandbox/seed': uiOnly('sandbox demo seeding'),
   'POST /api/support/contact': uiOnly('support contact form'),
+  'POST /api/support/ask': uiOnly('the AI assistant in the support dialog: it answers a person in the app and writes nothing but its own conversation; a connected agent reads the same ledger through its own tools'),
   'POST /api/log': machine('machine endpoint: unauthenticated client telemetry sink'),
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),

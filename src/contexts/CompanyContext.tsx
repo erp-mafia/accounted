@@ -95,6 +95,14 @@ interface CompanyContextValue {
    * picker door, which redirects on its own.
    */
   addCompanyHref?: string
+  /**
+   * Whether the support dialog offers the AI assistant for this company and
+   * user (lib/agent/support/rollout.ts: SUPPORT_ASSISTANT_COMPANY_IDS, an AI
+   * backend configured, never the invoicing-only role or the sandbox), as the
+   * layout read it. Absent reads as no: the dialog is then the form to a
+   * person, as it was. POST /api/support/ask stays the real enforcement.
+   */
+  supportAssistant?: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

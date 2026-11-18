@@ -253,7 +253,7 @@ export function AccountDangerZone() {
         <p className="px-1 pt-3">
           <SettingsRowNote>
             {t('support_question')}{' '}
-            <SupportLink variant="inline" subject={t('support_subject')} />
+            <SupportLink variant="inline" subject={t('support_subject')} assistant={false} />
           </SettingsRowNote>
         </p>
       </SettingsDangerZone>

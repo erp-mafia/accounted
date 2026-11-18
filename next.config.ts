@@ -63,6 +63,15 @@ const nextConfig: NextConfig = {
   // system env var on every Vercel build; self-hosted and local builds keep
   // the standalone directory.
   output: process.env.VERCEL ? undefined : 'standalone',
+  // The support assistant reads the page texts the build wrote
+  // (scripts/generate-support-page-texts.ts, package.json prebuild) from disk
+  // at run time. No module imports the file, so it is named here for the one
+  // function that reads it; without this it is left out of the function on
+  // Vercel and out of .next/standalone, and the assistant answers from the
+  // menu alone (src/lib/agent/support/page-texts.ts logs that as an error).
+  outputFileTracingIncludes: {
+    '/api/support/ask': ['./src/lib/agent/support/_generated/page-texts.json'],
+  },
   ...(supabaseImageHostname
     ? {
         images: {

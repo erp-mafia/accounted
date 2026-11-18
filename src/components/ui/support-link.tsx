@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import {
@@ -56,7 +57,22 @@ import {
   whenConversationsReady,
 } from '@/lib/support/conversations'
 import { dialogMaxHeight, dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
+import { mergeIntoDraft } from '@/lib/support/assistant-handoff'
 import { stockholmYearMonth } from '@/lib/dates/iso'
+
+// The AI assistant's panel is fetched when the dialog first shows it: this
+// dialog is part of every page's shell (the user menu), and a page should not
+// carry the panel, its stream reader and the markdown loader for a dialog
+// most visits never open.
+const SupportAsk = dynamic(() => import('@/components/support/SupportAsk').then((mod) => mod.SupportAsk), {
+  ssr: false,
+  loading: () => (
+    <div className="flex flex-col gap-2" aria-busy="true">
+      <Skeleton className="h-12 w-full rounded-lg" />
+      <Skeleton className="h-12 w-full rounded-lg" />
+    </div>
+  ),
+})
 
 interface SupportLinkProps {
   /** 'hidden' renders no trigger: the dialog is controlled through `open`. */
@@ -66,12 +82,22 @@ interface SupportLinkProps {
   className?: string
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /**
+   * False opens the dialog on the form to a person even where the company
+   * has the AI assistant: for a door that reports something (an error page,
+   * closing the account) or leads to an answer from the staff (the reply
+   * mail's link). Default: the assistant first, where the company has it.
+   */
+  assistant?: boolean
 }
 
 type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 
 /**
  * loading  fetching tickets or a thread
+ * ask      the AI assistant (components/support/SupportAsk.tsx): the start
+ *          page where the company has it and no answer from the staff is
+ *          waiting, with the form to a person one step away
  * list     every ticket, open ones first: the start page once there is more
  *          than one, or a single resolved one (startView)
  * thread   the conversation with support (reply box while the ticket is open;
@@ -81,7 +107,7 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
  * email    conversations unavailable (self-hosted, analytics off): same form, mail delivery
  * sent     delivered by mail (attachments, or the fallback)
  */
-type View = 'loading' | 'list' | 'thread' | 'compose' | 'email' | 'sent'
+type View = 'loading' | 'ask' | 'list' | 'thread' | 'compose' | 'email' | 'sent'
 
 const SECTION_LABEL_CLASS = 'mb-2 text-xs font-medium text-muted-foreground'
 
@@ -100,7 +126,15 @@ function totalBytes(files: File[]): number {
  * mail (the conversation API is text) and the mail form remains the fallback
  * for installs without PostHog.
  */
-export function SupportLink({ variant = 'inline', subject, children, className, open: openProp, onOpenChange }: SupportLinkProps) {
+export function SupportLink({
+  variant = 'inline',
+  subject,
+  children,
+  className,
+  open: openProp,
+  onOpenChange,
+  assistant = true,
+}: SupportLinkProps) {
   const t = useTranslations('support_link')
   const locale = useLocale()
   const { toast } = useToast()
@@ -112,7 +146,12 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const [tickets, setTickets] = useState<TicketSummary[]>([])
   const [thread, setThread] = useState<Thread | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [composeBack, setComposeBack] = useState<'list' | 'thread' | null>(null)
+  const [composeBack, setComposeBack] = useState<'list' | 'thread' | 'ask' | null>(null)
+  // Whether the conversation with the staff is available here (PostHog
+  // Support); without it the form goes by mail.
+  const [ticketsAvailable, setTicketsAvailable] = useState(false)
+  // The AI assistant: where the layout says this company and user have it.
+  const assistantOn = assistant && companyCtx?.supportAssistant === true && Boolean(companyCtx.company?.id)
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<File[]>([])
   const [isPreparing, setIsPreparing] = useState(false)
@@ -167,14 +206,23 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     // had just loaded (the reply mail's ?support=1 link) got the empty mail
     // form instead of the answer (crm#1393).
     if (!(await whenConversationsReady())) {
-      setView('email')
+      setTicketsAvailable(false)
+      setComposeBack(assistantOn ? 'ask' : null)
+      setView(assistantOn ? 'ask' : 'email')
       return
     }
+    setTicketsAvailable(true)
     const list = sortByActivity(await listTickets())
     setTickets(list)
     setUnread(totalUnread(list))
     if (openId) {
       await showTicket(openId)
+      return
+    }
+    // The assistant first, unless an answer from the staff is waiting: that
+    // is what the user opened the dialog for.
+    if (assistantOn && totalUnread(list) === 0) {
+      setView('ask')
       return
     }
     const start = startView(list)
@@ -184,7 +232,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     }
     setComposeBack(null)
     setView(start.view)
-  }, [showTicket])
+  }, [showTicket, assistantOn])
 
   // Unread dot on the trigger: one cheap call when the trigger mounts, once
   // the SDK is ready (a trigger mounted with the page would otherwise never ask).
@@ -420,6 +468,33 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     setView('compose')
   }
 
+  // From the assistant to the staff: what the dialog would have opened on
+  // without the assistant (the open ticket, the list, or the form), so a
+  // user with a ticket under way writes in it and does not start a second.
+  async function showStaff() {
+    if (!ticketsAvailable) {
+      setComposeBack('ask')
+      setView('email')
+      return
+    }
+    const start = startView(tickets)
+    if (start.view === 'thread') {
+      await showTicket(start.ticketId)
+      return
+    }
+    setComposeBack(start.view === 'compose' ? 'ask' : null)
+    setView(start.view)
+  }
+
+  // An answer sent on to a person: the form opens with the conversation as
+  // its message, after whatever the user had already typed there, and the
+  // user reads it before sending.
+  function handOffToStaff(conversation: string) {
+    updateMessage(mergeIntoDraft(message, conversation))
+    setComposeBack('ask')
+    setView(ticketsAvailable ? 'compose' : 'email')
+  }
+
   // Any open ticket on screen takes a reply, and the reply names that ticket
   // (replyInThread; handleReply still checks where it landed). Pinning
   // replies to the ticket the dialog opened on left every other open ticket
@@ -640,7 +715,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           one, so a dialog measured from the layout viewport sits half behind
           the keyboard on a tablet (PH 216). Where it sits and how tall it may
           be stays the shared dialog's own rule. */}
-      <DialogContent size="confirm"
+      <DialogContent size={view === 'ask' ? 'form' : 'confirm'}
  ref={panelRef}
  
  style={dialogViewportStyle(viewport)}
@@ -650,7 +725,11 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
           <DialogDescription>
-            {view === 'thread' || view === 'list' ? t('thread_description') : t('dialog_description')}
+            {view === 'ask'
+              ? t('ask_description')
+              : view === 'thread' || view === 'list'
+                ? t('thread_description')
+                : t('dialog_description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -658,6 +737,26 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           <div className="flex flex-col gap-2" aria-busy="true">
             <Skeleton className="h-12 w-full rounded-lg" />
             <Skeleton className="h-12 w-full rounded-lg" />
+          </div>
+        )}
+
+        {view === 'ask' && companyCtx?.company?.id && (
+          <SupportAsk
+            companyId={companyCtx.company.id}
+            ticketCount={tickets.length}
+            onShowTickets={() => void showStaff()}
+            onWriteToSupport={() => void showStaff()}
+            onHandoff={handOffToStaff}
+            onNavigate={() => handleOpenChange(false)}
+          />
+        )}
+
+        {assistantOn && (view === 'list' || (view === 'thread' && !hasList)) && (
+          <div>
+            <Button type="button" variant="ghost" className="-ml-3" onClick={() => setView('ask')}>
+              <ChevronLeftIcon className="h-4 w-4" />
+              {t('ask_back')}
+            </Button>
           </div>
         )}
 
@@ -686,16 +785,18 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           </div>
         )}
 
-        {view === 'compose' && composeBack && (
+        {(view === 'compose' || view === 'email') && composeBack && (
           <div>
             <Button
               type="button"
               variant="ghost"
               className="-ml-3"
-              onClick={() => (composeBack === 'list' ? void showList() : setView('thread'))}
+              onClick={() =>
+                composeBack === 'ask' ? setView('ask') : composeBack === 'list' ? void showList() : setView('thread')
+              }
             >
               <ChevronLeftIcon className="h-4 w-4" />
-              {composeBack === 'list' ? t('all_tickets') : t('back_to_ticket')}
+              {composeBack === 'ask' ? t('ask_back') : composeBack === 'list' ? t('all_tickets') : t('back_to_ticket')}
             </Button>
           </div>
         )}

@@ -50,6 +50,29 @@ function textBlocks(text: string): { type: 'text'; text: string }[] {
   return [{ type: 'text', text }]
 }
 
+/**
+ * The id of a conversation when it is this user's, in this company, of this
+ * intent; null otherwise, for a missing one and for someone else's alike.
+ * RLS on agent_conversations is COMPANY-scoped, so a colleague's thread would
+ * otherwise load: the user, company and intent checks are what close that.
+ * Shared with the support assistant (lib/agent/support/conversation.ts).
+ */
+export async function findOwnConversation(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  conversationId: string,
+  intentId: string,
+): Promise<string | null> {
+  const { data: conv } = await supabase
+    .from('agent_conversations')
+    .select('id, user_id, company_id, intent_id')
+    .eq('id', conversationId)
+    .maybeSingle()
+  if (!conv || conv.user_id !== userId || conv.company_id !== companyId || conv.intent_id !== intentId) return null
+  return conv.id as string
+}
+
 export type ResolveConversationResult =
   | { ok: true; conversationId: string; created: boolean }
   // The client passed a conversation id that isn't this user's general.help
@@ -74,20 +97,8 @@ export async function resolveChatConversation(
   contextRef?: string | null,
 ): Promise<ResolveConversationResult> {
   if (conversationId) {
-    const { data: conv } = await supabase
-      .from('agent_conversations')
-      .select('id, user_id, company_id, intent_id')
-      .eq('id', conversationId)
-      .maybeSingle()
-    if (
-      !conv ||
-      conv.user_id !== userId ||
-      conv.company_id !== companyId ||
-      conv.intent_id !== CHAT_INTENT_ID
-    ) {
-      return { ok: false, reason: 'not_found' }
-    }
-    return { ok: true, conversationId: conv.id as string, created: false }
+    const own = await findOwnConversation(supabase, userId, companyId, conversationId, CHAT_INTENT_ID)
+    return own ? { ok: true, conversationId: own, created: false } : { ok: false, reason: 'not_found' }
   }
 
   const { data: created, error } = await supabase

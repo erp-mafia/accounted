@@ -8,7 +8,9 @@ import { withCallLimit } from './call-limit'
 export type {
   AiChatTurn,
   AiDocumentInput,
+  AiEffort,
   AiImageMediaType,
+  AiProgressEvent,
   AiService,
   AiToolDef,
   AiTier,

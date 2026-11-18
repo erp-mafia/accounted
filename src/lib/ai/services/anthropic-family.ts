@@ -95,6 +95,39 @@ function addUsage(a: AiUsage, b: AiUsage): AiUsage {
   }
 }
 
+// The 5-minute cache both backends keep. No ttl: Bedrock ignores the longer
+// one (lib/agent/composer/client.ts), and an entry only has to outlive the
+// tool loop that wrote it or the next question a few minutes later.
+const CACHE_MARK = { type: 'ephemeral' as const }
+
+/**
+ * The system prompt as one cached block. Tools render before it, so the mark
+ * covers the tool definitions too: one prefix for every caller that sends the
+ * same tools and the same prompt.
+ */
+function cachedSystem(system: string): Anthropic.Messages.TextBlockParam[] {
+  return [{ type: 'text', text: system, cache_control: CACHE_MARK }]
+}
+
+/**
+ * The transcript with a cache mark on the last block of its last message, on
+ * a copy: the transcript itself stays unmarked, so a tool loop moves one mark
+ * forward turn by turn and never collects more than the four a request may
+ * carry. Each turn then reads what the turn before it sent.
+ */
+function withCacheMark(messages: Anthropic.Messages.MessageParam[]): Anthropic.Messages.MessageParam[] {
+  const last = messages[messages.length - 1]
+  if (!last) return messages
+  const blocks: Anthropic.Messages.ContentBlockParam[] =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : [...last.content]
+  const tail = blocks[blocks.length - 1]
+  // Only the blocks this service itself puts last: the prompt text and tool results.
+  if (!tail || (tail.type !== 'text' && tail.type !== 'tool_result')) return messages
+  if (tail.type === 'text' && tail.text.length === 0) return messages
+  blocks[blocks.length - 1] = { ...tail, cache_control: CACHE_MARK }
+  return [...messages.slice(0, -1), { ...last, content: blocks }]
+}
+
 /**
  * The Anthropic family (AWS Bedrock and the direct API) behind the job-shaped
  * interface. Delegates to the existing client factory and builds the EXACT
@@ -184,16 +217,36 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       // A request option, never a body field: the request on the wire is unchanged.
       const options = req.signal ? { signal: req.signal } : undefined
 
+      // The opt-in parts of a request (types.ts: effort, cachePrompt,
+      // onProgress). A caller that sets none of them sends exactly the
+      // literals below, as before they existed.
+      const system = req.system ? (req.cachePrompt ? cachedSystem(req.system) : req.system) : undefined
+      const effort = req.effort ? { output_config: { effort: req.effort } } : {}
+      const marked = (messages: Anthropic.Messages.MessageParam[]) =>
+        req.cachePrompt ? withCacheMark(messages) : messages
+      // One model turn. With onProgress the same request is streamed and its
+      // text handed on as it arrives; the assembled message is what the loop
+      // reads either way, so both paths decide alike.
+      const onProgress = req.onProgress
+      const send = async (params: MessageCreateParams): Promise<Anthropic.Messages.Message> => {
+        const client = await getClient()
+        if (!onProgress) return client.messages.create(params, options)
+        const stream = client.messages.stream(params, options)
+        stream.on('text', (delta) => onProgress({ type: 'text', delta }))
+        return stream.finalMessage()
+      }
+
       // Fast path (unchanged: keeps hosted byte-identical for every non-tool
       // caller, which is all of them today): one turn, no tools.
       if (!req.tools || req.tools.length === 0) {
         const params: MessageCreateParams = {
           model,
           max_tokens: req.maxTokens,
-          ...(req.system ? { system: req.system } : {}),
+          ...(system ? { system } : {}),
+          ...effort,
           messages: messagesFor(req.prompt, req.history),
         }
-        const resp = await (await getClient()).messages.create(params, options)
+        const resp = await send(params)
         return { text: textOf(resp), model, usage: usageOf(resp), ...endOf(resp) }
       }
 
@@ -212,17 +265,21 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       let forcedFinal: 'step_limit' | 'no_text' = 'step_limit'
 
       for (let step = 0; step < maxSteps; step++) {
-        const resp = await (await getClient()).messages.create({
+        const resp = await send({
           model,
           max_tokens: req.maxTokens,
-          ...(req.system ? { system: req.system } : {}),
+          ...(system ? { system } : {}),
+          ...effort,
           tools,
-          messages,
-        }, options)
+          messages: marked(messages),
+        })
         usage = addUsage(usage, usageOf(resp))
         const toolUses = resp.content.filter(
           (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
         )
+        // Tool calls, complete or cut off: whatever text this turn streamed
+        // was a remark before them, never the answer.
+        if (toolUses.length > 0) onProgress?.({ type: 'tools', names: toolUses.map((b) => b.name) })
 
         if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) {
           // A tool call cut off at max_tokens has incomplete input: never run
@@ -278,14 +335,15 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       // that replays those without declaring the tools they refer to.
       // tool_choice none is the sanctioned "answer in text" knob. One turn
       // only: if this one is empty too, the caller fails it honestly.
-      const final = await (await getClient()).messages.create({
+      const final = await send({
         model,
         max_tokens: req.maxTokens,
-        ...(req.system ? { system: req.system } : {}),
+        ...(system ? { system } : {}),
+        ...effort,
         tools,
         tool_choice: { type: 'none' },
-        messages: withFinalAnswerRequest(messages),
-      }, options)
+        messages: marked(withFinalAnswerRequest(messages)),
+      })
       return {
         text: textOf(final),
         model,

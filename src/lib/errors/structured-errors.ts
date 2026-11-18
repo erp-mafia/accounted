@@ -13576,6 +13576,54 @@ const CASH_FORECAST: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// The support assistant (lib/agent/support, POST /api/support/ask)
+// ─────────────────────────────────────────────────────────────────
+
+const SUPPORT_ASSISTANT: Record<string, StructuredErrorEntry> = {
+  // Each sentence ends in the way on: the support dialog keeps its form to a
+  // person whatever the assistant answers, and shows these verbatim.
+  // The company is not in SUPPORT_ASSISTANT_COMPANY_IDS. 409 like the other
+  // switched-off answers.
+  SUPPORT_ASSISTANT_OFF: {
+    httpStatus: 409,
+    message_sv: 'AI-assistenten i supporten är inte påslagen för det här företaget. Skriv till supporten i stället.',
+    message_en: 'The AI assistant in support is not switched on for this company. Write to support instead.',
+    retryable: false,
+  },
+  // No AI backend on the installation at all.
+  SUPPORT_ASSISTANT_UNCONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'AI-assistenten är inte konfigurerad på den här installationen. Skriv till supporten i stället.',
+    message_en: 'The AI assistant is not configured on this installation. Write to support instead.',
+    retryable: false,
+  },
+  // The company switched AI off under Datadelning och AI: the AI layer
+  // refuses the call, and the route says why.
+  SUPPORT_ASSISTANT_AI_SWITCHED_OFF: {
+    httpStatus: 409,
+    message_sv: 'AI är avstängt för det här företaget under Inställningar > Datadelning och AI. Skriv till supporten i stället.',
+    message_en: 'AI is switched off for this company under Settings > Data sharing and AI. Write to support instead.',
+    retryable: false,
+  },
+  // The per-user question limit (lib/agent/support/rate-limit.ts). The
+  // sentence for the day limit is passed by the route.
+  SUPPORT_ASSISTANT_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många frågor till AI-assistenten just nu. Vänta en stund och försök igen, eller skriv till supporten.',
+    message_en: 'Too many questions to the AI assistant right now. Wait a moment and try again, or write to support.',
+    retryable: true,
+  },
+  // The conversation id is not one of this user's support conversations in
+  // this company. 404 for a missing one and for someone else's alike.
+  SUPPORT_ASSISTANT_CONVERSATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Konversationen hittades inte. Ställ frågan igen.',
+    message_en: 'Conversation not found. Ask the question again.',
+    retryable: false,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -13657,6 +13705,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...LOSS_CARRYFORWARD,
   ...STOCK_COUNT,
   ...CASH_FORECAST,
+  ...SUPPORT_ASSISTANT,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {
