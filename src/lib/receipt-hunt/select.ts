@@ -181,6 +181,11 @@ export function selectProposals(
         // ("Insatt belopp") is guaranteed to pair with the wrong row. Those
         // documents stay reachable through the picker and agent candidates.
         candidate.amountSource !== 'prominent' &&
+        // Never propose on a sum that is only near the purchase's: a
+        // same-seller document a few kronor off scores well on name and date
+        // and is another charge's (crm#1962). It stays reachable through the
+        // picker and agent candidates, where both amounts are read.
+        candidate.amountAgrees &&
         !spentDocumentIds.has(candidate.document_id) &&
         !suppression.claimedDocumentIds.has(candidate.document_id) &&
         !suppression.rejectedPairs.has(pairKey(tx.id, candidate.document_id)),

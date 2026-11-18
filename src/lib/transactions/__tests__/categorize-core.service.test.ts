@@ -125,6 +125,30 @@ describe('categorizeTransaction: dry run', () => {
     expect(payloads('fiscal_periods', 'upsert')).toEqual([])
   })
 
+  // crm#1962: the preview shows the document the row holds; it says whether
+  // that document's total is the row's sum.
+  it.each([
+    ['the row\'s own sum', { totals: { total: 1250 }, invoice: { currency: 'SEK' } }, true],
+    ['another sum in the same currency', { totals: { total: 1280 }, invoice: { currency: 'SEK' } }, false],
+    ['no currency read, taken as kronor', { totals: { total: 1250 } }, true],
+    ['another currency', { totals: { total: 110 }, invoice: { currency: 'EUR' } }, null],
+    ['no total', { totals: {}, invoice: { currency: 'SEK' } }, null],
+  ])('says whether the row\'s underlag shows %s', async (_case, extracted, matches) => {
+    const { supabase } = ledger({
+      transactions: { data: row({ document_id: 'doc-1' }), error: null },
+      document_attachments: { data: { id: 'doc-1', extracted_data: extracted }, error: null },
+    })
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    expect(outcome.preview.underlag).toMatchObject({ document_id: 'doc-1', matches_row_amount: matches })
+  })
+
   it('refuses a Stripe feed row on a day the ledger already covers, in the dry run too, naming the day and what holds it', async () => {
     covered.mockResolvedValue({ through: '2026-05-12', source: 'migrated_ledger' })
     const stripeRow = row({ import_source: 'stripe' })

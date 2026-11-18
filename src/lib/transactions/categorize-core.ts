@@ -79,6 +79,7 @@ import { isPersonReview, matchBookingOfRows } from '@/lib/booking-review/check'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
+import { amountAgreesForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
   detectBookingDuplicate,
   type BookedDuplicateCandidate,
@@ -239,6 +240,15 @@ export interface CategorizeUnderlag {
   total: number | null
   vat_amount: number | null
   currency: string | null
+  /**
+   * Whether the document's total is the row's own sum (core-receipt-matcher
+   * amountAgreesForMatch): false when it is another sum in the same currency,
+   * null when the two cannot be compared (no total, another currency). The
+   * underlag is the document the row already holds (transactions.document_id);
+   * the booking picks none, so a false here is for whoever stages or approves
+   * it to look at before booking (crm#1962).
+   */
+  matches_row_amount: boolean | null
   /**
    * Set on a reverse charge booked under confirm_foreign_seller_vat: the
    * charge is in the basis and the cost, never deducted. could_be_swedish_vat
@@ -879,11 +889,15 @@ export async function categorizeTransaction(
         | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string }; supplier?: SellerIdentity | null }
         | null
       documentSeller = ex?.supplier ?? null
+      const total = ex?.totals?.total ?? null
+      const currency = ex?.invoice?.currency ?? null
+      const rowCurrency = transaction.currency ?? 'SEK'
       underlag = {
         document_id: doc.id as string,
-        total: ex?.totals?.total ?? null,
+        total,
         vat_amount: ex?.totals?.vatAmount ?? null,
-        currency: ex?.invoice?.currency ?? null,
+        currency,
+        matches_row_amount: amountAgreesForMatch(total, currency ?? 'SEK', null, transaction.amount, rowCurrency, transaction.amount),
       }
       if (input.vat_treatment === 'reverse_charge') {
         const sellerVat = sellerVatOnReverseCharge({

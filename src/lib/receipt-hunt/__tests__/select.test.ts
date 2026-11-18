@@ -234,6 +234,35 @@ describe('selectProposals', () => {
     expect(HUNT_MIN_CONFIDENCE).toBeGreaterThan(0.6)
     expect(AMBIGUITY_MARGIN).toBeGreaterThan(0)
   })
+
+  // crm#1962: the same seller's other charge, a few kronor off and dated
+  // nearer the purchase, outscored the document with the purchase's own sum.
+  describe('a sum near the purchase\'s against its own', () => {
+    const fee = tx({ id: 'tx-fee', date: '2026-10-19', description: 'EXEMPELBANKEN AVGIFT', merchant_name: 'Exempelbanken', amount: -182, amount_sek: -182 })
+    const invoice = (id: string, date: string, total: number) =>
+      item({ id, document_id: `doc-${id}` }, {
+        supplier: { name: 'Exempelbanken AB' },
+        invoice: { invoiceDate: date, currency: 'SEK' },
+        totals: { total, vatAmount: 0 },
+      })
+
+    it.each([
+      ['the near sum dated nearer the purchase', '2026-10-10', '2026-10-19'],
+      ['the exact sum dated nearer the purchase', '2026-10-19', '2026-10-10'],
+    ])('proposes the exact sum when %s', (_case, exactDate, nearDate) => {
+      for (const pool of [
+        [invoice('exact', exactDate, 182), invoice('near', nearDate, 185)],
+        [invoice('near', nearDate, 185), invoice('exact', exactDate, 182)],
+      ]) {
+        const result = selectProposals([fee], pool, noSuppression)
+        expect(result.map((p) => p.document_id)).toEqual(['doc-exact'])
+      }
+    })
+
+    it('proposes nothing on a near sum alone, however well name and date agree', () => {
+      expect(selectProposals([fee], [invoice('near', '2026-10-19', 185)], noSuppression)).toEqual([])
+    })
+  })
 })
 
 /**

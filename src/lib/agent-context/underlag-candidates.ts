@@ -26,6 +26,7 @@ import {
   CONVERTED_AMOUNT_TOLERANCE_PERCENT,
   DATE_TOLERANCE_DAYS,
   FALLBACK_CONFIDENCE_FACTOR,
+  amountAgreesForMatch,
   amountVarianceForMatch,
   bestProminentAmountVariance,
   calculateMatchConfidence,
@@ -75,6 +76,12 @@ export interface UnderlagCandidate {
    * must treat 'prominent' as weaker evidence or exclude it.
    */
   amountSource: 'total' | 'prominent'
+  /**
+   * The document's amount is the row's own sum (core-receipt-matcher
+   * amountAgreesForMatch), not merely near it. Consumers that act with less
+   * human scrutiny (the nightly receipt hunt) propose only these.
+   */
+  amountAgrees: boolean
   /** Swedish reasons the match scored, for display. */
   matchReasons: string[]
   /** Answers already captured for this item, so they travel with it. */
@@ -235,6 +242,10 @@ export function scoreUnderlagCandidates(
     }
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 
+    const amountAgrees = fallbackMatch
+      ? amountAgreesForMatch(fallbackMatch.amount, sig.currency, null, tx.amount, txCurrency, txSek) === true
+      : amountAgreesForMatch(sig.total, sig.currency, item.sek_total ?? null, tx.amount, txCurrency, txSek) === true
+
     scored.push({
       inbox_item_id: item.id,
       document_id: item.document_id,
@@ -245,13 +256,20 @@ export function scoreUnderlagCandidates(
       currency: sig.currency,
       confidence,
       amountSource: fallbackMatch ? 'prominent' : 'total',
+      amountAgrees,
       matchReasons,
       channelContext: item.channel_context ?? null,
     })
   }
 
-  scored.sort((a, b) => b.confidence - a.confidence)
-  return scored.slice(0, CANDIDATE_LIMIT)
+  // A document whose amount is the row's own sum wins over one that is only
+  // near it, whatever the dates and names add to the near one's score, and
+  // the near one is not offered beside it (crm#1962). With no sum that
+  // agrees, the near ones stay candidates for a reader who compares amounts.
+  const agreeing = scored.filter((candidate) => candidate.amountAgrees)
+  const ranked = agreeing.length > 0 ? agreeing : scored
+  ranked.sort((a, b) => b.confidence - a.confidence)
+  return ranked.slice(0, CANDIDATE_LIMIT)
 }
 
 /**
