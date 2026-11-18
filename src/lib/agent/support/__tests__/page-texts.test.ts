@@ -36,6 +36,10 @@ const INDEX: PageTextIndex = {
     ['invoices.title'],
     ['salary.new_run'],
   ],
+  // What each key is, one character per key: a heading, a button, three
+  // texts the source does not place, a key the messages no longer have; a
+  // button and a column; a heading; a button.
+  roles: ['hb----', 'bc', 'h', 'b'],
   routes: {
     '/invoices': [0, 1],
     '/invoices/[id]': [2, 1],
@@ -90,38 +94,60 @@ describe('pageParts and renderPageTexts', () => {
     expect(parts).toEqual([
       {
         name: 'page',
-        texts: ['Fakturor', 'Ny faktura', '# fakturor bokfördes', 'Skapas automatiskt, till exempel varje månad', 'Status'],
+        texts: [
+          { text: 'Fakturor', role: 'h' },
+          { text: 'Ny faktura', role: 'b' },
+          { text: '# fakturor bokfördes' },
+          { text: 'Skapas automatiskt, till exempel varje månad' },
+          { text: 'Status' },
+        ],
       },
       // "Status" is already listed with the page.
-      { name: 'RotRutPayoutDialog', texts: ['Begär utbetalning'] },
+      { name: 'RotRutPayoutDialog', texts: [{ text: 'Begär utbetalning', role: 'b' }] },
     ])
   })
 
-  it('renders one line per part', () => {
+  it('renders one line per part, each text followed by what it is when the source shows it', () => {
     const text = renderPageTexts(pageParts(INDEX, '/invoices', MESSAGES))
     expect(text.split('\n')).toEqual([
+      '[page] Fakturor (rubrik) | Ny faktura (knapp) | # fakturor bokfördes | Skapas automatiskt, till exempel varje månad | Status',
+      '[RotRutPayoutDialog] Begär utbetalning (knapp)',
+    ])
+  })
+
+  it('reads an index written before roles existed: every text without a role', () => {
+    const { roles: _roles, ...older } = INDEX
+    resetPageTextIndexCache()
+    expect(renderPageTexts(pageParts(older, '/invoices', MESSAGES)).split('\n')[0]).toBe(
       '[page] Fakturor | Ny faktura | # fakturor bokfördes | Skapas automatiskt, till exempel varje månad | Status',
-      '[RotRutPayoutDialog] Begär utbetalning',
+    )
+  })
+
+  it('finds the texts of one role by its word', () => {
+    const parts = pageParts(INDEX, '/invoices', MESSAGES)
+    expect(renderPageTexts(parts, { search: 'knapp' }).split('\n')).toEqual([
+      '[page] Ny faktura (knapp)',
+      '[RotRutPayoutDialog] Begär utbetalning (knapp)',
     ])
   })
 
   it('reads one part by name, and says which parts exist when the name is wrong', () => {
     const parts = pageParts(INDEX, '/invoices', MESSAGES)
-    expect(renderPageTexts(parts, { part: 'rotrutpayoutdialog' })).toBe('[RotRutPayoutDialog] Begär utbetalning')
+expect(renderPageTexts(parts, { part: 'rotrutpayoutdialog' })).toBe('[RotRutPayoutDialog] Begär utbetalning (knapp)')
     expect(renderPageTexts(parts, { part: 'Nope' })).toContain('page, RotRutPayoutDialog')
   })
 
   it('filters by every word of a search', () => {
     const parts = pageParts(INDEX, '/invoices', MESSAGES)
-    expect(renderPageTexts(parts, { search: 'ny faktura' })).toBe('[page] Ny faktura')
+expect(renderPageTexts(parts, { search: 'ny faktura' })).toBe('[page] Ny faktura (knapp)')
     expect(renderPageTexts(parts, { search: 'moms' })).toContain('Ingen text på sidan')
   })
 
   it('cuts a long page at a part boundary and names what was left out', () => {
     const parts = [
-      { name: 'page', texts: ['a'.repeat(60)] },
-      { name: 'BigDialog', texts: ['b'.repeat(80), 'c'.repeat(80)] },
-      { name: 'Small', texts: ['kort'] },
+      { name: 'page', texts: [{ text: 'a'.repeat(60) }] },
+      { name: 'BigDialog', texts: [{ text: 'b'.repeat(80) }, { text: 'c'.repeat(80) }] },
+      { name: 'Small', texts: [{ text: 'kort' }] },
     ]
     const text = renderPageTexts(parts, { maxChars: 100 })
     const lines = text.split('\n')
@@ -131,7 +157,7 @@ describe('pageParts and renderPageTexts', () => {
   })
 
   it('keeps whole texts when one part alone is longer than the budget', () => {
-    const parts = [{ name: 'page', texts: ['x'.repeat(40), 'y'.repeat(40), 'z'.repeat(40)] }]
+const parts = [{ name: 'page', texts: [{ text: 'x'.repeat(40) }, { text: 'y'.repeat(40) }, { text: 'z'.repeat(40) }] }]
     const text = renderPageTexts(parts, { maxChars: 100 })
     expect(text).toContain('x'.repeat(40))
     expect(text).not.toContain('z'.repeat(40))
@@ -145,6 +171,7 @@ describe('searchAppTexts', () => {
     expect(hits).toEqual([
       {
         text: 'Begär utbetalning',
+        role: 'b',
         places: [
           { route: '/invoices', part: 'RotRutPayoutDialog' },
           { route: '/invoices/[id]', part: 'RotRutPayoutDialog' },
@@ -171,7 +198,8 @@ describe('searchAppTexts', () => {
 describe('isPageTextIndex', () => {
   it('accepts the shape the generator writes and nothing else', () => {
     expect(isPageTextIndex(INDEX)).toBe(true)
-    expect(isPageTextIndex({ files: ['a'], keys: [], routes: {} })).toBe(false)
+expect(isPageTextIndex({ files: ['a'], keys: [], routes: {} })).toBe(false)
+    expect(isPageTextIndex({ ...INDEX, roles: ['h'] })).toBe(false)
     expect(isPageTextIndex(null)).toBe(false)
     expect(isPageTextIndex('[]')).toBe(false)
   })

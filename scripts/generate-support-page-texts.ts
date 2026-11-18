@@ -15,6 +15,8 @@
  * Writes src/lib/agent/support/_generated/page-texts.json:
  *   files   source files that read messages, relative to src/
  *   keys    per file (same position): the message keys it reads, in source order
+ *   roles   per file (same position): what each key is on the page (a button,
+ *           a tab, a heading ...), one character per key, where the source shows it
  *   routes  route pattern -> positions in `files`, the page first, then what it
  *           imports, breadth first
  * Only keys are stored, never the texts: the reader (page-texts.ts) resolves
@@ -29,7 +31,12 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import ts from 'typescript'
-import type { MessageTree, PageTextIndex } from '../src/lib/agent/support/page-text-index'
+import {
+  NO_PAGE_TEXT_ROLE,
+  type MessageTree,
+  type PageTextIndex,
+  type PageTextRole,
+} from '../src/lib/agent/support/page-text-index'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -45,6 +52,8 @@ export interface KeyRef {
   path: string
   /** True for t(`status_${x}`): every key under the same parent that starts with the path's last segment. */
   prefix: boolean
+  /** What the text is on the page, where the source shows it (roleOfCall, roleOfName). */
+  role?: PageTextRole
 }
 
 export interface FileAnalysis {
@@ -59,10 +68,134 @@ const TRANSLATOR_METHODS = new Set(['rich', 'markup', 'raw', 'has'])
 
 function unwrap(node: ts.Expression): ts.Expression {
   let current = node
-  while (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current) || ts.isAsExpression(current)) {
+  while (
+    ts.isAwaitExpression(current) ||
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
     current = current.expression
   }
   return current
+}
+
+// ── What a text is on the page ───────────────────────────────
+
+/** The element a text is rendered in, or given to as a prop, and what that makes it. */
+const TAG_ROLES: Record<string, PageTextRole> = {
+  Button: 'b',
+  button: 'b',
+  SplitButton: 'b',
+  TabsTrigger: 't',
+  SegmentedControl: 't',
+  h1: 'h',
+  h2: 'h',
+  h3: 'h',
+  h4: 'h',
+  DialogTitle: 'h',
+  SheetTitle: 'h',
+  CardTitle: 'h',
+  PageHeader: 'h',
+  SettingsSectionHeader: 'h',
+  Label: 'f',
+  label: 'f',
+  FormLabel: 'f',
+  SettingsRow: 'f',
+  th: 'c',
+  TableHead: 'c',
+  DropdownMenuItem: 'm',
+  ContextMenuItem: 'm',
+  CommandItem: 'm',
+  option: 'o',
+  SelectItem: 'o',
+  Link: 'l',
+  a: 'l',
+  DialogDescription: 'd',
+  HelpPopover: 'd',
+  SettingsRowNote: 'd',
+}
+
+/** Attributes that carry an explanation of the element, whatever the element is. */
+const HELP_ATTRIBUTES = new Set(['description', 'help', 'helpText', 'hint', 'tooltip'])
+
+/** How many elements up from a text its role is looked for: a button's text often sits in a span inside it. */
+const ROLE_LOOKUP_DEPTH = 3
+
+function tagName(node: ts.JsxElement | ts.JsxSelfClosingElement): string {
+  const tag = ts.isJsxElement(node) ? node.openingElement.tagName : node.tagName
+  return ts.isPropertyAccessExpression(tag) ? tag.name.text : tag.getText()
+}
+
+/**
+ * What a translator call's text is, from where the call sits: a placeholder
+ * attribute, or the nearest element (up to three levels) that has a role of
+ * its own. Undefined when the source does not show it, which is common and
+ * fine: the assistant is told that a text without a role has none it may name.
+ */
+function roleOfCall(call: ts.Node): PageTextRole | undefined {
+  let elements = 0
+  // The attribute the text is given to, when it is not rendered as a child.
+  let attribute: string | undefined
+  for (let node = call.parent; node && !ts.isSourceFile(node); node = node.parent) {
+    if (ts.isJsxAttribute(node)) {
+      const name = node.name.getText()
+      if (name === 'placeholder') return 'p'
+      if (HELP_ATTRIBUTES.has(name)) return 'd'
+      attribute ??= name
+    }
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const role = TAG_ROLES[tagName(node)]
+      if (role) {
+        // A title on anything but a heading is its tooltip, and the name of a
+        // group of tabs is not a tab.
+        if (attribute === 'title' && role !== 'h') return 'd'
+        if (attribute === 'aria-label' && role === 't') return undefined
+        return role
+      }
+      elements++
+      attribute = undefined
+      if (elements >= ROLE_LOOKUP_DEPTH) return undefined
+    }
+    if (ts.isFunctionDeclaration(node)) return undefined
+  }
+  return undefined
+}
+
+/** What the name of a lookup table or of a key property says its texts are: TAB_LABEL_KEYS, columnKey. */
+function roleOfName(name: string): PageTextRole | undefined {
+  if (/tab/i.test(name)) return 't'
+  if (/column|header/i.test(name)) return 'c'
+  if (/status|state|chip|badge/i.test(name)) return 's'
+  if (/placeholder/i.test(name)) return 'p'
+  if (/title|heading/i.test(name)) return 'h'
+  return undefined
+}
+
+const KEY_LIKE = /^[A-Za-z][\w.]*$/
+
+/** Every text value inside an object or array literal, nested ones included, in source order; never a property name. */
+function literalValues(node: ts.Expression, found: string[] = []): string[] {
+  const value = unwrap(node)
+  if (ts.isStringLiteralLike(value)) {
+    if (KEY_LIKE.test(value.text)) found.push(value.text)
+  } else if (ts.isArrayLiteralExpression(value)) {
+    for (const element of value.elements) literalValues(element, found)
+  } else if (ts.isObjectLiteralExpression(value)) {
+    for (const property of value.properties) {
+      if (ts.isPropertyAssignment(property)) literalValues(property.initializer, found)
+    }
+  }
+  return found
+}
+
+/** The variable a key expression starts from: TAB_LABEL_KEYS in `TAB_LABEL_KEYS[tab]`, col in `col.labelKey`. */
+function rootIdentifier(node: ts.Expression): string | undefined {
+  let current = unwrap(node)
+  while (ts.isElementAccessExpression(current) || ts.isPropertyAccessExpression(current)) {
+    current = unwrap(current.expression)
+  }
+  return ts.isIdentifier(current) ? current.text : undefined
 }
 
 /**
@@ -117,6 +250,13 @@ function isFunctionScope(node: ts.Node): boolean {
  * that both call theirs `t` keep their own namespaces. A translator handed to
  * another file as an argument is not followed there: that file's reads are
  * missed, which costs the index a few labels and never adds a wrong one.
+ *
+ * A key that is not written at the call is followed one step, inside the
+ * file: `t(TAB_LABEL_KEYS[tab])` reads every text value of the table
+ * TAB_LABEL_KEYS, and `t(column.labelKey)` every `labelKey: '...'` the file
+ * writes. Tabs, columns and statuses are commonly labelled this way, and
+ * without the step the index held a page's group headings and not its tabs.
+ * A table imported from another file is not followed.
  */
 export function analyseSource(fileName: string, text: string): FileAnalysis {
   const source = ts.createSourceFile(
@@ -129,6 +269,45 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
   const imports: string[] = []
   const refs: KeyRef[] = []
   const scopes: Array<Map<string, string>> = [new Map()]
+
+  // The file's lookup tables and key properties, read before the calls are:
+  // a table is usually declared above the component that reads it, but need
+  // not be.
+  const tables = new Map<string, string[]>()
+  const keyProperties = new Map<string, string[]>()
+  const collect = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const value = unwrap(node.initializer)
+      if (ts.isObjectLiteralExpression(value) || ts.isArrayLiteralExpression(value)) {
+        tables.set(node.name.text, literalValues(value))
+      }
+    }
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name))) {
+      const value = unwrap(node.initializer)
+      if (ts.isStringLiteralLike(value) && KEY_LIKE.test(value.text)) {
+        const values = keyProperties.get(node.name.text) ?? []
+        values.push(value.text)
+        keyProperties.set(node.name.text, values)
+      }
+    }
+    ts.forEachChild(node, collect)
+  }
+  collect(source)
+
+  /** The keys a call reads through a table or a key property of this file. */
+  const lookedUpKeys = (arg: ts.Expression | undefined): { keys: string[]; role?: PageTextRole } => {
+    if (!arg) return { keys: [] }
+    const expression = unwrap(arg)
+    if (ts.isStringLiteralLike(expression) || ts.isTemplateExpression(expression)) return { keys: [] }
+    const root = rootIdentifier(expression)
+    const table = root ? tables.get(root) : undefined
+    if (root && table && !ts.isIdentifier(expression)) return { keys: table, role: roleOfName(root) }
+    if (ts.isPropertyAccessExpression(expression)) {
+      const property = expression.name.text
+      return { keys: keyProperties.get(property) ?? [], role: roleOfName(property) }
+    }
+    return { keys: [] }
+  }
 
   const bind = (name: ts.BindingName, init: ts.Expression) => {
     if (ts.isIdentifier(name)) {
@@ -188,8 +367,17 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
             : null
         const ns = translator ? namespaceOf(translator) : undefined
         if (ns !== undefined) {
-          for (const { key, prefix } of keysOfArgument(node.arguments[0])) {
-            refs.push({ path: ns ? `${ns}.${key}` : key, prefix })
+          const role = roleOfCall(node)
+          const written = keysOfArgument(node.arguments[0])
+          for (const { key, prefix } of written) {
+            refs.push({ path: ns ? `${ns}.${key}` : key, prefix, ...(role ? { role } : {}) })
+          }
+          if (written.length === 0) {
+            const looked = lookedUpKeys(node.arguments[0])
+            const tableRole = looked.role ?? role
+            for (const key of looked.keys) {
+              refs.push({ path: ns ? `${ns}.${key}` : key, prefix: false, ...(tableRole ? { role: tableRole } : {}) })
+            }
           }
         }
       }
@@ -300,6 +488,7 @@ function nestedLayouts(page: string, reader: SourceReader): string[] {
 export function buildPageTextIndex(pages: string[], reader: SourceReader, messages: MessageTree): PageTextIndex {
   const analyses = new Map<string, FileAnalysis | null>()
   const keysOfFile = new Map<string, string[]>()
+  const rolesOfFile = new Map<string, string>()
 
   const analyse = (relative: string): FileAnalysis | null => {
     const cached = analyses.get(relative)
@@ -311,22 +500,24 @@ export function buildPageTextIndex(pages: string[], reader: SourceReader, messag
     }
     analyses.set(relative, result)
     if (result) {
-      const seen = new Set<string>()
-      const keys: string[] = []
+      // A key the file reads twice is listed once, with the first role the
+      // source shows for it.
+      const roleOfKey = new Map<string, PageTextRole | undefined>()
       for (const ref of result.refs) {
         for (const key of expandKeyRef(ref, messages)) {
-          if (seen.has(key)) continue
-          seen.add(key)
-          keys.push(key)
+          if (!roleOfKey.has(key) || (roleOfKey.get(key) === undefined && ref.role)) roleOfKey.set(key, ref.role)
         }
       }
+      const keys = [...roleOfKey.keys()]
       keysOfFile.set(relative, keys)
+      rolesOfFile.set(relative, keys.map((key) => roleOfKey.get(key) ?? NO_PAGE_TEXT_ROLE).join(''))
     }
     return result
   }
 
   const files: string[] = []
   const keys: string[][] = []
+  const roles: string[] = []
   const position = new Map<string, number>()
   const positionOf = (relative: string): number => {
     const known = position.get(relative)
@@ -334,6 +525,7 @@ export function buildPageTextIndex(pages: string[], reader: SourceReader, messag
     const index = files.length
     files.push(relative)
     keys.push(keysOfFile.get(relative) ?? [])
+    roles.push(rolesOfFile.get(relative) ?? '')
     position.set(relative, index)
     return index
   }
@@ -359,7 +551,7 @@ export function buildPageTextIndex(pages: string[], reader: SourceReader, messag
     }
     if (withTexts.length > 0) routes[route] = withTexts
   }
-  return { files, keys, routes }
+  return { files, keys, roles, routes }
 }
 
 // ── CLI ──────────────────────────────────────────────────────

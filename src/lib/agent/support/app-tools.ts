@@ -3,7 +3,7 @@ import { resolveNavPlace } from '@/components/dashboard/nav-v3'
 import { menuTrail, type UiMapInput } from '@/lib/agent/ask/ui-map'
 import type { Locale } from '@/i18n/config'
 import type { MessageTree, PageTextIndex } from './page-text-index'
-import { examplePath, matchRoute, pageParts, renderPageTexts, searchAppTexts } from './page-texts'
+import { examplePath, matchRoute, pageParts, renderPageTexts, searchAppTexts, withRole } from './page-texts'
 
 /**
  * The support assistant's own tools, beside the read-only ledger tools
@@ -73,7 +73,7 @@ export function buildAppTools(input: AppToolsInput): AiToolDef[] {
   const readPage: AiToolDef = {
     name: 'read_page',
     description:
-      'Read what is written on one page of the app: its labels, buttons, tabs, field names and help texts, exactly as the user sees them, grouped by the part of the page they belong to (the page itself, then each dialog or component it renders). Call this before you describe what is on a page or how something is done there. It does not say where on the page a text sits or in which state it is shown. A long page is cut: pass `part` to read one named part, or `search` to get only the texts that contain a word.',
+      'Read what is written on one page of the app: its labels, buttons, tabs, field names and help texts, exactly as the user sees them, grouped by the part of the page they belong to (the page itself, then each dialog or component it renders). A text is followed by what it is in parentheses where that is known: (knapp) button, (flik) tab, (rubrik) heading, (fält) field label, (kolumn) column, (menyval) menu item, (val) option, (länk) link, (platshållare) placeholder, (hjälptext) help text, (status) status. A text with nothing after it has no known role: never call it a button, a tab or anything else. Call this before you describe what is on a page or how something is done there. It does not say where on the page a text sits or in which state it is shown. A long page is cut: pass `part` to read one named part, or `search` to get only the texts that contain a word (a role word such as "flik" gets every text of that role).',
     jsonSchema: {
       type: 'object',
       properties: {
@@ -120,7 +120,7 @@ export function buildAppTools(input: AppToolsInput): AiToolDef[] {
       if (hits.length === 0) return { matches: [], note: `No text in the app contains "${query}".` }
       return {
         matches: hits.map((hit) => ({
-          text: hit.text,
+          text: withRole(hit),
           on: hit.places.map((place) => `${trailOf(place.route)} [${place.part}]`),
         })),
       }

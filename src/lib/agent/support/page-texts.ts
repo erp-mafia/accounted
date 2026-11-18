@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLogger } from '@/lib/logger'
 import type { Locale } from '@/i18n/config'
-import { isPageTextIndex, type MessageTree, type PageTextIndex } from './page-text-index'
+import {
+  isPageTextIndex,
+  isPageTextRole,
+  PAGE_TEXT_ROLES,
+  type MessageTree,
+  type PageTextIndex,
+  type PageTextRole,
+} from './page-text-index'
 
 const log = createLogger('agent.support.page-texts')
 
@@ -16,6 +23,11 @@ const log = createLogger('agent.support.page-texts')
  * an index of the message keys every page and its components read
  * (scripts/generate-support-page-texts.ts), and the texts come from the same
  * message file the user's screen renders from.
+ *
+ * A text carries its role (a button, a tab, a heading, a field ...) where the
+ * source shows it: the element it is rendered in, or the table it is looked
+ * up in. Where the source does not show it the text has no role, and the
+ * assistant is told not to give it one.
  *
  * What it does not know: where on the page a text sits, in which state it is
  * shown, and texts a component gets from somewhere other than its own
@@ -131,24 +143,38 @@ function messageAt(messages: MessageTree, key: string): string | null {
   return typeof current === 'string' ? current : null
 }
 
-// Texts per file position, resolved once per locale and index.
-const resolvedByLocale = new Map<string, { index: PageTextIndex; texts: string[][] }>()
+/** One text of a page, with what it is there when the source shows it. */
+export interface PageText {
+  text: string
+  role?: PageTextRole
+}
 
-function resolvedTexts(index: PageTextIndex, messages: MessageTree, locale: Locale): string[][] {
+/** The text as the assistant is shown it: `Ny faktura (knapp)`, or the text alone when it has no role. */
+export function withRole(item: PageText): string {
+  return item.role ? `${item.text} (${PAGE_TEXT_ROLES[item.role]})` : item.text
+}
+
+// Texts per file position, resolved once per locale and index.
+const resolvedByLocale = new Map<string, { index: PageTextIndex; texts: PageText[][] }>()
+
+function resolvedTexts(index: PageTextIndex, messages: MessageTree, locale: Locale): PageText[][] {
   const cached = resolvedByLocale.get(locale)
   if (cached && cached.index === index) return cached.texts
-  const texts = index.keys.map((keys) => {
-    const seen = new Set<string>()
-    const out: string[] = []
-    for (const key of keys) {
+  const texts = index.keys.map((keys, position) => {
+    const roles = index.roles?.[position] ?? ''
+    const seen = new Map<string, PageText>()
+    keys.forEach((key, i) => {
       const raw = messageAt(messages, key)
-      if (raw === null) continue
+      if (raw === null) return
       const text = plainText(raw)
-      if (!text || seen.has(text)) continue
-      seen.add(text)
-      out.push(text)
-    }
-    return out
+      if (!text) return
+      const role = isPageTextRole(roles[i]) ? roles[i] : undefined
+      const known = seen.get(text)
+      // The same words under two keys are one text; a role found for either holds.
+      if (known) known.role ??= role
+      else seen.set(text, role ? { text, role } : { text })
+    })
+    return [...seen.values()]
   })
   resolvedByLocale.set(locale, { index, texts })
   return texts
@@ -208,7 +234,7 @@ export function examplePath(pattern: string): string {
 export interface PagePart {
   /** The page itself ("page"), a layout above it, or the component the texts belong to ("RotRutPayoutDialog"). */
   name: string
-  texts: string[]
+  texts: PageText[]
 }
 
 function partName(file: string): string {
@@ -226,9 +252,9 @@ export function pageParts(index: PageTextIndex, pattern: string, messages: Messa
   const used = new Map<string, number>()
   const parts: PagePart[] = []
   for (const position of positions) {
-    const own = (texts[position] ?? []).filter((text) => !seen.has(text))
+    const own = (texts[position] ?? []).filter((item) => !seen.has(item.text))
     if (own.length === 0) continue
-    for (const text of own) seen.add(text)
+    for (const item of own) seen.add(item.text)
     const base = partName(index.files[position])
     const count = (used.get(base) ?? 0) + 1
     used.set(base, count)
@@ -255,7 +281,7 @@ function queryWords(query: string): string[] {
 export interface RenderPageOptions {
   /** Only this part, by its name. */
   part?: string
-  /** Only texts that contain every word. */
+  /** Only texts that contain every word; a role word ("flik", "knapp") matches the texts of that role. */
   search?: string
   maxChars?: number
 }
@@ -279,7 +305,7 @@ export function renderPageTexts(parts: PagePart[], options: RenderPageOptions = 
   const words = options.search ? queryWords(options.search) : []
   if (words.length > 0) {
     selected = selected
-      .map((part) => ({ ...part, texts: part.texts.filter((text) => includesAll(text, words)) }))
+      .map((part) => ({ ...part, texts: part.texts.filter((item) => includesAll(withRole(item), words)) }))
       .filter((part) => part.texts.length > 0)
     if (selected.length === 0) return `Ingen text på sidan innehåller "${options.search}".`
   }
@@ -288,7 +314,8 @@ export function renderPageTexts(parts: PagePart[], options: RenderPageOptions = 
   const leftOut: PagePart[] = []
   let used = 0
   for (const part of selected) {
-    const line = `[${part.name}] ${part.texts.join(' | ')}`
+    const shown = part.texts.map(withRole)
+    const line = `[${part.name}] ${shown.join(' | ')}`
     if (used > 0 && used + line.length > maxChars) {
       leftOut.push(part)
       continue
@@ -297,12 +324,12 @@ export function renderPageTexts(parts: PagePart[], options: RenderPageOptions = 
       // One part longer than the whole budget: as much of it as fits, whole texts only.
       const kept: string[] = []
       let size = part.name.length + 3
-      for (const text of part.texts) {
+      for (const text of shown) {
         if (size + text.length + 3 > maxChars) break
         kept.push(text)
         size += text.length + 3
       }
-      lines.push(`[${part.name}] ${kept.join(' | ')} | (${part.texts.length - kept.length} texter till i den här delen: sök med search)`)
+      lines.push(`[${part.name}] ${kept.join(' | ')} | (${shown.length - kept.length} texter till i den här delen: sök med search)`)
       used += size
       continue
     }
@@ -323,6 +350,8 @@ export function renderPageTexts(parts: PagePart[], options: RenderPageOptions = 
 
 export interface AppTextHit {
   text: string
+  /** What the text is where it was first found, when the source shows it. */
+  role?: PageTextRole
   /** Where the text is shown: route pattern and the part of the page. */
   places: Array<{ route: string; part: string }>
 }
@@ -349,13 +378,14 @@ export function searchAppTexts(
   for (const pattern of Object.keys(index.routes).sort()) {
     if (!isVisible(pattern)) continue
     for (const position of index.routes[pattern]) {
-      for (const text of texts[position] ?? []) {
-        if (!includesAll(text, words)) continue
-        const hit = hits.get(text) ?? { text, places: [] }
+      for (const item of texts[position] ?? []) {
+        if (!includesAll(item.text, words)) continue
+        const hit: AppTextHit = hits.get(item.text) ?? { text: item.text, places: [] }
+        hit.role ??= item.role
         if (hit.places.length < MAX_PLACES_PER_HIT && !hit.places.some((p) => p.route === pattern)) {
           hit.places.push({ route: pattern, part: partName(index.files[position]) })
         }
-        hits.set(text, hit)
+        hits.set(item.text, hit)
       }
     }
   }

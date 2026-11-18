@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { SEND_TO_SUPPORT_LABEL, supportSystemPrompt } from '../prompt'
+import { PAGE_TEXT_ROLES } from '../page-text-index'
 import { isSupportAssistantEnabled, supportAssistantEffort, supportAssistantRollout } from '../rollout'
 
-const COMPANY = 'ed461bc1-dbb5-4568-ae20-9337515878e2'
+const COMPANY = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OTHER = '11111111-2222-4333-8444-555555555555'
 
 describe('supportSystemPrompt', () => {
@@ -40,6 +41,14 @@ describe('supportSystemPrompt', () => {
   it('requires a page read behind every step it describes, also after it has declined to do the thing', () => {
     expect(full).toContain('ska bygga på ett read_page-anrop för just den sidan')
     expect(full).toContain('när du först säger nej')
+  })
+
+  it('names a text as a button or a tab only when read_page marks it so', () => {
+    expect(full).toContain('Kalla bara en text för knapp, flik eller liknande när den är märkt så')
+    expect(full).toContain('i stället för att välja bland de omärkta texterna')
+    expect(full).toContain('Märkningen är till för dig')
+    // Every role word the reader can attach is one the prompt explains.
+    for (const word of Object.values(PAGE_TEXT_ROLES)) expect(full).toContain(`(${word})`)
   })
 
   it('answers a rule from the skill library, and says so when it has none to read', () => {

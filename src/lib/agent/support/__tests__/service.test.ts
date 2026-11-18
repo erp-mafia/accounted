@@ -31,7 +31,7 @@ vi.mock('@/lib/agent/ask/snapshot', () => ({
   buildAssistantSnapshot: vi.fn().mockResolvedValue('Moms: kvartal.'),
 }))
 vi.mock('@/lib/agent/ask/ask-service', () => ({
-  companyProfileLine: vi.fn().mockResolvedValue('Företag: Arcim Technology AB (aktiebolag).'),
+  companyProfileLine: vi.fn().mockResolvedValue('Företag: Exempelbolaget AB (aktiebolag).'),
 }))
 
 const loadNavGateContext = vi.fn()
@@ -54,7 +54,7 @@ import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
 import { LEDGER_READ_TOOLS } from '@/lib/agent/ask/ledger-tools'
 
 const supabase = {} as SupabaseClient
-const COMPANY = 'ed461bc1-dbb5-4568-ae20-9337515878e2'
+const COMPANY = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INDEX: PageTextIndex = {
   files: ['app/(dashboard)/invoices/page.tsx'],
   keys: [['nav.help']],
@@ -112,13 +112,13 @@ describe('answerSupportQuestion', () => {
   it('puts what differs per company and question in the user turn: the company, its standing, its menu, the question', async () => {
     await ask()
     const prompt: string = generateText.mock.calls[0][0].prompt
-    expect(prompt.startsWith('Företag: Arcim Technology AB (aktiebolag).')).toBe(true)
+    expect(prompt.startsWith('Företag: Exempelbolaget AB (aktiebolag).')).toBe(true)
     expect(prompt).toContain('Moms: kvartal.')
     expect(prompt).toContain('Appens meny för det här bolaget')
     expect(prompt).toContain('(/invoices)')
     expect(prompt.endsWith('Fråga: Var skapar jag en faktura?')).toBe(true)
     // Nothing of the company in the part every company shares.
-    expect(generateText.mock.calls[0][0].system).not.toContain('Arcim')
+    expect(generateText.mock.calls[0][0].system).not.toContain('Exempelbolaget')
   })
 
   it('runs the read tools as the asking user in the conversation, for the audit trail: the ledger readers plus the skill readers', async () => {

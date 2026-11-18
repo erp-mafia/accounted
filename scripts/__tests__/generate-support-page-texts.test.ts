@@ -45,8 +45,9 @@ describe('analyseSource', () => {
        }`,
     )
     expect(refs).toEqual([
-      { path: 'invoices.title', prefix: false },
-      { path: 'invoices.new_invoice', prefix: false },
+      // A title on a button is its tooltip; the text inside it is the button.
+      { path: 'invoices.title', prefix: false, role: 'd' },
+      { path: 'invoices.new_invoice', prefix: false, role: 'b' },
     ])
   })
 
@@ -121,6 +122,101 @@ describe('analyseSource', () => {
        const Lazy = dynamic(() => import('./Lazy'))`,
     )
     expect(imports).toEqual(['./A', 'next/dynamic', '@/components/C', './Lazy'])
+  })
+})
+
+describe('analyseSource: keys read through a table of the file', () => {
+  it('reads every text of a lookup table the translator is called with, as tabs when the table says so', () => {
+    const { refs } = analyseSource(
+      'app/(dashboard)/invoices/page.tsx',
+      `import { useTranslations } from 'next-intl'
+       const TAB_LABEL_KEYS: Record<string, string> = { all: 'tab_all', unpaid: 'tab_unpaid', nested: ['tab_overdue'] }
+       const WIDTHS = { all: 'w-10' }
+       export default function Page({ tab }) {
+         const t = useTranslations('invoices')
+         return <div className={WIDTHS[tab]}>{t(TAB_LABEL_KEYS[tab])}</div>
+       }`,
+    )
+    expect(refs).toEqual([
+      { path: 'invoices.tab_all', prefix: false, role: 't' },
+      { path: 'invoices.tab_unpaid', prefix: false, role: 't' },
+      { path: 'invoices.tab_overdue', prefix: false, role: 't' },
+    ])
+  })
+
+  it('reads a table declared below the component, and one written with as const or satisfies', () => {
+    const { refs } = analyseSource(
+      'components/Below.tsx',
+      `import { useTranslations } from 'next-intl'
+       export function Below({ s }) { const t = useTranslations('invoices'); return <i>{t(STATUS_KEYS[s])}</i> }
+       const STATUS_KEYS = { draft: 'status_draft', sent: 'status_sent' } as const satisfies Record<string, string>`,
+    )
+    expect(refs.map((r) => [r.path, r.role])).toEqual([
+      ['invoices.status_draft', 's'],
+      ['invoices.status_sent', 's'],
+    ])
+  })
+
+  it('reads every value the file writes for a key property the translator is called with', () => {
+    const { refs } = analyseSource(
+      'components/Columns.tsx',
+      `import { useTranslations } from 'next-intl'
+       const COLUMNS = [{ id: 'a', headerKey: 'col_date' }, { id: 'b', headerKey: 'col_amount' }]
+       export function Columns() {
+         const t = useTranslations('invoices')
+         return <tr>{COLUMNS.map((column) => <td key={column.id}>{t(column.headerKey)}</td>)}</tr>
+       }`,
+    )
+    expect(refs.map((r) => [r.path, r.role])).toEqual([
+      ['invoices.col_date', 'c'],
+      ['invoices.col_amount', 'c'],
+    ])
+  })
+
+  it('does not follow a bare variable or a table of another file', () => {
+    const { refs } = analyseSource(
+      'components/Bare.tsx',
+      `import { useTranslations } from 'next-intl'
+       import { REMOTE_KEYS } from './keys'
+       const LOCAL = { a: 'title' }
+       export function Bare({ key }) { const t = useTranslations('invoices'); return <i>{t(key)}{t(REMOTE_KEYS[key])}{t(LOCAL)}</i> }`,
+    )
+    expect(refs).toEqual([])
+  })
+})
+
+describe('analyseSource: what a text is on the page', () => {
+  const roleOf = (jsx: string) =>
+    analyseSource(
+      'components/Role.tsx',
+      `import { useTranslations } from 'next-intl'
+       export function Role() { const t = useTranslations('invoices'); return ${jsx} }`,
+    ).refs.map((r) => r.role)
+
+  it('takes the role of the element the text is rendered in, up to three elements up', () => {
+    expect(roleOf(`<Button><span>{t('new_invoice')}</span></Button>`)).toEqual(['b'])
+    expect(roleOf(`<DialogTitle>{t('title')}</DialogTitle>`)).toEqual(['h'])
+    expect(roleOf(`<Label htmlFor="x">{t('title')}</Label>`)).toEqual(['f'])
+    expect(roleOf(`<th>{t('title')}</th>`)).toEqual(['c'])
+    expect(roleOf(`<DropdownMenu.Item><b>{t('title')}</b></DropdownMenu.Item>`)).toEqual([undefined])
+    expect(roleOf(`<DropdownMenuItem><b>{t('title')}</b></DropdownMenuItem>`)).toEqual(['m'])
+    expect(roleOf(`<Button><a1><a2><a3>{t('title')}</a3></a2></a1></Button>`)).toEqual([undefined])
+  })
+
+  it('takes a prop of an element by the element, a placeholder and a help attribute by themselves', () => {
+    expect(roleOf(`<PageHeader title={t('title')} description={t('nested.hint')} />`)).toEqual(['h', 'd'])
+    expect(roleOf(`<SettingsRow label={t('title')} />`)).toEqual(['f'])
+    expect(roleOf(`<input placeholder={t('title')} />`)).toEqual(['p'])
+    expect(roleOf(`<SegmentedControl options={[{ value: 'a', label: t('paid') }]} aria-label={t('title')} />`)).toEqual(['t', undefined])
+    expect(roleOf(`<Button title={t('title')} aria-label={t('paid')} />`)).toEqual(['d', 'b'])
+  })
+
+  it('gives no role to a text the source does not place', () => {
+    expect(roleOf(`<div><p>{t('title')}</p></div>`)).toEqual([undefined])
+    expect(analyseSource('lib/x.ts', `import { getTranslations } from 'next-intl/server'
+      export async function x() { const t = await getTranslations('invoices'); return t('title') }`).refs).toEqual([
+      { path: 'invoices.title', prefix: false },
+    ])
   })
 })
 
@@ -244,8 +340,17 @@ describe('buildPageTextIndex', () => {
     expect(index.files).not.toContain('lib/invoices/deep.ts')
   })
 
-  it('has no entry for a page without texts, and keeps files and keys in step', () => {
+  it('has no entry for a page without texts, and keeps files, keys and roles in step', () => {
     expect(index.routes['/empty']).toBeUndefined()
     expect(index.files.length).toBe(index.keys.length)
+    expect(index.roles?.length).toBe(index.keys.length)
+    index.keys.forEach((keys, position) => expect(index.roles?.[position]).toHaveLength(keys.length))
+  })
+
+  it('records what each text is: the button in the list, nothing for the title the page hands on', () => {
+    const list = index.files.indexOf('components/invoices/InvoiceList.tsx')
+    expect(index.roles?.[list]).toBe('b')
+    const page = index.files.indexOf('app/(dashboard)/invoices/page.tsx')
+    expect(index.roles?.[page]).toBe('-')
   })
 })

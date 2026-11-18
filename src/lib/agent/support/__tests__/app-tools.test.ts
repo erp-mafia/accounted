@@ -22,6 +22,8 @@ const INDEX: PageTextIndex = {
     'app/(dashboard)/salary/runs/[id]/page.tsx',
   ],
   keys: [['nav.help'], ['nav.help'], ['nav.help'], ['nav.help']],
+  // The invoices page shows the text as a button; the others do not say what it is.
+  roles: ['b', '-', '-', '-'],
   routes: { '/invoices': [0], '/salary': [1], '/help': [2], '/salary/runs/[id]': [3] },
 }
 const MESSAGES = sv as unknown as MessageTree
@@ -72,7 +74,10 @@ describe('buildAppTools', () => {
     const out = (await tools(WIDE).byName('read_page').execute({ path: '/invoices' })) as { page: string; texts: string }
     expect(out.page).toContain('(/invoices)')
     expect(out.page).toContain('→')
-    expect(out.texts).toBe(`[page] ${sv.nav.help}`)
+    expect(out.texts).toBe(`[page] ${sv.nav.help} (knapp)`)
+    // The same text on a page that does not place it carries no role.
+    const help = (await tools(WIDE).byName('read_page').execute({ path: '/help' })) as { texts: string }
+    expect(help.texts).toBe(`[page] ${sv.nav.help}`)
   })
 
   it('read_page refuses a page the company does not have, a path without a slash and an unknown page', async () => {
