@@ -34,6 +34,29 @@ describe('redactString', () => {
     )
   })
 
+  it('masks a whole base64url credential, hyphens included', () => {
+    // Half of all keys contain a '-': the pattern used to stop there.
+    const key = 'gnubok_sk_aB3-dE_f9-Zz0QwErTy-12'
+    const out = redactString(`auth failed for key ${key} on /v1`)
+    expect(out).toBe('auth failed for key [REDACTED_API_KEY] on /v1')
+    expect(out).not.toContain('dE_f9')
+    expect(out).not.toContain('12')
+  })
+
+  it('masks refresh tokens and connector keys too', () => {
+    expect(redactString('reuse of gnubok_rt_abc-DEF_123 detected')).toBe(
+      'reuse of [REDACTED_API_KEY] detected',
+    )
+    expect(redactString('connector gnubok_ck_live_x-y_z rejected')).toBe(
+      'connector [REDACTED_API_KEY] rejected',
+    )
+  })
+
+  it('leaves MCP tool names in the gnubok_ namespace readable', () => {
+    expect(redactString('tool gnubok_get_invoice_pdf failed')).toBe('tool gnubok_get_invoice_pdf failed')
+    expect(redactString('tool gnubok_set_voucher_note failed')).toBe('tool gnubok_set_voucher_note failed')
+  })
+
   it('scrubs Swedish IBANs, compact and space-grouped', () => {
     expect(redactString('payout to SE4550000000058398257466 bounced')).toBe(
       'payout to [REDACTED_IBAN] bounced',

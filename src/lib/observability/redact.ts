@@ -54,10 +54,15 @@ export const REDACT_KEYS = new Set([
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const PERSONNUMMER_PATTERN = /\b\d{6}-?\d{4}\b|\b\d{8}-?\d{4}\b/
-// gnubok API keys (secret keys and invite tokens). The wire-format prefix is
+// Credentials this app issues: API keys (sk), invite tokens (inv), MCP OAuth
+// refresh tokens (rt) and connector keys (ck). The wire-format prefix is
 // permanent (see CLAUDE.md: the gnubok_* prefixes are kept on purpose), so
-// this pattern will not rot with the Accounted rename.
-const API_KEY_PATTERN = /gnubok_(?:sk|inv)_[A-Za-z0-9_]+/g
+// this pattern will not rot with the Accounted rename. The prefixes are
+// listed, not matched loosely: MCP tool names share the gnubok_ namespace
+// (gnubok_get_..., gnubok_set_...) and must stay readable in logs. The body
+// is base64url, which includes '-': without it in the class the match stopped
+// at the first hyphen and left the rest of the credential in the log line.
+const API_KEY_PATTERN = /gnubok_(?:sk|inv|rt|ck)_[A-Za-z0-9_-]+/g
 // Swedish IBAN: SE + 22 digits, optionally grouped with spaces
 // ("SE4550000000058398257466" or "SE45 5000 0000 0583 9825 7466").
 const SE_IBAN_PATTERN = /\bSE(?:\s?\d){22}\b/g
