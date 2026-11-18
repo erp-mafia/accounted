@@ -101,7 +101,7 @@ describe('planTwins', () => {
     expect(planTwins(feeds, files).setAside).toEqual([])
   })
 
-  // Review of !1: a second run, or a move back, must find nothing to do.
+  // A second run, or a move back, must find nothing to do.
   it('counts rows already set aside, so a second run sets aside nothing more', () => {
     const f1 = row('file', '2026-05-05', 99, false)
     const f2 = row('file', '2026-05-05', 99, true)
@@ -233,7 +233,7 @@ describe('applyTwins', () => {
     expect(appendProcessingHistory).not.toHaveBeenCalled()
   })
 
-  // Review of !1: a failure part way must not leave set-aside rows unrecorded.
+  // A failure part way must not leave set-aside rows unrecorded.
   it('records the rows of earlier chunks when a later chunk fails, then rethrows', async () => {
     const many = Array.from({ length: 150 }, (_, i) => ({ transaction_id: `feed-${i}`, twin_transaction_id: `file-${i}` }))
     const where = many.flatMap((s) => [

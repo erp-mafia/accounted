@@ -1,1 +1,0 @@
-[2026-11-18] An approved AGI waits when Skatteverket is down (502/503/504 or no answer), as the momsdeklaration does: approving again runs the calls a re-staged proposal would, and nothing is filed before the BankID signature.
