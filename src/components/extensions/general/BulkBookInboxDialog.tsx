@@ -22,6 +22,25 @@ import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isOpenInboxItem } from '@/lib/documents/inbox-item-state'
 import { summarizeUnderlagTotals } from './bulk-book-inbox-totals'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+
+// The server's reason for an underlag held back because its booking changes
+// the underlag for a momsdeklaration already filed
+// (lib/transactions/categorize-core.ts, bulkBookMatchedInboxItems).
+const FILED_VAT_REASON = 'filed_vat_period'
+
+interface BulkBookSkipped {
+  item_id: string
+  reason?: string
+  warning?: VoucherWarning
+}
+
+/** What one send of the batch answered. */
+interface BulkBookSend {
+  bookedCount: number
+  skipped: BulkBookSkipped[]
+}
 
 // Minimal shape the dialog needs from the workspace's inbox items.
 interface BulkBookInboxItem {
@@ -89,6 +108,15 @@ const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
   { value: 'exempt', label: 'Momsfri' },
 ]
 
+/** The held underlag's warnings, one per distinct text: a selection usually shares one filed period. */
+function distinctWarnings(held: BulkBookSkipped[]): VoucherWarning[] {
+  const byText = new Map<string, VoucherWarning>()
+  for (const { warning } of held) {
+    if (warning && !byText.has(warning.message_sv)) byText.set(warning.message_sv, warning)
+  }
+  return [...byText.values()]
+}
+
 function isBookable(it: BulkBookInboxItem): boolean {
   return (
     Boolean(it.matched_transaction_id) &&
@@ -107,6 +135,13 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
   const [category, setCategory] = useState<string>('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'auto'>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // The first send's outcome while the person is asked about the underlag it
+  // held back (reason filed_vat_period); null when nothing is being asked.
+  const [filedVatAsk, setFiledVatAsk] = useState<BulkBookSend | null>(null)
+  const heldFiledVat = useMemo(
+    () => (filedVatAsk?.skipped ?? []).filter((s) => s.reason === FILED_VAT_REASON),
+    [filedVatAsk],
+  )
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
   const notMatched = useMemo(
@@ -175,49 +210,113 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
   const underlagTotals = useMemo(() => summarizeUnderlagTotals(bookable), [bookable])
   const isMixedCurrency = underlagTotals.length > 1
 
+  // One send of the batch: the given underlag with the dialog's category,
+  // moms and dimensions. `confirmFiledVat` is the person's answer for the
+  // underlag the first send held back.
+  const send = async (itemIds: string[], confirmFiledVat: boolean): Promise<BulkBookSend> => {
+    const res = await fetch('/api/extensions/ext/invoice-inbox/items/bulk-book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_ids: itemIds,
+        category,
+        ...(vatTreatment !== 'auto' ? { vat_treatment: vatTreatment } : {}),
+        ...(dimensionsEnabled && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+        ...(confirmFiledVat ? { confirm_filed_vat_period: true } : {}),
+      }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(getUserErrorMessage(json, { locale: errorLocale, statusCode: res.status }))
+    }
+    return {
+      bookedCount: json.data?.booked_count ?? 0,
+      skipped: Array.isArray(json.data?.skipped) ? (json.data.skipped as BulkBookSkipped[]) : [],
+    }
+  }
+
+  // The one toast for the whole batch, then the list is read again.
+  const finish = async ({ bookedCount, skipped }: BulkBookSend) => {
+    const skippedFor = (reason: string) => skipped.filter((s) => s.reason === reason).length
+    const noBoxCount = skippedFor('reverse_charge_box_unknown')
+    const sellerVatCount = skippedFor('reverse_charge_seller_vat')
+    const filedVatCount = skippedFor(FILED_VAT_REASON)
+    // Held back on the person's own word, not skipped: told apart below.
+    const skippedCount = skipped.length - filedVatCount
+    const parts: string[] = []
+    if (bookedCount > 0) parts.push(`${bookedCount} bokförda`)
+    if (skippedCount > 0) parts.push(`${skippedCount} överhoppade`)
+    if (noBoxCount > 0) parts.push(t('reverse_charge_skipped', { count: noBoxCount }))
+    if (sellerVatCount > 0) parts.push(t('reverse_charge_seller_vat_skipped', { count: sellerVatCount }))
+    if (filedVatCount > 0) parts.push(t('filed_vat_held_back', { count: filedVatCount }))
+    toast({
+      title: 'Bulkbokföring klar',
+      description: parts.join(' · ') || 'Inga underlag bokfördes',
+      variant: bookedCount === 0 ? 'destructive' : 'default',
+    })
+    onOpenChange(false)
+    await onSuccess()
+  }
+
   const submit = async () => {
     if (!category || bookable.length === 0) return
     setIsSubmitting(true)
     try {
-      const res = await fetch('/api/extensions/ext/invoice-inbox/items/bulk-book', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item_ids: bookable.map((it) => it.id),
-          category,
-          ...(vatTreatment !== 'auto' ? { vat_treatment: vatTreatment } : {}),
-          ...(dimensionsEnabled && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
-        }),
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(getUserErrorMessage(json, { locale: errorLocale, statusCode: res.status }))
+      const first = await send(bookable.map((it) => it.id), false)
+      // Underlag whose booking changes the underlag for a momsdeklaration
+      // already filed were held back: the rest are booked, and the person is
+      // asked once about these.
+      if (first.skipped.some((s) => s.reason === FILED_VAT_REASON)) {
+        setFiledVatAsk(first)
+        return
       }
-      const bookedCount: number = json.data?.booked_count ?? 0
-      const skippedCount: number = json.data?.skipped_count ?? 0
-      const skippedFor = (reason: string) => Array.isArray(json.data?.skipped)
-        ? (json.data.skipped as Array<{ reason?: string }>).filter((s) => s.reason === reason).length
-        : 0
-      const noBoxCount = skippedFor('reverse_charge_box_unknown')
-      const sellerVatCount = skippedFor('reverse_charge_seller_vat')
-      const parts: string[] = []
-      if (bookedCount > 0) parts.push(`${bookedCount} bokförda`)
-      if (skippedCount > 0) parts.push(`${skippedCount} överhoppade`)
-      if (noBoxCount > 0) parts.push(t('reverse_charge_skipped', { count: noBoxCount }))
-      if (sellerVatCount > 0) parts.push(t('reverse_charge_seller_vat_skipped', { count: sellerVatCount }))
-      toast({
-        title: 'Bulkbokföring klar',
-        description: parts.join(' · ') || 'Inga underlag bokfördes',
-        variant: bookedCount === 0 ? 'destructive' : 'default',
-      })
-      onOpenChange(false)
-      await onSuccess()
+      await finish(first)
     } catch (err) {
       toast({
         title: 'Bokföringen misslyckades',
         description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  // The answer to the one question: "Bokför ändå" sends the held underlag
+  // again with the confirmation, "Avbryt" leaves them unbooked. Either way
+  // the first send's bookings stand and the toast tells the whole batch.
+  const answerFiledVat = async (confirmed: boolean) => {
+    const first = filedVatAsk
+    if (!first) return
+    if (!confirmed) {
+      setFiledVatAsk(null)
+      await finish(first)
+      return
+    }
+    const held = first.skipped.filter((s) => s.reason === FILED_VAT_REASON)
+    setIsSubmitting(true)
+    try {
+      const second = await send(held.map((s) => s.item_id), true)
+      setFiledVatAsk(null)
+      await finish({
+        bookedCount: first.bookedCount + second.bookedCount,
+        skipped: [...first.skipped.filter((s) => s.reason !== FILED_VAT_REASON), ...second.skipped],
+      })
+    } catch (err) {
+      // One toast (a second would replace it): the failure, and what the
+      // first send booked. The list is read again, so whatever the failed
+      // send did reach shows as it is.
+      const reason = err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel'
+      toast({
+        title: 'Bokföringen misslyckades',
+        description: [reason, first.bookedCount > 0 ? t('filed_vat_already_booked', { count: first.bookedCount }) : null]
+          .filter(Boolean)
+          .join(' '),
+        variant: 'destructive',
+      })
+      setFiledVatAsk(null)
+      onOpenChange(false)
+      await onSuccess()
     } finally {
       setIsSubmitting(false)
     }
@@ -340,6 +439,30 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Asked once for every underlag the server held back: the typed
+          verifikat's confirm dialog, each distinct warning shown once. */}
+      {filedVatAsk && (
+        <VoucherWarningsDialog
+          warnings={distinctWarnings(heldFiledVat)}
+          processing={isSubmitting}
+          // The first send has booked the rest already: said first, so
+          // leaving the held ones is not read as undoing the batch.
+          intro={[
+            filedVatAsk.bookedCount > 0 ? t('filed_vat_already_booked', { count: filedVatAsk.bookedCount }) : null,
+            t('filed_vat_intro', { count: heldFiledVat.length }),
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          cancelLabel={t('filed_vat_leave')}
+          // Escape or a click outside while the held ones are being booked
+          // is no answer.
+          onCancel={() => {
+            if (!isSubmitting) void answerFiledVat(false)
+          }}
+          onConfirm={() => void answerFiledVat(true)}
+        />
+      )}
     </Dialog>
   )
 }

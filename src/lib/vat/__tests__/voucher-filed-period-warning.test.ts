@@ -97,6 +97,21 @@ describe('filedPeriodVoucherWarning: a new verifikat', () => {
     })
   })
 
+  it('speaks of a booking, with no date to pick, for a samlingsverifikat or an underlag booked from Inkorgen', async () => {
+    filedOn({ '2026-09-27': Q3 })
+
+    const warning = await filedPeriodVoucherWarning(supabase, 'c-1', { entry_date: '2026-09-27', lines: purchase(125) }, 'booking')
+
+    expect(warning?.message_sv).toBe(
+      'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). ' +
+        'Görs bokningen kan deklarationen behöva rättas.',
+    )
+    expect(warning?.message_en).toBe(
+      'The booking changes the figures behind a VAT return already filed: 2026-Q3 (filed 2026-11-11). ' +
+        'If it is made, the return may need correcting.',
+    )
+  })
+
   it('says nothing, and reads no more, when the date lies in no filed period', async () => {
     const warning = await filedPeriodVoucherWarning(supabase, 'c-1', { entry_date: '2026-10-20', lines: purchase(125) })
 

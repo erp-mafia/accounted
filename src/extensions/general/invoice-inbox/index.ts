@@ -85,8 +85,10 @@ import {
 import { inboxAddressCarriesName } from '@/lib/documents/inbox-address'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
-import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
+import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, DashboardBulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
+import { filedPeriodCategorizeWarning } from '@/lib/transactions/filed-vat-categorize'
+import { recordVoucherWarningsAcknowledged } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -2442,14 +2444,20 @@ export const invoiceInboxExtension: Extension = {
     // supplier-invoice-linked items are skipped, not errored, so the batch is
     // resilient. Reuses the same categorize core as the single-item agent flow,
     // so reverse-charge moms on foreign services is handled correctly.
+    //
+    // An underlag whose booking changes the underlag for a momsdeklaration
+    // already filed is held back (skipped, reason filed_vat_period, with the
+    // warning) until the same items come back with confirm_filed_vat_period:
+    // the dialog asks once for all of them
+    // (lib/transactions/filed-vat-categorize.ts).
     {
       method: 'POST',
       path: '/items/bulk-book',
       handler: async (request: Request, ctx: ExtensionContext) => {
-        let body: z.infer<typeof BulkBookInboxSchema>
+        let body: z.infer<typeof DashboardBulkBookInboxSchema>
         try {
           const json = await request.json()
-          body = BulkBookInboxSchema.parse(json)
+          body = DashboardBulkBookInboxSchema.parse(json)
         } catch (err) {
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Invalid request body' },
@@ -2457,11 +2465,33 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
+        const { confirm_filed_vat_period: confirmedFiledVat, ...booking } = body
+        const bulkLog = createLogger('invoice-inbox.bulk-book')
         const { booked, skipped } = await bulkBookMatchedInboxItems(
           ctx.supabase,
           ctx.userId,
           ctx.companyId,
-          body,
+          booking,
+          {
+            filedVat: {
+              confirmed: confirmedFiledVat === true,
+              ask: (transactionId, input, options) =>
+                filedPeriodCategorizeWarning(ctx.supabase, ctx.userId, ctx.companyId, transactionId, input, {
+                  ...options,
+                  subject: 'booking',
+                  log: bulkLog,
+                }),
+              record: (journalEntryId, warning) =>
+                recordVoucherWarningsAcknowledged({
+                  companyId: ctx.companyId,
+                  userId: ctx.userId,
+                  journalEntryId,
+                  warnings: [warning],
+                  door: 'dashboard_inbox_bulk_book',
+                  log: bulkLog,
+                }),
+            },
+          },
         )
 
         return NextResponse.json({

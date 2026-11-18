@@ -14,12 +14,17 @@
  * The cheap question comes first: the row's date against the filing record.
  * Only a row dated in a filed period pays for the dry run, and only a
  * booking that moves a ruta of that period is asked about.
+ *
+ * Inkorgen's "Bokför valda" books each underlag against its bank row through
+ * the same categorize core and asks the same question per underlag
+ * (bulkBookMatchedInboxItems hands its own booking options in). A new
+ * samlingsverifikat is asked in ./filed-vat-bulk-book.ts.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import type { Logger } from '@/lib/logger'
 import { filedVatPeriodsOfDates } from '@/lib/vat/filed-period-for-date'
-import { filedPeriodVoucherWarning } from '@/lib/vat/voucher-filed-period-warning'
+import { filedPeriodVoucherWarning, type FiledPeriodWarningSubject } from '@/lib/vat/voucher-filed-period-warning'
 import { categorizeTransaction, type CategorizeInput, type CategorizeOptions } from './categorize-core'
 
 /**
@@ -28,6 +33,9 @@ import { categorizeTransaction, type CategorizeInput, type CategorizeOptions } f
  * be refused anyway (the booking itself then says why), or its lines move no
  * ruta of the filed period. A check that cannot be made is null too, logged:
  * it never stops a booking.
+ *
+ * `options` are the booking's own (the dry run must build the lines the
+ * booking will post), plus what the text speaks of: a bank row by default.
  */
 export async function filedPeriodCategorizeWarning(
   supabase: SupabaseClient,
@@ -35,8 +43,9 @@ export async function filedPeriodCategorizeWarning(
   companyId: string,
   transactionId: string,
   booking: CategorizeInput,
-  options: Pick<CategorizeOptions, 'onBooked' | 'withoutReview'> & { log: Logger },
+  options: Omit<CategorizeOptions, 'dryRun' | 'log'> & { log: Logger; subject?: FiledPeriodWarningSubject },
 ): Promise<VoucherWarning | null> {
+  const { log, subject = 'bank_row', ...bookingOptions } = options
   try {
     const { data: row, error } = await supabase
       .from('transactions')
@@ -52,10 +61,9 @@ export async function filedPeriodCategorizeWarning(
     if (!filed.has(date)) return null
 
     const dry = await categorizeTransaction(supabase, userId, companyId, transactionId, booking, {
-      onBooked: options.onBooked,
-      ...(options.withoutReview ? { withoutReview: true } : {}),
+      ...bookingOptions,
       dryRun: true,
-      log: options.log,
+      log,
     })
     if (!dry.ok || !dry.dryRun || !dry.preview.would_create_journal_entry) return null
 
@@ -70,10 +78,10 @@ export async function filedPeriodCategorizeWarning(
           credit_amount: Number(line.credit_amount) || 0,
         })),
       },
-      'bank_row',
+      subject,
     )
   } catch (err) {
-    options.log.warn('filed VAT period check failed before a category booking (continuing)', {
+    log.warn('filed VAT period check failed before a category booking (continuing)', {
       transactionId,
       error: err instanceof Error ? err.message : String(err),
     })

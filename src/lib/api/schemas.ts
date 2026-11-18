@@ -3116,6 +3116,18 @@ export const BulkBookInboxSchema = z.object({
   dimensions: DimensionsBagSchema.nullish().transform((v) => v ?? undefined),
 })
 
+/**
+ * POST /items/bulk-book, Inkorgen's "Bokför valda": the shared body plus the
+ * person's answer about the underlag held back because their booking changes
+ * the underlag for a momsdeklaration already filed (skipped with reason
+ * filed_vat_period, lib/transactions/filed-vat-categorize.ts). Sent again
+ * with it, those are booked and recorded as booked past the warning. Kept
+ * off the staged params: an approval has nobody to ask.
+ */
+export const DashboardBulkBookInboxSchema = BulkBookInboxSchema.extend({
+  confirm_filed_vat_period: z.boolean().optional(),
+})
+
 const matchInvoiceFields = z
   .object({
     invoice_id: uuid,
@@ -3352,6 +3364,20 @@ export const BulkBookSchema = z
       })
     }
   })
+
+/**
+ * POST /api/transactions/bulk-book, the dashboard's door: the shared body
+ * plus the person's answer to BULK_BOOK_VAT_PERIOD_FILED, a new
+ * samlingsverifikat dated in a momsperiod whose declaration is filed, with
+ * lines that change the underlag for it
+ * (lib/transactions/filed-vat-bulk-book.ts). The check runs again on the
+ * confirmed send, and the booking is recorded as made past it. Kept off the
+ * v1 and MCP body: a staged samlingsverifikat carries the note on its
+ * proposal instead.
+ */
+export const DashboardBulkBookSchema = BulkBookSchema.safeExtend({
+  confirm_filed_vat_period: z.boolean().optional(),
+})
 
 /**
  * Allocate one bank transaction across N customer OR N supplier invoices.

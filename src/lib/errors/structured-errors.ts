@@ -1213,6 +1213,16 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_bulk_book_transactions',
     },
   },
+  // The dashboard's bulk-book door asks before a new samlingsverifikat dated
+  // in a filed momsperiod is booked with lines the declaration reads
+  // (lib/transactions/filed-vat-bulk-book.ts).
+  BULK_BOOK_VAT_PERIOD_FILED: {
+    httpStatus: 409,
+    message_sv:
+      'Samlingsverifikationen ändrar underlaget för en momsdeklaration som redan är inlämnad. Bekräfta det för att bokföra samlingsverifikationen.',
+    message_en:
+      'The combined voucher changes the figures behind a VAT return already filed. Confirm that to book it.',
+  },
   // The dashboard's categorize door asks before a bank row dated in a filed
   // momsperiod is booked with lines the declaration reads
   // (lib/transactions/filed-vat-categorize.ts).

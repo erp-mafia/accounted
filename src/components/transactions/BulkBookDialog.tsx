@@ -35,6 +35,8 @@ import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDi
 import { PlusIcon, XMarkIcon } from '@/components/icons'
 import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
 import type { TransactionWithInvoice } from './transaction-types'
 import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
@@ -98,6 +100,7 @@ export default function BulkBookDialog({
   const { toast } = useToast()
   const t = useTranslations('tx_bulk_book')
   const tVoucher = useTranslations('voucher_lines')
+  const tCommon = useTranslations('common')
 
   const [tab, setTab] = useState<Tab>('template')
   // Session-cached and scoped to the active company (system + company + its
@@ -127,6 +130,10 @@ export default function BulkBookDialog({
   // dead-ending in a toast. Match/ignore are not offered here: resolving one
   // row differently belongs on the transaction list, outside the batch.
   const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
+  // The server's question before a samlingsverifikat that changes the
+  // underlag for a filed momsdeklaration, with the duplicate answer the
+  // refused send already carried.
+  const [filedVatAsk, setFiledVatAsk] = useState<{ warnings: VoucherWarning[]; force: boolean } | null>(null)
   // Dimension tagging (kostnadsställe/projekt): the pair renders only when
   // company_settings.dimensions_enabled, same gate as JournalEntryForm. One
   // header-level default bag applies to both tabs; the server tags the
@@ -366,11 +373,13 @@ export default function BulkBookDialog({
     ])
   }
 
-  // `opts` is only ever passed by the duplicate-dialog retry; the footer
-  // button's onClick hands over a click event, which carries no `force`.
-  async function handleConfirm(opts?: { force?: boolean }) {
+  // `opts` is only ever passed by a confirm dialog's retry (the duplicate
+  // guard's, the filed momsperiod's); the footer button's onClick hands over
+  // a click event, which carries neither answer.
+  async function handleConfirm(opts?: { force?: boolean; confirmFiledVat?: boolean }) {
     if (!canConfirm) return
     const force = opts?.force === true
+    const confirmFiledVat = opts?.confirmFiledVat === true ? { confirm_filed_vat_period: true } : {}
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -397,6 +406,7 @@ export default function BulkBookDialog({
               })),
               ...defaultDimensions,
               ...(force ? { force: true } : {}),
+              ...confirmFiledVat,
             }
           : {
               tx_ids: transactions.map((tx) => tx.id),
@@ -405,6 +415,7 @@ export default function BulkBookDialog({
               entry_description: description.trim(),
               ...defaultDimensions,
               ...(force ? { force: true } : {}),
+              ...confirmFiledVat,
             }
       const response = await fetch('/api/transactions/bulk-book', {
         method: 'POST',
@@ -419,6 +430,14 @@ export default function BulkBookDialog({
           // dialog instead of a dead-end toast. "Bokför ändå" re-runs the
           // batch with force=true.
           setDuplicateCandidate(candidate)
+          return
+        }
+        const filedVat = body?.error?.details?.warnings as VoucherWarning[] | undefined
+        if (body?.error?.code === 'BULK_BOOK_VAT_PERIOD_FILED' && Array.isArray(filedVat) && filedVat.length > 0) {
+          // Nothing was booked. The dialog names the filed period; "Bokför
+          // ändå" sends the same batch again with the confirmation (and the
+          // duplicate answer already given), and the server asks once more.
+          setFiledVatAsk({ warnings: filedVat, force })
           return
         }
         const message = getErrorMessage(body, { statusCode: response.status })
@@ -836,6 +855,25 @@ export default function BulkBookDialog({
           onBookAnyway={() => {
             setDuplicateCandidate(null)
             void handleConfirm({ force: true })
+          }}
+        />
+      )}
+
+      {/* The samlingsverifikat changes the underlag for a momsdeklaration
+          already filed (BULK_BOOK_VAT_PERIOD_FILED): the typed verifikat's
+          confirm dialog, with the way back to the batch as it stands. */}
+      {filedVatAsk && (
+        <VoucherWarningsDialog
+          warnings={filedVatAsk.warnings}
+          processing={submitting}
+          cancelLabel={tCommon('cancel')}
+          onCancel={() => {
+            if (!submitting) setFiledVatAsk(null)
+          }}
+          onConfirm={() => {
+            const force = filedVatAsk.force
+            setFiledVatAsk(null)
+            void handleConfirm({ force, confirmFiledVat: true })
           }}
         />
       )}

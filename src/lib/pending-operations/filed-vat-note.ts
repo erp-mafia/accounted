@@ -43,7 +43,7 @@ interface PostedEntry {
 }
 
 interface Plan {
-  /** What the note calls the operation: "bokningen", "rättelsen", "makuleringen", "flytten", "datumändringen". */
+  /** What the note calls the operation: "bokningen", "samlingsverifikationen", "rättelsen", "makuleringen", "flytten", "datumändringen". */
   what: string
   /** Every date the approval posts on. */
   dates: string[]
@@ -111,6 +111,17 @@ const PLANS: Readonly<Record<string, (op: StagedOperation) => Plan | null>> = {
     const lines = postedLinesOf(op.preview_data?.lines)
     return typeof date === 'string' && lines
       ? { what: 'bokningen', dates: [date], entryId: null, posting: () => ({ entry_date: date, lines }) }
+      : null
+  },
+  // A new samlingsverifikat posts the lines the preview states on the rows'
+  // one date (lib/transactions/bulk-book.ts). A link to a verifikat already
+  // posted (mode link_existing) posts nothing.
+  bulk_book_transactions: (op) => {
+    if (op.preview_data?.mode !== 'create_new') return null
+    const date = op.preview_data?.tx_date
+    const lines = postedLinesOf(op.preview_data?.lines)
+    return typeof date === 'string' && lines
+      ? { what: 'samlingsverifikationen', dates: [date], entryId: null, posting: () => ({ entry_date: date, lines }) }
       : null
   },
   // The storno mirrors the original on preview.reversal.entry_date.

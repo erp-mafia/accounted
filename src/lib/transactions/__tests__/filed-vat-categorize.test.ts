@@ -96,6 +96,33 @@ describe('filedPeriodCategorizeWarning', () => {
     )
   })
 
+  it('builds the lines with the booking options it is handed, and speaks of what it is told to (Inkorgen\'s Bokför valda)', async () => {
+    const { client } = db({ date: '2026-09-27' })
+    const exclude = { excludeTransactionIds: ['tx-0'], excludeJournalEntryIds: ['je-0'] }
+    const loadChart = vi.fn()
+
+    await filedPeriodCategorizeWarning(client, 'user-1', 'c-1', 'tx-1', BOOKING, {
+      onBooked: 'refuse',
+      exclude,
+      loadChart: loadChart as never,
+      invoiceMatchIntercept: false,
+      withoutReview: true,
+      subject: 'booking',
+      log,
+    })
+
+    expect(core.categorizeTransaction).toHaveBeenCalledWith(client, 'user-1', 'c-1', 'tx-1', BOOKING, {
+      onBooked: 'refuse',
+      exclude,
+      loadChart,
+      invoiceMatchIntercept: false,
+      withoutReview: true,
+      dryRun: true,
+      log,
+    })
+    expect(leaf.filedPeriodVoucherWarning).toHaveBeenCalledWith(client, 'c-1', expect.objectContaining({ entry_date: '2026-09-27' }), 'booking')
+  })
+
   it('pays for no dry run when the row is dated in no filed period', async () => {
     expect(await ask(db({ date: '2026-10-20' }).client)).toBeNull()
 

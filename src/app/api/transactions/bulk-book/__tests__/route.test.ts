@@ -92,6 +92,13 @@ vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
   })),
 }))
 
+// The filed-momsperiod question reads the rows and dry-runs the booking
+// (lib/transactions/filed-vat-bulk-book.ts, tested there and through the real
+// dry run in its chain test). Stubbed, so the queued client stays aligned
+// with the booking's own queries: no question unless a test sets one.
+const filedVat = vi.hoisted(() => ({ filedPeriodBulkBookWarning: vi.fn() }))
+vi.mock('@/lib/transactions/filed-vat-bulk-book', () => filedVat)
+
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
@@ -1186,5 +1193,126 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
       ['1686', { '1': 'KS01' }],
       ['3004', { '6': 'P001' }],
     ])
+  })
+})
+
+/**
+ * A new samlingsverifikat dated in a momsperiod whose declaration is filed,
+ * with lines that declaration reads, is asked about before it is booked
+ * (lib/transactions/filed-vat-bulk-book.ts).
+ */
+describe('POST /api/transactions/bulk-book: the filed-momsperiod question', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const WARNING = {
+    code: 'VAT_PERIOD_ALREADY_FILED',
+    message_sv: 'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). Görs bokningen kan deklarationen behöva rättas.',
+    message_en: 'The booking changes the figures behind a VAT return already filed: 2026-Q3 (filed 2026-11-11). If it is made, the return may need correcting.',
+    details: { entry_date: '2026-09-27', filed_periods: [] },
+  }
+  const BODY = {
+    tx_ids: [TX1, TX2],
+    entry_description: 'Samlingsverifikation',
+    manual_lines: [
+      { account_number: '1930', debit_amount: 200, credit_amount: 0, currency: 'SEK' },
+      { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+    ],
+  }
+  /** The queue of 'books a single-currency manual_lines selection'. */
+  function enqueueBooking(mode: 'create_new' | 'link_existing' = 'create_new') {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-09-27' },
+        { id: TX2, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-09-27' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: { ok: true, mode, journal_entry_id: JE, voucher_series: 'A', voucher_number: 14, linked_tx_count: 2, tx_sum: 200 },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+  }
+  const post = (body: Record<string, unknown>) =>
+    POST(createMockRequest('/api/transactions/bulk-book', { method: 'POST', body }), createMockRouteParams({}))
+  const acknowledged = () =>
+    vi.mocked(appendProcessingHistory).mock.calls.filter(([event]) => event.eventType === 'VoucherWarningsAcknowledged')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(null)
+  })
+
+  it('refuses with 409 and the warning until the person confirms, and books nothing', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: unknown[] } } }>(await post(BODY))
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BULK_BOOK_VAT_PERIOD_FILED')
+    expect(body.error.details.warnings).toEqual([WARNING])
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(filedVat.filedPeriodBulkBookWarning).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ tx_ids: [TX1, TX2] }),
+    )
+  })
+
+  it('books with the confirmation and records the verifikat as booked past the warning', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+    enqueueBooking()
+
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string } }>(
+      await post({ ...BODY, confirm_filed_vat_period: true }),
+    )
+
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(body.data.journal_entry_id).toBe(JE)
+    // The answer stays at the door: the question is asked about the booking
+    // alone, and neither it nor the RPC is handed the field.
+    const asked = filedVat.filedPeriodBulkBookWarning.mock.calls[0][1] as Record<string, unknown>
+    expect(asked).not.toHaveProperty('confirm_filed_vat_period')
+    expect(asked.tx_ids).toEqual([TX1, TX2])
+    expect(JSON.stringify(mockSupabase.rpc.mock.calls)).not.toContain('confirm_filed_vat_period')
+    expect(acknowledged()).toHaveLength(1)
+    expect(acknowledged()[0][0]).toMatchObject({
+      aggregateId: JE,
+      payload: { journal_entry_id: JE, door: 'dashboard_bulk_book', codes: ['VAT_PERIOD_ALREADY_FILED'] },
+      actor: { type: 'user', id: 'user-1' },
+    })
+  })
+
+  it('records nothing on a verifikat the booking did not create (rows linked to one already posted)', async () => {
+    filedVat.filedPeriodBulkBookWarning.mockResolvedValue(WARNING)
+    enqueueBooking('link_existing')
+
+    const { status } = await parseJsonResponse(await post({ ...BODY, confirm_filed_vat_period: true }))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
+  })
+
+  it('books without a question, and records nothing, when the check says nothing', async () => {
+    enqueueBooking()
+
+    const { status } = await parseJsonResponse(await post(BODY))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
+  })
+
+  it('a confirmation sent for a booking the check says nothing about records nothing', async () => {
+    enqueueBooking()
+
+    const { status } = await parseJsonResponse(await post({ ...BODY, confirm_filed_vat_period: true }))
+
+    expect(status).toBe(200)
+    expect(acknowledged()).toHaveLength(0)
   })
 })

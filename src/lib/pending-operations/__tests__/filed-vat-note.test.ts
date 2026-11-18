@@ -79,6 +79,53 @@ describe('stagedFiledVatNote: what each judged type posts', () => {
     expect(leaf.filedPeriodVoucherWarning).toHaveBeenCalledWith(client, 'c-1', { entry_date: '2026-09-27', lines: bare(purchase) })
   })
 
+  it('a new samlingsverifikat: the lines of the preview on the rows\' one date, with nothing read', async () => {
+    const { client, read } = db()
+    leaf.filedPeriodVoucherWarning.mockResolvedValue(warningFor([{ ...Q3, rutor_change: { ruta48: 100 } }]))
+
+    const note = await stagedFiledVatNote(
+      client,
+      'c-1',
+      {
+        operation_type: 'bulk_book_transactions',
+        params: { tx_ids: ['t-1', 't-2'] },
+        // The preview the operation stores (lib/operations/transactions.ts): named lines.
+        preview_data: {
+          mode: 'create_new',
+          tx_count: 2,
+          tx_date: '2026-09-27',
+          lines: purchase.map((l) => ({ ...l, account_name: 'Konto', line_description: null })),
+        },
+      },
+      log,
+    )
+
+    expect(read).not.toHaveBeenCalled()
+    expect(leaf.filedPeriodVoucherWarning).toHaveBeenCalledWith(client, 'c-1', { entry_date: '2026-09-27', lines: bare(purchase) })
+    expect(note).toBe(
+      'Momsdeklarationen för 2026-Q3 är redan inlämnad (2026-11-11), och samlingsverifikationen ändrar underlaget för den. ' +
+        'Godkänns förslaget kan deklarationen behöva rättas.',
+    )
+  })
+
+  it('rows linked to a verifikat already posted: nothing is posted, so nothing is asked', async () => {
+    const { client } = db()
+
+    const note = await stagedFiledVatNote(
+      client,
+      'c-1',
+      {
+        operation_type: 'bulk_book_transactions',
+        params: { tx_ids: ['t-1'], existing_journal_entry_id: 'e-1' },
+        preview_data: { mode: 'link_existing', tx_count: 1, tx_date: '2026-09-27' },
+      },
+      log,
+    )
+
+    expect(note).toBeNull()
+    expect(leaf.filedPeriodVoucherWarning).not.toHaveBeenCalled()
+  })
+
   it('a makulering: the storno\'s mirrored lines on the storno\'s date, as an ingående balans when the original is one', async () => {
     const { client, read } = db({ source_type: 'opening_balance', lines: purchase })
 

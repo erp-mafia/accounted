@@ -22,6 +22,13 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal)
   return { ...actual, detectBookingDuplicate: vi.fn() }
 })
 
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: stubbed, so the queued reads stay the
+// operation's own. The staged row it is asked with is kept, so a renamed
+// preview field cannot drop the note unseen; its own tests pin the rest.
+const filedVatNote = vi.hoisted(() => ({ stagedFiledVatNote: vi.fn(async (..._args: unknown[]) => null as string | null) }))
+vi.mock('@/lib/pending-operations/filed-vat-note', () => filedVatNote)
+
 const bulkBook = tools.find((t) => t.name === 'gnubok_bulk_book_transactions')!
 
 const TX_1 = '11111111-1111-4111-8111-111111111111'
@@ -111,6 +118,24 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
     ])
     // Aggregate-only preview: no per-row text.
     expect(result.preview).not.toHaveProperty('lead_description')
+    // What the filed-momsperiod note reads off the staged row: a new
+    // samlingsverifikat, its one date and the lines it posts.
+    expect(filedVatNote.stagedFiledVatNote).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({
+        operation_type: 'bulk_book_transactions',
+        preview_data: expect.objectContaining({
+          mode: 'create_new',
+          tx_date: '2026-05-12',
+          lines: [
+            expect.objectContaining({ account_number: '1930', debit_amount: 250, credit_amount: 0 }),
+            expect.objectContaining({ account_number: '3001', debit_amount: 0, credit_amount: 250 }),
+          ],
+        }),
+      }),
+      expect.anything(),
+    )
     const inserted = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
     expect(inserted.operation_type).toBe('bulk_book_transactions')
     expect(inserted.title).toMatch(/^Samlingsverifikation \+250,00 SEK 2026-05-12: Swish 0701 \(\+1 till\)$/)

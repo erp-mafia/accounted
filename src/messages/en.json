@@ -5788,7 +5788,11 @@
     "reverse_charge_check_title": "Check the seller.",
     "reverse_charge_check_body": "Reverse charge applies to purchases from a foreign seller that charged no VAT. The box follows each document's seller country and the chosen category: a service from an EU country in box 21, a service from outside the EU in box 22 and goods from an EU country in box 20. Documents whose seller country cannot be read, a Swedish seller (e.g. construction services), goods from outside the EU (import VAT) and categories that don't say goods or service are skipped, as are documents on which the seller charged VAT: book those one at a time. The currency doesn't decide: a Swedish seller can invoice in EUR and still charge 25% VAT.",
     "reverse_charge_skipped": "{count} without a determinable reverse-charge box",
-    "reverse_charge_seller_vat_skipped": "{count} where the seller charged VAT"
+    "reverse_charge_seller_vat_skipped": "{count} where the seller charged VAT",
+    "filed_vat_intro": "{count, plural, one {1 booking has not been made yet: it changes the figures behind a VAT return already filed.} other {# bookings have not been made yet: they change the figures behind a VAT return already filed.}}",
+    "filed_vat_held_back": "{count, plural, one {1 left unbooked (filed VAT period)} other {# left unbooked (filed VAT period)}}",
+    "filed_vat_already_booked": "{count, plural, one {1 of the selected is already booked.} other {# of the selected are already booked.}}",
+    "filed_vat_leave": "Leave unbooked"
   },
   "inbox_workspace": {
     "book_direct_consequence": "Creates a verifikat with the document attached.",

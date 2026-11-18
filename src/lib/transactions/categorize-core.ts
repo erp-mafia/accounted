@@ -127,6 +127,7 @@ import {
   type ReverseChargeBoxRefusal,
 } from '@/lib/vat/reverse-charge-box'
 import type { SellerIdentity, SellerRegion } from '@/lib/vat/seller-country'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 const log = createLogger('transactions/categorize-core')
 
@@ -1610,6 +1611,25 @@ export function agentDuplicateMessage(
 }
 
 /**
+ * The service options categorizeMatchedTransaction books with. A dry run of
+ * the same booking (the filed-momsperiod question of Inkorgen's Bokför
+ * valda) takes them from here, so it builds the lines the booking posts.
+ */
+function matchedTransactionOptions(
+  opts: CategorizeMatchedTransactionOpts,
+  exclude?: BookingDuplicateExclusions,
+): Omit<CategorizeOptions, 'dryRun' | 'log'> {
+  return {
+    onBooked: 'refuse',
+    exclude,
+    loadChart: opts.loadChart,
+    invoiceMatchIntercept: false,
+    ...(opts.withoutReview ? { withoutReview: true } : {}),
+    ...(opts.expectedDuplicateJournalEntryId ? { forceVia: 'pending_approval' } : {}),
+  }
+}
+
+/**
  * Book a single bank transaction for the approval doors (the categorize
  * executor and the bulk-book-inbox driver): the service, answered in the
  * executor's `{ data } | { error, errorCode, status }` shape.
@@ -1631,14 +1651,14 @@ export async function categorizeMatchedTransaction(
    */
   exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
-  const outcome = await categorizeTransaction(supabase, userId, companyId, txId, categorizeInputFromStaged(opts), {
-    onBooked: 'refuse',
-    exclude,
-    loadChart: opts.loadChart,
-    invoiceMatchIntercept: false,
-    ...(opts.withoutReview ? { withoutReview: true } : {}),
-    ...(opts.expectedDuplicateJournalEntryId ? { forceVia: 'pending_approval' } : {}),
-  })
+  const outcome = await categorizeTransaction(
+    supabase,
+    userId,
+    companyId,
+    txId,
+    categorizeInputFromStaged(opts),
+    matchedTransactionOptions(opts, exclude),
+  )
   if (outcome.ok) {
     const booked = outcome.dryRun ? null : outcome.booked
     return {
@@ -1703,7 +1723,29 @@ export interface BulkBookInboxInput {
 
 export interface BulkBookInboxResult {
   booked: Array<{ item_id: string; transaction_id: string; journal_entry_id: string | null }>
-  skipped: Array<{ item_id: string; reason: string; detail?: string }>
+  /** `warning` rides with reason filed_vat_period: what the person is asked to confirm. */
+  skipped: Array<{ item_id: string; reason: string; detail?: string; warning?: VoucherWarning }>
+}
+
+/**
+ * The dashboard door's question about a momsdeklaration already filed, asked
+ * per underlag before it is booked (lib/transactions/filed-vat-categorize.ts;
+ * handed in, because that module reads this one). An underlag whose booking
+ * changes the underlag for a filed declaration is held back, skipped with
+ * reason filed_vat_period and the warning, until the person has confirmed;
+ * booked past it, the booking is recorded on its verifikat. The approval
+ * executor leaves it off: it has nobody to ask.
+ */
+export interface BulkBookInboxFiledVatQuestion {
+  /** The person has read the warning and books anyway. */
+  confirmed: boolean
+  ask: (
+    transactionId: string,
+    booking: CategorizeInput,
+    options: Omit<CategorizeOptions, 'dryRun' | 'log'>,
+  ) => Promise<VoucherWarning | null>
+  /** Called for a booking made past the warning. */
+  record: (journalEntryId: string, warning: VoucherWarning) => Promise<void>
 }
 
 /**
@@ -1725,6 +1767,7 @@ export async function bulkBookMatchedInboxItems(
   userId: string,
   companyId: string,
   input: BulkBookInboxInput,
+  options: { filedVat?: BulkBookInboxFiledVatQuestion } = {},
 ): Promise<BulkBookInboxResult> {
   const { item_ids, category, vat_treatment, vat_amount, notes, allow_duplicate, dimensions } = input
 
@@ -1835,6 +1878,39 @@ export async function bulkBookMatchedInboxItems(
     const itemNotes =
       [notes?.trim(), channelNotes].filter(Boolean).join(' · ') || undefined
 
+    const booking: CategorizeMatchedTransactionOpts = {
+      category,
+      vatTreatment: vat_treatment,
+      reverseChargeKind,
+      vatAmount: vat_amount,
+      notes: itemNotes,
+      allowDuplicate: allow_duplicate,
+      dimensions,
+      loadChart,
+      withoutReview: true,
+    }
+    // Snapshot copies so the guard sees only the prior bookings of this batch.
+    const exclude: BookingDuplicateExclusions = {
+      excludeTransactionIds: [...bookedTransactionIds],
+      excludeJournalEntryIds: [...bookedJournalEntryIds],
+    }
+
+    // A booking that changes the underlag for a momsdeklaration already filed
+    // waits for the person's word (the dashboard door only). Asked on the
+    // confirmed send too, so the booking made past it is known as one.
+    let filedVat: VoucherWarning | null = null
+    if (options.filedVat) {
+      filedVat = await options.filedVat.ask(
+        item.matched_transaction_id as string,
+        categorizeInputFromStaged(booking),
+        matchedTransactionOptions(booking, exclude),
+      )
+      if (filedVat && !options.filedVat.confirmed) {
+        skipped.push({ item_id: itemId, reason: 'filed_vat_period', detail: filedVat.message_sv, warning: filedVat })
+        continue
+      }
+    }
+
     // The model's reading of the underlag, taken before the booking.
     const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, item)
 
@@ -1845,9 +1921,8 @@ export async function bulkBookMatchedInboxItems(
         userId,
         companyId,
         item.matched_transaction_id as string,
-        { category, vatTreatment: vat_treatment, reverseChargeKind, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart, withoutReview: true },
-        // Snapshot copies so the guard sees only the prior bookings of this batch.
-        { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
+        booking,
+        exclude,
       )
     } catch (err) {
       // Caught per-item (incl. AccountsNotInChartError / period-lock bookkeeping
@@ -1890,6 +1965,7 @@ export async function bulkBookMatchedInboxItems(
       transaction_id: bookedTxId,
       journal_entry_id: bookedJeId,
     })
+    if (filedVat && bookedJeId) await options.filedVat?.record(bookedJeId, filedVat)
 
     // The bank line's own row came from categorizeMatchedTransaction; this
     // one records the underlag: booked as read, or with a total that differs.

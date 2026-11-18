@@ -82,7 +82,8 @@ vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
 
-import { bulkBookMatchedInboxItems } from '../categorize-core'
+import { bulkBookMatchedInboxItems, type BulkBookInboxFiledVatQuestion } from '../categorize-core'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
@@ -898,5 +899,149 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     expect(skipped[0].item_id).toBe('i1')
     expect(skipped[0].reason).toBe('already_booked_or_duplicate')
     expect(mockCreateJE).not.toHaveBeenCalled()
+  })
+})
+
+// Inkorgen's "Bokför valda" (the dashboard door) asks before an underlag is
+// booked into a momsperiod whose declaration is filed; the approval executor
+// hands no question in and books as staged.
+describe('bulkBookMatchedInboxItems: the filed-momsperiod question', () => {
+  const WARNING: VoucherWarning = {
+    code: 'VAT_PERIOD_ALREADY_FILED',
+    message_sv: 'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). Görs bokningen kan deklarationen behöva rättas.',
+    message_en: 'en',
+    details: {},
+  }
+  const ITEM = {
+    data: {
+      id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null,
+      extracted_data: null,
+    },
+  }
+  // An inbox item and the categorize chain of its booking (bookedChain above).
+  const BOOKING_QUEUE = [
+    ITEM,
+    { data: { id: 'tx-1', date: '2026-09-27', amount: -500, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+    { data: [] },
+    { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+    { data: [] },
+    { data: [{ id: 'fp-1' }] },
+    { data: [{ id: 'tx-1' }], error: null },
+    { data: { document_id: null } }, // propagation: tx pin lookup
+    { data: [] }, // propagation: matched inbox items
+  ]
+  const INPUT = { item_ids: ['i1'], category: 'expense_software' as const, vat_treatment: 'standard_25' as const, notes: 'Batch' }
+  const question = (confirmed: boolean, answer: VoucherWarning | null) => ({
+    confirmed,
+    ask: vi.fn<BulkBookInboxFiledVatQuestion['ask']>(async () => answer),
+    record: vi.fn<BulkBookInboxFiledVatQuestion['record']>(async () => undefined),
+  })
+
+  it('holds back an underlag whose booking changes a filed declaration, with the warning, and books nothing', async () => {
+    const filedVat = question(false, WARNING)
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(queuedSupabase([ITEM]), 'u1', 'c1', INPUT, { filedVat })
+
+    expect(booked).toEqual([])
+    expect(skipped).toEqual([{ item_id: 'i1', reason: 'filed_vat_period', detail: WARNING.message_sv, warning: WARNING }])
+    expect(mockCreateJE).not.toHaveBeenCalled()
+    expect(filedVat.record).not.toHaveBeenCalled()
+    // Asked about the booking this item would get, with the options it is booked with.
+    expect(filedVat.ask).toHaveBeenCalledWith(
+      'tx-1',
+      expect.objectContaining({ is_business: true, category: 'expense_software', vat_treatment: 'standard_25', notes: 'Batch' }),
+      expect.objectContaining({
+        onBooked: 'refuse',
+        invoiceMatchIntercept: false,
+        withoutReview: true,
+        exclude: { excludeTransactionIds: [], excludeJournalEntryIds: [] },
+      }),
+    )
+  })
+
+  it('books it once the person has confirmed, and records the booking as made past the warning', async () => {
+    const filedVat = question(true, WARNING)
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(queuedSupabase(BOOKING_QUEUE), 'u1', 'c1', INPUT, { filedVat })
+
+    expect(skipped).toEqual([])
+    expect(booked).toEqual([{ item_id: 'i1', transaction_id: 'tx-1', journal_entry_id: 'je-1' }])
+    expect(filedVat.ask).toHaveBeenCalledTimes(1)
+    expect(filedVat.record).toHaveBeenCalledWith('je-1', WARNING)
+  })
+
+  it('books an underlag the question says nothing about, and records nothing', async () => {
+    const filedVat = question(false, null)
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(queuedSupabase(BOOKING_QUEUE), 'u1', 'c1', INPUT, { filedVat })
+
+    expect(skipped).toEqual([])
+    expect(booked).toHaveLength(1)
+    expect(filedVat.record).not.toHaveBeenCalled()
+  })
+
+  it('asks about a later underlag with the batch\'s earlier bookings left out of its duplicate guard', async () => {
+    const filedVat = {
+      confirmed: false,
+      ask: vi.fn<BulkBookInboxFiledVatQuestion['ask']>(async (transactionId) => (transactionId === 'tx-2' ? WARNING : null)),
+      record: vi.fn<BulkBookInboxFiledVatQuestion['record']>(async () => undefined),
+    }
+    const later = { data: { ...ITEM.data, id: 'i2', matched_transaction_id: 'tx-2' } }
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(
+      queuedSupabase([...BOOKING_QUEUE, later]),
+      'u1',
+      'c1',
+      { ...INPUT, item_ids: ['i1', 'i2'] },
+      { filedVat },
+    )
+
+    expect(booked.map((b) => b.item_id)).toEqual(['i1'])
+    expect(skipped.map((s) => [s.item_id, s.reason])).toEqual([['i2', 'filed_vat_period']])
+    // The dry run of the second booking must not take the first, just booked,
+    // for a duplicate: it would be refused, and the underlag booked unasked.
+    expect(filedVat.ask.mock.calls[1][2].exclude).toEqual({
+      excludeTransactionIds: ['tx-1'],
+      excludeJournalEntryIds: ['je-1'],
+    })
+  })
+
+  it('asks about a reverse charge in the box the underlag\'s own seller gives', async () => {
+    const filedVat = question(false, WARNING)
+    const euItem = { data: { ...ITEM.data, extracted_data: { supplier: { vatNumber: 'DE123456789' } } } }
+
+    await bulkBookMatchedInboxItems(
+      queuedSupabase([euItem]),
+      'u1',
+      'c1',
+      { item_ids: ['i1'], category: 'expense_software', vat_treatment: 'reverse_charge' },
+      { filedVat },
+    )
+
+    expect(filedVat.ask).toHaveBeenCalledWith(
+      'tx-1',
+      expect.objectContaining({ vat_treatment: 'reverse_charge', reverse_charge_kind: 'eu_services' }),
+      expect.anything(),
+    )
+  })
+
+  it('keeps booking the rest of the batch around a held underlag', async () => {
+    const filedVat = {
+      confirmed: false,
+      ask: vi.fn<BulkBookInboxFiledVatQuestion['ask']>(async (transactionId) => (transactionId === 'tx-held' ? WARNING : null)),
+      record: vi.fn<BulkBookInboxFiledVatQuestion['record']>(async () => undefined),
+    }
+    const held = { data: { ...ITEM.data, id: 'i0', matched_transaction_id: 'tx-held' } }
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(
+      queuedSupabase([held, ...BOOKING_QUEUE]),
+      'u1',
+      'c1',
+      { ...INPUT, item_ids: ['i0', 'i1'] },
+      { filedVat },
+    )
+
+    expect(skipped.map((s) => [s.item_id, s.reason])).toEqual([['i0', 'filed_vat_period']])
+    expect(booked.map((b) => b.item_id)).toEqual(['i1'])
   })
 })

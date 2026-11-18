@@ -5788,7 +5788,11 @@
     "reverse_charge_check_title": "Kontrollera säljaren.",
     "reverse_charge_check_body": "Omvänd skattskyldighet gäller köp från en utländsk säljare som inte har debiterat moms. Rutan följer varje underlags säljarland och den valda kategorin: en tjänst från ett EU-land i ruta 21, en tjänst från ett land utanför EU i ruta 22 och en vara från ett EU-land i ruta 20. Underlag där säljarens land inte går att läsa, en svensk säljare (t.ex. byggtjänster), varor från ett land utanför EU (importmoms) och kategorier som inte säger vara eller tjänst hoppas över, liksom underlag där säljaren har debiterat moms: bokför dem ett och ett. Valutan avgör inte: en svensk säljare kan fakturera i EUR och ändå debitera 25 % moms.",
     "reverse_charge_skipped": "{count} utan avgörbar ruta för omvänd moms",
-    "reverse_charge_seller_vat_skipped": "{count} där säljaren har debiterat moms"
+    "reverse_charge_seller_vat_skipped": "{count} där säljaren har debiterat moms",
+    "filed_vat_intro": "{count, plural, one {1 bokning är inte gjord än: den ändrar underlaget för en momsdeklaration som redan är inlämnad.} other {# bokningar är inte gjorda än: de ändrar underlaget för en momsdeklaration som redan är inlämnad.}}",
+    "filed_vat_held_back": "{count, plural, one {1 lämnad obokförd (inlämnad momsperiod)} other {# lämnade obokförda (inlämnad momsperiod)}}",
+    "filed_vat_already_booked": "{count, plural, one {1 av de valda är redan bokförd.} other {# av de valda är redan bokförda.}}",
+    "filed_vat_leave": "Lämna obokförda"
   },
   "inbox_workspace": {
     "book_direct_consequence": "Skapar ett verifikat med underlaget bifogat.",
