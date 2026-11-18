@@ -146,6 +146,29 @@ describe('SIE lock refusal', () => {
       'Bokföring > Importera/Exportera > Importhistorik och tryck Fortsätt eller Ångra import. Starta sedan den här importen igen.')
   })
 
+  // replace_sie_import_job words the same refusal with "first": the import
+  // to replace is the unfinished one. It stayed a CONFLICT until 2026-11-18.
+  it('names a replacement of an unfinished import SIE_IMPORT_UNFINISHED too', async () => {
+    const error = jobDatabaseError({ code: '55000', message: 'SIE import is unfinished: resume or undo it first' })
+    expect(error).toMatchObject({ code: 'SIE_IMPORT_UNFINISHED', pgCode: '55000' })
+    const response = errorResponse(error, log as never, { requestId: 'req-1' })
+    expect(response.status).toBe(409)
+    const body = await response.json()
+    expect(body.error.code).toBe('SIE_IMPORT_UNFINISHED')
+    expect(body.error.message).toMatch(/^En annan SIE-import för företaget är inte klar än\./)
+  })
+
+  // The same opening words from other guards are not this refusal: the
+  // period hold and the IB review have their own answers elsewhere.
+  it('does not take the period hold or the IB review for an unfinished import', () => {
+    for (const message of [
+      'SIE import is unfinished: resume or undo it before closing',
+      'SIE import is unfinished: review after it completes',
+    ]) {
+      expect(jobDatabaseError({ code: '55000', message }).code).toBe('CONFLICT')
+    }
+  })
+
   it('keeps every other 55000 refusal a CONFLICT', () => {
     const error = jobDatabaseError({ code: '55000', message: 'Another SIE execution must finish before undo' })
     expect(error.code).toBe('CONFLICT')

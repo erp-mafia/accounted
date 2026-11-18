@@ -5452,8 +5452,10 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   },
   // start_sie_import_job and start_sie_append_job refuse a new import while
   // another import of the company is queued, running or stopped mid-way, or
-  // another run holds the year (55000 "SIE import is unfinished: resume or
-  // undo it", mapped in lib/import/sie-jobs.ts). As CONFLICT it read "En
+  // another run holds the year, and replace_sie_import_job refuses to replace
+  // an import that is itself unfinished (55000 "SIE import is unfinished:
+  // resume or undo it", with "first" from the replacement; both mapped in
+  // lib/import/sie-jobs.ts). As CONFLICT it read "En
   // konflikt uppstod" on the import page and "Ett oväntat serverfel uppstod"
   // on an approval: SIE imports approved one after another while the first
   // still ran, six refusals in two days (2026-11-16 and 17).

@@ -193,6 +193,10 @@ const JOB_REFUSALS: Record<string,string> = {
   // company is queued, running or stopped mid-way, or another run holds the
   // year. Waiting for it, or resuming or undoing it, is the way on.
   'SIE import is unfinished: resume or undo it':'SIE_IMPORT_UNFINISHED',
+  // replace_sie_import_job: the import to replace is itself queued, running
+  // or stopped mid-way. Same way on, so the same code and sentence. Reached
+  // from the import page and the v1 import; an approval never replaces.
+  'SIE import is unfinished: resume or undo it first':'SIE_IMPORT_UNFINISHED',
 }
 
 /**
