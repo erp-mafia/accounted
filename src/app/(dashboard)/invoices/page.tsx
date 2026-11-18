@@ -1558,6 +1558,7 @@ export default function InvoicesPage() {
             id: inv.id,
             invoiceNumber: inv.invoice_number,
             customerName: (inv.customer as { name: string } | null)?.name ?? null,
+            currency: inv.currency,
           }))}
           displayName={collectionsAvailability.displayName}
           sandbox={collectionsAvailability.sandbox}

@@ -24,7 +24,7 @@ import {
   type StartStep,
 } from '@/lib/collections/handover-dialog'
 import type { CollectionReadinessView } from '@/lib/collections/invoice-collection'
-import { formatKronor } from '@/lib/collections/amount-text'
+import { formatInvoiceAmount, formatKronor } from '@/lib/collections/amount-text'
 import { cn, formatDate } from '@/lib/utils'
 import { BankCheckResult } from './BankCheckResult'
 import { fetchCollectionReadiness, postOpenCase, useCaseWords, type InvoiceCollectionAvailability } from './case-client'
@@ -41,6 +41,8 @@ import { fetchCollectionReadiness, postOpenCase, useCaseWords, type InvoiceColle
 interface Props {
   invoiceId: string
   invoiceNumber: string | null
+  /** The invoice's own currency: the claim is in it. */
+  currency: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
   availability: InvoiceCollectionAvailability
@@ -58,7 +60,7 @@ function CheckLine({ ok, children }: { ok: boolean; children: ReactNode }) {
   )
 }
 
-export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenChange, availability, onDone }: Props) {
+export function SendToCollectionDialog({ invoiceId, invoiceNumber, currency, open, onOpenChange, availability, onDone }: Props) {
   const { tp, locale } = useCaseWords(availability.displayName)
   const { toast } = useToast()
   const [readiness, setReadiness] = useState<CollectionReadinessView | null>(null)
@@ -152,7 +154,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
             <DialogDescription data-ph-mask="" className="tabular-nums">
               {tp('send_summary', {
                 customer: readiness.customer.name ?? '',
-                amount: formatKronor(readiness.claim.remaining),
+                amount: formatInvoiceAmount(readiness.claim.remaining, currency),
                 date: formatDate(readiness.dueDate),
                 days: readiness.overdueDays,
               })}

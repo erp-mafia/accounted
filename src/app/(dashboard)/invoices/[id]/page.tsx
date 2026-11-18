@@ -3589,6 +3589,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <SendToCollectionDialog
           invoiceId={invoice.id}
           invoiceNumber={invoice.invoice_number}
+          currency={invoice.currency}
           open={showCollectionDialog}
           onOpenChange={(next) => {
             setShowCollectionDialog(next)

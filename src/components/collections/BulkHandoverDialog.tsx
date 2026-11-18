@@ -19,7 +19,7 @@ import {
 } from '@/lib/collections/bulk-handover'
 import type { CollectionReadinessView } from '@/lib/collections/invoice-collection'
 import { toggleUnticked } from '@/lib/collections/batch-dialog'
-import { formatKronor } from '@/lib/collections/amount-text'
+import { formatInvoiceAmount } from '@/lib/collections/amount-text'
 import { cn } from '@/lib/utils'
 import { fetchCollectionReadiness, postOpenCase, useCaseWords } from './case-client'
 import { blockText, checkLineText } from './check-text'
@@ -41,6 +41,8 @@ export interface BulkHandoverInvoice {
   id: string
   invoiceNumber: string | null
   customerName: string | null
+  /** The invoice's own currency: the claim is in it. */
+  currency: string | null
 }
 
 interface Props {
@@ -137,7 +139,7 @@ export function BulkHandoverDialog({ open, onOpenChange, invoices, displayName, 
                     <span className="tabular-nums">{invoice.invoiceNumber ?? ''}</span>
                     <span className="min-w-0 flex-1 truncate text-muted-foreground">{invoice.customerName ?? ''}</span>
                     {row.state !== 'loading' && row.remaining !== null && (
-                      <span className="tabular-nums">{formatKronor(row.remaining)}</span>
+                      <span className="tabular-nums">{formatInvoiceAmount(row.remaining, invoice.currency)}</span>
                     )}
                   </div>
                   {row.state === 'loading' ? (

@@ -9,7 +9,7 @@ import { bannerCheckLine, bannerCheckNeedsLook, bannerUnpaid, overdueBanner } fr
 import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
 import type { BatchItem } from '@/lib/collections/batch'
 import type { EntryCase, EntryInvoice } from '@/lib/collections/invoice-entry'
-import { formatKronor } from '@/lib/collections/amount-text'
+import { formatInvoiceAmount } from '@/lib/collections/amount-text'
 import { cn, formatDate } from '@/lib/utils'
 import { fetchCollectionReadiness, useCaseWords, type InvoiceCollectionAvailability } from './case-client'
 import { checkLineText } from './check-text'
@@ -27,7 +27,7 @@ import { checkLineText } from './check-text'
 
 interface Props {
   invoiceId: string
-  invoice: EntryInvoice & { total?: number | null }
+  invoice: EntryInvoice & { total?: number | null; currency?: string | null }
   availability: InvoiceCollectionAvailability
   openCase: EntryCase | null
   canWrite: boolean
@@ -102,7 +102,7 @@ export function OverdueCollectionBanner({
           {unpaid !== null && (
             <>
               <span className="text-muted-foreground"> · </span>
-              <span className="tabular-nums">{tp('banner_unpaid', { amount: formatKronor(unpaid) })}</span>
+              <span className="tabular-nums">{tp('banner_unpaid', { amount: formatInvoiceAmount(unpaid, invoice.currency) })}</span>
             </>
           )}
         </p>
