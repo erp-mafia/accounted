@@ -1,8 +1,7 @@
 /**
  * The personnummer repair, run by
- * scripts/repair-customer-personal-number-in-org-number.ts and, since the
- * production key exists only in the deployed app, by the one-off cron
- * /api/customers/personal-number-repair/cron.
+ * scripts/repair-customer-personal-number-in-org-number.ts and, on a
+ * schedule, by the route /api/customers/personal-number-repair/cron.
  *
  * A customer_type='individual' row must not carry an org number: a
  * privatperson has none, and its personnummer belongs encrypted in

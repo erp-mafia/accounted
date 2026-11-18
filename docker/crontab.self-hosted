@@ -63,7 +63,6 @@
 20 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/complete-invoice-lines/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/cleanup/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/register-repair/cron
-*/5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/customers/personal-number-repair/cron
 15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
 40 1 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/auto-lock/cron
 30 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/receipt-hunt/cron
@@ -92,3 +91,4 @@
 
 # self-hosted-only jobs, not in vercel.json: see EXTRA_JOBS in scripts/generate-crontabs.ts
 17 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/connector/sync/cron
+*/5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/customers/personal-number-repair/cron

@@ -5,12 +5,12 @@
  * org_number on every individual.
  *
  * WHY: a privatperson has no org number, and its personnummer belongs
- * encrypted in personal_number. Until the write paths all enforced that
- * (the MCP create tool before 2026-08-21, the CSV register import until
- * fix/customer-import-personnummer), an individual's personnummer could land
- * in plaintext in org_number. The code fix stops new rows; this repairs the
- * rows already there, and must run before the customers_individual_no_org_number
- * check is added (that migration refuses any UPDATE of a row it would reject).
+ * encrypted in personal_number. Until the write paths all enforced that, an
+ * individual's personnummer could land in plaintext in org_number. The write
+ * paths and the customers_individual_no_org_number check stop new rows; this
+ * repairs the rows already there. It runs with the check in place: the check
+ * refuses a write that leaves the number on the card, and the repair takes
+ * it off.
  *
  * Per row (customer_type='individual' with a non-blank org_number), decided by
  * src/lib/customers/org-number-repair.ts:
@@ -40,9 +40,9 @@
  * never double-applies; a row that changed underneath is counted as skipped.
  * Safe to re-run.
  *
- * Never run by a loop: an operator decides when it runs. Production's key
- * exists only in the deployed app, so production runs the same repair through
- * the one-off cron /api/customers/personal-number-repair/cron.
+ * Never run by a loop: an operator decides when this script runs. A Docker
+ * install runs the same repair on a schedule through the route
+ * /api/customers/personal-number-repair/cron (docker/crontab.self-hosted).
  */
 import { config } from 'dotenv'
 import { createClient } from '@supabase/supabase-js'

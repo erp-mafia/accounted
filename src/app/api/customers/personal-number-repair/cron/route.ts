@@ -2,10 +2,13 @@ import { NextResponse } from 'next/server'
 import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { repairIndividualOrgNumbers } from '@/lib/customers/org-number-repair'
 
-// One-off, on the operators' go (2026-10-28): the personnummer repair of
-// scripts/repair-customer-personal-number-in-org-number.ts needs the
-// production key, which only the deployed app holds. Remove this route and
-// its vercel.json entry once a run finds nothing left to write.
+// The personnummer repair of
+// scripts/repair-customer-personal-number-in-org-number.ts on a schedule, for
+// a database that upgrades with such rows: they are repaired without an
+// operator. Scheduled on Docker only (EXTRA_JOBS in
+// scripts/generate-crontabs.ts). Where the check
+// customers_individual_no_org_number is validated no such row can exist, so
+// the hosted schedule (vercel.json) does not list this route.
 export const maxDuration = 300
 // No row is written after this; one write and its audit row finish well
 // inside the rest, and the next run carries on where this one stopped.
@@ -14,7 +17,7 @@ const RUN_BUDGET_MS = 200_000
 /**
  * The run that reports rows it could not write as an error: the one that
  * starts in the first five minutes after 06:00 UTC. The cron runs every five
- * minutes (vercel.json, docker/crontab.self-hosted), so that is one run a
+ * minutes (docker/crontab.self-hosted), so that is one run a
  * day; the other 287 say it as a warning. Nothing here keeps state between
  * runs (no table for a one-off), so the gate is the clock: a row that keeps
  * failing reaches the error tracker once a day, not 288 times. A new failure

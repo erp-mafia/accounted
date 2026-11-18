@@ -140,6 +140,15 @@ export const EXTRA_JOBS: Readonly<Record<CrontabVariant, readonly ExtraJob[]>> =
         'GNUBOK_CONNECTOR_KEY (hourly; grants carry a 72h offline grace). Hosted has no connector ' +
         'key, so the route is not in vercel.json; an instance without a key answers not_configured.',
     },
+    {
+      path: '/api/customers/personal-number-repair/cron',
+      schedule: '*/5 * * * *',
+      reason:
+        'Self-hosted only: moves a personnummer out of customers.org_number on private persons\' cards. ' +
+        'A database that upgrades with such rows needs them repaired without an operator, and keeps the ' +
+        'customers_individual_no_org_number check NOT VALID until then. Hosted has the check validated, ' +
+        'so no such row can exist there and the route is not in vercel.json.',
+    },
   ],
 }
 
