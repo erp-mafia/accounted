@@ -589,15 +589,19 @@ async function linkToBookedEntry(
 
 /**
  * A verifikat in a locked or closed year takes no document; nothing was
- * written. The code is the PERIOD_LOCKED this operation publishes, the
- * sentence the one every document door gives (DOC_UPLOAD_PERIOD_LOCKED).
+ * written. The code is the PERIOD_LOCKED this operation publishes; the
+ * sentences and the next step are the ones every document door gives
+ * (DOC_UPLOAD_PERIOD_LOCKED), not PERIOD_LOCKED's advice to move an entry date.
  */
 function lockedYearRefusal(journalEntryId: string): Extract<OperationOutcome<AttachDocumentResult>, { ok: false }> {
+  const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
   return {
     ok: false,
     code: 'PERIOD_LOCKED',
     details: { journal_entry_id: journalEntryId },
-    messageSv: getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv,
+    messageSv: answer.message_sv,
+    messageEn: answer.message_en,
+    remediation: answer.remediation,
   }
 }
 

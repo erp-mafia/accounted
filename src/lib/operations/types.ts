@@ -35,6 +35,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import type { StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import type { Logger } from '@/lib/logger'
 import type { PendingOperationType } from '@/types'
 
@@ -72,7 +73,13 @@ export interface OperationWarning {
  * failure carries a code from lib/errors/structured-errors.ts; `messageSv`
  * overrides the registry sentence when the failure names something specific
  * (a DB guard's message that names the dimension), and `error` hands a
- * BookkeepingError to the door verbatim.
+ * BookkeepingError to the door verbatim. A failure that keeps a published
+ * code but speaks another registry entry's answer (a document on a locked
+ * year: PERIOD_LOCKED with DOC_UPLOAD_PERIOD_LOCKED's) brings `messageEn`
+ * and `remediation` too. The v1 and dashboard doors answer all three in the
+ * envelope; a thrown failure (MCP) keeps the Swedish and the next step; an
+ * approved staged operation keeps the Swedish as its error and the other two
+ * in its result data.
  */
 export type OperationOutcome<O> =
   | { ok: true; dryRun: true; preview: Record<string, unknown> }
@@ -82,6 +89,10 @@ export type OperationOutcome<O> =
       code: string
       details?: Record<string, unknown>
       messageSv?: string
+      /** The English of `messageSv`: only read together with it, so the pair never drifts apart. */
+      messageEn?: string
+      /** Replaces the registry's next step for `code`. */
+      remediation?: StructuredErrorRemediation
       error?: unknown
       /**
        * Set when the operation already made an irreversible change before

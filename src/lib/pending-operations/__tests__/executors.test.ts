@@ -1556,6 +1556,32 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     expect(result.http_status).toBe(404)
   })
 
+  // The agent that staged the attach reads the approval's answer: the
+  // published code, the document sentence, and the document's way forward in
+  // data, not the registry's advice for PERIOD_LOCKED (move the entry date).
+  it('rejects with the locked-year answer and its next step when the verifikat it would join is closed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: 'je-1' }, error: null }) // tx fetch: booked
+    enqueue({ data: { id: DOC, journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: [{ id: 'tx-old' }], error: null }) // pinned on another row
+    enqueue({ data: [], error: null }) // inbox items
+    enqueue({ data: [], error: null }) // bank_row_anchors: that row is unbooked
+    enqueue({ data: [{ id: 'je-1', fiscal_period: { is_closed: true, locked_at: null } }], error: null }) // closed period
+    enqueue({ data: null, error: null }) // dispatcher reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp(baseOp))
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(result).toMatchObject({ status: 'failed', http_status: 400, operation_status: 'rejected' })
+    expect(result.code).toBe('PERIOD_LOCKED')
+    expect(result.error).toBe(answer.message_sv)
+    expect(result.data).toEqual({
+      journal_entry_id: 'je-1',
+      message_en: answer.message_en,
+      remediation: answer.remediation,
+    })
+  })
+
   it('auto-rejects 409 when existing pinned doc is räkenskapsinformation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

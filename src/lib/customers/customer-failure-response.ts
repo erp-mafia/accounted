@@ -29,7 +29,7 @@ export function customerFailureResponse(
   // This door has always answered the registry message, not the command's
   // messageSv (the empty-update refusal's own sentence reaches v1 and MCP
   // only): kept as it was.
-  return sessionFailureResponse({ ...outcome, messageSv: undefined }, log, requestId, {
+  return sessionFailureResponse({ ...outcome, messageSv: undefined, messageEn: undefined }, log, requestId, {
     writeFailureCodes: CUSTOMER_WRITE_FAILURES,
   })
 }

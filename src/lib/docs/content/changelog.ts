@@ -42,6 +42,7 @@ The first stable release of the public REST API. Six phases of development cover
 ### Documents: a locked year is a refusal, not a server error (2026-11)
 
 - **Fix: \`POST /documents\` with a \`journal_entry_id\` on a verifikat in a locked or closed fiscal year answers \`400 DOC_UPLOAD_PERIOD_LOCKED\`** (2026-11-18) and stores nothing; \`message\` says why and \`recovery_hint\` names the way forward (unlock or reopen the year, or upload without \`journal_entry_id\`). **Before**, it answered \`500 DOC_UPLOAD_STORAGE_FAILED\` with no reason. \`POST /documents/{id}/link\` keeps its documented \`400 PERIOD_LOCKED\` for the same case and now gives the same message and \`recovery_hint\`. Additive; the API version date is unchanged.
+- **Fix: \`POST /transactions/{id}/attach-document\` refused with \`400 PERIOD_LOCKED\` because the verifikat is in a locked or closed fiscal year** (2026-11-18) gives that same \`message\`, \`message_en\` and \`recovery_hint\`. **Before**, they were the general \`PERIOD_LOCKED\` ones (change the entry date), and the document sentence sat only in \`details.reason\`, where it stays. An attach staged by an agent and refused for this at approval keeps the document sentence as its error and has \`message_en\` and \`remediation\` in the result's \`data\`. Additive; the API version date is unchanged.
 
 ### Dry-run: refused where it cannot preview (2026-11)
 

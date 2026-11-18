@@ -45,6 +45,24 @@ describe('sessionFailureResponse', () => {
     `)
   })
 
+  it('answers a failure that brings its English and its next step with all three', async () => {
+    const remediation = { description: 'Unlock the year first.', tool: 'gnubok_list_fiscal_periods' }
+    const { status, body } = await answer(
+      sessionFailureResponse(
+        { ok: false, code: 'PERIOD_LOCKED', messageSv: 'Året är låst.', messageEn: 'The year is locked.', remediation },
+        log,
+        'req-1',
+      ),
+    )
+    expect(status).toBe(400)
+    expect(body.error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      message: 'Året är låst.',
+      message_en: 'The year is locked.',
+      remediation,
+    })
+  })
+
   it('answers a database error as the database error', async () => {
     expect(
       await answer(

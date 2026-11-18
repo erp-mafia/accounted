@@ -36,6 +36,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { POST as attach } from '../route'
 import { POST as detach } from '../../detach-document/route'
 import { isIdempotencyClaim } from '@/tests/helpers'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -272,7 +273,18 @@ describe('POST /transactions/:id/attach-document', () => {
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ document_id: DOC_ID })
-    expect((await res.json()).error.code).toBe('PERIOD_LOCKED')
+    const { error } = await res.json()
+    // The published code, with the one answer for a document on a locked year
+    // in message, message_en and recovery_hint: not PERIOD_LOCKED's own
+    // advice to move an entry date.
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(res.status).toBe(400)
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message).toBe(answer.message_sv)
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(answer.remediation!.description)
+    expect(error.recovery_hint).not.toBe(getErrorEntry('PERIOD_LOCKED')!.remediation?.description)
+    expect(error.details).toMatchObject({ journal_entry_id: JE_ID, reason: answer.message_sv })
     const writes = client.calls.filter((c) => WRITES.has(c.method) && BOOKS.has(c.table)).map((c) => c.table)
     expect(writes).toEqual(['document_attachments'])
   })
@@ -487,7 +499,11 @@ describe('POST /transactions/:id/attach-document', () => {
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ document_id: DOC_ID })
-    expect((await res.json()).error.code).toBe('PERIOD_LOCKED')
+    const { error } = await res.json()
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(answer.remediation!.description)
     expect(wrote(client)).toBe(false)
   })
 })

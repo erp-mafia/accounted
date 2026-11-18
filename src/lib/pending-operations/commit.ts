@@ -582,7 +582,19 @@ async function commitRegisteredOperation(
       status: entry?.httpStatus ?? 400,
       // What the refusal names (the vouchers that already book a bank row),
       // kept on the rejected row's result_data as v1 answers it in details.
-      ...(outcome.details ? { data: outcome.details } : {}),
+      // A refusal that brings its own English and next step (a document on a
+      // locked year) keeps them there too, as the SIE executor keeps its
+      // remediation: the agent that staged the write reads its way forward
+      // from the approval's data, not from the registry's for the code.
+      ...(outcome.details || outcome.messageEn || outcome.remediation
+        ? {
+            data: {
+              ...(outcome.details ?? {}),
+              ...(outcome.messageSv && outcome.messageEn ? { message_en: outcome.messageEn } : {}),
+              ...(outcome.remediation ? { remediation: outcome.remediation } : {}),
+            },
+          }
+        : {}),
       // A failure after an irreversible step: failed_partial, not rejected.
       ...(partial ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }

@@ -42,5 +42,7 @@ export function sessionFailureResponse(
     requestId,
     details: outcome.details,
     ...(outcome.messageSv ? { messageSv: outcome.messageSv } : {}),
+    ...(outcome.messageSv && outcome.messageEn ? { messageEn: outcome.messageEn } : {}),
+    ...(outcome.remediation ? { remediation: outcome.remediation } : {}),
   })
 }

@@ -481,10 +481,16 @@ describe('POST /api/transactions/[id]/attach-document: a document another row ho
     enqueue({ data: [], error: null }) // bank_row_anchors: that row is unbooked
     enqueue({ data: [{ id: 'je-1', fiscal_period: { is_closed: true, locked_at: null } }], error: null }) // closed period
 
-    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await post())
-    // The published code, with the one answer for a locked year as its sentence.
+    const { body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string; remediation: { description: string } }
+    }>(await post())
+    // The published code, with the one answer for a locked year in both
+    // languages and as its next step.
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
     expect(body.error.code).toBe('PERIOD_LOCKED')
-    expect(body.error.message).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
+    expect(body.error.message).toBe(answer.message_sv)
+    expect(body.error.message_en).toBe(answer.message_en)
+    expect(body.error.remediation).toEqual(answer.remediation)
     expect(findCalls('transactions', 'update')).toEqual([])
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
     expect(findCalls('document_attachments', 'update')).toEqual([])

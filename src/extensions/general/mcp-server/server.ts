@@ -3587,7 +3587,8 @@ async function resolveJournalEntryRef(
  * unstaged because enforce_period_lock_documents refuses the link there.
  * reopen_tool is the way back for that state: unlock a locked year, reopen a
  * year marked closed in the previous system (klarmarkerat); a year closed by
- * a year-end run here is never reopened, so it has none.
+ * a year-end run here has none: only the company owner reopens it, in the
+ * app, and no tool does.
  */
 interface LockedLinkPeriod {
   fiscal_period_id: string

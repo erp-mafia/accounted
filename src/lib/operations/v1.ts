@@ -256,6 +256,13 @@ export async function v1OutcomeResponse(
       details: outcome.messageSv
         ? { ...(outcome.details ?? {}), reason: outcome.messageSv }
         : outcome.details,
+      // A sentence in both languages is the answer's message. A Swedish one
+      // alone stays under details.reason: beside the registry's message_en
+      // it would say something else than its English.
+      ...(outcome.messageSv && outcome.messageEn
+        ? { messageSv: outcome.messageSv, messageEn: outcome.messageEn }
+        : {}),
+      ...(outcome.remediation ? { remediation: outcome.remediation } : {}),
     })
   }
   if (outcome.dryRun) {
