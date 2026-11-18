@@ -13253,7 +13253,6 @@
     "psd2_not_enabled_title": "Bank integration (PSD2) is not enabled",
     "psd2_not_enabled_description": "Enable the Enable Banking extension to connect your bank account, or import transactions manually from a bank file.",
     "psd2_not_enabled_cta": "Import a bank file instead",
-    "badge_beta": "Beta",
     "woocommerce_title": "WooCommerce",
     "woocommerce_description": "Connect your WooCommerce store to fetch paid orders and refunds into the transaction inbox.",
     "woocommerce_not_enabled_title": "The WooCommerce extension is not enabled",

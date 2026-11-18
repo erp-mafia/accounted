@@ -13253,7 +13253,6 @@
     "psd2_not_enabled_title": "Bankintegration (PSD2) är inte aktiverad",
     "psd2_not_enabled_description": "Aktivera tillägget Enable Banking för att koppla ditt bankkonto, eller importera transaktioner manuellt via bankfil.",
     "psd2_not_enabled_cta": "Importera bankfil istället",
-    "badge_beta": "Beta",
     "woocommerce_title": "WooCommerce",
     "woocommerce_description": "Koppla din WooCommerce-butik så hämtas betalda ordrar och återbetalningar till transaktionsinkorgen.",
     "woocommerce_not_enabled_title": "WooCommerce-tillägget är inte aktiverat",

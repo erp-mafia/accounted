@@ -40,6 +40,7 @@ import {
 } from '@/components/icons'
 import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDate } from '@/lib/utils'
+import { LIST_BLEED_CLASS } from '@/components/ui/dry-table-classes'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -1964,7 +1965,6 @@ export default function ImportPage() {
                     title={t('woocommerce_title')}
                     action={tCommon('open')}
                     sub={t('woocommerce_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/woocommerce.svg" name="WooCommerce" />}
                     disabled={!canWrite || woocommerceDisabled}
                     lockTitle={lockedTitle}
@@ -1976,7 +1976,6 @@ export default function ImportPage() {
                     title={t('shopify_title')}
                     action={tCommon('open')}
                     sub={t('shopify_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
                     disabled={!canWrite || shopifyDisabled}
                     lockTitle={lockedTitle}
@@ -1988,7 +1987,6 @@ export default function ImportPage() {
                     title={t('zettle_title')}
                     action={tCommon('open')}
                     sub={t('zettle_description')}
-                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/zettle.svg" name="Zettle" />}
                     disabled={!canWrite || zettleDisabled}
                     lockTitle={lockedTitle}
@@ -2293,7 +2291,7 @@ function ImportRow({
   /** Provider marks at the end of the line. */
   chips?: React.ReactNode
   disabled?: boolean
-  /** Hover text on the row's button (why it is locked). */
+  /** Hover text on a locked row (why it is locked). */
   lockTitle?: string
   /** For rows that fold a panel open below the list (history, cloud backup). */
   expanded?: boolean
@@ -2306,9 +2304,22 @@ function ImportRow({
 }) {
   // One line per way in (canvas "Import och flytt"): the name, what it is in
   // the muted ink, the provider marks, and the row's own button at the right
-  // end. The button carries the action, so the row itself is not a control.
+  // end. A click anywhere on the row opens it. The handler sits on the row and
+  // the button has none: its click (pointer, Enter, Space) bubbles up, so the
+  // button stays the one keyboard stop and the action runs once. A disabled
+  // button lets clicks through (pointer-events-none), hence the row's guard.
   return (
-    <div id={id} className="flex min-h-11 items-center gap-3 border-b-hairline py-1.5">
+    <div
+      id={id}
+      className={cn(
+        'group flex min-h-11 items-center gap-3 border-b-hairline py-1.5',
+        LIST_BLEED_CLASS,
+        'px-2 transition-colors duration-150',
+        !disabled && 'cursor-pointer hover:bg-secondary/35',
+      )}
+      onClick={disabled ? undefined : onClick}
+      title={disabled ? lockTitle : undefined}
+    >
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
         <span className="flex items-center gap-2 text-sm font-medium text-strong">
           {title}
@@ -2320,10 +2331,13 @@ function ImportRow({
       <Button
         type="button"
         variant={expanded === undefined ? 'outline' : 'ghost'}
-        className="shrink-0"
-        onClick={onClick}
+        className={cn(
+          'shrink-0',
+          expanded === undefined
+            ? 'group-hover:shadow-raised-hover'
+            : 'group-hover:bg-secondary/60 group-hover:text-foreground',
+        )}
         disabled={disabled}
-        title={lockTitle}
         aria-expanded={expanded}
         aria-label={`${action}: ${title}`}
       >
@@ -2338,16 +2352,6 @@ function ImportRow({
         )}
       </Button>
     </div>
-  )
-}
-
-// Same quiet beta-badge recipe as the sidebar nav (DashboardNav renderBadge),
-// so "Beta" reads identically wherever it appears.
-function BetaChip({ label }: { label: string }) {
-  return (
-    <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
-      {label}
-    </span>
   )
 }
 
