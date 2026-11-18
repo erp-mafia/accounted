@@ -4318,6 +4318,23 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Nästa räkenskapsperiod har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.',
     message_en: 'Next fiscal period already has opening balances posted; reverse them before re-running year-end.',
   },
+  // gnubok_run_year_end refused at staging: the company lock date
+  // (company_settings.bookkeeping_locked_through) covers the year's last day,
+  // where the closing entry is posted. Readiness says the same as the blocker
+  // COMPANY_LOCK_DATE (lib/core/bookkeeping/year-end-service.ts).
+  YEAR_END_COMPANY_LOCK_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringens låsdatum täcker räkenskapsårets sista dag, där bokslutet bokförs. Flytta först tillbaka låsdatumet under Inställningar → Bokföring. Om automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt.',
+    message_en:
+      'The company lock date covers the last day of the fiscal year, where the year-end closing is posted. Move the lock date back first under Settings → Bookkeeping. If automatic locking is on, turn it off while the closing is done: otherwise the date can be locked again the next night.',
+    retryable: false,
+    remediation: {
+      description:
+        'Tell the user why, then stage gnubok_update_bookkeeping_lock with bookkeeping_locked_through before the period end (or null). When auto_lock_period_days is set, send auto_lock_period_days: null in the same call: the automatic lock can move the date forward again the next night. After approval, run gnubok_year_end_readiness again. The user can turn automatic locking back on once the year is closed.',
+      tool: 'gnubok_update_bookkeeping_lock',
+    },
+  },
   YEAR_END_NO_ACTIVITY: {
     httpStatus: 409,
     message_sv:

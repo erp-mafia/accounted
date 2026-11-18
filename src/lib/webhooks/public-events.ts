@@ -129,7 +129,7 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
       {
         type: 'period.lock_date_changed',
         description:
-          'the company-wide lock date ("Bokföring låst t.o.m.", nothing on or before it can be booked or changed) was set, moved or removed. Carries `previousLockDate` and `lockDate` (YYYY-MM-DD, `null` when there is none), `direction` (`forward` or `backward`; removing the lock is `backward`), `via` (`app`, `api`, or `approval` of a staged change) and `reopenedFiledVatPeriods` (the filed momsdeklaration periods a backward move reopened, each with `tax_period`, `period_start`, `period_end`, `filed_on`; empty otherwise). Fires only when the stored date changes',
+          'the company-wide lock date ("Bokföring låst t.o.m.", nothing on or before it can be booked or changed) was set, moved or removed. Carries `previousLockDate` and `lockDate` (YYYY-MM-DD, `null` when there is none), `direction` (`forward` or `backward`; removing the lock is `backward`), `via` (`app`, `api`, `approval` of a staged change, or `auto_lock` when the nightly automatic lock of `auto_lock_period_days` moved it forward) and `reopenedFiledVatPeriods` (the filed momsdeklaration periods a backward move reopened, each with `tax_period`, `period_start`, `period_end`, `filed_on`; empty otherwise). Fires only when the stored date changes',
       },
     ],
   },

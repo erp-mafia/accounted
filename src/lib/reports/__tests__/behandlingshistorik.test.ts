@@ -597,6 +597,27 @@ describe('auditRowToEvent: system changes', () => {
     expect(ev.details).toEqual(['Momsperiod: Kvartal → Helår'])
   })
 
+  it('company_settings: a lock date the automatic lock moved names the nightly job, not a person', () => {
+    // The row write_audit_log writes for the job's UPDATE: the cron actor, and
+    // in user_id the settings row's own user, who did nothing here.
+    const ev = auditRowToEvent(
+      auditRow({
+        table_name: 'company_settings',
+        action: 'UPDATE',
+        user_id: 'user-1',
+        actor_id: 'user-1',
+        actor_type: 'cron',
+        actor_label: 'cron.bookkeeping_auto_lock',
+        old_state: { bookkeeping_locked_through: '2025-12-31', auto_lock_period_days: 30 },
+        new_state: { bookkeeping_locked_through: '2026-09-30', auto_lock_period_days: 30 },
+      }),
+    )!
+    expect(ev.details).toEqual(['Bokföringen låst till och med: 2025-12-31 → 2026-09-30'])
+    expect(formatActorLabel(ev.actor, new Map([['user-1', 'anna@example.se']]))).toBe(
+      'Schemalagd körning: cron.bookkeeping_auto_lock',
+    )
+  })
+
   it('fiscal_periods: lock, close, app-written unlock, closed externally', () => {
     const lock = auditRowToEvent(auditRow({ table_name: 'fiscal_periods', action: 'LOCK_PERIOD', new_state: { name: 'RÅ 2025' } }))!
     expect(lock).toMatchObject({ category: 'period', code: 'period.locked', object: 'RÅ 2025' })

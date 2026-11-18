@@ -75,7 +75,15 @@ describe('gnubok_year_end_readiness: registration', () => {
     // A year's dates only a person can settle: nothing to pre-check.
     'next_period_not_calendar_year',
     'next_period_overlaps',
+    // period_locked for the other lock: the message names the lock date and
+    // the way out, and the blocker carries the remediation with its tool.
+    'company_lock_date',
   ])
+
+  it('maps the company lock date codes to the company_lock_date kind', () => {
+    expect(YEAR_END_BLOCKER_KIND.COMPANY_LOCK_DATE).toBe('company_lock_date')
+    expect(YEAR_END_BLOCKER_KIND.COMPANY_LOCK_DATE_CHECK_FAILED).toBe('company_lock_date')
+  })
 
   it('maps the PERIOD_LOCKED readiness code to the period_locked kind', () => {
     expect(YEAR_END_BLOCKER_KIND.PERIOD_LOCKED).toBe('period_locked')
@@ -233,6 +241,45 @@ describe('gnubok_year_end_readiness: execute', () => {
     ])
     expect(kinds).not.toContain('other')
     expect(result.summary).toMatch(/Inte klart/)
+  })
+
+  it('hands the company lock date blocker to the agent with the tool that moves the date', async () => {
+    const message =
+      'Bokföringen är låst till och med 2026-12-31, och bokslutet bokförs på räkenskapsårets sista dag (2026-12-31). Flytta först tillbaka låsdatumet under Inställningar → Bokföring. Om automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt'
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ready: false,
+      blockers: [{ code: 'COMPANY_LOCK_DATE', message }],
+      errors: [message],
+      warnings: [],
+      draftCount: 0,
+      voucherGaps: [],
+      unexplainedGaps: [],
+      sequenceMismatches: [],
+      trialBalanceBalanced: true,
+    })
+
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const supabase = makeMockSupabase({
+      id: 'period-1',
+      name: '2026',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+      is_closed: false,
+      locked_at: null,
+      closing_entry_id: null,
+      continuity_verified: true,
+    })
+
+    const result = (await tool.execute({ fiscal_period_id: 'period-1' }, 'company-1', 'user-1', supabase)) as {
+      ready: boolean
+      blockers: Array<{ kind: string; message: string; remediation?: { description: string; tool?: string } }>
+    }
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers).toHaveLength(1)
+    expect(result.blockers[0]).toMatchObject({ kind: 'company_lock_date', message })
+    expect(result.blockers[0].remediation?.tool).toBe('gnubok_update_bookkeeping_lock')
+    expect(result.blockers[0].remediation?.description).toMatch(/auto_lock_period_days: null/)
   })
 
   it('falls back to the wording heuristic for an unmapped blocker code', async () => {

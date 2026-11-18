@@ -1,0 +1,1 @@
+[2026-11-18] Year-end readiness blocks on a company lock date on or after the year's last day (COMPANY_LOCK_DATE), naming the date and the way out, and gnubok_run_year_end refuses to stage: with automatic locking acting, that day is locked that many days after year end, before most closings.

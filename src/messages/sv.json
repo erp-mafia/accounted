@@ -1886,7 +1886,7 @@
       "aktiekapital": "Aktiekapital",
       "antal_aktier": "Antal aktier",
       "bookkeeping_locked_through": "Bokföring låst t.o.m.",
-      "auto_lock_period_days": "Automatisk låsning (dagar efter periodens slut)",
+      "auto_lock_period_days": "Automatisk låsning (dagar efter månadens slut)",
       "bank_account": "Bankkonto",
       "default_expense_account": "Standardkonto för kostnader",
       "default_currency": "Standardvaluta",
@@ -4457,10 +4457,10 @@
     "locked_through_help": "Verifikationer med datum till och med detta datum kan inte skapas eller ändras.",
     "auto_lock_label": "Automatisk låsning efter",
     "auto_lock_none": "Ingen automatisk låsning",
-    "auto_lock_30": "30 dagar efter periodens slut",
-    "auto_lock_60": "60 dagar efter periodens slut",
-    "auto_lock_90": "90 dagar efter periodens slut",
-    "auto_lock_help": "Låser automatiskt perioder efter valt antal dagar."
+    "auto_lock_30": "30 dagar efter månadens slut",
+    "auto_lock_60": "60 dagar efter månadens slut",
+    "auto_lock_90": "90 dagar efter månadens slut",
+    "auto_lock_help": "Varje kalendermånad låses automatiskt efter valt antal dagar. Flyttar du tillbaka låsdatumet medan automatisk låsning är på, låses månaden igen nästa natt."
   },
   "settings_voucher_series": {
     "heading": "Verifikationsserier",
@@ -14783,6 +14783,9 @@
     "upload_failed": "Kunde inte bifoga underlaget",
     "remove_failed": "Kunde inte ta bort underlaget",
     "too_large_title": "Filen är för stor"
+  },
+  "year_end_preflight": {
+    "open_bookkeeping_settings": "Öppna bokföringsinställningar"
   },
   "bokslut_checklist": {
     "heading": "Bokslutschecklista",

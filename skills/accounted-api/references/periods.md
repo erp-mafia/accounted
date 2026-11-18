@@ -4816,6 +4816,7 @@ Async-operation endpoint. Runs the year-end closing flow: currency revaluation (
 - Period must pass year_end_readiness checks (no drafts, no unexplained voucher gaps, trial balance balanced). The engine re-validates and aborts if not.
 - A locked period fails the operation (YEAR_END_FAILED, the message names the lock): unlock it with POST /fiscal-periods/{id}/unlock and run year-end on the open period. Do not call /lock first.
 - Closing entry is itself a verifikation (posted): the period must NOT already be closed.
+- A company lock date (bookkeeping_locked_through) on or after the period's last day stops the year-end before anything is posted; year_end_readiness reports it. The automatic lock (auto_lock_period_days) puts the date there that many days after the year ends. Move it back with PATCH /settings/bookkeeping-lock first, with auto_lock_period_days: null while the closing is done: the automatic lock can move the date forward again the next night.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

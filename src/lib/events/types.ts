@@ -16,10 +16,12 @@ import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
 
 /**
  * The door a lock date change came through: the settings page ('app'), a
- * direct v1 API call ('api'), or the approval of a staged change, from MCP
- * or ?stage=true ('approval').
+ * direct v1 API call ('api'), the approval of a staged change, from MCP or
+ * ?stage=true ('approval'), or the automatic lock, the nightly job that acts
+ * on company_settings.auto_lock_period_days ('auto_lock'). Nobody is behind
+ * an 'auto_lock' change.
  */
-export type LockDateChangeVia = 'app' | 'api' | 'approval'
+export type LockDateChangeVia = 'app' | 'api' | 'approval' | 'auto_lock'
 
 // ============================================================
 // Core Event Types: discriminated union of all system events
@@ -232,7 +234,9 @@ export type CoreEvent =
   // company_settings.bookkeeping_locked_through) was set, moved or removed
   // (lib/company/settings-service.ts). lockDate is null when the lock was
   // removed, which is a move backward. `via` names the door, never the person
-  // (the webhook payload carries no personal data).
+  // (the webhook payload carries no personal data). Via 'auto_lock' there is
+  // no person: userId is then the company's creator, only because event_log
+  // files every row under a user (user_id is NOT NULL), and it is never served.
   | { type: 'period.lock_date_changed'; payload: { previousLockDate: string | null; lockDate: string | null; direction: 'forward' | 'backward'; via: LockDateChangeVia; reopenedFiledVatPeriods: ReopenedVatPeriod[]; userId: string; companyId: string } }
   // Customers
   | { type: 'customer.created'; payload: { customer: Customer; userId: string; companyId: string } }

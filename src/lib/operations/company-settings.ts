@@ -580,7 +580,7 @@ const BookkeepingLockInput = z
       'Lock every date on or before this one (YYYY-MM-DD). Null removes the lock.',
     ),
     auto_lock_period_days: S.auto_lock_period_days.describe(
-      'Lock each month automatically this many days after it ends (the settings page offers 30, 60, 90). Null turns it off.',
+      'Lock each calendar month automatically this many days after it ends (the settings page offers 30, 60, 90): every night bookkeeping_locked_through is moved forward to the newest month end that many days back, never back. A number above 36500 is stored and locks nothing. Null turns it off.',
     ),
     acknowledge_filed_vat_periods: z
       .boolean()
@@ -612,6 +612,7 @@ export const settingsUpdateBookkeepingLock = defineOperation({
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
       'Locking more (a first lock date, or a later one) is refused while an SIE import is still holding a fiscal period (finish the import first). Moving the date back or removing it is always allowed: that is how an SIE undo stopped by the lock date continues.',
       'A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.',
+      'While auto_lock_period_days is set, a lock date moved back is moved forward again the next night (the automatic lock is a floor). Set auto_lock_period_days to null first to keep the dates open longer.',
     ],
     example: {
       request: { bookkeeping_locked_through: '2026-06-30' },

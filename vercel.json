@@ -171,6 +171,10 @@
       "schedule": "15 5 * * *"
     },
     {
+      "path": "/api/bookkeeping/auto-lock/cron",
+      "schedule": "40 1 * * *"
+    },
+    {
       "path": "/api/receipt-hunt/cron",
       "schedule": "30 5 * * *"
     },

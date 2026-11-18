@@ -178,7 +178,8 @@ describe('buildSystemdokumentation', () => {
     const withAutoLock = buildSystemdokumentation(facts({ settings: { ...facts().settings!, ore_rounding: true, auto_lock_period_days: 45 } }))
     const t2 = Object.fromEntries(withAutoLock.behandlingsregler.map((x) => [x.rubrik, x.text]))
     expect(t2['Öresavrundning på kundfakturor']).toContain('3740')
-    expect(t2['Automatisk låsning']).toContain('45 dagar')
+    // The nightly job locks calendar months (lib/company/auto-lock.ts), whatever the moms period.
+    expect(t2['Automatisk låsning']).toBe('Låsdatumet flyttas fram automatiskt 45 dagar efter varje kalendermånads slut.')
   })
 
   // #73: ML 2023:200 7 kap. 26 och 40 §§; listed where the company books by kontantmetoden.

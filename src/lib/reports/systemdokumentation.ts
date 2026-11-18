@@ -349,7 +349,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     })
   }
   if (s?.auto_lock_period_days != null) {
-    behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
+    behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje kalendermånads slut.` })
   }
 
   const integrationer: SystemdokumentationIntegration[] = [

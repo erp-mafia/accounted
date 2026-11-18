@@ -8,6 +8,7 @@ import { LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ExclamationTriangleIcon, InformationCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { BokslutChecklist } from './BokslutChecklist'
 import { K3TransitionCard } from './K3TransitionCard'
@@ -154,6 +155,7 @@ export function PreflightStep({ report, isLoading, error, onRetry, onContinue }:
  * list's gap rows) to the räkenskapsår this preflight is for.
  */
 function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: string }) {
+  const t = useTranslations('year_end_preflight')
   let href: string | null = null
   let actionLabel: string | null = null
 
@@ -180,6 +182,11 @@ function BlockerRow({ blocker, periodId }: { blocker: DisplayBlocker; periodId: 
     // Förklara action; the param scopes the list to this räkenskapsår.
     href = `/bookkeeping?gaps=${periodId}`
     actionLabel = 'Förklara luckan'
+  } else if (blocker.code === 'COMPANY_LOCK_DATE') {
+    // Periodlåsning there holds both the lock date and automatic locking,
+    // the two things the message says to change.
+    href = '/settings/bookkeeping'
+    actionLabel = t('open_bookkeeping_settings')
   }
 
   return (

@@ -4557,6 +4557,11 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   // The fail-closed variant of the gap check, like UNBOOKED_CHECK_FAILED: "we
   // could not tell", so the agent reacts as to a gap (list the gaps, re-run).
   VOUCHER_GAP_CHECK_FAILED: 'unexplained_voucher_gap',
+  // A period-state kind like period_locked, for the other lock: the company
+  // lock date covers the year's last day. The message names the date and the
+  // way out, and the blocker carries the remediation with the tool.
+  COMPANY_LOCK_DATE: 'company_lock_date',
+  COMPANY_LOCK_DATE_CHECK_FAILED: 'company_lock_date',
 }
 
 /**
@@ -24372,6 +24377,10 @@ export const tools: McpTool[] = [
               },
             }
           : {}),
+        // The one text gnubok_run_year_end's staging refusal also answers.
+        ...(code === 'COMPANY_LOCK_DATE'
+          ? { remediation: getErrorEntry('YEAR_END_COMPANY_LOCK_DATE')?.remediation }
+          : {}),
       }))
 
       let preview = null
@@ -24816,6 +24825,21 @@ export const tools: McpTool[] = [
               'Unlock with gnubok_unlock_period and call gnubok_run_year_end again; do not lock first.',
           ),
           { code: 'PERIOD_LOCK_ALREADY_LOCKED' },
+        )
+      }
+      // The same for the other lock: a company lock date on or after the
+      // year's last day refuses the closing entry at approval, on the
+      // lock-date trigger. Readiness reports it as company_lock_date; refuse
+      // here too, so a close the lock date is known to refuse is never
+      // staged (a lock that could not be read is left to the approval, which
+      // validates readiness and fails closed). No period name in the text:
+      // "Räkenskapsår" would make it read as the Swedish message.
+      const lock = await resolvePeriodLockForDate(supabase, companyId, period.period_end)
+      if (lock.layer === 'company_lock_date') {
+        throw codedRefusal(
+          'YEAR_END_COMPANY_LOCK_DATE',
+          `The company lock date (${lock.status.lock_date}) covers the last day of the period (${period.period_end}), where gnubok_run_year_end posts the closing entry. ` +
+            'Move the lock date back with gnubok_update_bookkeeping_lock first (and set auto_lock_period_days to null while the closing is done, if it is set: the automatic lock can move the date forward again the next night), then call gnubok_run_year_end again.',
         )
       }
 

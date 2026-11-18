@@ -2,11 +2,12 @@
  * period.lock_date_changed (issue #128): updateCompanySettings emits it,
  * awaited, after a save that really moved the stored lock date
  * (company_settings.bookkeeping_locked_through), on every door: the settings
- * page ('app'), a direct v1 call ('api') and the approval of a staged change
- * ('approval'). The filed momsdeklaration periods a backward move reopens are
- * worked out in the service, so every door names them. The webhook payload
- * carries the door, never the person: the internal userId is stripped on
- * delivery like on every other event.
+ * page ('app'), a direct v1 call ('api'), the approval of a staged change
+ * ('approval') and the automatic lock ('auto_lock'), whose save replaces only
+ * the lock date it read (expectedLockDate). The filed momsdeklaration periods
+ * a backward move reopens are worked out in the service, so every door names
+ * them. The webhook payload carries the door, never the person: the internal
+ * userId is stripped on delivery like on every other event.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -87,7 +88,7 @@ async function save(
     data: { ...STORED, bookkeeping_locked_through: 'bookkeeping_locked_through' in body ? body.bookkeeping_locked_through : before },
   },
 ) {
-  const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+  const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
   enqueue({ data: { ...STORED, bookkeeping_locked_through: before } }) // the stored row
   if (!options.dryRun) enqueue(storedAfter) // update ... returning
   enqueue(HAS_DEADLINES) // system deadlines exist: no self-heal
@@ -96,7 +97,7 @@ async function save(
     body,
     { adminVerified: true, via: 'app', findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy, ...options },
   )
-  return { outcome, updates: findCalls('company_settings', 'update') }
+  return { outcome, updates: findCalls('company_settings', 'update'), calls }
 }
 
 describe('period.lock_date_changed: when it fires', () => {
@@ -264,6 +265,70 @@ describe('period.lock_date_changed: via names the door', () => {
   it("is what the settings page passes ('app')", async () => {
     await save(null, { bookkeeping_locked_through: '2026-09-30' }, { via: 'app' })
     expect(emitted.map((e) => e.via)).toEqual(['app'])
+  })
+
+  it("is 'auto_lock' for the automatic lock", async () => {
+    await save('2026-06-30', { bookkeeping_locked_through: '2026-09-30' }, { via: 'auto_lock', expectedLockDate: '2026-06-30' })
+    expect(emitted.map((e) => [e.via, e.direction])).toEqual([['auto_lock', 'forward']])
+  })
+})
+
+describe('expectedLockDate: the save replaces only the lock date its caller read', () => {
+  /** What the save's one UPDATE is filtered on: the calls between .update() and .single(). */
+  function updateFilters(calls: Array<{ method: string; args: unknown[] }>) {
+    const from = calls.findIndex((call) => call.method === 'update')
+    const to = calls.findIndex((call, index) => index > from && call.method === 'single')
+    return calls.slice(from + 1, to).map((call) => [call.method, ...call.args])
+  }
+
+  const stillStored: Array<[string, string | null, unknown[]]> = [
+    ['no lock date', null, ['is', 'bookkeeping_locked_through', null]],
+    ['a lock date', '2026-06-30', ['eq', 'bookkeeping_locked_through', '2026-06-30']],
+  ]
+  it.each(stillStored)('writes while %s is still stored, and makes that the condition of the UPDATE', async (_case, before, condition) => {
+    const { outcome, calls } = await save(before, { bookkeeping_locked_through: '2026-09-30' }, { expectedLockDate: before })
+    expect(outcome.ok).toBe(true)
+    expect(updateFilters(calls)).toEqual([['eq', 'company_id', COMPANY], condition, ['select', '*']])
+    expect(emitted).toHaveLength(1)
+  })
+
+  it.each([
+    ['a later one, which this save would move back', '2026-10-31'],
+    ['an earlier one', '2026-03-31'],
+  ])('writes nothing when another lock date is stored by now: %s', async (_case, storedNow) => {
+    const { outcome, updates } = await save(storedNow, { bookkeeping_locked_through: '2026-09-30' }, { expectedLockDate: null })
+    expect(outcome).toMatchObject({ ok: false, code: 'CONFLICT' })
+    expect(updates).toHaveLength(0)
+    expect(emitted).toEqual([])
+    expect(listVatFilings).not.toHaveBeenCalled()
+  })
+
+  it('answers the same on a dry run', async () => {
+    const { outcome } = await save('2026-10-31', { bookkeeping_locked_through: '2026-09-30' }, { expectedLockDate: null, dryRun: true })
+    expect(outcome).toMatchObject({ ok: false, code: 'CONFLICT' })
+  })
+
+  it('writes nothing when the lock date changes between the read and the write', async () => {
+    const { outcome } = await save(
+      '2026-06-30',
+      { bookkeeping_locked_through: '2026-09-30' },
+      { expectedLockDate: '2026-06-30' },
+      { data: null, error: { code: 'PGRST116', message: 'no rows' } },
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'CONFLICT' })
+    expect(emitted).toEqual([])
+  })
+
+  it('leaves a save without it as it was: no condition, and a missing row is still NOT_FOUND', async () => {
+    const { calls } = await save('2026-06-30', { bookkeeping_locked_through: '2026-09-30' })
+    expect(updateFilters(calls)).toEqual([['eq', 'company_id', COMPANY], ['select', '*']])
+    const { outcome } = await save(
+      '2026-06-30',
+      { bookkeeping_locked_through: '2026-04-30' },
+      {},
+      { data: null, error: { code: 'PGRST116', message: 'no rows' } },
+    )
+    expect(outcome).toMatchObject({ ok: false, code: 'NOT_FOUND' })
   })
 })
 

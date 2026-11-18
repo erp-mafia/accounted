@@ -1733,6 +1733,7 @@ Sets bookkeeping_locked_through (nothing dated on or before it can be booked, co
 - Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
 - Locking more (a first lock date, or a later one) is refused while an SIE import is still holding a fiscal period (finish the import first). Moving the date back or removing it is always allowed: that is how an SIE undo stopped by the lock date continues.
 - A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.
+- While auto_lock_period_days is set, a lock date moved back is moved forward again the next night (the automatic lock is a floor). Set auto_lock_period_days to null first to keep the dates open longer.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

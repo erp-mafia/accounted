@@ -1,0 +1,1 @@
+[2026-11-17] "Automatisk låsning efter" (auto_lock_period_days) now acts: a nightly job moves the lock date forward to the newest month end that many days back, as a floor (moved back, it locks again the next night), not removed as dead: 19 companies had it on and the page and API promised it.

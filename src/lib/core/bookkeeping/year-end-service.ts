@@ -25,6 +25,7 @@ import {
   fiscalYearInTheWay,
   findNextPeriod,
 } from './period-service'
+import { resolvePeriodLockForDate } from './period-status'
 import { unfinishedSieImportMessage } from './sie-import-hold'
 import { generateResultAppropriation, previewResultAppropriation } from './result-appropriation-service'
 import {
@@ -265,6 +266,33 @@ export async function validateYearEndReadiness(
       message:
         'Perioden är låst: lås upp den först. Bokslutet bokför bokslutsverifikationen i perioden och låser den sedan självt',
     })
+  }
+
+  // Check: the company lock date does not cover the year's last day. The
+  // closing entry is dated period_end, so a lock date on or after it fails
+  // the first posting on the lock-date trigger, after readiness said ready:
+  // PERIOD_LOCKED's failure, for the other lock. The automatic lock
+  // (lib/company/auto-lock.ts) puts the date there the set number of days
+  // after the year ends (30, 60 or 90 in the settings page), long before
+  // most closings. The verdict is the triggers' own
+  // (period-status.ts) and fails closed when it cannot be read. A closed year
+  // is PERIOD_ALREADY_CLOSED's to report: its lock date is meant to cover it.
+  if (!period.is_closed) {
+    const lock = await resolvePeriodLockForDate(supabase, companyId, period.period_end)
+    if (lock.layer === 'company_lock_date') {
+      blockers.push({
+        code: 'COMPANY_LOCK_DATE',
+        message:
+          `Bokföringen är låst till och med ${lock.status.lock_date}, och bokslutet bokförs på räkenskapsårets sista dag (${period.period_end}). ` +
+          'Flytta först tillbaka låsdatumet under Inställningar → Bokföring. ' +
+          'Om automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt',
+      })
+    } else if (lock.status.lookup_failed) {
+      blockers.push({
+        code: 'COMPANY_LOCK_DATE_CHECK_FAILED',
+        message: 'Det gick inte att kontrollera om räkenskapsårets sista dag är låst. Försök igen',
+      })
+    }
   }
 
   // Check: no SIE import or undo still holds the year. The closing entry is

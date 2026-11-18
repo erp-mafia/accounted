@@ -260,7 +260,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           ))}
         </Section>
 
-        <Section title="6. Rättelser och låsning" note={`BFL 5 kap. 5 §. Låsdatum: ${report.rattelse_och_las.lock_date ?? 'inget'}${report.rattelse_och_las.auto_lock_period_days != null ? `, flyttas automatiskt ${report.rattelse_och_las.auto_lock_period_days} dagar efter momsperiodens slut` : ''}.`}>
+        <Section title="6. Rättelser och låsning" note={`BFL 5 kap. 5 §. Låsdatum: ${report.rattelse_och_las.lock_date ?? 'inget'}${report.rattelse_och_las.auto_lock_period_days != null ? `, flyttas automatiskt ${report.rattelse_och_las.auto_lock_period_days} dagar efter varje kalendermånads slut` : ''}.`}>
           {report.rattelse_och_las.rules.map((r, i) => (
             <Bullet key={i} text={r} />
           ))}

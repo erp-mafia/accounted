@@ -1886,7 +1886,7 @@
       "aktiekapital": "Share capital",
       "antal_aktier": "Number of shares",
       "bookkeeping_locked_through": "Bookkeeping locked through",
-      "auto_lock_period_days": "Automatic lock (days after period end)",
+      "auto_lock_period_days": "Automatic lock (days after month end)",
       "bank_account": "Bank account",
       "default_expense_account": "Default expense account",
       "default_currency": "Default currency",
@@ -4457,10 +4457,10 @@
     "locked_through_help": "Vouchers dated on or before this date cannot be created or modified.",
     "auto_lock_label": "Automatic locking after",
     "auto_lock_none": "No automatic locking",
-    "auto_lock_30": "30 days after period end",
-    "auto_lock_60": "60 days after period end",
-    "auto_lock_90": "90 days after period end",
-    "auto_lock_help": "Automatically locks periods after the chosen number of days."
+    "auto_lock_30": "30 days after month end",
+    "auto_lock_60": "60 days after month end",
+    "auto_lock_90": "90 days after month end",
+    "auto_lock_help": "Each calendar month is locked automatically after the chosen number of days. If you move the lock date back while automatic locking is on, the month is locked again the next night."
   },
   "settings_voucher_series": {
     "heading": "Verifikationsserier",
@@ -14783,6 +14783,9 @@
     "upload_failed": "Could not attach the document",
     "remove_failed": "Could not remove the document",
     "too_large_title": "The file is too large"
+  },
+  "year_end_preflight": {
+    "open_bookkeeping_settings": "Open bookkeeping settings"
   },
   "bokslut_checklist": {
     "heading": "Closing checklist",

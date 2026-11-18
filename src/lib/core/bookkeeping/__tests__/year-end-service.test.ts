@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { makeFiscalPeriod } from '@/tests/helpers'
 
@@ -247,6 +247,18 @@ vi.mock('../period-service', () => ({
   fiscalYearInTheWay: vi.fn().mockResolvedValue(null),
 }))
 
+// Default: no lock on the year's last day, without a read (the positional
+// queue below hands results out in call order). The company lock date tests
+// run the real verdict against seeded tables.
+const NO_LOCK = { status: { period_id: 'fp-1', status: 'open' as const, lock_date: null }, layer: null }
+vi.mock('../period-status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../period-status')>()),
+  resolvePeriodLockForDate: vi.fn().mockResolvedValue({
+    status: { period_id: 'fp-1', status: 'open', lock_date: null },
+    layer: null,
+  }),
+}))
+
 // Default: the next year has no IB. The one-IB-per-year tests override; the
 // read itself is covered in lib/import/opening-balance/__tests__/existing.test.ts.
 vi.mock('@/lib/import/opening-balance/existing', async (importOriginal) => ({
@@ -280,6 +292,7 @@ import { previewCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluati
 import { priorResultCarry } from '../prior-result-carry'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { countUnbookedInPeriod, findNextPeriod } from '../period-service'
+import { resolvePeriodLockForDate } from '../period-status'
 import {
   buildCutoffLines,
   KONTANTMETOD_CUTOFF_DESCRIPTIONS,
@@ -1639,6 +1652,91 @@ describe('validateYearEndReadiness: open FX items at balansdagen (ÅRL 4 kap. 13
       result.warnings.some((w: string) => w.includes('kunde inte genomföras'))
     ).toBe(true)
     expect(result.ready).toBe(true)
+  })
+})
+
+describe('validateYearEndReadiness: the company lock date over the year\'s last day', () => {
+  // The closing entry is dated period_end. A lock date on or after it (where
+  // the automatic lock puts it 30 to 90 days after the year ends) refused the
+  // closing at its first posting, after readiness had said ready.
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../period-status')>('../period-status')
+    vi.mocked(resolvePeriodLockForDate).mockImplementation(actual.resolvePeriodLockForDate)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+  })
+  afterEach(() => {
+    vi.mocked(resolvePeriodLockForDate).mockResolvedValue(NO_LOCK)
+  })
+
+  /** Books that pass every other gate, with this lock date and automatic lock setting. */
+  const readiness = (lockedThrough: string | null, autoLockDays: number | null, period: Row = {}) => {
+    const tables = fxBaseTables()
+    tables.fiscal_periods = [{ ...tables.fiscal_periods![0], ...period }]
+    tables.company_settings = [
+      { company_id: 'company-1', bookkeeping_locked_through: lockedThrough, auto_lock_period_days: autoLockDays },
+    ]
+    return validateYearEndReadiness(makeFilteringClient(tables) as never, 'company-1', 'user-1', 'fp-1')
+  }
+  const lockBlocker = (result: Awaited<ReturnType<typeof validateYearEndReadiness>>) =>
+    result.blockers.find((b) => b.code === 'COMPANY_LOCK_DATE')
+
+  it('blocks when the lock date is the year\'s last day, naming the date and the way out', async () => {
+    const result = await readiness(FX_PERIOD_END, 30)
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.map((b) => b.code)).toEqual(['COMPANY_LOCK_DATE'])
+    const message = lockBlocker(result)!.message
+    expect(message).toContain(`låst till och med ${FX_PERIOD_END}`)
+    expect(message).toContain('Flytta först tillbaka låsdatumet under Inställningar → Bokföring')
+    expect(message).toMatch(/automatisk låsning är på: stäng av den medan bokslutet görs, annars kan datumet låsas igen nästa natt/)
+    expect(result.errors).toEqual([message])
+  })
+
+  it('blocks a later lock date too, and names that date', async () => {
+    const result = await readiness('2025-03-31', 90)
+    expect(lockBlocker(result)!.message).toContain('låst till och med 2025-03-31')
+  })
+
+  it('is the same block with automatic locking off: the lock date is what refuses the closing', async () => {
+    const off = await readiness(FX_PERIOD_END, null)
+    const on = await readiness(FX_PERIOD_END, 30)
+    expect(off.ready).toBe(false)
+    expect(lockBlocker(off)).toEqual(lockBlocker(on))
+  })
+
+  it('does not block a lock date the day before the year\'s last day', async () => {
+    const result = await readiness('2024-12-30', 30)
+    expect(lockBlocker(result)).toBeUndefined()
+    expect(result.ready).toBe(true)
+  })
+
+  it('leaves a company without a lock date ready, as before', async () => {
+    const result = await readiness(null, 30)
+    expect(result.blockers).toEqual([])
+    expect(result.ready).toBe(true)
+  })
+
+  it('leaves a closed year to PERIOD_ALREADY_CLOSED: its lock date is meant to cover it', async () => {
+    const result = await readiness('2025-12-31', null, { is_closed: true })
+    const codes = result.blockers.map((b) => b.code)
+    expect(codes).toContain('PERIOD_ALREADY_CLOSED')
+    expect(codes).not.toContain('COMPANY_LOCK_DATE')
+  })
+
+  it('fails closed when the lock cannot be read', async () => {
+    vi.mocked(resolvePeriodLockForDate).mockResolvedValue({
+      status: { period_id: null, status: 'locked', lock_date: null, lookup_failed: true },
+      layer: null,
+    })
+    const result = await readiness(null, null)
+    expect(result.ready).toBe(false)
+    expect(result.blockers.map((b) => b.code)).toEqual(['COMPANY_LOCK_DATE_CHECK_FAILED'])
   })
 })
 

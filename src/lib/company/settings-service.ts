@@ -46,7 +46,10 @@
  *     caller acknowledged them: the settings page asks the person and saves
  *     again (decision 2026-11-17). A failed read fails closed;
  *   - a save that really moves the stored lock date emits
- *     period.lock_date_changed (awaited), naming the door, not the person.
+ *     period.lock_date_changed (awaited), naming the door, not the person;
+ *   - the automatic lock (lib/company/auto-lock.ts, the nightly job) comes
+ *     through here as one more door, 'auto_lock', with expectedLockDate: its
+ *     save replaces the lock date it decided on or writes nothing.
  *
  * A dry run performs every read and every check and writes nothing: no payee
  * write-through, no settings update, no deadline regeneration, no code
@@ -101,14 +104,27 @@ export interface UpdateCompanySettingsOptions {
    * The door already asked the database whether the caller is owner/admin
    * (withRouteContext requireAdmin). Doors without a cookie session (API
    * key, MCP) leave this false and the service reads the membership role.
+   * The automatic lock sets it too: nobody calls, the job acts on the
+   * company's own setting behind the cron secret.
    */
   adminVerified?: boolean
   /**
    * Which door the save came through: the settings page ('app'), a direct v1
-   * call ('api'), or the approval of a staged change ('approval').
-   * period.lock_date_changed carries it in place of the person.
+   * call ('api'), the approval of a staged change ('approval'), or the
+   * automatic lock ('auto_lock'). period.lock_date_changed carries it in
+   * place of the person.
    */
   via: LockDateChangeVia
+  /**
+   * The lock date the caller read and decided on (null: none; left out: no
+   * condition). The settings row is written only while the stored date is
+   * still that one, and the UPDATE itself carries the condition: a date
+   * somebody saves in between is never replaced, and two runs of one job
+   * cannot both move it. Otherwise the row is left as it is and the save
+   * answers CONFLICT. The automatic lock sets it, so its move forward can
+   * never undo a later date.
+   */
+  expectedLockDate?: string | null
   /** filedVatPeriodsReopenedBy, passed in by the door (see ReopenedFiledVatLookup). */
   findReopenedFiledVatPeriods: ReopenedFiledVatLookup
   /**
@@ -549,11 +565,17 @@ export async function updateCompanySettings(
     return refuse('SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE')
   }
 
+  const previousLockDate = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null
+  // A caller that decided on the lock date it read replaces only that date
+  // (options.expectedLockDate); the UPDATE below carries the same condition
+  // for a change between this read and the write.
+  const expectsLockDate = options.expectedLockDate !== undefined
+  if (expectsLockDate && previousLockDate !== options.expectedLockDate) return refuse('CONFLICT')
+
   // The filed momsdeklaration periods a lock date move reopens, worked out
   // once for every door: each door refuses them unacknowledged,
   // and period.lock_date_changed names them whichever door moved the date.
   // A failed read fails closed.
-  const previousLockDate = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null
   let reopenedFiledVatPeriods: ReopenedVatPeriod[] = []
   if (body.bookkeeping_locked_through !== undefined) {
     try {
@@ -648,15 +670,19 @@ export async function updateCompanySettings(
     }
   }
 
-  const { data, error } = await supabase
-    .from('company_settings')
-    .update(payload)
-    .eq('company_id', companyId)
-    .select('*')
-    .single()
+  let update = supabase.from('company_settings').update(payload).eq('company_id', companyId)
+  if (expectsLockDate) {
+    update = previousLockDate === null
+      ? update.is('bookkeeping_locked_through', null)
+      : update.eq('bookkeeping_locked_through', previousLockDate)
+  }
+  const { data, error } = await update.select('*').single()
 
   if (error) {
     if (error.code === 'PGRST116') {
+      // The row was read above: with the condition, no match means the lock
+      // date changed in between.
+      if (expectsLockDate && oldSettings) return refuse('CONFLICT')
       return refuse('NOT_FOUND', 'Inställningarna hittades inte.', { resource: 'company_settings' })
     }
     return { ok: false, code: 'UNKNOWN_ERROR', error }

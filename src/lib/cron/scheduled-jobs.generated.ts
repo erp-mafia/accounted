@@ -56,6 +56,7 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   { path: '/api/extensions/arcim-migration/register-repair/cron', schedule: '*/5 * * * *', maxDurationSeconds: 300 },
   { path: '/api/customers/personal-number-repair/cron', schedule: '*/5 * * * *', maxDurationSeconds: 300 },
   { path: '/api/bookkeeping/accruals/post-due/cron', schedule: '15 5 * * *', maxDurationSeconds: 300 },
+  { path: '/api/bookkeeping/auto-lock/cron', schedule: '40 1 * * *', maxDurationSeconds: 300 },
   { path: '/api/receipt-hunt/cron', schedule: '30 5 * * *', maxDurationSeconds: 300 },
   { path: '/api/peppol/inbound/cron', schedule: '*/10 * * * *', maxDurationSeconds: 300 },
   { path: '/api/digital-mailboxes/cron', schedule: '3-59/10 * * * *', maxDurationSeconds: 300 },
