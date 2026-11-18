@@ -22,7 +22,8 @@ interface ConfirmationDialogProps {
   /** Help behind a "?" beside the title (convention 7): the why and the
    *  how, so the body can state one fact. */
   help?: ReactNode
-  warningText?: string
+  /** The one attention sentence above the buttons; a node when it carries a link. */
+  warningText?: ReactNode
   confirmLabel?: string
   extraActions?: ReactNode
   children: ReactNode

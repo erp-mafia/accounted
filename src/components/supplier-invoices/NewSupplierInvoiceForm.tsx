@@ -81,6 +81,13 @@ import {
 } from '@/lib/documents/underlag-upload-route'
 import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
+import { useSupplierInvoiceDuplicates } from '@/components/supplier-invoices/use-supplier-invoice-duplicates'
+import {
+  DuplicateNumberLine,
+  ReusedReferenceLine,
+  ReusedReferenceSentence,
+  duplicateNumberSentence,
+} from '@/components/supplier-invoices/DuplicateWarnings'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
@@ -322,14 +329,6 @@ export default function NewSupplierInvoiceForm({
   const [dueDateCaption, setDueDateCaption] = useState<
     { type: 'terms'; days: number } | { type: 'on_invoice' } | null
   >(null)
-
-  // Pre-submit duplicate advisory (change 3): debounced lookup against
-  // GET /api/supplier-invoices/exists; the create route's 409 stays the backstop.
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    number: string
-    existingId: string | null
-  } | null>(null)
-  const duplicateSeqRef = useRef(0)
 
   // Fakturabelopp and Moms as the invoice states them (total-first): they
   // fill a single empty row, switch öresavrundning on when the gap is
@@ -846,40 +845,17 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedInvoiceDate])
 
-  // Pre-submit duplicate advisory (change 3): debounced, sequence-guarded and
-  // purely advisory: the create route's structured 409 stays the enforcement
-  // point, and the exists endpoint mirrors the unique index's
-  // credited/reversed exclusion so re-issues never warn.
-  useEffect(() => {
-    const supplierId = watchedSupplierId
-    const number = (watchedInvoiceNumber || '').trim()
-    if (!supplierId || !number) {
-      // Advance the seq so an in-flight exists response cannot resurrect the
-      // warning under a field the user just cleared.
-      duplicateSeqRef.current += 1
-      setDuplicateWarning(null)
-      return
-    }
-    const seq = ++duplicateSeqRef.current
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/supplier-invoices/exists?supplier_id=${encodeURIComponent(supplierId)}&number=${encodeURIComponent(number)}`,
-        )
-        if (!res.ok) return
-        const json = await res.json()
-        if (duplicateSeqRef.current !== seq) return
-        setDuplicateWarning(
-          json?.data?.exists
-            ? { number, existingId: json.data.existing?.id ?? null }
-            : null,
-        )
-      } catch {
-        // Advisory only; the 409 backstop still catches real duplicates.
-      }
-    }, 400)
-    return () => clearTimeout(timer)
-  }, [watchedSupplierId, watchedInvoiceNumber])
+  // Pre-submit duplicate advisory: the number (the create route's structured
+  // 409 stays the enforcement point) and the payment reference, which no
+  // door refuses.
+  const { found: duplicates, check: checkDuplicates } = useSupplierInvoiceDuplicates({
+    supplier_id: watchedSupplierId,
+    supplier_invoice_number: watchedInvoiceNumber,
+    payment_reference: watchedPaymentReference,
+    payer: watchedPayer,
+  })
+  // On one other invoice of the supplier only: acknowledged in the review dialog.
+  const reuseToAcknowledge = duplicates?.reference?.needs_acknowledgement ? duplicates.reference : null
 
   // Auto-fetch Riksbanken exchange rate when currency switches to non-SEK and
   // the user hasn't typed a custom rate yet. Re-fetches when the invoice
@@ -1737,7 +1713,6 @@ export default function NewSupplierInvoiceForm({
     pendingData,
     showBankPicker,
     setShowBankPicker,
-    setPendingTransactionId,
     conflict,
     setConflict,
     isResolvingConflict,
@@ -1766,6 +1741,7 @@ export default function NewSupplierInvoiceForm({
     onMissingField: focusMissingField,
     settleTransactionId: inboxItemId ? (settleWith?.transactionId ?? null) : null,
     euSupplier,
+    acknowledgesInReview: async (data) => (await checkDuplicates(data))?.reference?.needs_acknowledgement === true,
   })
 
   // Gone, or never there: nothing is left for the unmount cleanup to remove.
@@ -2171,22 +2147,8 @@ export default function NewSupplierInvoiceForm({
                     )
                   })()
                 )}
-                {duplicateWarning && (
-                  <p className="text-xs text-destructive" data-ph-mask="">
-                    {t('duplicate_warning_line', { number: duplicateWarning.number })}
-                    {duplicateWarning.existingId && (
-                      <>
-                        {' '}
-                        <button
-                          type="button"
-                          className="underline underline-offset-2"
-                          onClick={() => router.push(`/supplier-invoices/${duplicateWarning.existingId}`)}
-                        >
-                          {t('duplicate_warning_link')}
-                        </button>
-                      </>
-                    )}
-                  </p>
+                {duplicates?.number && (
+                  <DuplicateNumberLine number={(watchedInvoiceNumber || '').trim()} invoice={duplicates.number} />
                 )}
               </div>
               <div className="space-y-2">
@@ -2284,6 +2246,7 @@ export default function NewSupplierInvoiceForm({
                       className={cn('h-9', settledFields.has('payment_reference') && 'prefill-settle')}
                       {...register('payment_reference')}
                     />
+                    {duplicates?.reference && <ReusedReferenceLine reuse={duplicates.reference} />}
                     {supplierHasGiro && (
                       <p className="text-xs text-muted-foreground">{t('ocr_payment_file_caption')}</p>
                     )}
@@ -2933,9 +2896,10 @@ export default function NewSupplierInvoiceForm({
         </div>
       </form>
 
-      {/* Review dialog (AB only: also shown after a bank transaction is picked
-          in the register-and-match flow). */}
-      {pendingData && !isEF && showReview && (() => {
+      {/* Review dialog (AB: also shown after a bank transaction is picked in
+          the register-and-match flow. EF only when a reused payment reference
+          is acknowledged here). */}
+      {pendingData && showReview && (() => {
         const reviewSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)
         if (!reviewSupplier) return null
         return (
@@ -2945,14 +2909,20 @@ export default function NewSupplierInvoiceForm({
             onConfirm={handleConfirm}
             isSubmitting={isSubmitting}
             title={t('review_dialog_title')}
+            // One attention sentence: a reference to acknowledge takes its
+            // place, right above the button that acknowledges it.
             warningText={
-              effectiveBookingMoment === 'issue'
+              reuseToAcknowledge ? (
+                <span data-ph-mask="">
+                  <ReusedReferenceSentence reuse={reuseToAcknowledge} />
+                </span>
+              ) : effectiveBookingMoment === 'issue'
                 ? t('review_dialog_warning')
                 : effectiveBookingMoment === 'payment'
                   ? t('review_dialog_warning_cash')
                   : t('review_dialog_warning_deferred')
             }
-            confirmLabel={t('review_dialog_confirm')}
+            confirmLabel={reuseToAcknowledge ? t('review_dialog_confirm_anyway') : t('review_dialog_confirm')}
           >
             <SupplierInvoiceReviewContent
               supplier={reviewSupplier}
@@ -2984,10 +2954,7 @@ export default function NewSupplierInvoiceForm({
           target is the payable including the invoice rounding item. */}
       <BankTransactionPicker
         open={showBankPicker}
-        onOpenChange={(open) => {
-          setShowBankPicker(open)
-          if (!open) setPendingTransactionId(null)
-        }}
+        onOpenChange={setShowBankPicker}
         targetAmount={figures.toPay}
         targetCurrency={watchedCurrency}
         onPick={handlePickTransaction}
@@ -3101,7 +3068,11 @@ export default function NewSupplierInvoiceForm({
               {t('duplicate_dialog_title')}
             </DialogTitle>
             {/* data-ph-mask: the conflict message carries the invoice number */}
-            <DialogDescription data-ph-mask="">{conflict?.message}</DialogDescription>
+            <DialogDescription data-ph-mask="">
+              {duplicates?.number?.voucher
+                ? duplicateNumberSentence(t, (watchedInvoiceNumber || '').trim(), duplicates.number)
+                : conflict?.message}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
             {conflict?.existing && (

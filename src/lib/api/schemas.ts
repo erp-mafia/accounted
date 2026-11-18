@@ -2207,11 +2207,18 @@ export const CreateSupplierInvoiceSchema = z.object({
 // partial unique index idx_supplier_invoices_company_supplier_number on
 // (company_id, supplier_id, supplier_invoice_number), which excludes
 // credited/reversed invoices, so the advisory never warns on the re-issue
-// pattern the index was widened to allow.
-export const SupplierInvoiceExistsQuerySchema = z.object({
-  supplier_id: uuid,
-  number: z.string().min(1, 'number is required'),
-})
+// pattern the index was widened to allow. The payment reference is looked
+// for among the same live invoices; the number, the reference or both.
+export const SupplierInvoiceExistsQuerySchema = z
+  .object({
+    supplier_id: uuid,
+    number: z.string().min(1).max(200).optional(),
+    reference: z.string().min(1).max(200).optional(),
+  })
+  .refine((query) => query.number !== undefined || query.reference !== undefined, {
+    path: ['number'],
+    message: 'number or reference is required',
+  })
 
 export const MarkSupplierInvoicePaidSchema = z.object({
   amount: z.number().positive().optional(),

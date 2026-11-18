@@ -3,8 +3,9 @@
  * from the company's books: the item and its reading, the bank row it was
  * paid by (the row it is linked to, else the live arrival match), what the
  * company has switched on and how it books, the purchase category, the
- * supplier card, and the account the company has booked the counterparty
- * on. Every read filters by company (service-role doors have no RLS).
+ * supplier card, whether its other invoices already carry the payment
+ * reference, and the account the company has booked the counterparty on.
+ * Every read filters by company (service-role doors have no RLS).
  *
  * Read only: an item the bank was never checked for is planned without a
  * row (the item's detail read checks it, and the page plans after that
@@ -27,6 +28,7 @@ import { resolveInboxPurchaseCategories, templatePurchaseAccount } from '@/lib/c
 import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
 import { matchSupplierByIdentity, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
+import { lookupSupplierInvoiceDuplicates } from '@/lib/supplier-invoices/duplicate-lookup'
 import type { SellerRegion } from '@/lib/vat/seller-country'
 import { INBOX_ITEM_DOCUMENT_HOLD, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
 import type { PairableRow } from '@/lib/inkorg/pairs-read'
@@ -208,6 +210,24 @@ export async function readOneClickInput(
     if (found) supplier = await readSupplier(supabase, companyId, found.supplierId)
   }
 
+  // A registration stores the reading's payment reference. On one other live invoice of the
+  // supplier it may be the same invoice under another number, which a person acknowledges in
+  // the editor (lib/supplier-invoices/duplicate-lookup.ts). Only a supplier invoice on a card
+  // that exists can have one. A lookup that fails opens the editor too: it is asked again there.
+  const supplierId = supplier?.id
+  const paymentReference = reading?.invoice?.paymentReference
+  const referenceToAcknowledge =
+    kind === 'supplier_invoice' && supplierId && paymentReference
+      ? await hint(
+          log,
+          'the payment reference',
+          async () =>
+            (await lookupSupplierInvoiceDuplicates(supabase, companyId, { supplierId, number: reading?.invoice?.invoiceNumber, reference: paymentReference }))
+              .reference?.needs_acknowledgement === true,
+          true,
+        )
+      : false
+
   // What was bought: the person's answer, else what the item reads as (their choice, the supplier's instruction, the proposal).
   const category =
     answers.purchaseCategory ??
@@ -264,6 +284,7 @@ export async function readOneClickInput(
       supplier,
       counterpartyAccount: counterpart?.account ?? null,
       counterpartyAlwaysReview: counterpart?.alwaysReview ?? false,
+      referenceToAcknowledge,
       directBooking,
       bookingReview: {
         rules: bookingReviewRules,

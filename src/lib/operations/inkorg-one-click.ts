@@ -58,6 +58,12 @@
  *   from the reading (name, numbers, address, the country and type the VAT
  *   rule used). A direct booking names the matched supplier only.
  *
+ *   Payment reference. A register path whose OCR is on one other live
+ *   invoice of the supplier opens the editor: it may be the same invoice
+ *   under another number, and the editor's review step is where a person
+ *   says so (lib/supplier-invoices/duplicate-lookup.ts). On two or more it is
+ *   how the supplier invoices, and one click registers.
+ *
  *   Review. The company's one-click switch, a counterpart rule set to
  *   always ask and a booking review rule that matches the plan
  *   (lib/transactions/direct-booking.ts askedForReview, the same decision
@@ -146,6 +152,7 @@ export type OneClickReason =
   | 'missing_due_date'
   | 'missing_supplier_name'
   | 'supplier_type_mismatch'
+  | 'payment_reference_reused'
   | 'limited_deduction'
   | 'possible_asset'
   | 'possible_domestic_reverse_charge'
@@ -215,6 +222,13 @@ export interface OneClickInput {
    * unknown, which meets any amount criterion). A match opens the editor.
    */
   bookingReview?: { rules: BookingReviewRule[]; counterpartyKey: string; supplierKey?: string; amountSek: number | null }
+  /**
+   * The reading's payment reference is on one other live invoice of the
+   * matched supplier, under another number (referenceReuseNeedsAcknowledgement
+   * in lib/supplier-invoices/duplicate-lookup.ts), or that could not be read.
+   * Absent: it is not.
+   */
+  referenceToAcknowledge?: boolean
   /** Where the seller is, as the person answered; read only when the document names no country. */
   sellerRegionAnswer: SellerRegion | null
   /** SEK per unit of the invoice's currency on its date (a register path in a foreign currency). */
@@ -786,6 +800,9 @@ export function planOneClick(input: OneClickInput): OneClickPlan {
       )
       if (Math.abs(payable - gross) > 0.01) return ask('editor', 'amount_mismatch')
     }
+    // The reference this registration would store is on one other invoice of the supplier: the
+    // editor names that invoice, and its review step is where a person registers it all the same.
+    if (input.referenceToAcknowledge && built.invoice.payment_reference) return ask('editor', 'payment_reference_reused')
   }
   // The company's and the rule's say, last: the editor opens on the whole plan.
   if (askedForReview({ rule_always_review: input.counterpartyAlwaysReview, review_blocked: planBlocked(plan.lines, input.bookingReview) }, input.directBooking ?? DIRECT_BOOKING_ON)) {

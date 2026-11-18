@@ -39,6 +39,12 @@ const directBookingMock = vi.fn()
 vi.mock('@/lib/transactions/direct-booking-settings', () => ({
   readDirectBookingSettings: (...args: unknown[]) => directBookingMock(...args),
 }))
+// The lookup itself is tested with its own rows (lib/supplier-invoices/__tests__/duplicate-lookup.test.ts).
+const duplicateLookupMock = vi.fn()
+vi.mock('@/lib/supplier-invoices/duplicate-lookup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supplier-invoices/duplicate-lookup')>()),
+  lookupSupplierInvoiceDuplicates: (...args: unknown[]) => duplicateLookupMock(...args),
+}))
 
 import { readOneClickInput } from '../inkorg-one-click-read'
 
@@ -87,6 +93,7 @@ beforeEach(() => {
   matchSupplierMock.mockResolvedValue(null)
   categoriesMock.mockResolvedValue(new Map([['item-1', { code: 'expense.software.saas', source: 'lines', level: 'Trolig', version: 'pc-2026-10' }]]))
   templateMock.mockResolvedValue(null)
+  duplicateLookupMock.mockResolvedValue({ number: null, reference: null })
 })
 
 describe('readOneClickInput', () => {
@@ -197,5 +204,75 @@ describe('readOneClickInput', () => {
     const result = await read()
     expect(result.ok && [result.input.category, result.input.bank]).toEqual([null, null])
     expect(log.warn).toHaveBeenCalled()
+  })
+})
+
+describe('readOneClickInput: the payment reference on the supplier\'s other invoices', () => {
+  // An unpaid invoice of a supplier the company has a card for, with an OCR.
+  const UNPAID = {
+    ...ITEM,
+    matched_supplier_id: 'sup-1',
+    bank_match_transaction_id: null,
+    extracted_data: { ...READING, invoice: { invoiceNumber: 'F-1002', invoiceDate: '2026-10-13', dueDate: '2026-11-12', paymentReference: '1234567897', currency: 'SEK' } },
+  }
+  const SETTINGS = { vat_registered: true, accounting_method: 'accrual' }
+  const CARD = { id: 'sup-1', name: 'Konsult AB', supplier_type: 'swedish_business', default_expense_account: '6550', default_payment_terms: 30, archived_at: null }
+  const twin = { id: 'si-1', supplier_invoice_number: 'F-0990', arrival_number: 31, invoice_date: '2026-09-13', total: 1250, currency: 'SEK', ore_rounding: null, status: 'approved', voucher: null }
+
+  beforeEach(() => {
+    readBankMatchMock.mockResolvedValue(null)
+  })
+
+  it('asks the supplier card\'s live invoices for the reading\'s reference, under another number', async () => {
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 1, needs_acknowledgement: true } })
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+    expect(duplicateLookupMock).toHaveBeenCalledWith(supabase, 'company-1', { supplierId: 'sup-1', number: 'F-1002', reference: '1234567897' })
+  })
+
+  it('has nothing to acknowledge when no other invoice carries it, or two or more do', async () => {
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const none = await read()
+    expect(none.ok && none.input.referenceToAcknowledge).toBe(false)
+
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 3, needs_acknowledgement: false } })
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const routine = await read()
+    expect(routine.ok && routine.input.referenceToAcknowledge).toBe(false)
+  })
+
+  it('asks for a supplier found by the reading\'s identity too', async () => {
+    matchSupplierMock.mockResolvedValue({ supplierId: 'sup-1', matchedOn: 'org_number' })
+    duplicateLookupMock.mockResolvedValue({ number: null, reference: { invoice: twin, count: 1, needs_acknowledgement: true } })
+    enqueueMany([{ data: { ...UNPAID, matched_supplier_id: null } }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+  })
+
+  it('does not ask without a supplier card, without a reference, or for a receipt', async () => {
+    // No card: the plan creates the supplier, which has no invoices yet.
+    enqueueMany([{ data: { ...UNPAID, matched_supplier_id: null } }, { data: SETTINGS }])
+    const noCard = await read()
+    expect(noCard.ok && noCard.input.referenceToAcknowledge).toBe(false)
+
+    enqueueMany([{ data: { ...UNPAID, extracted_data: { ...UNPAID.extracted_data, invoice: { ...UNPAID.extracted_data.invoice, paymentReference: null } } } }, { data: SETTINGS }, { data: CARD }])
+    const noReference = await read()
+    expect(noReference.ok && noReference.input.referenceToAcknowledge).toBe(false)
+
+    // A receipt is booked as one verifikat: no supplier invoice, no reference stored.
+    enqueueMany([{ data: { ...UNPAID, extracted_data: { ...UNPAID.extracted_data, documentKind: 'receipt' } } }, { data: SETTINGS }, { data: CARD }])
+    const receipt = await read()
+    expect(receipt.ok && [receipt.input.kind, receipt.input.referenceToAcknowledge]).toEqual(['receipt', false])
+
+    expect(duplicateLookupMock).not.toHaveBeenCalled()
+  })
+
+  it('opens the editor when the lookup cannot be read: it is asked again there', async () => {
+    duplicateLookupMock.mockRejectedValue(new Error('down'))
+    enqueueMany([{ data: UNPAID }, { data: SETTINGS }, { data: CARD }])
+    const result = await read()
+    expect(result.ok && result.input.referenceToAcknowledge).toBe(true)
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('the payment reference'), expect.anything())
   })
 })

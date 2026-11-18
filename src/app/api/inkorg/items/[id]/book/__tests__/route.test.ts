@@ -119,7 +119,7 @@ beforeEach(() => {
 
 const plan = async (query = '') => {
   const res = await GET(createMockRequest(`/api/inkorg/items/${ITEM_ID}/booking-plan${query}`), createMockRouteParams({ id: ITEM_ID }))
-  return parseJsonResponse<{ data: { plan: { form: string; ask: string | null; lines: unknown[] }; preview_token: string } }>(res)
+  return parseJsonResponse<{ data: { plan: { form: string; ask: string | null; reason: string; lines: unknown[] }; preview_token: string } }>(res)
 }
 
 const post = (body: unknown, id = ITEM_ID) =>
@@ -352,6 +352,66 @@ describe('POST /api/inkorg/items/:id/book', () => {
       ITEM_ID,
       { transaction_id: TX_ID, invoice: expect.objectContaining({ supplier_id: SUPPLIER_ID, invoice_date: '2026-09-01' }) },
     )
+  })
+
+  // A payment reference on one other live invoice of the supplier is
+  // acknowledged in the editor's review step: one click never registers past it.
+  describe('a payment reference a person has to acknowledge', () => {
+    const card = { id: SUPPLIER_ID, supplierType: 'swedish_business', defaultExpenseAccount: null, paymentTermsDays: 30 }
+    const withReference = reading({
+      documentKind: 'supplier_invoice',
+      supplier: { name: 'Konsult AB', orgNumber: '556677-8899' },
+      invoice: { invoiceNumber: 'F-1002', invoiceDate: '2026-09-01', dueDate: '2026-09-30', paymentReference: '1234567897' },
+      totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+    })
+    const unpaid: OneClickInput = { ...CONSULTING, reading: withReference, bank: null, supplier: card }
+    const item = { ...ITEM, matchedSupplierId: SUPPLIER_ID, description: 'Konsult AB', reading: withReference }
+    const registered = { ok: true, created: true, data: { invoice: { id: 'si-1', arrival_number: 3 }, items: [], registration_journal_entry_id: null, inbox_item_id: ITEM_ID } }
+
+    it('registers in one click while no other invoice carries the reference', async () => {
+      loads(unpaid, item)
+      convertMock.mockResolvedValue(registered)
+      const { status } = await post({ preview_token: await tokenFor() })
+      expect(status).toBe(200)
+      expect(convertMock).toHaveBeenCalledWith(expect.anything(), ITEM_ID, expect.objectContaining({ payment_reference: '1234567897' }))
+    })
+
+    it('answers the plan with the editor asked for, and refuses the booking with nothing registered', async () => {
+      loads({ ...unpaid, referenceToAcknowledge: true }, item)
+      const planned = (await plan()).body.data
+      expect(planned.plan).toMatchObject({ form: 'register', ask: 'editor', reason: 'payment_reference_reused' })
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { ask: string; reason: string } } }>(
+        await post({ preview_token: planned.preview_token }),
+      )
+      expect(status).toBe(422)
+      expect(body.error.code).toBe('INKORG_BOOKING_NEEDS_ANSWER')
+      expect(body.error.details).toMatchObject({ ask: 'editor', reason: 'payment_reference_reused' })
+      expect(convertMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses an invoice paid later the same way: nothing registered, nothing settled', async () => {
+      loads({ ...unpaid, referenceToAcknowledge: true, bank: { ...WISPR.bank!, date: '2026-09-22', amountSek: -1250 } }, item)
+      const planned = (await plan()).body.data
+      expect(planned.plan).toMatchObject({ form: 'register_and_settle', ask: 'editor' })
+      const { status } = await post({ preview_token: planned.preview_token, transaction_id: TX_ID })
+      expect(status).toBe(422)
+      expect(settleMock).not.toHaveBeenCalled()
+      expect(convertMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses a click on a plan read before the other invoice was registered', async () => {
+      loads(unpaid, item)
+      const token = await tokenFor()
+      // Another invoice with the same reference was registered since.
+      loads({ ...unpaid, referenceToAcknowledge: true }, item)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { preview: { ask: string; reason: string } } } }>(
+        await post({ preview_token: token }),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('PREVIEW_STALE')
+      expect(body.error.details.preview).toMatchObject({ ask: 'editor', reason: 'payment_reference_reused' })
+      expect(convertMock).not.toHaveBeenCalled()
+    })
   })
 })
 

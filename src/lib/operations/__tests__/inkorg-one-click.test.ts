@@ -678,6 +678,63 @@ describe('planOneClick: the company and the rule ask for a review (accounted#130
   })
 })
 
+describe('planOneClick: a payment reference another invoice of the supplier already carries', () => {
+  // The same OCR on one other live invoice may be the same invoice under
+  // another number: a person acknowledges it in the editor's review step
+  // ("Registrera ändå"), so one click never registers past it.
+  const invoice = doc({
+    documentKind: 'supplier_invoice',
+    supplier: { name: 'Konsult AB', orgNumber: '556677-8899', address: 'Kungsgatan 1, 111 22 Stockholm' },
+    invoice: { invoiceNumber: 'F-1002', invoiceDate: '2026-09-01', dueDate: '2026-09-30', paymentReference: '1234567897' },
+    totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+  })
+  const card = { id: 'sup-9', supplierType: 'swedish_business', defaultExpenseAccount: '6550', paymentTermsDays: 30 }
+  const unpaid = {
+    category: 'expense.professional_services.consulting' as const,
+    kind: 'supplier_invoice' as const,
+    reading: invoice,
+    supplier: card,
+    bank: null,
+  }
+  const paidLater = { ...BANK, date: '2026-09-28', amountSek: -1250 }
+
+  it('registers in one click while the reference is new to the supplier, or its normal', () => {
+    expect(planOneClick(input(unpaid))).toMatchObject({ form: 'register', ask: null, reason: 'unpaid' })
+    expect(planOneClick(input({ ...unpaid, referenceToAcknowledge: false }))).toMatchObject({ form: 'register', ask: null })
+  })
+
+  it('opens the editor, on the whole plan, when the reference is on one other invoice', () => {
+    const plan = planOneClick(input({ ...unpaid, referenceToAcknowledge: true }))
+    expect([plan.form, plan.ask, plan.reason]).toEqual(['register', 'editor', 'payment_reference_reused'])
+    expect(plan.invoice?.payment_reference).toBe('1234567897')
+    expect(plan.costAccount).toBe('6550')
+    expect(plan.supplier).toEqual({ id: 'sup-9' })
+    expect(balanced(plan.lines)).toBe(true)
+  })
+
+  it('opens it for an invoice paid later too, which one click would register and settle', () => {
+    expect(planOneClick(input({ ...unpaid, bank: paidLater }))).toMatchObject({ form: 'register_and_settle', ask: null })
+    const plan = planOneClick(input({ ...unpaid, bank: paidLater, referenceToAcknowledge: true }))
+    expect([plan.form, plan.ask, plan.reason]).toEqual(['register_and_settle', 'editor', 'payment_reference_reused'])
+  })
+
+  it('still books a purchase paid at once as one verifikat: no supplier invoice, so no reference is stored', () => {
+    const plan = planOneClick(input({ ...unpaid, referenceToAcknowledge: true, bank: { ...BANK, date: '2026-09-03', amountSek: -1250 } }))
+    expect([plan.form, plan.ask, plan.reason]).toEqual(['direct', null, 'paid_at_purchase'])
+  })
+
+  it('asks nothing for a reading without a reference: none is stored', () => {
+    const noReference = { ...invoice, invoice: { ...invoice.invoice, paymentReference: null } }
+    expect(planOneClick(input({ ...unpaid, reading: noReference, referenceToAcknowledge: true }))).toMatchObject({ form: 'register', ask: null })
+  })
+
+  it('keeps a more specific question, and names the reference before the general review switch', () => {
+    const noDueDate = { ...invoice, invoice: { ...invoice.invoice, dueDate: null } }
+    expect(planOneClick(input({ ...unpaid, reading: noDueDate, referenceToAcknowledge: true })).reason).toBe('missing_due_date')
+    expect(planOneClick(input({ ...unpaid, referenceToAcknowledge: true, directBooking: { enabled: false } })).reason).toBe('payment_reference_reused')
+  })
+})
+
 describe('oneClickOutcome', () => {
   it('says the Wispr plan books in one click, in codes only', async () => {
     const { oneClickOutcome } = await import('../inkorg-one-click')
