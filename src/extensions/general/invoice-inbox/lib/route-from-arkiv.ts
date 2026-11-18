@@ -8,6 +8,7 @@ import { hasQueuedOrBookedTwin } from '@/lib/documents/queued-inbox-item'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
 import { isArchiveOnlyUpload } from '@/lib/documents/archive-only'
+import { UNDERLAG_DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -23,7 +24,7 @@ import { isArchiveOnlyUpload } from '@/lib/documents/archive-only'
  * ARKIV_COMPANY_IDS. Outside it the document stays in Underlag, and the
  * sweep brings back what was routed before (requeueHiddenRoutedItems).
  */
-export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_note'])
+export const VOUCHER_TYPES: ReadonlySet<string> = new Set(UNDERLAG_DOC_TYPES)
 
 /**
  * A queue item stays in Underlag, whatever Arkiv typed its document, when the inbox reader saw a bill in it:

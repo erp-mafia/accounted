@@ -162,6 +162,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   match_batch_allocate: 'warning_match_batch_allocate',
   bulk_book_transactions: 'warning_bulk_book_transactions',
   delete_document: 'warning_delete_document',
+  set_document_type: 'warning_set_document_type',
   // The sentence for a removal that keeps nothing to put back; singleActionWarning
   // promises Senast borttagna only when the staged preview says the item can come back.
   delete_inbox_item: 'warning_delete_inbox_item',

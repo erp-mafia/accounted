@@ -440,7 +440,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/documents/:id/detach': gap('P3', 'detach a duplicate underlag from a posted verifikat'),
   'POST /api/documents/:id/versions': gap('P3', 'new version of a document'),
   'POST /api/documents/:id/admission': gap('P3', 'admit or discard a held document'),
-  'POST /api/documents/:id/classification': gap('P3', 'human document type classification'),
+  'POST /api/documents/:id/classification': covered(['gnubok_set_document_type']),
   'POST /api/documents/:id/extraction/fields': gap('P3', 'settle extracted fields on an archive document'),
   'POST /api/arkiv/facts/:id/revert': gap('P3', 'revert a company fact (gnubok_propose_fact stages new ones)'),
   'POST /api/arkiv/findings/:id': gap('P3', 'close an Arkiv finding'),
@@ -1145,4 +1145,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * the staged gnubok_mark_not_momsredovisning and
  * gnubok_withdraw_not_momsredovisning.
  */
-export const GAP_CEILING = 164
+export const GAP_CEILING = 163

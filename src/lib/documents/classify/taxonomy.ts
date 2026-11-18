@@ -33,6 +33,13 @@ export const DOC_TYPES = [
 
 export type DocType = (typeof DOC_TYPES)[number]
 
+/**
+ * The types Underlag books from: a person's type of one of these queues the
+ * document there (invoice-inbox route-from-arkiv.ts); any other type files it
+ * on its shelf in Dokument.
+ */
+export const UNDERLAG_DOC_TYPES: readonly DocType[] = ['receipt', 'supplier_invoice', 'credit_note']
+
 export function isDocType(value: unknown): value is DocType {
   return typeof value === 'string' && (DOC_TYPES as readonly string[]).includes(value)
 }

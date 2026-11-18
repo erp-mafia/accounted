@@ -11,7 +11,10 @@
  * MCP: the reads have hand-written tools already (gnubok_list_records,
  * gnubok_get_record, gnubok_list_unmatched_documents,
  * gnubok_get_document_content), so those operations are v1 only. Attach,
- * delete and detach get generated staged tools. The opt-in parts of one
+ * delete and detach get generated staged tools. documents.set-type is the
+ * MCP door to Dokument's "Ändra typ" (lib/documents/classify/set-type.ts,
+ * which POST /api/documents/{id}/classification calls too) and has no http
+ * binding: no v1 route sets a type. The opt-in parts of one
  * document's read (text, reading, links, arrivals) are one service,
  * lib/documents/read/document-detail.ts, behind both GET /documents/{id} and
  * gnubok_get_document_content.
@@ -19,6 +22,8 @@
 import { z } from 'zod'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { getDocumentMetadata, listDocumentsPage, removeDocument } from '@/lib/documents/document-actions'
+import { setDocumentTypeByPerson } from '@/lib/documents/classify/set-type'
+import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import {
   DOCUMENT_ARRIVAL_TEXT_CHARS,
   DOCUMENT_DETAIL_PARTS,
@@ -371,6 +376,115 @@ export const documentsDelete = defineOperation({
     const outcome = await removeDocument(ctx, document_id, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
     return { ok: true, data: { document_id: outcome.data.id, deleted: true as const } }
+  },
+})
+
+/** A type's name as Dokument shows it in Swedish (arkiv.types in messages/sv.json), for the approval card. */
+async function swedishTypeName(docType: string | null): Promise<string> {
+  const mod = await import('@/messages/sv.json')
+  const arkiv = (((mod as { default?: unknown }).default ?? mod) as { arkiv?: { types?: unknown; folder_untyped?: string } }).arkiv
+  if (!docType) return arkiv?.folder_untyped ?? docType ?? ''
+  const name = docType
+    .split('.')
+    .reduce<unknown>((node, key) => (node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined), arkiv?.types)
+  return typeof name === 'string' ? name : docType
+}
+
+export const documentsSetType = defineOperation({
+  id: 'documents.set-type',
+  kind: 'write',
+  scope: 'documents:write',
+  // The shelf a document sits on and the schema it is read with: no
+  // verifikat, nothing booked, set again to undo.
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Set what an archived document is (its type in Dokument).',
+    description:
+      'A person\'s type, as "Ändra typ" in Dokument: it becomes the current classification, the model never overrides it, and the document moves to the folder of the type (minutes.board and minutes.agm to Bolagshandlingar). What an earlier agreement type derived (the agreement, its deadlines and facts) is withdrawn unless the new type is the same kind of agreement. A receipt, supplier invoice or credit note type can put a document nobody booked in Underlag. Dry-runnable.',
+    useWhen: 'A document sits under Utan typ or under the wrong type, e.g. board or general meeting minutes uploaded through the API.',
+    doNotUseFor: 'Booking a document (that is the inbox and the verifikat), or linking it to a verifikat (gnubok_link_document_to_voucher).',
+    pitfalls: [
+      'A document of another company returns 404 DOC_NOT_FOUND.',
+      'An upload can name the type at once: doc_type on gnubok_complete_document_upload and gnubok_upload_document.',
+    ],
+    example: {
+      request: { document_id: '4f1c…', doc_type: 'minutes.board' },
+      response: { data: { document_id: '4f1c…', doc_type: 'minutes.board', previous_doc_type: null }, meta: META },
+    },
+  },
+  input: z.object({
+    document_id: DOCUMENT_ID,
+    doc_type: z.enum(DOC_TYPES).describe('minutes.board = Styrelseprotokoll, minutes.agm = Stämmoprotokoll.'),
+  }),
+  output: z.object({
+    document_id: z.string().uuid(),
+    doc_type: z.enum(DOC_TYPES),
+    previous_doc_type: z.string().nullable().describe('The type before; null when it had none.'),
+  }),
+  errorCodes: ['DOC_NOT_FOUND'],
+  mcp: {
+    name: 'gnubok_set_document_type',
+    title: 'Set Document Type',
+    description:
+      'Stage setting an archived document\'s type, as "Ändra typ" in Dokument: it moves from Utan typ to its folder (minutes.board, minutes.agm: Bolagshandlingar). Nothing is booked; set again to undo. document_id from gnubok_list_records or an upload.',
+    keywords: [
+      'dokumenttyp',
+      'ändra typ',
+      'byt typ',
+      'sätt typ',
+      'utan typ',
+      'bolagshandlingar',
+      'styrelseprotokoll',
+      'stämmoprotokoll',
+      'protokoll',
+      'klassificera dokument',
+      'document type',
+      'set document type',
+      'classify document',
+    ],
+    stage: {
+      pendingType: 'set_document_type',
+      title: (_input, preview) => `Ändra dokumenttyp: ${String(preview?.file_name ?? '')} (${String(preview?.new_type ?? '')})`,
+    },
+  },
+  run: async (ctx, { document_id, doc_type }, { dryRun }) => {
+    if (dryRun) {
+      const { data, error } = await ctx.supabase
+        .from('document_attachments')
+        .select('id, file_name, doc_type')
+        .eq('id', document_id)
+        .eq('company_id', ctx.companyId)
+        .maybeSingle()
+      if (error) return { ok: false, code: 'UNKNOWN_ERROR', error }
+      if (!data) return { ok: false, code: 'DOC_NOT_FOUND' }
+      const row = data as { id: string; file_name: string; doc_type: string | null }
+      return {
+        ok: true,
+        dryRun: true,
+        preview: {
+          document_id: row.id,
+          file_name: row.file_name,
+          current_type: await swedishTypeName(row.doc_type),
+          new_type: await swedishTypeName(doc_type),
+          doc_type_before: row.doc_type,
+          doc_type,
+        },
+      }
+    }
+    try {
+      const out = await setDocumentTypeByPerson(ctx.supabase, {
+        companyId: ctx.companyId,
+        documentId: document_id,
+        userId: ctx.userId,
+        docType: doc_type,
+      })
+      if (out.status === 'not_found') return { ok: false, code: 'DOC_NOT_FOUND' }
+      if (out.status === 'error') return { ok: false, code: 'UNKNOWN_ERROR', error: new Error(out.reason) }
+      return { ok: true, data: { document_id, doc_type, previous_doc_type: out.previousDocType } }
+    } catch (err) {
+      return { ok: false, code: 'UNKNOWN_ERROR', error: err }
+    }
   },
 })
 

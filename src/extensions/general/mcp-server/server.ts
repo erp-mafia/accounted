@@ -780,6 +780,8 @@ import { AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
 import { ARCHIVE_ONLY_SKIP } from '@/lib/documents/archive-only'
+import { setDocumentTypeByPerson } from '@/lib/documents/classify/set-type'
+import { DOC_TYPES, isDocType, UNDERLAG_DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -1905,6 +1907,10 @@ interface DocumentInboxResult {
   extraction_skipped?: boolean
   /** Archived without an inbox item and without a reading, as the caller asked (archiveOnlyResult). */
   archive_only?: boolean
+  /** With doc_type on the upload: the document's type after the call (withUploadDocType). */
+  doc_type?: string
+  /** With doc_type on the upload: why the document kept another type. */
+  doc_type_note?: string
   next?: { tool: string; hint: string }
 }
 
@@ -2003,6 +2009,71 @@ async function archiveOnlyResult(document: { id: string; extraction_model?: stri
       hint: 'Archived only: no inbox item, no AI reading, nothing booked. Link document_id to its posted verifikat (one: gnubok_link_document_to_voucher). Until then it is listed only in gnubok_list_records.',
     },
   }
+}
+
+/**
+ * doc_type on an upload (crm#2016): what the caller says the document is,
+ * from the same list Dokument types with. Refused, before anything is
+ * archived, outside that list, and as a receipt, supplier invoice or credit
+ * note with archive_only: a person's type of those puts the document in
+ * Underlag to be booked (invoice-inbox route-from-arkiv.ts), which is what
+ * archive_only leaves out.
+ */
+function readUploadDocType(value: unknown, archiveOnly: boolean): DocType | null {
+  if (value === undefined || value === null) return null
+  if (!isDocType(value)) {
+    throw badArgument('doc_type', `doc_type must be one of ${DOC_TYPES.join(', ')} (got ${JSON.stringify(value)}).`)
+  }
+  if (archiveOnly && UNDERLAG_DOC_TYPES.includes(value)) {
+    throw badArgument(
+      'doc_type',
+      `doc_type ${value} with archive_only: that type puts the document in Underlag to be booked. Leave doc_type out; linked to its verifikat it files under Bokförda underlag.`,
+    )
+  }
+  return value
+}
+
+/**
+ * The upload's doc_type, set once the document is in the archive, as a
+ * person's type through Dokument's own service (set-type.ts): after the inbox
+ * item exists, so the type reaches that item as a retype in Dokument does.
+ * It types a document that has none and never replaces a type: a retry, or
+ * the same bytes again, changes nothing a person or the model decided.
+ * Changing a type is gnubok_set_document_type, which stages.
+ */
+async function withUploadDocType(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  result: DocumentInboxResult,
+  docType: DocType | null,
+): Promise<DocumentInboxResult> {
+  if (!docType) return result
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .select('doc_type')
+    .eq('id', result.document_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw dbError(error, 'Failed to read the archived document\'s type')
+  const current = (data as { doc_type?: string | null } | null)?.doc_type ?? null
+  if (current === docType) return { ...result, doc_type: current }
+  if (current) {
+    return {
+      ...result,
+      doc_type: current,
+      doc_type_note: `Already typed ${current}, kept. To change it: gnubok_set_document_type.`,
+    }
+  }
+  const out = await setDocumentTypeByPerson(supabase, { companyId, documentId: result.document_id, userId, docType })
+  if (out.status !== 'set') {
+    // The same call again is safe (the upload is idempotent and an untyped document takes the type).
+    throw codedRefusal(
+      'TRANSIENT_ERROR',
+      `Archived as document_id ${result.document_id}, but its type was not saved (${out.status === 'error' ? out.reason : 'not found'}). Retry the same call, or set it with gnubok_set_document_type.`,
+    )
+  }
+  return { ...result, doc_type: docType }
 }
 
 async function findCompletedDocumentInboxItem(
@@ -17935,7 +18006,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_complete_document_upload',
     keywords: ['ladda upp', 'underlag', 'dokument'],
     title: 'Complete Document Upload',
-    description: 'Validate and archive bytes sent to the URL from gnubok_create_document_upload, run AI extraction if entitled and create the inbox item (archive_only=true: neither). Idempotent: safe to retry with the same upload_id.',
+    description: 'Archive the bytes PUT to the URL from gnubok_create_document_upload, run AI extraction if entitled and create the inbox item (archive_only=true: neither). doc_type (e.g. minutes.board) types it in Dokument. Idempotent: retry with the same upload_id.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17960,6 +18031,7 @@ export const tools: McpTool[] = [
           type: 'boolean',
           description: 'Underlag of a posted verifikat: no inbox item, no AI reading. Link document_id next.',
         },
+        doc_type: { type: 'string' },
       },
       required: ['upload_id'],
       // Step 2 of 2: the upload_id gnubok_create_document_upload returned;
@@ -17988,6 +18060,7 @@ export const tools: McpTool[] = [
         throw badArgument('archive_only', 'archive_only must be true or false.')
       }
       const archiveOnly = args.archive_only === true
+      const docType = readUploadDocType(args.doc_type, archiveOnly)
 
       const existingInbox = await findCompletedDocumentInboxItem(
         supabase,
@@ -17995,7 +18068,7 @@ export const tools: McpTool[] = [
         userId,
         uploadId,
       )
-      if (existingInbox) return existingInbox
+      if (existingInbox) return withUploadDocType(supabase, companyId, userId, existingInbox, docType)
 
       // file_name and mime_type default to what the upload was created with
       // (crm#1474): the reservation holds the name, so repeating it is optional.
@@ -18026,12 +18099,12 @@ export const tools: McpTool[] = [
         { extractionOwner: archiveOnly ? 'none' : 'invoice-inbox', dedupeByContent: true },
       )
       if (completed.document.deduplicated) {
-        return withMcpUploadArrival(supabase, companyId, userId, actor, await alreadyArchivedResult(supabase, companyId, completed.document.id))
+        return withMcpUploadArrival(supabase, companyId, userId, actor, await withUploadDocType(supabase, companyId, userId, await alreadyArchivedResult(supabase, companyId, completed.document.id), docType))
       }
       if (archiveOnly) {
-        return withMcpUploadArrival(supabase, companyId, userId, actor, await archiveOnlyResult(completed.document))
+        return withMcpUploadArrival(supabase, companyId, userId, actor, await withUploadDocType(supabase, companyId, userId, await archiveOnlyResult(completed.document), docType))
       }
-      return withMcpUploadArrival(supabase, companyId, userId, actor, await createDocumentInboxItem(
+      return withMcpUploadArrival(supabase, companyId, userId, actor, await withUploadDocType(supabase, companyId, userId, await createDocumentInboxItem(
         supabase,
         companyId,
         userId,
@@ -18040,7 +18113,7 @@ export const tools: McpTool[] = [
         completed.document.mime_type ?? mimeType,
         Buffer.from(completed.buffer),
         uploadId,
-      ))
+      ), docType))
     },
   },
 
@@ -18048,14 +18121,15 @@ export const tools: McpTool[] = [
     name: 'gnubok_upload_document',
     keywords: ['ladda upp', 'kvitto', 'underlag', 'dokument', 'bifoga'],
     title: 'Upload Document to Inbox',
-    description: 'Legacy inline-base64 upload for small files (max 3 MB). Prefer gnubok_create_document_upload so raw bytes bypass the model. AI field extraction runs only with the AI capability.',
+    description: 'Legacy inline-base64 upload, max 3 MB. Prefer gnubok_create_document_upload so raw bytes bypass the model. AI field extraction needs the AI capability.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         file_name: { type: 'string', description: 'File name with extension' },
-        file_content_base64: { type: 'string', description: 'Base64-encoded file content' },
-        mime_type: { type: 'string', description: 'MIME type (optional, inferred from extension)' },
+        file_content_base64: { type: 'string', description: 'Base64 bytes' },
+        mime_type: { type: 'string', description: 'Optional: inferred from extension' },
+        doc_type: { type: 'string' },
       },
       required: ['file_name', 'file_content_base64'],
     },
@@ -18078,6 +18152,7 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', 'file_content_base64 is required: the file\'s bytes, base64-encoded.')
       }
       const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
+      const docType = readUploadDocType(args.doc_type, false)
 
       const buffer = Buffer.from(base64Content, 'base64')
       if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
@@ -18095,8 +18170,10 @@ export const tools: McpTool[] = [
         type: mimeType,
       }, { upload_source: 'api', extractionOwner: 'invoice-inbox', dedupeByContent: true })
       // A repeat is still a delivery: its arrival lands on the archived copy ("Kom även via").
-      if (doc.deduplicated) return withMcpUploadArrival(supabase, companyId, userId, actor, await alreadyArchivedResult(supabase, companyId, doc.id))
-      return withMcpUploadArrival(supabase, companyId, userId, actor, await createDocumentInboxItem(
+      if (doc.deduplicated) {
+        return withMcpUploadArrival(supabase, companyId, userId, actor, await withUploadDocType(supabase, companyId, userId, await alreadyArchivedResult(supabase, companyId, doc.id), docType))
+      }
+      return withMcpUploadArrival(supabase, companyId, userId, actor, await withUploadDocType(supabase, companyId, userId, await createDocumentInboxItem(
         supabase,
         companyId,
         userId,
@@ -18104,7 +18181,7 @@ export const tools: McpTool[] = [
         fileName,
         doc.mime_type ?? mimeType,
         buffer,
-      ))
+      ), docType))
     },
   }),
 

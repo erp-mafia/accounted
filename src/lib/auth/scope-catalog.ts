@@ -455,6 +455,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_agi_validate_huvuduppgift: 'compliance:read',
   // Operation registry, wave 3: documents, transactions, rättelse, filing.
   gnubok_delete_document: 'documents:write',
+  gnubok_set_document_type: 'documents:write',
   gnubok_detach_document_from_transaction: 'transactions:write',
   gnubok_delete_inbox_item: 'documents:write',
   gnubok_unmatch_inbox_item_transaction: 'documents:write',

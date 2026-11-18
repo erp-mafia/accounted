@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   extractInvoiceFields: vi.fn(),
   hasCapability: vi.fn(),
   mirrorExtractionToDocument: vi.fn(),
+  setDocumentTypeByPerson: vi.fn(),
+}))
+
+// Dokument's own service for a person's type (crm#2016): its rules have their own tests (set-type.test.ts).
+vi.mock('@/lib/documents/classify/set-type', () => ({
+  setDocumentTypeByPerson: mocks.setDocumentTypeByPerson,
 }))
 
 // The paid OCR is gated at the OCR call (createDocumentInboxItem), not on the
@@ -87,6 +93,13 @@ describe('MCP model-free document upload tools', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.hasCapability.mockResolvedValue(true)
+    mocks.setDocumentTypeByPerson.mockImplementation(async (_supabase: unknown, input: { documentId: string; docType: string }) => ({
+      status: 'set',
+      documentId: input.documentId,
+      docType: input.docType,
+      previousDocType: null,
+      withdrawnAgreementId: null,
+    }))
     mocks.createPendingDocumentUpload.mockResolvedValue({
       uploadId,
       signedUrl: 'https://storage.example/upload?token=signed',
@@ -825,6 +838,150 @@ describe('MCP model-free document upload tools', () => {
       expect(schema.properties.matched_supplier_id.type).toEqual(['string', 'null'])
       expect(schema.required).not.toContain('matched_supplier_id')
     }
+  })
+
+  // crm#2016: board and general meeting minutes uploaded archive_only had no
+  // type, so they sat under Utan typ in Dokument, and no tool could set one.
+  describe('doc_type', () => {
+    /** document_attachments answers the document's current type; the inbox has no item for it. */
+    const archive = (currentType: string | null = null) => {
+      const inboxInserts: unknown[] = []
+      const from = vi.fn((table: string) => {
+        if (table === 'invoice_inbox_items') {
+          const builder = makeQueryBuilder({ data: null, error: null })
+          ;(builder.insert as ReturnType<typeof vi.fn>).mockImplementation((row: unknown) => {
+            inboxInserts.push(row)
+            return builder
+          })
+          return builder
+        }
+        if (table === 'document_attachments') return makeQueryBuilder({ data: { doc_type: currentType }, error: null })
+        throw new Error(`Unexpected table: ${table}`)
+      })
+      return { from, inboxInserts }
+    }
+    const completeArchiveOnly = (from: unknown, args: Record<string, unknown>) =>
+      findTool('gnubok_complete_document_upload').execute(
+        { upload_id: uploadId, file_name: 'protokoll.pdf', mime_type: 'application/pdf', archive_only: true, ...args },
+        companyId,
+        userId,
+        { from } as never,
+      )
+    const alreadyArchived = (documentId: string) =>
+      mocks.completePendingDocumentUpload.mockResolvedValue({
+        document: { ...makeDocumentAttachment({ id: documentId, user_id: userId, company_id: companyId }), deduplicated: true },
+        buffer: new ArrayBuffer(0),
+      })
+
+    it('types the archived document as a person would in Dokument, after it is stamped archive-only', async () => {
+      const { from, inboxInserts } = archive()
+
+      const result = await completeArchiveOnly(from, { doc_type: 'minutes.agm' })
+
+      expect(mocks.setDocumentTypeByPerson).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+        companyId,
+        documentId: uploadId,
+        userId,
+        docType: 'minutes.agm',
+      })
+      // The stamp lands first: the type's routing reads it.
+      expect(mocks.mirrorExtractionToDocument.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.setDocumentTypeByPerson.mock.invocationCallOrder[0],
+      )
+      expect(inboxInserts).toEqual([])
+      expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: null, archive_only: true, doc_type: 'minutes.agm' })
+    })
+
+    it('refuses a type outside the list Dokument uses, naming the list, before anything is archived', async () => {
+      const refusal = completeArchiveOnly(vi.fn(), { doc_type: 'aktiebok' })
+
+      await expect(refusal).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [{ field: 'doc_type' }] })
+      await expect(refusal).rejects.toThrow(/minutes\.board, minutes\.agm/)
+      expect(mocks.completePendingDocumentUpload).not.toHaveBeenCalled()
+      expect(mocks.setDocumentTypeByPerson).not.toHaveBeenCalled()
+    })
+
+    it.each(['receipt', 'supplier_invoice', 'credit_note'])(
+      'refuses %s with archive_only: a person\'s type of it would put the document in Underlag',
+      async (docType) => {
+        await expect(completeArchiveOnly(vi.fn(), { doc_type: docType })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+        expect(mocks.completePendingDocumentUpload).not.toHaveBeenCalled()
+      },
+    )
+
+    it('never replaces the type of a document the bytes already are: it says so and names the tool that changes it', async () => {
+      const archivedId = '44444444-4444-4444-8444-444444444444'
+      alreadyArchived(archivedId)
+
+      const result = await completeArchiveOnly(archive('minutes.board').from, { doc_type: 'minutes.agm' })
+
+      expect(mocks.setDocumentTypeByPerson).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ document_id: archivedId, deduplicated: true, doc_type: 'minutes.board' })
+      expect((result as { doc_type_note: string }).doc_type_note).toContain('gnubok_set_document_type')
+    })
+
+    it('types an untyped document the bytes already are, so a retry finishes what a failed call left', async () => {
+      const archivedId = '44444444-4444-4444-8444-444444444444'
+      alreadyArchived(archivedId)
+
+      const result = await completeArchiveOnly(archive(null).from, { doc_type: 'minutes.board' })
+
+      expect(mocks.setDocumentTypeByPerson).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({ documentId: archivedId, docType: 'minutes.board' }),
+      )
+      expect(result).toMatchObject({ document_id: archivedId, doc_type: 'minutes.board' })
+    })
+
+    it('says the document is archived but untyped when the service fails: retry the call, or set the type', async () => {
+      mocks.setDocumentTypeByPerson.mockResolvedValueOnce({ status: 'error', reason: 'insert failed: boom' })
+
+      const refusal = completeArchiveOnly(archive().from, { doc_type: 'minutes.board' })
+
+      await expect(refusal).rejects.toMatchObject({ code: 'TRANSIENT_ERROR' })
+      await expect(refusal).rejects.toThrow(new RegExp(`document_id ${uploadId}.*gnubok_set_document_type`))
+    })
+
+    it('the legacy inline upload types the document after its inbox item is filed', async () => {
+      mocks.uploadDocument.mockResolvedValueOnce(makeDocumentAttachment({ id: uploadId, file_name: 'avtal.pdf', mime_type: 'application/pdf' }))
+      const insert = makeQueryBuilder({ data: { id: 'inbox-new', status: 'received' }, error: null })
+      const typeRead = makeQueryBuilder({ data: { doc_type: null }, error: null })
+      const empty = makeQueryBuilder({ data: null, error: null })
+      const from = vi.fn((table: string) => (table === 'invoice_inbox_items' ? insert : table === 'document_attachments' ? typeRead : empty))
+
+      const result = await findTool('gnubok_upload_document').execute(
+        { file_name: 'avtal.pdf', file_content_base64: Buffer.from('%PDF-1.4\n%%EOF\n').toString('base64'), doc_type: 'agreement.rental' },
+        companyId,
+        userId,
+        { from } as never,
+      )
+
+      expect((insert.insert as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.setDocumentTypeByPerson.mock.invocationCallOrder[0],
+      )
+      expect(mocks.setDocumentTypeByPerson).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ documentId: uploadId, docType: 'agreement.rental' }),
+      )
+      expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: 'inbox-new', doc_type: 'agreement.rental' })
+    })
+
+    it('the legacy inline upload refuses an unknown type before anything is stored', async () => {
+      await expect(
+        findTool('gnubok_upload_document').execute(
+          { file_name: 'a.pdf', file_content_base64: 'JVBERi0=', doc_type: 'protokoll' },
+          companyId,
+          userId,
+          {} as never,
+        ),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+      expect(mocks.uploadDocument).not.toHaveBeenCalled()
+    })
+
+    it('without doc_type nothing is typed', async () => {
+      await completeArchiveOnly(archive().from, {})
+      expect(mocks.setDocumentTypeByPerson).not.toHaveBeenCalled()
+    })
   })
 })
 

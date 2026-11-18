@@ -958,6 +958,12 @@ describe('tools/list payload size guard', () => {
     // merging the main of 2026-11-14 the allow_duplicate note lost its
     // example to stay under.
     // Ceiling unchanged.
+    // 2026-11-18 (crm#2016): doc_type on the two upload tools, bare (the
+    // refusal lists the types; gnubok_set_document_type, search-only, has
+    // the enum), named in complete's description; paid for on the same two
+    // tools (shorter upload_document description, base64 and mime_type
+    // notes). Measured 63 098 (full catalog 67 549; main 63 088 and
+    // 67 539). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

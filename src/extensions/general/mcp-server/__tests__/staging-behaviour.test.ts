@@ -1470,6 +1470,11 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } },
     empty: ['supplier_invoices', 'expense_claims', 'transactions', 'invoice_inbox_items', 'signing_requests'],
   },
+  // An archived document with no type yet (crm#2016): the dry run reads its row only.
+  gnubok_set_document_type: {
+    args: { doc_type: 'minutes.board' },
+    rows: { document_attachments: { file_name: 'styrelseprotokoll.pdf', doc_type: null } },
+  },
   // A current PDF in the archive and one outside signer with an address, in
   // a plan that holds signing: the preview reads the row and the signers,
   // never the file or BankID.

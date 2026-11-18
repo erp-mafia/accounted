@@ -118,6 +118,9 @@ const RISK_TIERS = {
   // matched supplier's instruction: a label beside the kontering, no
   // verifikat, undone by setting it again.
   set_inbox_purchase_category: 'low',
+  // What an archived document is (its Arkiv type, crm#2016): the shelf it
+  // sits on and the schema it is read with, no verifikat; set again to undo.
+  set_document_type: 'low',
   undo_bank_import: 'high',
   correct_entry_metadata: 'high',
   correct_entry_lines_inline: 'high',

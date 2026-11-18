@@ -147,6 +147,7 @@ import {
   documentsDelete,
   documentsGet,
   documentsList,
+  documentsSetType,
   transactionsAttachDocument,
   transactionsDetachDocument,
 } from './documents'
@@ -423,10 +424,11 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   paymentsSigningLink,
   // changed supplier bank details: MCP stages the approval, a person gives it in the web UI
   supplierPayeesConfirm,
-  // documents
+  // documents (set-type is MCP only: Dokument's own route calls the same service)
   documentsList,
   documentsGet,
   documentsDelete,
+  documentsSetType,
   transactionsAttachDocument,
   transactionsDetachDocument,
   // inbox-items
