@@ -1,1 +1,0 @@
-[2026-11-18] An Excel file the reader cannot open is a 400 with the way forward in every import: the reader's error carries the code (IMPORT_WORKBOOK_UNREADABLE). Against #181: bank files keep their own code, and v1 /imports/bank keeps VALIDATION_ERROR: changing a v1 code breaks a dated version.

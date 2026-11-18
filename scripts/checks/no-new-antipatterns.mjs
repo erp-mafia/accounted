@@ -270,6 +270,10 @@
  *   33. migration-version: two files in supabase/migrations with one version,
  *      which aborts the production push after the merge. Implementation and
  *      rationale in migration-version.mjs. No baseline: any hit fails.
+ *   34. tracked-ignored: a tracked file that a .gitignore of the tree
+ *      ignores (committed before the rule, added with -f, or brought along
+ *      by a branch cut before the rule). Implementation and rationale in
+ *      tracked-ignored.mjs. No baseline: any hit fails.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -299,6 +303,7 @@ import { findClientServerOnlyReachers } from './client-server-only.mjs'
 import { findConsentTokenAccess, CONSENT_TOKEN_HINT } from './consent-token-access.mjs'
 import { findOneDefinitionFindings, loadOneDefinitionRules, ONE_DEFINITION_HINT } from './one-definition.mjs'
 import { findDuplicateMigrationVersions, MIGRATION_VERSION_HINT } from './migration-version.mjs'
+import { findTrackedIgnoredFiles, TRACKED_IGNORED_HINT } from './tracked-ignored.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
@@ -1624,6 +1629,13 @@ if (duplicateMigrationVersions.length) {
   console.error(`\n✗ migration-version: ${duplicateMigrationVersions.length} version(s) held by more than one migration:`)
   for (const d of duplicateMigrationVersions) console.error(`    ${d.version}: ${d.files.join(', ')}`)
   console.error(MIGRATION_VERSION_HINT)
+}
+const trackedIgnored = findTrackedIgnoredFiles(ROOT)
+if (trackedIgnored.length) {
+  failed = true
+  console.error(`\n✗ tracked-ignored: ${trackedIgnored.length} tracked file(s) that .gitignore ignores:`)
+  for (const file of trackedIgnored) console.error(`    ${file}`)
+  console.error(TRACKED_IGNORED_HINT)
 }
 const oneDefinition = findOneDefinitionFindings(SOURCE_ROOT, await loadOneDefinitionRules())
 if (oneDefinition.findings.length) {
