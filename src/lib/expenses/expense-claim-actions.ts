@@ -45,6 +45,7 @@ import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { AccountsNotInChartError, BookingReviewRequiredError } from '@/lib/bookkeeping/errors'
 import {
+  claimReceiptDocumentId,
   createPayoutBatch,
   deleteExpenseClaim,
   planExpenseClaim,
@@ -237,12 +238,18 @@ async function periodLockFailure(
   }
 }
 
+/** What checkUnderlag answers: a refusal, or the inbox item's own document (null without one). */
+type UnderlagCheck = { ok: false; failure: Failure } | { ok: true; inboxDocumentId: string | null }
+
 /**
  * The receipt and the inbox item must be the company's own. The v1 and MCP
  * doors run as the service role, where no RLS stops a foreign id from being
  * written onto the claim row (and read back through its document join).
+ * Passing answers the inbox item's document, which the registration attaches
+ * as the receipt (claimReceiptDocumentId).
  */
-async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClaimInput): Promise<Failure | null> {
+async function checkUnderlag(ctx: OperationContext, input: RegisterExpenseClaimInput): Promise<UnderlagCheck> {
+  const refuse = (failure: Failure): UnderlagCheck => ({ ok: false, failure })
   if (input.document_id) {
     const { data, error } = await ctx.supabase
       .from('document_attachments')
@@ -250,33 +257,32 @@ async function underlagFailure(ctx: OperationContext, input: RegisterExpenseClai
       .eq('id', input.document_id)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
-    if (error) return failed(error)
-    if (!data) return { ok: false, code: 'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND', details: { document_id: input.document_id } }
+    if (error) return refuse(failed(error))
+    if (!data) return refuse({ ok: false, code: 'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND', details: { document_id: input.document_id } })
   }
-  if (input.inbox_item_id) {
-    // Same answer the registration gives before it posts, so a dry run (the
-    // staged preview) refuses an underlag that is already booked (accounted#14).
-    const booking = await readInboxItemBookingState(ctx.supabase, ctx.companyId, input.inbox_item_id)
-    if (booking.state === 'error') return failed(booking.error)
-    if (booking.state === 'missing') {
-      return { ok: false, code: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND', details: { inbox_item_id: input.inbox_item_id } }
-    }
-    if (booking.state === 'booked') {
-      return {
-        ok: false,
-        code: 'INBOX_ITEM_ALREADY_BOOKED',
-        details: {
-          inbox_item_id: input.inbox_item_id,
-          ...(booking.journal_entry_id ? { journal_entry_id: booking.journal_entry_id } : {}),
-          ...(booking.supplier_invoice_id ? { supplier_invoice_id: booking.supplier_invoice_id } : {}),
-        },
-      }
-    }
-    // The other half of this purchase is booked already: an utlägg of it books the purchase twice.
-    const pairBooked = await refuseWhenPairBooked(ctx.supabase, ctx.companyId, input.inbox_item_id)
-    if (pairBooked) return { ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv }
+  if (!input.inbox_item_id) return { ok: true, inboxDocumentId: null }
+  // Same answer the registration gives before it posts, so a dry run (the
+  // staged preview) refuses an underlag that is already booked (accounted#14).
+  const booking = await readInboxItemBookingState(ctx.supabase, ctx.companyId, input.inbox_item_id)
+  if (booking.state === 'error') return refuse(failed(booking.error))
+  if (booking.state === 'missing') {
+    return refuse({ ok: false, code: 'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND', details: { inbox_item_id: input.inbox_item_id } })
   }
-  return null
+  if (booking.state === 'booked') {
+    return refuse({
+      ok: false,
+      code: 'INBOX_ITEM_ALREADY_BOOKED',
+      details: {
+        inbox_item_id: input.inbox_item_id,
+        ...(booking.journal_entry_id ? { journal_entry_id: booking.journal_entry_id } : {}),
+        ...(booking.supplier_invoice_id ? { supplier_invoice_id: booking.supplier_invoice_id } : {}),
+      },
+    })
+  }
+  // The other half of this purchase is booked already: an utlägg of it books the purchase twice.
+  const pairBooked = await refuseWhenPairBooked(ctx.supabase, ctx.companyId, input.inbox_item_id)
+  if (pairBooked) return refuse({ ok: false, code: pairBooked.code, details: pairBooked.details, messageSv: pairBooked.messageSv })
+  return { ok: true, inboxDocumentId: booking.document_id ?? null }
 }
 
 /**
@@ -292,8 +298,8 @@ export async function createExpenseClaim(
   try {
     const locked = await periodLockFailure(supabase, companyId, input.expense_date)
     if (locked) return locked
-    const underlag = await underlagFailure(ctx, input)
-    if (underlag) return underlag
+    const underlag = await checkUnderlag(ctx, input)
+    if (!underlag.ok) return underlag.failure
 
     if (options.dryRun) {
       const planned = await planExpenseClaim(supabase, companyId, input, { dryRun: true })
@@ -330,7 +336,8 @@ export async function createExpenseClaim(
           vat_sek: plan.vatSek,
           currency: input.currency,
           exchange_rate: input.currency === 'SEK' ? null : plan.rate,
-          document_id: input.document_id ?? null,
+          // The receipt the registration attaches: the inbox item's own document, when it has one.
+          document_id: claimReceiptDocumentId(input, underlag.inboxDocumentId) ?? null,
           inbox_item_id: input.inbox_item_id ?? null,
           verifikat: {
             description: plan.entryDescription,

@@ -104,6 +104,23 @@ describe('readInboxItemBookingState', () => {
     expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({ state: 'open', replaces: null, extracted_data: extracted })
   })
 
+  it('an open item carries its own document, the underlag a door that books it links (crm#2018)', async () => {
+    const { sb, enqueue, findCalls } = client()
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: 'doc-1' } })
+    expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({ state: 'open', replaces: null, document_id: 'doc-1' })
+    expect(String(findCalls('invoice_inbox_items', 'select')[0]?.[0])).toContain('document_id')
+  })
+
+  it('a booked item answers no document to link', async () => {
+    const { sb, enqueue } = client()
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: 'si-1', document_id: 'doc-1' } })
+    expect(await readInboxItemBookingState(sb, COMPANY, 'item-1')).toEqual({
+      state: 'booked',
+      journal_entry_id: null,
+      supplier_invoice_id: 'si-1',
+    })
+  })
+
   it('a supplier invoice books the item', async () => {
     const { sb, enqueue } = client()
     enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: 'si-1' } })

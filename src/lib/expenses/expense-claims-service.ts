@@ -474,13 +474,27 @@ export function expenseClaimRemovalBusinessEvent(
   }
 }
 
+/**
+ * The receipt a claim's verifikat carries. A claim that settles an inbox item
+ * carries that item's own document, as every door that books an inbox item
+ * links it (book-direct, the voucher, the supplier invoice); document_id is
+ * the receipt of a claim without one, or of an item that holds no document.
+ * Pure: the dry run and the registration answer the same receipt.
+ */
+export function claimReceiptDocumentId(
+  input: Pick<RegisterExpenseClaimInput, 'document_id'>,
+  inboxItemDocumentId: string | null | undefined,
+): string | undefined {
+  return inboxItemDocumentId ?? input.document_id
+}
+
 export async function registerExpenseClaim(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: RegisterExpenseClaimInput,
+  registration: RegisterExpenseClaimInput,
 ): Promise<RegisterExpenseClaimResult> {
-  const planned = await planExpenseClaim(supabase, companyId, input)
+  const planned = await planExpenseClaim(supabase, companyId, registration)
   if (!planned.ok) return planned
   const { plan } = planned
 
@@ -489,16 +503,24 @@ export async function registerExpenseClaim(
   // twice left two posted verifikat (accounted#14). A pointer at a reversed
   // verifikat (a booking this claim replaces) is stale and is replaced.
   let replacesEntryId: string | null = null
-  if (input.inbox_item_id) {
-    const booking = await readInboxItemBookingState(supabase, companyId, input.inbox_item_id)
+  let inboxDocumentId: string | null = null
+  if (registration.inbox_item_id) {
+    const booking = await readInboxItemBookingState(supabase, companyId, registration.inbox_item_id)
     if (booking.state === 'error') return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: booking.error.message }
     if (booking.state === 'missing') return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
     if (booking.state === 'booked') return { ok: false, code: 'INBOX_ITEM_BOOKED' }
     replacesEntryId = booking.replaces
+    inboxDocumentId = booking.document_id ?? null
     // The other half of this purchase is booked already (one purchase was booked twice, as
     // utlägg, from the invoice and from the receipt of the same mail): refused before anything is written.
-    const pairBooked = await refuseWhenPairBooked(supabase, companyId, input.inbox_item_id)
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, registration.inbox_item_id)
     if (pairBooked) return { ok: false, code: 'INBOX_ITEM_PAIR_BOOKED', detail: pairBooked.messageSv }
+  }
+  // The item's document is the receipt, so a caller that sends only
+  // inbox_item_id still gets the underlag onto the verifikat (crm#2018).
+  const input: RegisterExpenseClaimInput = {
+    ...registration,
+    document_id: claimReceiptDocumentId(registration, inboxDocumentId),
   }
 
   // Claim row first, then the verifikat with source_id pointing back at it;

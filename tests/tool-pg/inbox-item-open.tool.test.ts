@@ -96,6 +96,8 @@ describe('the document hold', () => {
       replaces: null,
       // The underlag rides along, so the voucher executor can run the FX check.
       extracted_data: expect.objectContaining({ totals: { total: 500 } }),
+      // The item's own document, which a door that books the item links.
+      document_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
   })
 })

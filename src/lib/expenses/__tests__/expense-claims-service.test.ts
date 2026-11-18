@@ -280,6 +280,83 @@ describe('registerExpenseClaim', () => {
     ])
   })
 
+  // crm#2018: an agent staged the claim with inbox_item_id only; the item was
+  // marked booked and the verifikat carried no underlag.
+  it('attaches the inbox item\'s own document when the caller sent only inbox_item_id', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: 'doc-item' } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+    enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'email' } }) // document lookup
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 329,
+      vat_amount: 65.8,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: 'doc-item' })
+    expect(findCalls('document_attachments', 'eq')).toContainEqual(['id', 'doc-item'])
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-item', 'je-1', { link_basis: 'user_created', link_evidence: null })
+  })
+
+  it('attaches the inbox item\'s document, not a different document_id sent with it', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: 'doc-item' } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+    enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'email' } }) // document lookup
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 329,
+      vat_amount: 65.8,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      document_id: 'doc-other',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: 'doc-item' })
+    expect(linkToJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-item', 'je-1', { link_basis: 'user_created', link_evidence: null })
+  })
+
+  it('links nothing for an inbox item without a document and no document_id', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: null } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: null })
+    expect(findCall('document_attachments', 'select')).toBeUndefined()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   // accounted#14: the item stamp overwrote any pointer, so the same
   // underlag registered twice kept two posted verifikat.
   const INBOX_CLAIM_INPUT = {
