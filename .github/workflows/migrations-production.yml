@@ -36,6 +36,12 @@ concurrency:
 jobs:
   migrate:
     name: Apply migrations to production
+    # Runs where the production environment's secrets are held: in a private
+    # repository, or in one that sets the repository variable
+    # APPLY_PRODUCTION_MIGRATIONS to true. Anywhere else (a public repository,
+    # a public fork) the job is skipped, so a push to main there applies
+    # nothing and does not fail for want of secrets.
+    if: github.event.repository.private || vars.APPLY_PRODUCTION_MIGRATIONS == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
