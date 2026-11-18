@@ -967,6 +967,112 @@ describe('Skatteverket read tools: a session that is gone', () => {
   })
 })
 
+describe('Skatteverket tools: Skatteverket does not answer', () => {
+  // Replays the twelve calls of 2026-11-05 12:39 to 12:44 UTC (one company,
+  // six gnubok_vat_declaration_validate and six gnubok_vat_declaration_status):
+  // Skatteverket's reply did not come within the transport's 15 seconds, and
+  // each call answered UNKNOWN_ERROR, not retryable, "The operation was
+  // aborted due to timeout": no word on what had timed out or what to do.
+  const PERIOD = { period_type: 'quarterly', year: 2026, period: 3 }
+
+  /** What a fetch that outlives AbortSignal.timeout rejects with (pinned against the platform in lib/errors). */
+  const timeout = (): unknown => new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+  /** undici's error for a call that reached nobody. */
+  const noConnection = (): unknown => new TypeError('fetch failed')
+
+  const refusalOf = async (call: Promise<unknown>, toolName: string) => {
+    const thrown = await call.then(() => null, (err: unknown) => err)
+    expect(thrown, `${toolName} must refuse`).not.toBeNull()
+    return toToolError(thrown, { toolName }).error
+  }
+
+  function expectUnavailable(error: ReturnType<typeof toToolError>['error']) {
+    expect(error.code).toBe('SKATTEVERKET_UNAVAILABLE')
+    expect(error.retryable).toBe(true)
+    expect(error.message_en).toContain('Skatteverket did not answer')
+    expect(error.message_en).toContain('Try the same call again in a few minutes.')
+    // The connection is not the problem: the agent must not send the user to BankID.
+    expect(error.remediation?.description).toContain('do not ask the user to reconnect')
+    expect(error.remediation?.tool).toBeUndefined()
+    expect(error.message_sv).toBe('Skatteverket svarar inte just nu. Försök igen om en stund.')
+  }
+
+  beforeEach(() => {
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202609', momsuppgift: {}, declaration: COMPLETE_VAT_DECLARATION })
+  })
+
+  it('gnubok_vat_declaration_validate names the check that needs no Skatteverket', async () => {
+    for (const failure of [timeout(), noConnection()]) {
+      mockSkvRequest.mockRejectedValue(failure)
+      const { supabase } = createQueuedMockSupabase()
+      const error = await refusalOf(
+        validate.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+        'gnubok_vat_declaration_validate',
+      )
+      expectUnavailable(error)
+      expect(error.message_en).toContain('gnubok_vat_close_check with the same period arguments')
+    }
+    expect(tools.some((t) => t.name === 'gnubok_vat_close_check')).toBe(true)
+  })
+
+  it('gnubok_vat_declaration_submit says nothing was staged, and stages nothing', async () => {
+    mockSkvRequest.mockRejectedValue(timeout())
+    const { supabase, findCalls } = createTableMockSupabase({})
+    const error = await refusalOf(
+      vatSubmit.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      'gnubok_vat_declaration_submit',
+    )
+    expectUnavailable(error)
+    expect(error.message_en).toContain('Nothing was staged')
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  // The service answers the missing answer itself (declaration-status.test.ts).
+  it('gnubok_vat_declaration_status names the local record of filed periods', async () => {
+    mockFetchVatDeclarationStatus.mockResolvedValue({
+      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, error: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
+    })
+    const { supabase } = createQueuedMockSupabase()
+    const error = await refusalOf(
+      vatStatus.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      'gnubok_vat_declaration_status',
+    )
+    expectUnavailable(error)
+    expect(error.message_en).toContain('gnubok_list_vat_filings needs no connection')
+  })
+
+  it('gnubok_agi_status names the run record that needs no Skatteverket', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockResolveUserReadAuth.mockResolvedValue({
+      ok: true,
+      auth: { mode: 'user', userId: 'user-1', companyId: 'company-1' },
+      source: 'user',
+      tokenUserId: 'user-1',
+    })
+    mockKvittenser.mockRejectedValue(timeout())
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } })
+    enqueue({ data: null })
+    const error = await refusalOf(
+      agiStatus.execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      'gnubok_agi_status',
+    )
+    expectUnavailable(error)
+    expect(error.message_en).toContain('gnubok_get_salary_run with salary_run_id sr-1')
+  })
+
+  it('a failure that is not a missing answer keeps its own words', async () => {
+    mockSkvRequest.mockRejectedValue(new Error('Unexpected token < in JSON'))
+    const { supabase } = createQueuedMockSupabase()
+    const error = await refusalOf(
+      validate.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      'gnubok_vat_declaration_validate',
+    )
+    expect(error.code).toBe('UNKNOWN_ERROR')
+    expect(error.message_en).toBe('Unexpected token < in JSON')
+  })
+})
+
 describe('Skatteverket tools: scopes', () => {
   it('maps the five tools to the right scopes', () => {
     expect(TOOL_SCOPE_MAP.gnubok_vat_declaration_validate).toBe('compliance:read')

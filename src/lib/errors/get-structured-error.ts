@@ -122,11 +122,33 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /too many clients/i,
   /rate limit/i,
   /timed out/i,
+  /aborted due to timeout/i,
 ]
+
+/**
+ * The platform's own error for a deadline that ran out: what a fetch rejects
+ * with when it outlives AbortSignal.timeout. Its sentence ("The operation was
+ * aborted due to timeout") names neither what was waited for nor what to do,
+ * so it is answered with the sentences below; a timeout its thrower worded
+ * (lib/http/fetch-with-timeout, or an error that wraps this one) keeps its
+ * words. A call that got no answer may still have been carried out, hence
+ * the check.
+ */
+function isPlatformTimeout(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError'
+}
+const TIMEOUT_MESSAGE_SV = 'En tjänst som behövs för det här svarade inte i tid. Försök igen om en stund.'
+const TIMEOUT_MESSAGE_EN =
+  'A service this request depends on did not answer in time. Retry after a short wait; if the request changes something, first check whether it already went through.'
 
 function isTransientFailure(error: unknown, message: string): boolean {
   if (typeof error === 'object' && error !== null) {
     const obj = error as Record<string, unknown>
+    // A deadline that ran out, by the name the platform gives it (a
+    // DOMException from AbortSignal.timeout) and lib/http/fetch-with-timeout
+    // keeps. Read by name: the sentence differs by who raised it, and the
+    // pattern above only catches the platform's once another error wraps it.
+    if (obj.name === 'TimeoutError') return true
     const inner = typeof obj.error === 'object' && obj.error !== null ? (obj.error as Record<string, unknown>) : undefined
     for (const c of [obj.code, inner?.code]) {
       if (typeof c === 'string' && TRANSIENT_SQLSTATES.has(c)) return true
@@ -414,7 +436,12 @@ export function classifyError(error: unknown): ErrorClassification {
 
   // Nothing more specific matched but the failure is transient: the stable
   // TRANSIENT_ERROR code lets a client dispatch on it.
-  return { code: transient ? 'TRANSIENT_ERROR' : 'UNKNOWN_ERROR', transient }
+  if (!transient) return { code: 'UNKNOWN_ERROR', transient }
+  return {
+    code: 'TRANSIENT_ERROR',
+    ...(isPlatformTimeout(error) ? { message_sv: TIMEOUT_MESSAGE_SV, message_en: TIMEOUT_MESSAGE_EN } : {}),
+    transient,
+  }
 }
 
 /**

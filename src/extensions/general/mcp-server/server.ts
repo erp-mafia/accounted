@@ -775,7 +775,7 @@ import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fi
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
 // components/. The two submit tools stage ops whose commit dispatches back into
 // the skatteverket extension via the registry (lib/pending-operations/commit.ts).
-import { skvRequest, SkatteverketAuthError, isApigwClientRefusal } from '@/extensions/general/skatteverket/lib/api-client'
+import { skvRequest, SkatteverketAuthError, isApigwClientRefusal, skvUnreachable } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
@@ -2890,14 +2890,33 @@ function ledgerAsOfDateArg(value: unknown): string | undefined {
   return asOf.asOfDate
 }
 
-function mapSkatteverketError(err: unknown): Error {
+/**
+ * `whenUnavailable`: the sentence the tool adds when Skatteverket gave no
+ * answer (skvUnavailableRefusal): what still works without it differs by tool.
+ */
+function mapSkatteverketError(err: unknown, whenUnavailable: string): Error {
   if (err instanceof SkatteverketAuthError) {
     const mapped = skvAuthCodeToStructured(err.code)
     const out = new Error(err.message) as Error & { code: string }
     out.code = mapped.code
     return out
   }
+  if (skvUnreachable(err)) return skvUnavailableRefusal(whenUnavailable)
   return err instanceof Error ? err : new Error(String(err))
+}
+
+/**
+ * Skatteverket gave no answer: the transport's timeout ran out, or no
+ * connection. The transport rethrows the platform's own error, which reached
+ * the agent as UNKNOWN_ERROR, not retryable, "The operation was aborted due
+ * to timeout" (12 calls on 2026-11-05): no word on who had not answered or
+ * what to do. The registry entry says who was silent, that the call can be
+ * made again and that the connection is not the problem, so the agent does
+ * not send the user to BankID for an outage on Skatteverket's side.
+ */
+function skvUnavailableRefusal(whenUnavailable: string): Error {
+  const code = 'SKATTEVERKET_UNAVAILABLE'
+  return codedRefusal(code, `${getErrorEntry(code)?.message_en} ${whenUnavailable}`)
 }
 
 /**
@@ -2923,8 +2942,9 @@ async function mapFilingSkvError(
   companyId: string,
   userId: string,
   err: unknown,
+  whenUnavailable: string,
 ): Promise<Error> {
-  const mapped = mapSkatteverketError(err)
+  const mapped = mapSkatteverketError(err, whenUnavailable)
   if ((mapped as Error & { code?: string }).code !== 'SKATTEVERKET_NOT_CONNECTED') return mapped
   const filing = await getSkvFilingReadiness(supabase, companyId, userId)
   if (!filing?.message) return mapped
@@ -21243,7 +21263,11 @@ export const tools: McpTool[] = [
           ].join(' '),
         }
       } catch (err) {
-        throw await mapFilingSkvError(supabase, companyId, userId, err)
+        throw await mapFilingSkvError(
+          supabase, companyId, userId, err,
+          // The half of the pre-flight that runs on Accounted's own books.
+          "gnubok_vat_close_check with the same period arguments runs the completeness checks, which need no Skatteverket call. Only Skatteverket's own arithmetic check waits; it is read-only, so nothing was saved or filed.",
+        )
       }
     },
   },
@@ -21298,7 +21322,10 @@ export const tools: McpTool[] = [
           if (!res.ok) throw await skvKontrolleraRefusal(res)
           return { ...prep, kontrollresultat: await res.json() }
         } catch (err) {
-          throw await mapFilingSkvError(supabase, companyId, userId, err)
+          throw await mapFilingSkvError(
+            supabase, companyId, userId, err,
+            'Nothing was staged and nothing was filed: stage the declaration again once Skatteverket answers.',
+          )
         }
       })()
       // Filing freezes nothing: while the period's last day is open the
@@ -21366,6 +21393,7 @@ export const tools: McpTool[] = [
         if (result.code === 'SKATTEVERKET_NOT_CONNECTED') {
           throw await skvReadRefusal(supabase, companyId, userId, { meanwhile: VAT_STATUS_WITHOUT_SKATTEVERKET })
         }
+        if (result.code === 'SKATTEVERKET_UNAVAILABLE') throw skvUnavailableRefusal(VAT_STATUS_WITHOUT_SKATTEVERKET)
         throw codedRefusal(result.code, result.error)
       }
       const { redovisare, redovisningsperiod, submitted, decided } = result
@@ -21565,11 +21593,14 @@ export const tools: McpTool[] = [
           kvittens_read: kvittensRead,
         }
       } catch (err) {
-        const mapped = mapSkatteverketError(err) as Error & { code?: string }
+        // What answers for the run without Skatteverket, whether the session
+        // is gone or Skatteverket gives no answer.
+        const localRecord = `gnubok_get_salary_run with salary_run_id ${salaryRunId} needs no connection and shows what Accounted has on record for the run (status, agi_generated_at, agi_submitted_at).`
+        const mapped = mapSkatteverketError(err, localRecord) as Error & { code?: string }
         // Names the session the read used: the caller's own or another member's.
         if (mapped.code === 'SKATTEVERKET_NOT_CONNECTED') {
           throw await skvReadRefusal(supabase, companyId, userId, {
-            meanwhile: `gnubok_get_salary_run with salary_run_id ${salaryRunId} needs no connection and shows what Accounted has on record for the run (status, agi_generated_at, agi_submitted_at). Only the Skatteverket receipts need the login.`,
+            meanwhile: `${localRecord} Only the Skatteverket receipts need the login.`,
           })
         }
         throw mapped

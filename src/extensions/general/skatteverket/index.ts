@@ -33,7 +33,7 @@ import {
   type OAuthFlow,
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
-import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal } from './lib/api-client'
+import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal, skvUnreachable } from './lib/api-client'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
@@ -2873,11 +2873,6 @@ function skvActionFailureResponse(failure: SkvActionFailure): NextResponse {
  * waiting.
  */
 const SERVICE_DOWN_STATUSES = new Set([502, 503, 504])
-
-/** No answer at all: the call's timeout ran out, or no connection (undici's "fetch failed"). */
-function skvUnreachable(err: unknown): boolean {
-  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
-}
 
 /**
  * Ombudshantering itself unreachable: a 502/503/504 from it, no answer within

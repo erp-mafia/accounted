@@ -5,11 +5,12 @@ import type {
   SkvVatDeclarationStatusInput,
   SkvVatDeclarationStatusResult,
 } from '@/lib/skatteverket/declaration-status'
-import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
+import { skvRequestWithAuth, SkatteverketAuthError, skvUnreachable } from './api-client'
 import { resolveReadAuth } from './resolve-auth'
 import { resolveRedovisare, resolveRedovisningsperiod } from './declaration-prep'
 import { skvAuthCodeToStructured } from './error-map'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 
 /**
@@ -28,8 +29,9 @@ import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
  * declaration belongs to the company, not to whoever pressed "Anslut". The
  * audit rows (one per view, written by the transport) name the caller.
  *
- * Error contract: known failure modes return `{ ok: false, code, http_status,
- * error }` with structured codes so the v1 route maps them deterministically;
+ * Error contract: known failure modes (no answer from Skatteverket included)
+ * return `{ ok: false, code, http_status, error }` with structured codes so
+ * the v1 route maps them deterministically;
  * unexpected errors are thrown and handled by the route wrapper.
  */
 export async function fetchVatDeclarationStatus(
@@ -124,6 +126,16 @@ export async function fetchVatDeclarationStatus(
     if (err instanceof SkatteverketAuthError) {
       const mapped = skvAuthCodeToStructured(err.code)
       return { ok: false, code: mapped.code, http_status: mapped.httpStatus, error: err.message }
+    }
+    // No answer from Skatteverket (the transport's timeout, or no connection)
+    // is a failure with a code, like the ones above: thrown, it reached an
+    // agent as UNKNOWN_ERROR and the v1 route as a 500.
+    if (skvUnreachable(err)) {
+      ctx.log.warn('skv declaration-status: no answer from Skatteverket', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+      const code = 'SKATTEVERKET_UNAVAILABLE'
+      return { ok: false, code, http_status: 503, error: getErrorEntry(code)?.message_sv ?? code }
     }
     throw err
   }

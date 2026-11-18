@@ -199,6 +199,37 @@ describe('retryable contract (always present, transient inference)', () => {
     expect(getStructuredError(new Error('connect ECONNRESET 1.2.3.4:443')).retryable).toBe(true)
   })
 
+  // A fetch that outlives AbortSignal.timeout rejects with the platform's own
+  // error: a DOMException named TimeoutError, "The operation was aborted due
+  // to timeout". No pattern knew that sentence, so twelve Skatteverket calls
+  // on 2026-11-05 answered UNKNOWN_ERROR, not retryable, with those words.
+  it('classifies the platform timeout as transient and says what to do', async () => {
+    const signal = AbortSignal.timeout(1)
+    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+    const timeout: unknown = signal.reason
+    expect(timeout).toMatchObject({ name: 'TimeoutError', message: 'The operation was aborted due to timeout' })
+
+    const result = getStructuredError(timeout)
+    expect(result.code).toBe('TRANSIENT_ERROR')
+    expect(result.retryable).toBe(true)
+    expect(result.message_en).toBe(
+      'A service this request depends on did not answer in time. Retry after a short wait; if the request changes something, first check whether it already went through.',
+    )
+    expect(result.message_sv).toBe('En tjänst som behövs för det här svarade inte i tid. Försök igen om en stund.')
+  })
+
+  it('keeps the words of a failure that wraps the platform timeout', () => {
+    const result = getStructuredError(new Error('Bank sync failed: The operation was aborted due to timeout'))
+    expect(result.code).toBe('TRANSIENT_ERROR')
+    expect(result.retryable).toBe(true)
+    expect(result.message_en).toBe('Bank sync failed: The operation was aborted due to timeout')
+  })
+
+  it('reads a timeout by its name, whatever it says', () => {
+    const named = Object.assign(new Error('gave up waiting'), { name: 'TimeoutError' })
+    expect(getStructuredError(named)).toMatchObject({ code: 'TRANSIENT_ERROR', retryable: true, message_en: 'gave up waiting' })
+  })
+
   it('keeps a specific code but still computes retryable from the failure', () => {
     // NOT_FOUND is permanent even though nothing in the registry says so explicitly.
     const result = getStructuredError(codedRefusal('NOT_FOUND', 'Transaction not found'))

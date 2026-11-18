@@ -248,6 +248,34 @@ describe('fetchVatDeclarationStatus', () => {
     expect(mockSkvRequestWithAuth.mock.calls[0][3]).toMatchObject({ expectJson: true })
   })
 
+  // The transport rethrows what the platform raises when its 15 seconds run
+  // out, or when the call reaches nobody. Thrown on, it reached an agent as
+  // UNKNOWN_ERROR and the v1 route as a 500 (12 MCP calls on 2026-11-05).
+  it('no answer from Skatteverket → SKATTEVERKET_UNAVAILABLE 503, in Swedish', async () => {
+    for (const failure of [
+      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      new TypeError('fetch failed'),
+    ]) {
+      mockSkvRequestWithAuth.mockRejectedValue(failure)
+      const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+        periodType: 'monthly', year: 2026, period: 3,
+      })
+      expect(result).toEqual({
+        ok: false,
+        code: 'SKATTEVERKET_UNAVAILABLE',
+        http_status: 503,
+        error: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
+      })
+    }
+  })
+
+  it('any other failure is still thrown for the route wrapper', async () => {
+    mockSkvRequestWithAuth.mockRejectedValue(new Error('Unexpected token < in JSON'))
+    await expect(
+      fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', { periodType: 'monthly', year: 2026, period: 3 }),
+    ).rejects.toThrow('Unexpected token < in JSON')
+  })
+
   it('SkatteverketAuthError → structured code via skvAuthCodeToStructured', async () => {
     mockSkvRequestWithAuth.mockRejectedValueOnce(
       new SkatteverketAuthError('Behörighet saknas', 'BEHORIGHET_SAKNAS'),

@@ -45,6 +45,9 @@ const cases: Array<[string, unknown, string]> = [
   ['a serialization failure', { code: '40001', message: 'could not serialize access' }, 'TRANSIENT_ERROR'],
   ['a statement timeout', { code: '57014', message: 'canceling statement due to statement timeout' }, 'TRANSIENT_ERROR'],
   ['a refused connection', new Error('connect ECONNREFUSED 127.0.0.1:5432'), 'TRANSIENT_ERROR'],
+  // What AbortSignal.timeout rejects a fetch with: a 500 on REST and
+  // UNKNOWN_ERROR to an agent until the timeout was read by its name.
+  ['a call that ran out of time', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'TRANSIENT_ERROR'],
   ['a coded refusal', codedRefusal('PERIOD_NOT_LOCKED', 'Period must be locked before closing'), 'PERIOD_NOT_LOCKED'],
   ['an argument check', badArgument('invoice_id', 'invoice_id is required'), 'VALIDATION_ERROR'],
   [

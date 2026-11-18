@@ -1,0 +1,1 @@
+[2026-11-17] A call cut off by its timeout answers TRANSIENT_ERROR (503, retryable) on every door, and a Skatteverket MCP tool that gets no answer answers SKATTEVERKET_UNAVAILABLE with what still works without it: read as UNKNOWN_ERROR (500) it told an agent neither who was silent nor what to do.

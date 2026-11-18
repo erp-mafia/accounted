@@ -9875,6 +9875,22 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_en: 'Skatteverket rate limit exceeded.',
     retryable: true,
   },
+  // No answer from Skatteverket at all: the call's timeout ran out, or no
+  // connection. It says nothing about the request or the company's
+  // connection, so the same call can be made again later. As the platform's
+  // own error it reached agents as UNKNOWN_ERROR, "The operation was aborted
+  // due to timeout" (12 calls in five minutes on 2026-11-05).
+  SKATTEVERKET_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
+    message_en:
+      'Skatteverket did not answer: no reply within the time limit, or no connection. Try the same call again in a few minutes.',
+    retryable: true,
+    remediation: {
+      description:
+        "The arguments and the company's Skatteverket connection are not the problem: do not ask the user to reconnect.",
+    },
+  },
   SKATTEVERKET_API_ERROR: {
     httpStatus: 502,
     message_sv: 'Skatteverkets tjänst svarade med ett fel. Se detaljerna och försök igen.',

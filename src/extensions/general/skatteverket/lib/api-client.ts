@@ -7,6 +7,7 @@ import {
 } from '@/lib/connect/instance/upstreams'
 import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { requireHttpsUrl } from '@/lib/http/require-https'
+import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
 import { SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS } from '@/lib/skatteverket/session-lifetime'
@@ -1242,4 +1243,13 @@ export class SkatteverketAuthError extends Error {
 /** True when `err` is Skatteverket's gateway refusing the APIGW client itself. */
 export function isApigwClientRefusal(err: unknown): err is SkatteverketAuthError {
   return err instanceof SkatteverketAuthError && err.detail === 'APIGW_CLIENT_REFUSED'
+}
+
+/**
+ * No answer at all: the call's timeout ran out, or no connection (undici's
+ * "fetch failed"). The transport rethrows either as the platform raised it,
+ * so every door that words a failure asks here whether it was this one.
+ */
+export function skvUnreachable(err: unknown): boolean {
+  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
 }
