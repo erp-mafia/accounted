@@ -74,6 +74,9 @@ describe('buildBrandVarsCss', () => {
     expect(css).toContain('html[data-brand] nav[data-shell-rail] {')
     const sidebarBlock = css!.split('nav[data-shell-rail]')[1]
     expect(sidebarBlock).toContain('--foreground: 0 0% 98%;')
+    // The active area's icon and name and the create button are in the strong
+    // ink, near black in the light theme: it must be light on the deep tone.
+    expect(sidebarBlock.split('nav[data-mobile-nav]')[0]).toContain('--strong: 0 0% 98%;')
     expect(sidebarBlock).toContain('--muted-foreground: 0 0% 75%;')
     expect(sidebarBlock).toContain('--primary: 0 0% 98%;')
     // The solid-primary chip inside the sidebar inverts onto the chrome tone.

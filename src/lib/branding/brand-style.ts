@@ -83,7 +83,8 @@ export function hexToHslTriplet(hex: string): string | null {
 }
 
 // Sidebar tokens on deep chrome (WL-02 round 2: deep-branded chrome needs
-// light sidebar text). The sidebar consumes --foreground, --muted-foreground,
+// light sidebar text). The sidebar consumes --foreground, --strong (the
+// active area's icon and name, the create button), --muted-foreground,
 // --primary (active items), --primary-foreground, --secondary (hover/active
 // chips), --muted (count badges) and --border (trial box, hairlines); this is
 // the minimal set that keeps it readable on the deep tone. Lightness values
@@ -166,6 +167,9 @@ export function buildBrandVarsCss(brand: Pick<Brand, 'brandColor' | 'chromeColor
 
   const sidebarVars = [
     `  --foreground: ${SIDEBAR_FOREGROUND};`,
+    // The rail draws the active area and the plus in the strong ink, which
+    // is near black in the light theme: unreadable on the deep tone.
+    `  --strong: ${SIDEBAR_FOREGROUND};`,
     `  --muted-foreground: ${SIDEBAR_MUTED_FOREGROUND};`,
     `  --primary: ${SIDEBAR_FOREGROUND};`,
     `  --primary-foreground: ${chromeTriplet};`,

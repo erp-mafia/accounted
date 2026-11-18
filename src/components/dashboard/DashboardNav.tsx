@@ -430,15 +430,18 @@ export default function DashboardNav({ navGate, isSandbox = false, extensionNavI
 
   const railEntry = (area: NavV3Area): RailEntry => {
     const AreaIcon = area.icon
-    const external = area.id === 'byra' && !cockpitMode && cockpitExternal
+    // Outside the cockpit the Byrå button is the way back to the clients.
+    const backToClients = area.id === 'byra' && !cockpitMode
     return {
       id: area.id,
-      // Outside the cockpit the Byrå button is the way back to the clients.
-      label: area.id === 'byra' && !cockpitMode ? tNav('back_to_clients') : tNav(area.labelKey as never),
+      // The area's name, shown under the icon. One source: the sidebar's heading reads the same key.
+      label: tNav(area.labelKey as never),
       icon: <AreaIcon className="h-5 w-5" />,
       href: areaLanding(area),
       active: area.id === activeAreaId,
-      hint: external ? cockpitHint : null,
+      // The name says "Byrå"; the tooltip says where the button leads.
+      tip: backToClients ? tNav('back_to_clients') : null,
+      hint: backToClients && cockpitExternal ? cockpitHint : null,
     }
   }
   const railGroups = ([0, 1, 2, 3] as const).map((group) => visibleAreas.filter((area) => area.rail === group).map(railEntry))

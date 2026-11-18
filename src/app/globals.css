@@ -15,17 +15,22 @@
 :root {
   color-scheme: light;
 
-  /* Navigation widths (frame layout): the icon rail on the frame (--rail-w)
-     and the area sidebar, the left column of the page panel (--side-w).
-     --nav-w is their sum: where the page itself starts, which overlays
-     pinned to the page read (the assistant panel, the full-height item
-     view). Plain lengths, not calc(): the assistant panel parses --nav-w
-     (AgentSheet readNavWidth). The sidebar is 220px, and the prototype's
-     320px from a 1440px window up (override below the :root block), where
-     the page keeps more room than it has on a 1280px laptop at 220px. */
-  --rail-w: 60px;
+  /* Navigation widths (frame layout): the rail on the frame (--rail-w) and
+     the area sidebar, the left column of the page panel (--side-w). Each is
+     written once, as a plain length. --nav-w is their sum, derived here and
+     never written as a number: where the page itself starts, which overlays
+     pinned to the page read (the floating bulk bar, the full-height item
+     view). A script cannot parse a calc(), so the assistant panel adds the
+     same two lengths (AgentSheet readNavWidth, navWidthFromParts).
+     The rail is as wide as the longest area name needs under its icon and no
+     wider: a 76px label ("Bookkeeping" is 75px and "Inställningar" 72px at
+     12px/500), 4px inside the button and 6px to the rail's edges. The
+     sidebar is 220px, and the prototype's 320px from a 1440px window up
+     (override below the :root block), where the page keeps more room than
+     it has on a 1280px laptop at 220px. */
+  --rail-w: 96px;
   --side-w: 220px;
-  --nav-w: 280px;
+  --nav-w: calc(var(--rail-w) + var(--side-w));
   /* Settings: width of the one control column every settings row shares
      (components/settings/SettingsRows.tsx), so fields and switches align. */
   --settings-control-w: 400px;
@@ -213,7 +218,6 @@
 @media (min-width: 90rem) {
   :root {
     --side-w: 320px;
-    --nav-w: 380px;
   }
 }
 

@@ -32,6 +32,7 @@ import {
   containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
+  navWidthFromParts,
   resizeFloatRect,
   type ResizeEdges,
 } from '@/lib/agent-panel/geometry'
@@ -122,16 +123,24 @@ function useMinWidthMd() {
   return md
 }
 
-/** Current sidebar column width (--nav-w, read from #dash-shell). */
+/**
+ * Current nav column width: the rail plus the area sidebar, read from
+ * #dash-shell as the two lengths --nav-w is the sum of (--nav-w itself is a
+ * calc(), see navWidthFromParts). With no shell to read (a server render, a
+ * page outside the dashboard) the clamp keeps the width it has always assumed.
+ */
 function readNavWidth(): number {
-  if (typeof document === 'undefined') return 248
-  const shell = document.getElementById('dash-shell')
-  const px = shell ? parseInt(getComputedStyle(shell).getPropertyValue('--nav-w'), 10) : NaN
-  return Number.isFinite(px) ? px : 248
+  const shell = typeof document === 'undefined' ? null : document.getElementById('dash-shell')
+  if (shell) {
+    const style = getComputedStyle(shell)
+    const px = navWidthFromParts(style.getPropertyValue('--rail-w'), style.getPropertyValue('--side-w'))
+    if (Number.isFinite(px)) return px
+  }
+  return 248
 }
 
 /**
- * Reactive sidebar width: a change to #dash-shell's inline --nav-w fires
+ * Reactive nav column width: a change to #dash-shell's inline widths fires
  * no resize event, so observe the style attribute instead of forcing a
  * computed-style read on every render.
  */

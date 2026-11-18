@@ -1,0 +1,1 @@
+[2026-11-17] Amends 2026-11-15: the rail shows each area's name under its icon, always, with no expand toggle (founder call after three reports and the first day's clicks: 67 % went from one area icon straight to another within 5 s). --rail-w is 96px, written once; plus and search share a row.
