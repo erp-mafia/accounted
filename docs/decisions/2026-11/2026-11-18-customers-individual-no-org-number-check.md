@@ -1,0 +1,1 @@
+[2026-11-18] The database refuses an org number on an individual customer card (CHECK customers_individual_no_org_number), and promote_parties types a party that holds one as a business: the rule lived only in app code, one copy per write path, and 730 cards held a personnummer in plain text.
