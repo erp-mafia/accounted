@@ -3620,7 +3620,10 @@
     "direct_booking_help": "When a suggestion on a bank row or in the Inkorg counts as settled (a rule of your own, a counterparty booked the same way at least three times, the assistant's sure reading of a receipt), it books with one click and can be undone right after. Off: every suggestion opens its review first, so you see the entry before it is booked. A single rule can also be set to always review, under Bookkeeping rules.",
     "direct_booking_on": "Settled suggestions book with one click",
     "direct_booking_off": "Every suggestion is reviewed first",
-    "direct_booking_save_failed": "The setting could not be saved"
+    "direct_booking_save_failed": "The setting could not be saved",
+    "reopen_filed_vat_title": "Reopen filed VAT periods?",
+    "reopen_filed_vat_body": "The change to the lock date reopens VAT periods whose VAT return is already filed: {periods}.\n\nA correction booked there may mean the VAT return for the period needs correcting.",
+    "reopen_filed_vat_confirm": "Reopen the periods"
   },
   "settings_salary": {
     "payments_heading": "Payment",
@@ -12087,7 +12090,14 @@
       "likvida_medel_ib": "Cash and cash equivalents at the beginning of the year",
       "kursdifferens_likvida_medel": "Exchange difference in cash and cash equivalents",
       "likvida_medel_ub": "Cash and cash equivalents at the end of the year"
-    }
+    },
+    "vat_filing_books_locked": "bookkeeping locked through {date}",
+    "vat_filing_lock_books": "Lock the bookkeeping through {date}",
+    "vat_lock_books_title": "Lock the bookkeeping through {date}?",
+    "vat_lock_books_body": "The VAT return for {period} is filed.",
+    "vat_lock_books_open_year": "The fiscal year ending {date} is not closed: its year-end closing cannot be booked until the lock date is moved back.",
+    "vat_lock_books_consequence": "Vouchers dated on or before {date} can then no longer be created or changed. The date is moved back under Settings > Bookkeeping.",
+    "vat_lock_books_confirm": "Lock the bookkeeping"
   },
   "contract_revenue": {
     "title": "Work in progress",

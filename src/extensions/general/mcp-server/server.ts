@@ -780,7 +780,8 @@ import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-clie
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { readVatRefusal } from '@/extensions/general/skatteverket/lib/vat-refusal'
-import { fetchVatDeclarationStatus } from '@/extensions/general/skatteverket/lib/declaration-status'
+import { fetchVatDeclarationStatus, vatDeclarationOnFile } from '@/extensions/general/skatteverket/lib/declaration-status'
+import { booksLockOffer } from '@/lib/operations/vat-filings'
 import { resolveUserReadAuth } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import type { SkvVatDeclarationState } from '@/lib/skatteverket/declaration-status'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
@@ -21293,6 +21294,10 @@ export const tools: McpTool[] = [
           throw await mapFilingSkvError(supabase, companyId, userId, err)
         }
       })()
+      // Filing freezes nothing: while the period's last day is open the
+      // follow-up also says to offer the lock once the declaration is filed.
+      const periodEnd = skvPeriodToEndDate(prepared.redovisningsperiod)
+      const lockOffer = await booksLockOffer(supabase, companyId, periodEnd, 'once_filed')
       return stage({
         supabase,
         companyId,
@@ -21309,11 +21314,11 @@ export const tools: McpTool[] = [
         },
         actor,
         next: {
-          description: 'After approval, sign in Skatteverket via the returned BankID link, then poll gnubok_vat_declaration_status.',
+          description: `After approval, sign in Skatteverket via the returned BankID link, then poll gnubok_vat_declaration_status.${lockOffer ? ` ${lockOffer.description}` : ''}`,
           tool: 'gnubok_vat_declaration_status',
           args: { period_type: periodType, year, period },
         },
-        dateForPeriodCheck: skvPeriodToEndDate(prepared.redovisningsperiod),
+        dateForPeriodCheck: periodEnd,
       })
     },
   },
@@ -21357,7 +21362,15 @@ export const tools: McpTool[] = [
         throw codedRefusal(result.code, result.error)
       }
       const { redovisare, redovisningsperiod, submitted, decided } = result
-      return { redovisare, redovisningsperiod, submitted, decided }
+      // A declaration on file is the moment the period is done, and filing
+      // freezes nothing: while the period's last day is open, offer the lock.
+      // `next` is left out of the output schema on purpose: this tool is in
+      // tools/list, whose budget is frozen (payload-size.bench.test.ts), and
+      // output schemas are open, so a client takes the key as it comes.
+      const lockOffer = vatDeclarationOnFile(submitted, decided)
+        ? await booksLockOffer(supabase, companyId, skvPeriodToEndDate(redovisningsperiod), 'filed')
+        : null
+      return { redovisare, redovisningsperiod, submitted, decided, ...(lockOffer ? { next: lockOffer } : {}) }
     },
   },
 

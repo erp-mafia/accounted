@@ -1,0 +1,1 @@
+[2026-11-17] The settings page asks before a lock date move reopens a filed momsperiod, as the API and MCP doors do (409 naming the periods, a confirm, the save again with the acknowledgment): ends the dashboard exemption of 2026-09-26, which the founder had left open; every door now asks.

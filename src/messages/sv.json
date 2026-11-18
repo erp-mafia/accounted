@@ -3620,7 +3620,10 @@
     "direct_booking_help": "När ett förslag på en bankrad eller i Inkorgen räknas som avgjort (en egen regel, en motpart bokförd likadant minst tre gånger, assistentens säkra läsning av ett kvitto) bokförs det med ett klick och kan ångras direkt efteråt. Av: varje förslag öppnar granskningen först, så att du ser konteringen innan den bokförs. En enskild regel kan också granskas alltid, under Bokföringsregler.",
     "direct_booking_on": "Avgjorda förslag bokförs med ett klick",
     "direct_booking_off": "Varje förslag granskas först",
-    "direct_booking_save_failed": "Inställningen kunde inte sparas"
+    "direct_booking_save_failed": "Inställningen kunde inte sparas",
+    "reopen_filed_vat_title": "Öppna inlämnade momsperioder igen?",
+    "reopen_filed_vat_body": "Ändringen av låsdatumet öppnar momsperioder vars momsdeklaration redan är inlämnad: {periods}.\n\nEn rättelse som bokförs där kan betyda att momsdeklarationen för perioden behöver rättas.",
+    "reopen_filed_vat_confirm": "Öppna perioderna"
   },
   "settings_salary": {
     "payments_heading": "Utbetalning",
@@ -12087,7 +12090,14 @@
       "likvida_medel_ib": "Likvida medel vid årets början",
       "kursdifferens_likvida_medel": "Kursdifferens i likvida medel",
       "likvida_medel_ub": "Likvida medel vid årets slut"
-    }
+    },
+    "vat_filing_books_locked": "bokföringen är låst t.o.m. {date}",
+    "vat_filing_lock_books": "Lås bokföringen t.o.m. {date}",
+    "vat_lock_books_title": "Lås bokföringen t.o.m. {date}?",
+    "vat_lock_books_body": "Momsdeklarationen för {period} är inlämnad.",
+    "vat_lock_books_open_year": "Räkenskapsåret som slutar {date} är inte stängt: bokslutet kan inte bokföras förrän låsdatumet flyttats tillbaka.",
+    "vat_lock_books_consequence": "Verifikationer daterade t.o.m. {date} kan sedan inte skapas eller ändras. Datumet flyttas tillbaka under Inställningar > Bokföring.",
+    "vat_lock_books_confirm": "Lås bokföringen"
   },
   "contract_revenue": {
     "title": "Pågående arbeten",

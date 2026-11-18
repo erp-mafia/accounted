@@ -1,0 +1,1 @@
+[2026-11-17] A filed momsperiod offers the lock where it is filed: "Lås bokföringen t.o.m. <last day>" in the Moms page's filed line (owner/admin, confirm first, forward only) and as the next hint of the MCP filing tools, no new tool: 74 of 3,939 companies had ever set the lock date.

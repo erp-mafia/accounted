@@ -42,9 +42,9 @@
  *     the next subscription invoice is made out to the company as it now
  *     stands (crm#1378). A failed sync never fails the save;
  *   - a lock date move (bookkeeping_locked_through) works out which filed
- *     momsdeklaration periods it reopens. The API and MCP doors refuse that
- *     unless the caller acknowledged them; the settings page does not ask
- *     (decision 2026-09-26). A failed read fails closed;
+ *     momsdeklaration periods it reopens. Every door refuses that unless the
+ *     caller acknowledged them: the settings page asks the person and saves
+ *     again (decision 2026-11-17). A failed read fails closed;
  *   - a save that really moves the stored lock date emits
  *     period.lock_date_changed (awaited), naming the door, not the person.
  *
@@ -113,9 +113,9 @@ export interface UpdateCompanySettingsOptions {
   findReopenedFiledVatPeriods: ReopenedFiledVatLookup
   /**
    * Refuse a lock date move that reopens a filed momsdeklaration period
-   * (BOOKKEEPING_LOCK_REOPENS_FILED_VAT, naming the periods). The API and MCP
-   * doors set it unless the caller sent acknowledge_filed_vat_periods; the
-   * settings page does not ask (decision 2026-09-26).
+   * (BOOKKEEPING_LOCK_REOPENS_FILED_VAT, naming the periods). Every door sets
+   * it unless the caller sent acknowledge_filed_vat_periods: the API and MCP
+   * doors, and since 2026-11-17 the settings page.
    */
   refuseReopeningFiledVat?: boolean
 }
@@ -550,7 +550,7 @@ export async function updateCompanySettings(
   }
 
   // The filed momsdeklaration periods a lock date move reopens, worked out
-  // once for every door: the API and MCP doors refuse them unacknowledged,
+  // once for every door: each door refuses them unacknowledged,
   // and period.lock_date_changed names them whichever door moved the date.
   // A failed read fails closed.
   const previousLockDate = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null

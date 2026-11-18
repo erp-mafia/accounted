@@ -370,9 +370,9 @@ describe('gnubok_vat_declaration_submit', () => {
     mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 }, declaration: COMPLETE_VAT_DECLARATION })
     mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'OK' }) })
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // stagePendingOperation: resolvePeriodStatusForDate (company_settings + fiscal_periods) then insert
-    enqueue({ data: null })
-    enqueue({ data: null })
+    // The lock offer and then stagePendingOperation each read how the books
+    // stand on the last day (company_settings + fiscal_periods); then the insert.
+    for (let read = 0; read < 4; read++) enqueue({ data: null })
     enqueue({ data: { id: 'op-1' }, error: null })
 
     const result = (await vatSubmit.execute(
@@ -385,6 +385,129 @@ describe('gnubok_vat_declaration_submit', () => {
     // Exactly one SKV call (the stage-time /kontrollera); no /utkast.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
     expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
+  })
+})
+
+// Filing freezes nothing, and almost no company had set the lock date: the
+// tools that record or report a filing hand the agent the offer to lock the
+// books through the period's last day, while that day is open. The lock is
+// the existing staged, high-risk gnubok_update_bookkeeping_lock.
+describe('VAT filing tools: the offer to lock the books through the filed period', () => {
+  const MARCH = { period_type: 'monthly', year: 2025, period: 3 }
+  const YEAR_2024 = { id: 'fy-2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: true, locked_at: null }
+  const OPEN_YEAR = { id: 'fy-2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false, locked_at: null }
+
+  function stageSubmit(lockedThrough: string | null) {
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 }, declaration: COMPLETE_VAT_DECLARATION })
+    mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'OK' }) })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The offer reads the lock date and the company's räkenskapsår ...
+    enqueue({ data: { bookkeeping_locked_through: lockedThrough } })
+    enqueue({ data: [YEAR_2024, OPEN_YEAR] })
+    // ... and stagePendingOperation the status of the same day, for period_status.
+    enqueue({ data: { bookkeeping_locked_through: lockedThrough } })
+    enqueue({ data: OPEN_YEAR })
+    enqueue({ data: { id: 'op-1' }, error: null })
+    return vatSubmit.execute(MARCH, 'company-1', 'user-1', supabase as never, { type: 'api_key' }) as Promise<{
+      next: { description: string; tool: string; args: Record<string, unknown> }
+      period_status: { status: string }
+    }>
+  }
+
+  function readStatus(answer: { submitted: unknown; decided: unknown }, reads: Array<{ data: unknown }>) {
+    mockFetchVatDeclarationStatus.mockResolvedValue({ ok: true, redovisare: '165560000000', redovisningsperiod: '202503', ...answer })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    for (const read of reads) enqueue(read)
+    return vatStatus
+      .execute(MARCH, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then((result) => ({ result: result as { next?: { description: string; tool: string; args: Record<string, unknown> } }, findCalls }))
+  }
+
+  it('submit: the follow-up still leads to the status poll, and says to offer the lock once it is filed', async () => {
+    const result = await stageSubmit('2025-02-28')
+
+    expect(result.next.tool).toBe('gnubok_vat_declaration_status')
+    expect(result.next.args).toMatchObject(MARCH)
+    expect(result.next.description).toMatch(/^After approval, sign in Skatteverket via the returned BankID link, then poll gnubok_vat_declaration_status\./)
+    expect(result.next.description).toContain('Once the declaration is filed, ask the user whether to lock the books through 2025-03-31')
+    expect(result.next.description).toContain('gnubok_update_bookkeeping_lock')
+    expect(result.period_status.status).toBe('open')
+  })
+
+  it('submit: says nothing about a lock when the books are already locked through the last day', async () => {
+    const result = await stageSubmit('2025-03-31')
+
+    expect(result.next.description).toBe(
+      'After approval, sign in Skatteverket via the returned BankID link, then poll gnubok_vat_declaration_status.',
+    )
+    expect(result.period_status.status).toBe('locked')
+  })
+
+  it('status: a declaration on file with the last day open offers the existing lock tool, asking first', async () => {
+    const { result } = await readStatus(
+      { submitted: [{ kvittensnummer: 'K1' }], decided: null },
+      [{ data: { bookkeeping_locked_through: null } }, { data: [YEAR_2024, OPEN_YEAR] }],
+    )
+
+    expect(result.next?.description).not.toContain('bokslut')
+    expect(result.next).toEqual({
+      description: expect.stringContaining('The declaration is filed: ask the user whether to lock the books through 2025-03-31'),
+      tool: 'gnubok_update_bookkeeping_lock',
+      args: { bookkeeping_locked_through: '2025-03-31' },
+    })
+    expect(result.next?.description).toMatch(/Only on a yes, stage gnubok_update_bookkeeping_lock; it is high risk and the user approves it\.$/)
+  })
+
+  it.each([
+    ['the lock date is the last day', '2025-03-31', OPEN_YEAR],
+    ['the lock date lies past the period', '2025-06-30', OPEN_YEAR],
+    ['the räkenskapsår is closed', null, { ...OPEN_YEAR, is_closed: true }],
+    ['the räkenskapsår is locked', null, { ...OPEN_YEAR, locked_at: '2025-05-02T08:00:00Z' }],
+  ])('status: offers nothing when %s', async (_case, lockedThrough, year) => {
+    const { result } = await readStatus(
+      { submitted: { kvittensnummer: 'K1' }, decided: null },
+      [{ data: { bookkeeping_locked_through: lockedThrough } }, { data: [YEAR_2024, year] }],
+    )
+
+    expect(result).not.toHaveProperty('next')
+  })
+
+  it('status: offers nothing and reads no lock when nothing is on file', async () => {
+    const { result, findCalls } = await readStatus({ submitted: null, decided: null }, [])
+
+    expect(result).not.toHaveProperty('next')
+    expect(findCalls('company_settings', 'select')).toEqual([])
+  })
+
+  it('status: a decided declaration counts as filed too', async () => {
+    const { result } = await readStatus(
+      { submitted: null, decided: { beslutadTidpunkt: '2025-05-02T10:00:00Z' } },
+      [{ data: { bookkeeping_locked_through: '2025-02-28' } }, { data: [YEAR_2024, OPEN_YEAR] }],
+    )
+
+    expect(result.next?.args).toEqual({ bookkeeping_locked_through: '2025-03-31' })
+  })
+
+  it('status: says that an unclosed räkenskapsår behind the lock cannot get its bokslut booked', async () => {
+    const { result } = await readStatus(
+      { submitted: { kvittensnummer: 'K1' }, decided: null },
+      // March 2025 is filed while the books of 2024 are still open.
+      [{ data: { bookkeeping_locked_through: null } }, { data: [{ ...YEAR_2024, is_closed: false }, OPEN_YEAR] }],
+    )
+
+    expect(result.next?.description).toContain(
+      'Say too that the räkenskapsår ending 2024-12-31 is not closed, so its bokslut cannot be booked until the lock date is moved back.',
+    )
+    expect(result.next?.args).toEqual({ bookkeeping_locked_through: '2025-03-31' })
+  })
+
+  it('status: offers nothing when the lock could not be read', async () => {
+    const { result } = await readStatus(
+      { submitted: { kvittensnummer: 'K1' }, decided: null },
+      [{ data: null, error: { message: 'connection reset' } } as never],
+    )
+
+    expect(result).not.toHaveProperty('next')
   })
 })
 
@@ -679,7 +802,9 @@ describe('gnubok_vat_declaration_status: the company-scoped read the v1 route an
       ok: true, redovisare: '165560000000', redovisningsperiod: '202603',
       submitted: { kvittensnummer: 'K1' }, decided: null,
     })
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The books are locked through the period's last day: no lock to offer.
+    enqueue({ data: { bookkeeping_locked_through: '2026-03-31' } })
 
     const result = await vatStatus.execute(
       { period_type: 'yearly', year: 2026, period: 1, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },

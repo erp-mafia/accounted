@@ -22,6 +22,7 @@ import {
   type VatFilingPeriodType,
   type VatFilingRecord,
 } from '@/lib/vat/filing-record'
+import { VatFiledPeriodLock } from '@/components/reports/VatFiledPeriodLock'
 
 interface VatFilingStatusCardProps {
   periodType: VatFilingPeriodType
@@ -46,7 +47,9 @@ interface VatFilingStatusCardProps {
  * or the "Markera som inlämnad" button for a declaration filed on
  * skatteverket.se. Recording the filing is free and sends nothing to
  * Skatteverket; it is what lets the page open the next period by default.
- * Why it exists is explained behind the step's "?", not here.
+ * Why it exists is explained behind the step's "?", not here. The filed line
+ * also says how the books stand on the period (VatFiledPeriodLock): locked
+ * through it, or the offer to lock them.
  *
  * Hidden while the period is still running: it cannot have been filed yet.
  */
@@ -151,6 +154,7 @@ export function VatFilingStatusCard({
               {t('vat_filing_reference', { reference: record.reference })}
             </>
           )}
+          <VatFiledPeriodLock record={record} periodLabel={periodLabel} />
           {record.source === 'manual' && canWrite && (
             <>
               {' · '}

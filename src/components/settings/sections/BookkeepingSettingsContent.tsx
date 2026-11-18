@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -56,6 +57,19 @@ export function BookkeepingSettingsContent() {
   // fakturor" only applies to faktureringsmetoden, so it folds away under
   // kontantmetoden instead of offering a choice that does nothing.
   const [pickedMethod, setPickedMethod] = useState<string | null>(null)
+  // A lock date moved back over a filed momsperiod is refused until the person
+  // has seen which periods it reopens and what that means: the save then goes
+  // again with the acknowledgment (the question the API and MCP doors ask).
+  const tCommon = useTranslations('common')
+  const { dialogProps: reopenDialogProps, confirm: confirmReopen } = useDestructiveConfirm()
+  const confirmReopeningFiledVat = (periods: string[]) =>
+    confirmReopen({
+      title: t('reopen_filed_vat_title'),
+      description: t('reopen_filed_vat_body', { periods: periods.join(', ') }),
+      confirmLabel: t('reopen_filed_vat_confirm'),
+      cancelLabel: tCommon('cancel'),
+      variant: 'warning',
+    })
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -128,7 +142,7 @@ export function BookkeepingSettingsContent() {
     <div>
       <SettingsSectionHeader title={tNav('bookkeeping')} intro={tIntro('bookkeeping')} />
 
-      <SettingsFormWrapper onSave={handleSave}>
+      <SettingsFormWrapper onSave={handleSave} confirmReopeningFiledVat={confirmReopeningFiledVat}>
         {/* Grunder: framework (AB only), method, deferred booking, default
             series. The framework row saves through its own PATCH and opts out
             of this wrapper's dirty tracking; the rest read via FormData. */}
@@ -236,6 +250,8 @@ export function BookkeepingSettingsContent() {
 
         <PeriodLockingSettings settings={settings} />
       </SettingsFormWrapper>
+      {/* Outside the form: its buttons must never count as the form's own. */}
+      <DestructiveConfirmDialog {...reopenDialogProps} />
 
       {/* Company settings that save on their own: locked for a read-only member. */}
       <SettingsViewerScope>

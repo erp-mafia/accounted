@@ -107,7 +107,7 @@ export async function fetchVatDeclarationStatus(
       decided = result.body
     }
 
-    if (submitted || decided) {
+    if (vatDeclarationOnFile(submitted, decided)) {
       // Best effort: the answer is Skatteverket's, and a failed local write
       // must not hide it. The cron still reconciles a period left behind.
       try {
@@ -127,6 +127,16 @@ export async function fetchVatDeclarationStatus(
     }
     throw err
   }
+}
+
+/**
+ * Whether Skatteverket has a declaration on file for the period: /inlamnat or
+ * /beslutat answered a body (nothing on file is a 404, read as null). One
+ * test for the readers of fetchVatDeclarationStatus's answer: the filing is
+ * recorded on it here, and the MCP status tool offers the lock on it.
+ */
+export function vatDeclarationOnFile(submitted: unknown, decided: unknown): boolean {
+  return Boolean(submitted || decided)
 }
 
 /**

@@ -137,7 +137,7 @@ describe('period.lock_date_changed: when it fires', () => {
     expect(emitted[0].reopenedFiledVatPeriods).toEqual([
       { tax_period: '2026-Q2', period_start: '2026-04-01', period_end: '2026-06-30', filed_on: '2026-08-12' },
     ])
-    // The settings page does not ask (decision 2026-09-26): the save goes
+    // An acknowledged move (no door refuses it here): the save goes
     // through and the warnings say what was reopened.
     if (outcome.ok && !outcome.dryRun) {
       expect(outcome.warnings?.map((w) => w.code)).toEqual([

@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { CheckIcon, LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useSaveSettings } from '@/components/settings/use-save-settings'
+import { useSaveSettings, type SaveSettingsOptions } from '@/components/settings/use-save-settings'
 import { SettingsViewerScope } from '@/components/settings/SettingsRows'
 import type { CompanySettings } from '@/types'
 import { cn } from '@/lib/utils'
@@ -17,6 +17,8 @@ type SaveResult =
 interface SettingsFormWrapperProps {
   children: React.ReactNode
   onSave?: (formData: FormData) => SaveResult
+  /** Asked before this form's save reopens filed momsperioder (see SaveSettingsOptions). */
+  confirmReopeningFiledVat?: SaveSettingsOptions['confirmReopeningFiledVat']
   className?: string
 }
 
@@ -25,7 +27,7 @@ interface SettingsFormWrapperProps {
  * affordance is a sticky bar that fades in only when the form is dirty
  * (Fönster concept): a quiet page until you actually change something.
  */
-export function SettingsFormWrapper({ children, onSave, className }: SettingsFormWrapperProps) {
+export function SettingsFormWrapper({ children, onSave, confirmReopeningFiledVat, className }: SettingsFormWrapperProps) {
   const t = useTranslations('settings_company')
   const saveSettings = useSaveSettings()
   const { canWrite } = useCanWrite()
@@ -57,7 +59,10 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     setIsSaving(true)
     setSaved(false)
 
-    const result = await saveSettings(updates as Partial<CompanySettings>, { failedTitle: t('wrapper_save_failed_title') })
+    const result = await saveSettings(updates as Partial<CompanySettings>, {
+      failedTitle: t('wrapper_save_failed_title'),
+      confirmReopeningFiledVat,
+    })
     if (result) {
       onSuccess?.((result.data as Record<string, unknown> | undefined) ?? (updates as Record<string, unknown>))
       setDirty(false)
@@ -66,7 +71,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     }
 
     setIsSaving(false)
-  }, [onSave, saveSettings, t])
+  }, [onSave, confirmReopeningFiledVat, saveSettings, t])
 
   const barVisible = dirty || isSaving || saved
 

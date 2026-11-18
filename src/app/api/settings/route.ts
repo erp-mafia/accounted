@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
@@ -31,10 +32,21 @@ export const GET = withRouteContext(
 )
 
 /**
+ * The settings page's save: the settings columns, plus the person's answer to
+ * BOOKKEEPING_LOCK_REOPENS_FILED_VAT (never a column; the API and MCP lock
+ * operation takes the same field).
+ */
+const SettingsSaveSchema = UpdateSettingsSchema.extend({
+  acknowledge_filed_vat_periods: z.boolean().optional(),
+})
+
+/**
  * The settings page has always read `{ error: '<Swedish sentence>' }` for a
  * refused save and a failed write; only the role refusal and an unreadable
  * role used the structured envelope. Kept as it was: the same codes reach the
- * API doors in their own envelopes.
+ * API doors in their own envelopes. The one refusal that is a question
+ * (BOOKKEEPING_LOCK_REOPENS_FILED_VAT) answers in the structured envelope too:
+ * the page reads its code and the filed periods in details to ask the person.
  */
 function settingsFailureResponse(
   outcome: Extract<OperationOutcome<unknown>, { ok: false }>,
@@ -44,7 +56,11 @@ function settingsFailureResponse(
   if (outcome.error) {
     return NextResponse.json({ error: getUserErrorMessage(outcome.error) }, { status: 500 })
   }
-  if (outcome.code === 'FORBIDDEN' || outcome.code === 'INTERNAL_ERROR') {
+  if (
+    outcome.code === 'FORBIDDEN'
+    || outcome.code === 'INTERNAL_ERROR'
+    || outcome.code === 'BOOKKEEPING_LOCK_REOPENS_FILED_VAT'
+  ) {
     return sessionFailureResponse(outcome, log, requestId)
   }
   const entry = getErrorEntry(outcome.code)
@@ -60,17 +76,29 @@ function settingsFailureResponse(
  * vacation basis, payee write-through, tax deadline regeneration) live in
  * lib/company/settings-service.ts, shared with the v1 settings operations and
  * their MCP tools.
+ *
+ * Moving the lock date back over a filed momsperiod is refused here as on the
+ * API and MCP doors (409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT, the periods in
+ * details.filed_periods) until the save carries acknowledge_filed_vat_periods:
+ * the page shows the periods, the person confirms, and the save comes again
+ * (decision 2026-11-17, which ends the page's exemption of 2026-09-26).
  */
 export const PUT = withRouteContext(
   'settings.update',
   async (request, { supabase, companyId, log, requestId, user }) => {
-    const validation = await validateBody(request, UpdateSettingsSchema)
+    const validation = await validateBody(request, SettingsSaveSchema)
     if (!validation.success) return validation.response
+    const { acknowledge_filed_vat_periods: acknowledged, ...changes } = validation.data
 
     const outcome = await updateCompanySettings(
       { supabase, companyId, userId: user.id, log },
-      validation.data,
-      { adminVerified: true, via: 'app', findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy },
+      changes,
+      {
+        adminVerified: true,
+        via: 'app',
+        findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy,
+        refuseReopeningFiledVat: acknowledged !== true,
+      },
     )
     if (!outcome.ok) return settingsFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
