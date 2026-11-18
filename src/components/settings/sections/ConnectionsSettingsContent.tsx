@@ -35,6 +35,12 @@ import { GoogleMark } from '@/components/ui/provider-marks'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
+  BilloRow,
+  KivraRow,
+  useDigitalMailboxes,
+  type DigitalMailboxRowFrameProps,
+} from '@/components/inkorg/AddMailboxDialog'
+import {
   fetchMailConnections,
   summarizeMailboxes,
   MAIL_SETTINGS_HREF,
@@ -77,8 +83,9 @@ function ImgLogo({ src }: { src: string }) {
 }
 
 /**
- * The collections provider's square mark from Connect (lib/collections/provider-mark.ts),
- * filling the tile; the children when there is none or it does not load.
+ * A provider's square mark filling the tile: the collections provider's from
+ * Connect (lib/collections/provider-mark.ts), Kivra's and Billo's own app
+ * icons. The children when there is none or it does not load.
  */
 function ProviderMarkOr({ src, children }: { src: string | null; children: React.ReactNode }) {
   const [failed, setFailed] = useState(false)
@@ -111,6 +118,44 @@ function ConnectionLabel({ logo, name, help }: { logo: React.ReactNode; name: Re
         <SettingsRowNote>{first}</SettingsRowNote>
       </span>
     </span>
+  )
+}
+
+/** Kivra's and Billo's app icons, the same files the Inkorg's doors wear (components/inkorg/door-icon.tsx). */
+const DIGITAL_MAILBOX_LOGO = { kivra: '/logos/kivra.png', billo: '/logos/billo.png' } as const
+
+/**
+ * A Kivra or Billo row: the row "Lägg till brevlåda" in the Inkorg shows
+ * (the state, the buttons, Billo's dialog and the sending switch are that
+ * row's own), laid out as a connection row. The state sits beside the
+ * buttons like on every row here; what only a mailbox has (Billo's scanning
+ * address, a failed read, the sending switch) takes lines of its own under
+ * them, the width of the control column.
+ */
+function DigitalMailboxConnectionRow({ door, status, connected = false, notes, extra, children }: DigitalMailboxRowFrameProps) {
+  const t = useTranslations('settings_connections')
+  const tInkorg = useTranslations('inkorg')
+  return (
+    <SettingsRow
+      label={
+        <ConnectionLabel
+          logo={
+            <ProviderMarkOr src={DIGITAL_MAILBOX_LOGO[door]}>
+              <EnvelopeIcon className="h-4 w-4 text-foreground" aria-hidden="true" />
+            </ProviderMarkOr>
+          }
+          name={tInkorg(`mailbox_${door}_name`)}
+          help={tInkorg(`mailbox_${door}_body`)}
+        />
+      }
+    >
+      <div className={`min-w-0 flex-1 basis-0 text-xs ${connected ? 'text-foreground' : 'text-muted-foreground'}`}>
+        {status ?? t('not_connected')}
+      </div>
+      <SettingsRowEnd>{children}</SettingsRowEnd>
+      {notes ? <div className="basis-full text-xs text-muted-foreground">{notes}</div> : null}
+      {extra ? <div className="basis-full">{extra}</div> : null}
+    </SettingsRow>
   )
 }
 
@@ -214,6 +259,13 @@ export function ConnectionsSettingsContent() {
   // the address route refuses, so the row is left out without asking.
   const hasInboxCapability = useCapability(CAPABILITY.ai)
   const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox && hasInboxCapability
+  // Kivra and Billo deliver into the inbox, so they follow its gate: a
+  // company that cannot open the inbox is not offered a mailbox it could not
+  // read. A row shows once the read says this deployment receives from the
+  // provider for this company (Accounted's credentials and the rollout).
+  const digitalMailboxes = useDigitalMailboxes(hasInvoiceInbox)
+  const offersKivra = digitalMailboxes.state.status === 'ready' && digitalMailboxes.state.providers.kivra.available.receive
+  const offersBillo = digitalMailboxes.state.status === 'ready' && digitalMailboxes.state.providers.billo.available.receive
   const hasStripe = ENABLED_EXTENSION_IDS.has('stripe')
   const hasShopify = ENABLED_EXTENSION_IDS.has('shopify')
   const hasWooCommerce = ENABLED_EXTENSION_IDS.has('woocommerce')
@@ -699,6 +751,9 @@ export function ConnectionsSettingsContent() {
             connected: mail ? mail.active.length + mail.needsReconnect.length > 0 : null,
             attention: (mail?.needsReconnect.length ?? 0) > 0,
           })}
+        {/* Connected here, in the row: Kivra and Billo have no settings page of their own. */}
+        {offersBillo && <BilloRow {...digitalMailboxes.rowProps('billo')} Row={DigitalMailboxConnectionRow} connectVariant="outline" />}
+        {offersKivra && <KivraRow {...digitalMailboxes.rowProps('kivra')} Row={DigitalMailboxConnectionRow} connectVariant="outline" />}
       </SettingsGroup>
 
       {!isSandbox || hasStripe || hasShopify || hasWooCommerce || hasZettle || showCollections ? (

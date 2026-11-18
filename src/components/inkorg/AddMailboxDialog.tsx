@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useState, type ComponentType, type FormEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { CheckIcon, EllipsisHorizontalIcon, Square2StackIcon } from '@/components/icons'
@@ -399,12 +399,51 @@ type DigitalState =
 
 type DigitalSlot = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; answer: DigitalProviderAnswer }
 
-interface DigitalRowProps {
+/**
+ * What a Kivra or Billo row hands the frame that lays it out: this dialog's
+ * list row, or a connection row on Inställningar › Kopplingar. The row owns
+ * the state, the buttons and the dialogs; the frame only places them.
+ */
+export interface DigitalMailboxRowFrameProps {
+  door: DigitalMailboxProviderId
+  /** The mailbox's state in one line (read, waiting, loading, a failed read); absent while nothing reads it. */
+  status?: ReactNode
+  /** The mailbox is read into the Inkorg. */
+  connected?: boolean
+  /** Lines under the state: Billo's scanning address, the last failure. */
+  notes?: ReactNode
+  /** The sending switch. */
+  extra?: ReactNode
+  /** The row's buttons. */
+  children?: ReactNode
+}
+
+export interface DigitalRowProps {
   slot: DigitalSlot
   /** Puts the connection a write answered in place, without another read. */
   onConnection: (connection: ConnectionSummary | null) => void
   /** Reads both providers again: a sync answers counts, not the connection. */
   reload: () => void
+  /** The frame the row is laid out in; this dialog's list row when left out. */
+  Row?: ComponentType<DigitalMailboxRowFrameProps>
+  /** The look of the button that connects: the dialog's primary when left out, `outline` in a list of connections. */
+  connectVariant?: 'default' | 'outline'
+}
+
+/** The frame in this dialog: the state and its notes take the place of the door's description. */
+function DialogDigitalRow({ door, status, notes, extra, children }: DigitalMailboxRowFrameProps) {
+  const detail =
+    status || notes ? (
+      <>
+        {status ? <div>{status}</div> : null}
+        {notes}
+      </>
+    ) : undefined
+  return (
+    <MailboxRow door={door} detail={detail} extra={extra}>
+      {children}
+    </MailboxRow>
+  )
 }
 
 /** A failed read: a re-read after a write keeps what the rows already show. */
@@ -412,12 +451,18 @@ function failedRead(prev: DigitalState): DigitalState {
   return prev.status === 'ready' ? prev : { status: 'failed' }
 }
 
-/** GET /api/digital-mailboxes, once per open of the dialog and again on reload(). */
-function useDigitalMailboxes() {
+/**
+ * GET /api/digital-mailboxes, once per mount (each open of the dialog) and
+ * again on reload(). With `enabled` false nothing is read and the state
+ * stays loading: a page that shows the rows only to some companies does not
+ * ask for the others.
+ */
+export function useDigitalMailboxes(enabled = true) {
   const [state, setState] = useState<DigitalState>({ status: 'loading' })
   const [reads, setReads] = useState(0)
 
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     ;(async () => {
       try {
@@ -435,7 +480,7 @@ function useDigitalMailboxes() {
     return () => {
       cancelled = true
     }
-  }, [reads])
+  }, [reads, enabled])
 
   const reload = useCallback(() => setReads((n) => n + 1), [])
 
@@ -447,7 +492,7 @@ function useDigitalMailboxes() {
     )
   }, [])
 
-  const rowProps = (provider: DigitalMailboxProviderId): DigitalRowProps => ({
+  const rowProps = (provider: DigitalMailboxProviderId): Pick<DigitalRowProps, 'slot' | 'onConnection' | 'reload'> => ({
     slot: state.status === 'ready' ? { status: 'ready', answer: state.providers[provider] } : state,
     onConnection: (connection) => setConnection(provider, connection),
     reload,
@@ -486,7 +531,7 @@ function httpsUrl(value: string | null | undefined): string | null {
 type DigitalBusy = 'connect' | 'sync' | 'sending' | null
 
 /** What both rows do the same way: read now, disconnect, switch sending. */
-function useDigitalMailboxActions(provider: DigitalMailboxProviderId, { onConnection, reload }: Omit<DigitalRowProps, 'slot'>) {
+function useDigitalMailboxActions(provider: DigitalMailboxProviderId, { onConnection, reload }: Pick<DigitalRowProps, 'onConnection' | 'reload'>) {
   const t = useTranslations('inkorg')
   const tCommon = useTranslations('common')
   const locale: ErrorLocale = useLocale() === 'en' ? 'en' : 'sv'
@@ -557,25 +602,38 @@ function useDigitalMailboxActions(provider: DigitalMailboxProviderId, { onConnec
 }
 
 /** Before the answer is in, or when it never came: the row without its controls. */
-function DigitalPlaceholderRow({ door, status }: { door: DigitalMailboxProviderId; status: 'loading' | 'failed' }) {
+function DigitalPlaceholderRow({
+  door,
+  status,
+  Row,
+}: {
+  door: DigitalMailboxProviderId
+  status: 'loading' | 'failed'
+  Row: ComponentType<DigitalMailboxRowFrameProps>
+}) {
   const t = useTranslations('inkorg')
-  if (status === 'loading') return <MailboxRow door={door} detail={<Skeleton className="mt-1 h-4 w-48 rounded-sm" />} />
-  return <MailboxRow door={door} detail={<AttnLine>{t('digital_load_failed')}</AttnLine>} />
+  if (status === 'loading') return <Row door={door} status={<Skeleton className="mt-1 h-4 w-48 rounded-sm" />} />
+  return <Row door={door} status={<AttnLine>{t('digital_load_failed')}</AttnLine>} />
 }
 
-/** The row's lines for a mailbox that is read or waits: its state, Billo's scanning address, the last failure. */
-function DigitalDetail({ provider, view }: { provider: DigitalMailboxProviderId; view: DigitalMailboxRowView }) {
+/** The state of a mailbox that is read or waits, in one line. */
+function DigitalStatus({ provider, view }: { provider: DigitalMailboxProviderId; view: DigitalMailboxRowView }) {
+  const t = useTranslations('inkorg')
+  if (view.receive === 'pending') return <>{t(provider === 'kivra' ? 'kivra_pending' : 'billo_pending')}</>
+  return <>{view.lastSyncedAt ? t('digital_synced', { time: formatDateTime(view.lastSyncedAt) }) : t('digital_never_synced')}</>
+}
+
+/** Whether the mailbox has lines to show under its state. */
+function hasDigitalNotes(view: DigitalMailboxRowView): boolean {
+  return !!view.postalAddress || !!view.error
+}
+
+/** The lines under the state: Billo's scanning address and the last failure. */
+function DigitalNotes({ provider, view }: { provider: DigitalMailboxProviderId; view: DigitalMailboxRowView }) {
   const t = useTranslations('inkorg')
   const name = t(`mailbox_${provider}_name`)
-  const status =
-    view.receive === 'pending'
-      ? t(provider === 'kivra' ? 'kivra_pending' : 'billo_pending')
-      : view.lastSyncedAt
-        ? t('digital_synced', { time: formatDateTime(view.lastSyncedAt) })
-        : t('digital_never_synced')
   return (
     <>
-      <p>{status}</p>
       {view.postalAddress && (
         <p data-ph-mask="" className="break-words">
           {t('billo_postal_address', { address: view.postalAddress })}
@@ -643,14 +701,16 @@ function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxPr
  * in a new tab); the row waits until Kivra confirms, by its webhook, the
  * cron's lookup or "Kontrollera", and then reads the mailbox.
  */
-function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
+export function KivraRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('kivra', { onConnection, reload })
   const { t, busy } = actions
   // Kivra's activation page from the last connect answer, reopened without another round trip.
   const [onboardingUrl, setOnboardingUrl] = useState<string | null>(null)
 
-  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="kivra" status={slot.status} />
+  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="kivra" status={slot.status} Row={Row} />
   const view = digitalMailboxRowView(slot.answer.available, slot.answer.connection)
+  const status = <DigitalStatus provider="kivra" view={view} />
+  const notes = hasDigitalNotes(view) ? <DigitalNotes provider="kivra" view={view} /> : undefined
 
   async function connect() {
     // Opened on the click itself, so the browser allows it, and pointed at
@@ -695,33 +755,33 @@ function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
 
   if (view.receive === 'off') {
     return (
-      <MailboxRow door="kivra" extra={sending}>
-        <Button loading={busy === 'connect'} onClick={() => void connect()}>
+      <Row door="kivra" extra={sending}>
+        <Button variant={connectVariant} loading={busy === 'connect'} onClick={() => void connect()}>
           {t('connect_kivra')}
         </Button>
-      </MailboxRow>
+      </Row>
     )
   }
   if (view.receive === 'pending') {
     return (
-      <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
+      <Row door="kivra" status={status} notes={notes} extra={sending}>
         <Button variant="outline" loading={busy === 'connect'} onClick={openKivra}>
           {t('kivra_open')}
         </Button>
         <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(true)}>
           {t('kivra_check')}
         </Button>
-      </MailboxRow>
+      </Row>
     )
   }
   return (
-    <MailboxRow door="kivra" detail={<DigitalDetail provider="kivra" view={view} />} extra={sending}>
+    <Row door="kivra" status={status} connected notes={notes} extra={sending}>
       <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
         {t('digital_fetch_now')}
       </Button>
       <DigitalRowMenu provider="kivra" onDisconnect={() => void actions.disconnect()} />
       <DestructiveConfirmDialog {...actions.dialogProps} />
-    </MailboxRow>
+    </Row>
   )
 }
 
@@ -729,12 +789,12 @@ function KivraRow({ slot, onConnection, reload }: DigitalRowProps) {
  * Billo: the company's business mailbox is created from here, with the
  * admin (BankID) as its representative, and read from then on.
  */
-function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
+export function BilloRow({ slot, onConnection, reload, Row = DialogDigitalRow, connectVariant }: DigitalRowProps) {
   const actions = useDigitalMailboxActions('billo', { onConnection, reload })
   const { t, busy } = actions
   const [creating, setCreating] = useState(false)
 
-  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="billo" status={slot.status} />
+  if (slot.status !== 'ready') return <DigitalPlaceholderRow door="billo" status={slot.status} Row={Row} />
   const view = digitalMailboxRowView(slot.answer.available, slot.answer.connection)
 
   const sending = view.sending ? (
@@ -748,8 +808,8 @@ function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
 
   if (view.receive === 'off') {
     return (
-      <MailboxRow door="billo" extra={sending}>
-        <Button onClick={() => setCreating(true)}>
+      <Row door="billo" extra={sending}>
+        <Button variant={connectVariant} onClick={() => setCreating(true)}>
           {t('billo_create')}
         </Button>
         <BilloCreateDialog
@@ -761,11 +821,17 @@ function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
             actions.toast({ title: t('billo_created') })
           }}
         />
-      </MailboxRow>
+      </Row>
     )
   }
   return (
-    <MailboxRow door="billo" detail={<DigitalDetail provider="billo" view={view} />} extra={sending}>
+    <Row
+      door="billo"
+      status={<DigitalStatus provider="billo" view={view} />}
+      connected={view.receive === 'active'}
+      notes={hasDigitalNotes(view) ? <DigitalNotes provider="billo" view={view} /> : undefined}
+      extra={sending}
+    >
       {view.receive === 'active' && (
         <Button variant="outline" loading={busy === 'sync'} onClick={() => void actions.sync(false)}>
           {t('digital_fetch_now')}
@@ -773,7 +839,7 @@ function BilloRow({ slot, onConnection, reload }: DigitalRowProps) {
       )}
       <DigitalRowMenu provider="billo" onDisconnect={() => void actions.disconnect()} />
       <DestructiveConfirmDialog {...actions.dialogProps} />
-    </MailboxRow>
+    </Row>
   )
 }
 
