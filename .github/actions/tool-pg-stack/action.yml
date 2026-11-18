@@ -3,7 +3,9 @@ description: >-
   Waits for the job's Postgres service on localhost:5432, replays the bootstrap
   and every migration, then starts PostgREST on the host network: the
   .tool-pg-stack template of .gitlab-ci.yml. The job declares the Postgres
-  service and the DATABASE_URL, TOOL_PG_REST_URL and PGPASSWORD variables.
+  service and the DATABASE_URL, TOOL_PG_REST_URL and PGPASSWORD variables, and
+  ends with a step that removes the postgrest container (if: always()): a
+  composite action has no step that runs after the job's own steps.
 
 runs:
   using: composite
@@ -42,6 +44,9 @@ runs:
       # its schema cache already holds them.
       shell: bash
       run: |
+        # A container left by a job that did not reach its "Stop PostgREST"
+        # step would hold the name and the port.
+        docker rm -f postgrest >/dev/null 2>&1 || true
         docker run -d --name postgrest --network host \
           -e PGRST_DB_URI="postgres://postgres:postgres@127.0.0.1:5432/postgres" \
           -e PGRST_DB_SCHEMAS=public \

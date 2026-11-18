@@ -88,6 +88,12 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
+      - name: Stop PostgREST
+        # Started by hand in tool-pg-stack, so nothing removes it for us. Left
+        # running it keeps the name and port 3000, and the next job that
+        # starts PostgREST on this runner fails.
+        if: ${{ always() }}
+        run: docker rm -f postgrest >/dev/null 2>&1 || true
 
   # The report benchmark (scripts/perf/README.md, "Report benchmark"): every
   # migration replayed into Postgres 17 with production's shared_buffers and
@@ -116,6 +122,9 @@ jobs:
         # quarters of the compute's 8 GB. Dynamic shared memory in files: a
         # container's /dev/shm is 64 MB, which parallel queries outgrow.
         run: |
+          # A container left by a run that did not reach "Stop Postgres" would
+          # hold the name and the port.
+          docker rm -f bench-postgres >/dev/null 2>&1 || true
           docker run -d --name bench-postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
             supabase/postgres:17.6.1.136@sha256:f371b5f3f2ac0a05703f33d6e6134515fb2498cab708fb948a0aeb7481467c00 \
             postgres -D /etc/postgresql -c shared_buffers=2GB -c work_mem=12MB \
@@ -151,3 +160,8 @@ jobs:
             perf-mixed.json
           retention-days: 90
           if-no-files-found: ignore
+      - name: Stop Postgres
+        # Started by hand above, so nothing removes it for us. Left running it
+        # keeps port 5432, and every later database job on this runner fails.
+        if: ${{ always() }}
+        run: docker rm -f bench-postgres >/dev/null 2>&1 || true

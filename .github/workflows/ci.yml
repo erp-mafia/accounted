@@ -18,10 +18,11 @@ name: CI
 #
 # Runners: every job runs on a GitHub-hosted runner unless a repository
 # variable names another one. TYPECHECK_RUNNER is the label of a runner that
-# takes one job at a time on a host with 16 GB (the type check needs 12.5 GB
-# cold); CI_RUNNER is the label for every other job. The pg jobs map Postgres
-# and PostgREST to fixed host ports, so a host that carries CI_RUNNER must run
-# one of those jobs at a time.
+# takes one job at a time on a host with 16 GB. The two jobs that need most of
+# that memory run there, so they never run at the same moment: the type check
+# (12.5 GB cold) and the build (8.5 GB). CI_RUNNER is the label for every
+# other job. The pg jobs map Postgres and PostgREST to fixed host ports, so a
+# host that carries CI_RUNNER must run one of those jobs at a time.
 #
 # No job here reads a secret, except pr-privacy, which reads the customer name
 # list when the repository has one.
@@ -171,7 +172,9 @@ jobs:
 
   build:
     name: Build (zero extensions)
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # On the type check's runner, which takes one job at a time: side by side
+    # on one 16 GB host the two run it out of memory.
+    runs-on: ${{ vars.TYPECHECK_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 40
     env:
       # The Next.js build worker runs out of memory on Node's default heap.
@@ -386,6 +389,12 @@ jobs:
           zero-extensions: 'false'
       - uses: ./.github/actions/tool-pg-stack
       - run: npm run test:tools
+      - name: Stop PostgREST
+        # Started by hand in tool-pg-stack, so nothing removes it for us. Left
+        # running it keeps the name and port 3000, and the next job that
+        # starts PostgREST on this runner fails.
+        if: ${{ always() }}
+        run: docker rm -f postgrest >/dev/null 2>&1 || true
 
   core-build:
     name: Core Build
