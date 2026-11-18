@@ -430,8 +430,11 @@ export const NAV_V3_AREAS: NavV3Area[] = [
         ],
       },
       {
-        // Kept: removing the in-app chat is an open founder decision.
-        items: [{ href: '/chat', module: 'agent', labelKey: 'v3_chat', icon: ChatBubbleLeftIcon }],
+        // The built-in chat will be removed (founder decision 2026-11-17): a
+        // customer's own assistant connects over MCP instead (Koppla en agent
+        // above). Until then the row stays, behind the switch that takes the
+        // chat away (ASSISTANT_CHAT_ENABLED, on unless switched off).
+        items: [{ href: '/chat', module: 'agent', labelKey: 'v3_chat', icon: ChatBubbleLeftIcon, requiresAssistantChat: true }],
       },
     ],
   },

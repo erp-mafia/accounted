@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 const requireAuthMock = vi.fn()
@@ -309,5 +310,58 @@ describe('POST /api/agent/ask', () => {
       expect(resolveConv).not.toHaveBeenCalled()
       expect(persistUser).not.toHaveBeenCalled()
     })
+  })
+})
+
+// ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Every question
+// this route answers is the general chat's, so switched off it answers none.
+describe('POST /api/agent/ask with the chat switched off', () => {
+  const OFF_SV = 'Chatten är avstängd. Koppla din egen assistent, till exempel Claude, under Agenter > Koppla en agent.'
+  const OFF_EN = 'The chat is switched off. Connect your own assistant, for example Claude, under Agents > Connect an agent.'
+
+  beforeEach(() => {
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'off')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('still 401s when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({ user: null, supabase, error: NextResponse.json({ error: 'x' }, { status: 401 }) })
+    expect((await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))).status).toBe(401)
+  })
+
+  it.each([
+    ['a stateless question', {}],
+    ['a new thread', { persist: true }],
+    ['a resumed thread', { persist: true, conversation_id: '11111111-1111-4111-8111-111111111111' }],
+  ])('answers 409 ASSISTANT_CHAT_OFF for %s, with no answer and nothing written', async (_name, extra) => {
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body(extra) }))
+    const { status, body: b } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(res)
+
+    // 409, never 503: the console reads a 503 as "no AI backend configured".
+    expect(status).toBe(409)
+    expect(b.error.code).toBe('ASSISTANT_CHAT_OFF')
+    // What the console shows for this body (AskConsole reads it with getErrorMessage).
+    expect(getErrorMessage(b)).toBe(OFF_SV)
+    expect(getErrorMessage(b, { locale: 'en' })).toBe(OFF_EN)
+    expect(checkRate).not.toHaveBeenCalled()
+    expect(answer).not.toHaveBeenCalled()
+    expect(resolveConv).not.toHaveBeenCalled()
+    expect(persistUser).not.toHaveBeenCalled()
+    expect(persistAssistant).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/agent/ask with the chat switch unset or on', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it.each([undefined, '', 'true', '1', 'anything'])('answers when ASSISTANT_CHAT_ENABLED is %j', async (value) => {
+    if (value !== undefined) vi.stubEnv('ASSISTANT_CHAT_ENABLED', value)
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))
+    expect(res.status).toBe(200)
+    expect(answer).toHaveBeenCalledTimes(1)
   })
 })

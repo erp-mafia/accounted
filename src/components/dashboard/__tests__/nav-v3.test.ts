@@ -158,7 +158,7 @@ describe('the tree', () => {
   const GATE_KEYS = [
     'module', 'requiresDimensions', 'requiresSalesOrders', 'requiresQuotes', 'requiresWebshop', 'requiresPosSales',
     'requiresMileage', 'requiresExpenses', 'requiresArkiv', 'requiresSigning', 'requiresBolagetHub', 'requiresAgents',
-    'requiresInkorgV2', 'hiddenWithInkorgV2', 'requiresAutogiro', 'requiredCapability', 'entityOnly', 'byraOnly',
+    'requiresInkorgV2', 'hiddenWithInkorgV2', 'requiresAutogiro', 'requiresAssistantChat', 'requiredCapability', 'entityOnly', 'byraOnly',
     'hidden', 'comingSoon', 'betaBadge', 'newBadge',
   ] as const satisfies readonly (keyof NavGateFlags)[]
 

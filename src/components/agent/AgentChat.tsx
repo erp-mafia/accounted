@@ -23,6 +23,7 @@ import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
+import { ChatRemovalNotice } from './ChatRemovalNotice'
 import { MarkdownMessage, useMarkdownReady } from './lazy-markdown'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
@@ -803,6 +804,7 @@ export default function AgentChat({
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </div>
+      <ChatRemovalNotice />
       {/* The pill is positioned against THIS box, not the whole component: the
           composer below grows as the user types, and a fixed offset from the
           bottom would slide the pill under it. */}

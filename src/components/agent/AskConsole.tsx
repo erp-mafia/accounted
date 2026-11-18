@@ -10,6 +10,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { ChatRemovalNotice } from './ChatRemovalNotice'
 import { composerMayAutoFocus } from './composer-focus'
 import { MarkdownMessage, useMarkdownReady } from './lazy-markdown'
 
@@ -204,6 +205,7 @@ export default function AskConsole({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+      <ChatRemovalNotice />
       <div
         ref={scrollerRef}
         className={cn('flex-1 overflow-y-auto px-5 py-6 space-y-6', scrollerClassName)}

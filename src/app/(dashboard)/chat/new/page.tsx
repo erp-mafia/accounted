@@ -4,6 +4,7 @@ import { getIntent } from '@/lib/agent/intents/registry'
 import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
 import { getAiStatus } from '@/lib/ai'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { leaveWhenChatSwitchedOff } from '../chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +25,9 @@ export default async function ChatNewPage({ searchParams }: PageProps) {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+  // Switched off (ASSISTANT_CHAT_ENABLED), no conversation starts, whatever
+  // ?intent= says.
+  leaveWhenChatSwitchedOff()
 
   const sp = await searchParams
   const requested = typeof sp.intent === 'string' && sp.intent.trim() ? sp.intent.trim() : 'general.help'

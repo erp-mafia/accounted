@@ -228,6 +228,8 @@
   },
   "agent_chat": {
     "assistant_unavailable": "The assistant cannot run on the AI provider configured for this installation.",
+    "removal_notice": "This chat will be removed.",
+    "removal_notice_connect": "This chat will be removed. You do the bookkeeping with your own assistant, for example Claude, which you connect under <link>{place}</link>. Questions about the app go to support.",
     "intent_general": "Ask your assistant",
     "intent_transaction": "Help with a transaction",
     "intent_invoice": "Help with an invoice",

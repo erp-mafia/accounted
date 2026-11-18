@@ -59,6 +59,17 @@ interface CompanyContextValue {
    */
   assistantAvailable: boolean
   /**
+   * Whether the built-in assistant chat is switched on in this installation
+   * (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts), as the layout
+   * read it. Absent reads as on: the chat is there until someone switches it
+   * off. Gates the doors into the chat only (the pages' "ask the assistant"
+   * buttons, the palette's question row, the floating button's setting, the
+   * panel coming back after a reload; the layout leaves out the floating
+   * button itself). The routes' ASSISTANT_CHAT_OFF answer stays the real
+   * enforcement.
+   */
+  assistantChatEnabled?: boolean
+  /**
    * Trial expiry while the trial is the company's only source of paid access;
    * null when paying/comped or after the trial lapsed. Drives the countdown
    * touchpoint in the sidebar.
@@ -144,4 +155,16 @@ export function useAssistantAvailable(): boolean {
   const ctx = useContext(CompanyContext)
   if (!ctx) return true
   return ctx.assistantAvailable
+}
+
+/**
+ * Whether the built-in assistant chat is switched on (see
+ * CompanyContextValue.assistantChatEnabled). Read it at every door that opens
+ * the chat for a person, beside useAssistantAvailable where the door opens
+ * the tool-loop runtime. On unless the layout said off, so also outside a
+ * CompanyProvider: the server answers ASSISTANT_CHAT_OFF.
+ */
+export function useAssistantChatEnabled(): boolean {
+  const ctx = useContext(CompanyContext)
+  return ctx?.assistantChatEnabled !== false
 }

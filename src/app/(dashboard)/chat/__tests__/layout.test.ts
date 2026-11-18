@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // crm#1135: a new account saw no assistant anywhere. Every entry point waits
 // for a built agent (agent_profiles.verified_at), and /chat forwarded an
@@ -9,7 +9,8 @@ const redirect = vi.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT:${url}`)
 })
 vi.mock('next/navigation', () => ({ redirect: (url: string) => redirect(url) }))
-vi.mock('@/components/agent/ChatSidebar', () => ({ default: () => null }))
+const ChatSidebar = vi.fn(() => null)
+vi.mock('@/components/agent/ChatSidebar', () => ({ default: ChatSidebar }))
 
 const getResolvedDashboardAgentProfile = vi.fn()
 const conversations = vi.fn()
@@ -62,5 +63,43 @@ describe('ChatLayout', () => {
     expect(out).toBeTruthy()
     expect(redirect).not.toHaveBeenCalled()
     expect(conversations).toHaveBeenCalledTimes(1)
+    expect(sidebarOf(out)).toBe(ChatSidebar)
+  })
+})
+
+/** The component in the layout's sidebar slot, or undefined when the slot is empty. */
+function sidebarOf(layout: unknown): unknown {
+  const [slot] = (layout as { props: { children: unknown[] } }).props.children
+  return slot ? (slot as { type: unknown }).type : undefined
+}
+
+// ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off, the
+// layout leads to Koppla en agent like each of its pages (chat-switch.ts,
+// pages.test.ts), before the build gate and before the conversation list.
+describe('ChatLayout with the chat switched off', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    conversations.mockResolvedValue({ data: [], error: null })
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('does not send a company without an agent into the build: it leads to Koppla en agent', async () => {
+    getResolvedDashboardAgentProfile.mockResolvedValue(null)
+    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    expect(redirect).not.toHaveBeenCalledWith('/onboarding/agent')
+  })
+
+  it('leads a company with a built agent to Koppla en agent too, and does not read the conversation list', async () => {
+    getResolvedDashboardAgentProfile.mockResolvedValue({
+      display_name: 'Anna',
+      avatar_id: null,
+      verified_at: '2026-10-10T14:04:42Z',
+    })
+    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    expect(conversations).not.toHaveBeenCalled()
+    expect(ChatSidebar).not.toHaveBeenCalled()
   })
 })

@@ -69,7 +69,7 @@ import { createClient } from '@/lib/supabase/client'
 import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
-import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useAssistantChatEnabled, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
@@ -454,8 +454,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
   const { openAgentSheet, identity } = useAgentSheet()
   // Both "Fråga assistenten" doors below open the tool-loop runtime
-  // (/api/agent/invoke); hide them where the deployment cannot run it (#2204).
-  const assistantAvailable = useAssistantAvailable()
+  // (/api/agent/invoke); hide them where the deployment cannot run it (#2204)
+  // and where the built-in chat is switched off (ASSISTANT_CHAT_ENABLED).
+  const assistantChatEnabled = useAssistantChatEnabled()
+  const assistantAvailable = useAssistantAvailable() && assistantChatEnabled
 
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)

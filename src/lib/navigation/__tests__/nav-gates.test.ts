@@ -66,6 +66,16 @@ describe('passesNavGates', () => {
     expect(passesNavGates(item({ href: '/chat' }), ctx())).toBe(true)
   })
 
+  // ASSISTANT_CHAT_ENABLED: on unless switched off, so a context that does
+  // not say reads as on, the opposite of the rollouts above.
+  it('hides the chat entry only where the installation has switched the chat off', () => {
+    const chat = item({ href: '/chat', requiresAssistantChat: true })
+    expect(passesNavGates(chat, ctx())).toBe(true)
+    expect(passesNavGates(chat, ctx({ assistantChatEnabled: true }))).toBe(true)
+    expect(passesNavGates(chat, ctx({ assistantChatEnabled: false }))).toBe(false)
+    expect(passesNavGates(item({ href: '/wiki' }), ctx({ assistantChatEnabled: false }))).toBe(true)
+  })
+
   it('hides what the new Inkorg replaces for a company in its rollout, and only then', () => {
     const underlag = item({ href: '/e/general/invoice-inbox', hiddenWithInkorgV2: true })
     expect(passesNavGates(underlag, ctx({ inkorgV2Enabled: false }))).toBe(true)

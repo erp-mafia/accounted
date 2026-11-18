@@ -5,18 +5,20 @@ import { isAutogiroEnabled } from '@/lib/invoices/autogiro/flag'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import { isBolagetEnabled } from '@/lib/env/bolaget-switch'
 import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
+import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
 import type { NavGateContext } from '@/lib/navigation/nav-gates'
 
 /**
  * The per-company page rollouts the menu reads, resolved in one place: the
  * Dokument section, the Agenter page, the new Inkorg page and Autogiro, plus
- * the Signeringar page, which follows the signing rollout. The dashboard
+ * the Signeringar page, which follows the signing rollout, and the built-in
+ * chat, which follows the installation's own switch. The dashboard
  * layout hands them to the sidebar and the assistant's UI map reads them for
  * its prompt, so the two cannot disagree about where a page is. Each flag
  * stays in the block that owns its page; this composition layer only
  * gathers them.
  */
-export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled'>
+export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'arkivBrainEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled' | 'assistantChatEnabled'>
 
 export function navRollouts(companyId: string | null | undefined): NavRollouts {
   return {
@@ -34,5 +36,7 @@ export function navRollouts(companyId: string | null | undefined): NavRollouts {
     bolagetEnabled: isBolagetEnabled(companyId),
     // Avtal och åtaganden (Bolaget rollout, BOLAGET_COMPANY_IDS).
     commitmentsEnabled: commitmentsEnabledFor(companyId),
+    // The Chatt row (ASSISTANT_CHAT_ENABLED): the whole installation, on unless switched off.
+    assistantChatEnabled: assistantChatEnabled(),
   }
 }

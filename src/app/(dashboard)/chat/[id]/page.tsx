@@ -4,6 +4,7 @@ import ChatConversationView from '@/components/agent/ChatConversationView'
 import { intentLabelKey } from '@/components/agent/intent-label-keys'
 import type { StoredStagedOperation } from '@/types'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
+import { leaveWhenChatSwitchedOff } from '../chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +24,10 @@ export default async function ChatConversationPage({ params }: PageProps) {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): no stored
+  // conversation is shown, whatever its intent and whether or not the id
+  // exists, and nothing is read for it.
+  leaveWhenChatSwitchedOff()
 
   // Both queries key on the route id, so they run in parallel. The tenant
   // check on the conversation row still gates rendering — when it fails,

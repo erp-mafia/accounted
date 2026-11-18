@@ -48,6 +48,8 @@ export interface NavGateFlags {
   requiresAgents?: boolean
   /** What the Agenter page replaces (the Arbetssätt view of the wiki): hidden where that page is open. */
   hiddenWithAgents?: boolean
+  /** The built-in chat (/chat): hidden where it is switched off (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts). */
+  requiresAssistantChat?: boolean
   /** Fakta in the wiki: only where Arkiv reads the company's documents (lib/arkiv/flag.ts isArkivBrainEnabled). */
   requiresArkivBrain?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
@@ -98,7 +100,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     requiresInkorgV2: true,
     requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
   },
-  { href: '/chat', module: 'agent', labelKey: 'assistant' },
+  { href: '/chat', module: 'agent', labelKey: 'assistant', requiresAssistantChat: true },
   // The wiki replaced "Vad din agent vet" under Assistent (decided 2026-10-29):
   // its own row, landing on what the agent receives (/agent-knowledge redirects).
   { href: '/wiki', module: 'agent', labelKey: 'wiki', newBadge: true },

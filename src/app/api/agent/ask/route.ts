@@ -23,6 +23,8 @@ import {
   persistAssistantTurn,
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 
 const log = createLogger('api.agent.ask')
@@ -106,6 +108,10 @@ const Schema = z.object({
 export async function POST(request: Request): Promise<Response> {
   const { user, supabase, error } = await requireAuth()
   if (error) return error
+
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): every
+  // question this route answers is the chat's question box, so none runs.
+  if (!assistantChatEnabled()) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) return NextResponse.json(agentRateLimitResponseBody(rate), { status: 429 })

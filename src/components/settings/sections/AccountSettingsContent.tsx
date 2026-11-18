@@ -32,6 +32,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 import { PalettePicker } from '@/components/settings/PalettePicker'
 import { usePalette } from '@/components/providers/PaletteProvider'
+import { useAssistantChatEnabled } from '@/contexts/CompanyContext'
 import type { Palette } from '@/lib/theme/palettes'
 
 export function AccountSettingsContent() {
@@ -41,6 +42,7 @@ export function AccountSettingsContent() {
   const { palette, setPalette } = usePalette()
   const [mounted, setMounted] = useState(false)
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
+  const assistantChatEnabled = useAssistantChatEnabled()
   const { toast } = useToast()
   const activeLocale = useLocale() as Locale
   const tCommon = useTranslations('common')
@@ -325,8 +327,9 @@ export function AccountSettingsContent() {
           />
         </SettingsRow>
 
-        {/* The floating assistant button: shown or hidden for this person */}
-        <FabVisibilityRow />
+        {/* The floating assistant button: shown or hidden for this person.
+            No row where the built-in chat is switched off: there is no button. */}
+        {assistantChatEnabled && <FabVisibilityRow />}
 
         {/* Install as app: renders nothing when already running installed */}
         <InstallAppSection />

@@ -40,6 +40,7 @@ import {
   switchedOffPackageIds,
 } from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
+import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
 import { resolveRequestBrand } from '@/lib/branding/request-brand'
@@ -128,6 +129,11 @@ export default async function DashboardLayout({
   // CompanyProvider below so the entry points that open that runtime can hide
   // instead of leading the user into its 503 (#2204).
   const assistantAvailable = getAiStatus().assistantAvailable
+  // Installation-level too: is the built-in chat switched on
+  // (ASSISTANT_CHAT_ENABLED, on unless switched off)? Handed to every
+  // CompanyProvider below so the doors into the chat go with it; the menu
+  // row follows the same switch through navRollouts.
+  const assistantChatOn = assistantChatEnabled()
 
   // Resolve active company from user_preferences (authoritative). The
   // `gnubok-company-id` cookie is intentionally no longer consulted here:
@@ -284,6 +290,7 @@ export default async function DashboardLayout({
           isSandbox: false,
           capabilities: [],
           assistantAvailable,
+          assistantChatEnabled: assistantChatOn,
           trialEndsAt: null,
           entitlementState: 'none' as const,
           trialExpiredAt: null,
@@ -467,6 +474,7 @@ export default async function DashboardLayout({
       isSandbox: false,
       capabilities: [],
       assistantAvailable,
+      assistantChatEnabled: assistantChatOn,
       trialEndsAt: null,
       entitlementState: 'none' as const,
       trialExpiredAt: null,
@@ -653,6 +661,7 @@ export default async function DashboardLayout({
     capabilities: entitlements.capabilities,
     // The assistant reads the whole company: never offered to the invoicer.
     assistantAvailable: assistantAvailable && !isInvoicer,
+    assistantChatEnabled: assistantChatOn,
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
@@ -790,8 +799,9 @@ export default async function DashboardLayout({
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant
-            entry point must stay clickable then, like the sheet itself. */}
-        <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+            entry point must stay clickable then, like the sheet itself.
+            Not rendered where the chat is switched off. */}
+        {assistantChatOn && <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />}
         {!isSandbox && (
           <AnalyticsIdentify
             user={{

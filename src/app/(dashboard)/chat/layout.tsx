@@ -5,6 +5,7 @@ import {
   getDashboardCompanyId,
   getResolvedDashboardAgentProfile,
 } from '../request-context'
+import { leaveWhenChatSwitchedOff } from './chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +20,11 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): every /chat
+  // page leads to Koppla en agent, built agent or not, so nobody is sent into
+  // the build from here and the conversation list is never read.
+  leaveWhenChatSwitchedOff()
 
   // Until the agent is built, the Assistent entry leads to building it
   // (crm#1135): the build ends in /chat/intake, and the build page itself

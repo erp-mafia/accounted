@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { useAssistantAvailable } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useAssistantChatEnabled } from '@/contexts/CompanyContext'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -95,9 +95,11 @@ export default function BookkeepingPage() {
   // cannot run (#2204): drop it from the split button and the pristine cards
   // rather than offer a door into a 503. One list feeds both surfaces, and a
   // persisted last-used 'assistent' falls back to 'tomt' through
-  // resolveInitialMode's validity check.
+  // resolveInitialMode's validity check. The same where the built-in chat is
+  // switched off (ASSISTANT_CHAT_ENABLED): the mode opens its panel.
   const assistantAvailable = useAssistantAvailable()
-  const createModes: readonly CreateMode[] = assistantAvailable
+  const assistantChatEnabled = useAssistantChatEnabled()
+  const createModes: readonly CreateMode[] = assistantAvailable && assistantChatEnabled
     ? CREATE_MODES
     : CREATE_MODES.filter((mode) => mode !== 'assistent')
 

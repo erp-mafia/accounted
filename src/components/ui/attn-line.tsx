@@ -18,14 +18,21 @@ interface AttnLineProps {
 }
 
 /**
+ * How the line's action looks. Exported for a link that sits inside the
+ * sentence instead of at its end (the chat's removal notice), so both read
+ * as the same kind of link.
+ */
+export const ATTN_ACTION_CLASS =
+  'font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] transition-colors duration-150 hover:decoration-foreground/60'
+
+/**
  * Attention is one sentence, not a banner (UI-migration convention 6, Stil
  * v3): the amber status glyph with its cut-out mark, then a single 13px line
  * in the body ink with an optional embedded action link. Max one per page.
  * tone "info" (the blue glyph) is for a helpful fact, never a warning.
  */
 export function AttnLine({ children, action, trailing, tone = 'warning', className }: AttnLineProps) {
-  const actionClass =
-    'font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] transition-colors duration-150 hover:decoration-foreground/60'
+  const actionClass = ATTN_ACTION_CLASS
   return (
     <div className={cn('flex items-start gap-2 text-[13px] leading-5 text-foreground/80', className)}>
       <StatusGlyph tone={tone} className="mt-[3px]" />

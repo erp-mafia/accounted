@@ -13,6 +13,8 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
+import { agentPromoOffered } from '@/lib/onboarding/agent-promo-gate'
+import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
 import { readAiConnection, readFirstTaskClient } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
@@ -202,12 +204,17 @@ export default async function DashboardPage({
   // Build-assistant nudge: shown only until the company has a verified
   // agent_profile, after the checklist is dismissed or completed, and once a
   // connected agent has worked (until then the Kopplingar agent chip is the
-  // page's agent prompt).
+  // page's agent prompt). Never while the built-in assistant is switched off
+  // (ASSISTANT_CHAT_ENABLED): there is nothing to build then.
   const agentConnected = aiConnection.connected && !firstTask
-  const promo =
-    !agentBuilt && agentConnected && (initialSetup.dismissedAt || initialSetup.completedAt) ? (
-      <AgentPromo companyId={companyId} />
-    ) : null
+  const promo = agentPromoOffered({
+    assistantChatEnabled: assistantChatEnabled(),
+    agentBuilt,
+    agentConnected,
+    setupClosed: Boolean(initialSetup.dismissedAt || initialSetup.completedAt),
+  }) ? (
+    <AgentPromo companyId={companyId} />
+  ) : null
   const tHem = await getTranslations('hem')
   const hem = (
     <DashboardContent

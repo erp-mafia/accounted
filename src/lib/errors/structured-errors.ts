@@ -8601,6 +8601,25 @@ const AGENT_IDENTITY: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// The built-in assistant chat (lib/env/assistant-chat-switch.ts)
+// ─────────────────────────────────────────────────────────────────
+
+const ASSISTANT_CHAT: Record<string, StructuredErrorEntry> = {
+  // POST /api/agent/invoke and POST /api/agent/ask while the installation
+  // has the chat switched off (ASSISTANT_CHAT_ENABLED): no turn runs, and the
+  // sentence says where the person's own assistant connects. 409 like the
+  // other switched-off answers, and never 503: the chat console reads a 503
+  // as "no AI backend configured". Every intent is refused, the onboarding
+  // interview included.
+  ASSISTANT_CHAT_OFF: {
+    httpStatus: 409,
+    message_sv: 'Chatten är avstängd. Koppla din egen assistent, till exempel Claude, under Agenter > Koppla en agent.',
+    message_en: 'The chat is switched off. Connect your own assistant, for example Claude, under Agents > Connect an agent.',
+    retryable: false,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Package switches (enable_package, disable_package; lib/suggestions)
 // ─────────────────────────────────────────────────────────────────
 
@@ -13569,6 +13588,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...API_KEY,
   ...SERVICE_ACCOUNT,
   ...AGENT_IDENTITY,
+  ...ASSISTANT_CHAT,
   ...PACKAGE,
   ...GRANT,
   ...PROVIDER,

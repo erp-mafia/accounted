@@ -12,7 +12,12 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { createLogger } from '@/lib/logger'
 import { localeFromCookieHeader } from '@/i18n/config'
+
+const log = createLogger('api.agent.invoke')
 
 // Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
 // 15-27k-token prompt prefix) can outlive the plan default duration cap; a
@@ -99,6 +104,13 @@ export async function POST(request: Request) {
   const intent = getIntent(body.intent_id)
   if (!intent) {
     return NextResponse.json({ error: `Unknown intent: ${body.intent_id}` }, { status: 400 })
+  }
+
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): no turn
+  // runs, for any intent. The onboarding interview (onboarding.intake) goes
+  // with the rest (founder decision 2026-11-18).
+  if (!assistantChatEnabled()) {
+    return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
   }
 
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))

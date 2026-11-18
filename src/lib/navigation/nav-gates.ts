@@ -51,6 +51,12 @@ export interface NavGateContext {
   bolagetEnabled?: boolean
   /** The MCP server extension is built in (ENABLED_EXTENSION_IDS): the Koppla en agent row. Absent reads as off. */
   mcpExtensionEnabled?: boolean
+  /**
+   * The built-in chat is switched on in this installation
+   * (lib/env/assistant-chat-switch.ts): the Chatt row. Absent reads as ON,
+   * unlike the rollouts above: the chat is there until someone switches it off.
+   */
+  assistantChatEnabled?: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
   /**
@@ -145,8 +151,11 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // (cockpitNavItems); in company mode the pinned back-to-clients link
   // replaces it, and non-byrå users never see it (WL-14).
   if (item.byraOnly) return false
-  // The Assistent (/chat) entry has no gate: before the agent is built it
-  // leads to building it (chat/layout), so a new account always sees it.
+  // The Chatt (/chat) entry has one gate, the installation's chat switch
+  // (ASSISTANT_CHAT_ENABLED): switched off, the chat is not offered. While it
+  // is on, a new account always sees the entry: before the agent is built it
+  // leads to building it (chat/layout).
+  if (item.requiresAssistantChat && ctx.assistantChatEnabled === false) return false
   return true
 }
 

@@ -29,7 +29,7 @@ import {
 } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/count-tile'
-import { useCompany } from '@/contexts/CompanyContext'
+import { useAssistantChatEnabled, useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 import { passesNavGates, type NavGateContext, type ShellNavGate } from '@/lib/navigation/nav-gates'
@@ -170,6 +170,7 @@ export default function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null)
   const { company, capabilities, isSandbox, addCompanyHref, byraTeam, role } = useCompany()
   const { identity } = useAgentSheet()
+  const assistantChatEnabled = useAssistantChatEnabled()
   const tSwitcher = useTranslations('company_switcher')
   const tNav = useTranslations('nav')
   const t = useTranslations('command_palette')
@@ -259,12 +260,13 @@ export default function CommandPalette({
   const pageGroups = q ? groupPalettePages(filteredPages) : [{ group: t('section_pages'), pages: filteredPages }]
 
   // The hand-off-to-assistant entries use the agent name the user chose in
-  // /onboarding/agent, and hide entirely until that onboarding is done: the
-  // same gate as the FAB.
+  // /onboarding/agent, and hide entirely until that onboarding is done and
+  // where the built-in chat is switched off (ASSISTANT_CHAT_ENABLED): the
+  // same gates as the FAB.
   const assistantName = identity.displayName?.trim() || t('assistant_default_name')
   // With no hit it is the one entry; with hits it follows them.
   const noHits = filteredActions.length === 0 && filteredPages.length === 0
-  const assistantFallback: Entry | null = !identity.isVerified || !q || !paletteOpensForRole(role, '/chat/new')
+  const assistantFallback: Entry | null = !assistantChatEnabled || !identity.isVerified || !q || !paletteOpensForRole(role, '/chat/new')
     ? null
     : {
         id: noHits ? 'assistant-fallback' : 'assistant-followup',

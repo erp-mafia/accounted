@@ -218,6 +218,17 @@ describe('the palette answers to the names the menu had before', () => {
     expect(firstHit('bolaget', pagesFor({ bolagetEnabled: false, commitmentsEnabled: false }))).toBeUndefined()
   })
 
+  it('offers the chat by its row and its old name until the installation switches it off (ASSISTANT_CHAT_ENABLED)', () => {
+    const on = pagesFor()
+    expect(on.some((p) => p.href === '/chat')).toBe(true)
+    expect(on.filter((p) => matches(p, 'assistent')).map((p) => p.href)).toContain('/chat')
+
+    const off = pagesFor({ assistantChatEnabled: false })
+    expect(off.some((p) => p.href === '/chat' || p.href.startsWith('/chat/'))).toBe(false)
+    // Where the person's own assistant connects stays.
+    expect(off.some((p) => p.href === '/settings/api')).toBe(true)
+  })
+
   it('says to try another word when nothing is found: with an empty list Enter opens nothing', () => {
     expect(sv.command_palette.empty).toBe('Inget hittades. Prova ett annat ord.')
     expect(en.command_palette.empty).not.toMatch(/Enter/)

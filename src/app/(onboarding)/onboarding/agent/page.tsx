@@ -8,6 +8,7 @@ import { billingHref } from '@/lib/entitlements/upgrade-reason'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import { employeeFieldValue, loadActiveEmployeeCount } from '@/lib/agent/composer/employee-facts'
 import AgentOnboarding from '@/components/onboarding/agent/AgentOnboarding'
+import { leaveWhenChatSwitchedOff } from '@/app/(dashboard)/chat/chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +22,12 @@ export default async function AgentOnboardingPage() {
 
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
+
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): there is no
+  // assistant to build and no interview after it, so this page leads to
+  // Koppla en agent. Before the paywall, so nobody is sent to billing for an
+  // assistant that is not there, and before anything is fetched or built.
+  leaveWhenChatSwitchedOff()
 
   // Paywall: the build flow drives the gated composer stream (ai capability).
   // Send non-payers to billing instead of a build sequence that 403s

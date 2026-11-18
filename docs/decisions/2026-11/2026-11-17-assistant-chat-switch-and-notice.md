@@ -1,0 +1,1 @@
+[2026-11-17] The built-in assistant chat will be removed, in steps: a customer gets a better result with their own assistant over MCP. First step: ASSISTANT_CHAT_ENABLED (default on) lets the founders switch it off on a date they pick, and a line in the chat warns users first. No date set.

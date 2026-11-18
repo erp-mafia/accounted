@@ -29,6 +29,7 @@ import {
   type AgentStatusEvent,
 } from './agent-status'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAssistantChatEnabled } from '@/contexts/CompanyContext'
 
 // The sheet is a lazy chunk, and it used to have no loading state at all: a
 // click on the launcher produced NOTHING until the chunk arrived, then the
@@ -208,6 +209,7 @@ export function AgentSheetProvider({
   initialPanelPrefs,
 }: AgentSheetProviderProps) {
   useSheetPrefetch()
+  const chatEnabled = useAssistantChatEnabled()
   const [activeArgs, setActiveArgs] = useState<OpenAgentSheetArgs | null>(null)
   // Collapsed = session alive but hidden. Kept separate from activeArgs so
   // collapsing never unmounts AgentChat (which would wipe the conversation).
@@ -300,8 +302,11 @@ export function AgentSheetProvider({
   // had to find it again under "Tidigare konversationer". The sheet records
   // the open thread per tab (sessionStorage), and this reopens it on mount.
   // Only on mount: client-side navigation keeps the provider, and a session
-  // the user closed has already been cleared from storage.
+  // the user closed has already been cleared from storage. Not where the
+  // built-in chat is switched off (ASSISTANT_CHAT_ENABLED, constant for the
+  // page's life): no door opens the panel there, so no reload does either.
   useEffect(() => {
+    if (!chatEnabled) return
     const stored = readAgentSheetSession()
     if (!stored) return
     // sessionStorage is client-only: reading it in the state initializer would
@@ -314,7 +319,7 @@ export function AgentSheetProvider({
       resumeConversationId: stored.conversationId,
     })
     setCollapsed(stored.collapsed)
-  }, [])
+  }, [chatEnabled])
 
   const openAgentSheet = useCallback((args: OpenAgentSheetArgs) => {
     setActiveArgs(args)

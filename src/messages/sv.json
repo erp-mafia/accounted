@@ -228,6 +228,8 @@
   },
   "agent_chat": {
     "assistant_unavailable": "Assistenten kan inte köras med den AI-leverantör som är konfigurerad på den här installationen.",
+    "removal_notice": "Den här chatten kommer att tas bort.",
+    "removal_notice_connect": "Den här chatten kommer att tas bort. Bokföringen sköter du med din egen assistent, till exempel Claude, som du kopplar under <link>{place}</link>. Frågor om appen ställer du till supporten.",
     "intent_general": "Fråga din assistent",
     "intent_transaction": "Hjälp med transaktion",
     "intent_invoice": "Hjälp med faktura",
