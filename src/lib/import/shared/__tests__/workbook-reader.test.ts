@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx'
-import { readWorkbookFromBuffer } from '../workbook-reader'
+import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
+import {
+  readBestSheet,
+  readWorkbookFromBuffer,
+  UnreadableWorkbookError,
+  withCentralDirectorySizes,
+} from '../workbook-reader'
 
 function bufFromBytes(bytes: number[]): ArrayBuffer {
   return new Uint8Array(bytes).buffer
@@ -73,5 +79,35 @@ describe('readWorkbookFromBuffer', () => {
 
     const result = await readWorkbookFromBuffer(buffer, 'data.xls')
     expect(rowsOf(result)).toEqual([['A'], ['Ö']])
+  })
+})
+
+// A streaming zip writer leaves an entry's sizes for a data descriptor after
+// the data; the xlsx reader trusted the zeros in the local header. Every
+// importer that reads a workbook goes through readWorkbookFromBuffer.
+describe('a workbook from a streaming zip writer', () => {
+  const rows = [['Kundnummer', 'Namn'], ['1001', 'Kund AB']]
+
+  it.each([{ deflate: false }, { deflate: true }])('reads for every importer (readBestSheet, %o)', async (shape) => {
+    const { rawData } = await readBestSheet(streamedXlsx({ rows }, shape), 'kunder.xlsx')
+    expect(rawData).toEqual(rows)
+  })
+
+  it('leaves a zip that has its sizes in the local headers as it came', () => {
+    const regular = XLSX.write(XLSX.utils.book_new(XLSX.utils.aoa_to_sheet(rows)), { bookType: 'xlsx', type: 'array' })
+    expect(withCentralDirectorySizes(regular)).toBe(regular)
+  })
+
+  it('throws UnreadableWorkbookError for a file it cannot open, naming the reason without its numbers', async () => {
+    const cut = new Uint8Array(streamedXlsx({ rows })).slice(0, 600).buffer
+    const thrown = await readWorkbookFromBuffer(cut, 'kunder.xlsx').catch((err: unknown) => err)
+    expect(thrown).toBeInstanceOf(UnreadableWorkbookError)
+    expect((thrown as Error).cause).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toMatch(/^The workbook could not be read: \S/)
+  })
+
+  it('masks the numbers in the reason, which the log redaction would blank whole', () => {
+    const err = new UnreadableWorkbookError(new Error('Bad compressed size: 816 != 1702240364'))
+    expect(err.message).toBe('The workbook could not be read: Bad compressed size: # != #')
   })
 })

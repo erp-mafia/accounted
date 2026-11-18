@@ -1,8 +1,14 @@
 /**
- * Handelsbanken CSV format parser
+ * Handelsbanken account history: the CSV download and the Excel export
+ * (Handelsbanken_Account_Transactions_<date>.xlsx), which ../workbook.ts reads
+ * into the same semicolon text.
  *
  * Format: Semicolon-delimited, comma decimal separator
- * Columns: Reskontradatum, Transaktionsdatum, Text, Belopp, Saldo
+ * Columns: Reskontradatum, Transaktionsdatum, Text, Belopp, Saldo (a card
+ * account's history has no Saldo)
+ * English labels read: Ledger date (Handelsbanken's own English for
+ * reskontradatum, the ledgerDate of its account API), Transaction date, Text
+ * or Description, Amount, Balance
  * Date format: YYYY-MM-DD
  * Encoding: UTF-8 or Windows-1252
  *
@@ -22,6 +28,7 @@
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { preambleAccountIdentity } from '../account-identity'
+import { headerLikeCells, unrecognizedColumnsMessages, type ExpectedColumns } from '../columns'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 import { parseSwedishAmount } from '@/lib/money'
@@ -29,6 +36,22 @@ import { parseSwedishAmount } from '@/lib/money'
 // How many leading lines to scan for the header (allows for a metadata preamble)
 const HEADER_SCAN_LIMIT = 15
 
+/** The columns this parser reads, for the error when a file has none of them. */
+export const HANDELSBANKEN_EXPECTED_COLUMNS: ExpectedColumns = {
+  date: ['Reskontradatum', 'Transaktionsdatum', 'Ledger date'],
+  amount: ['Belopp', 'Amount'],
+  optional: ['Text', 'Saldo'],
+}
+
+// Header labels, lower case, Swedish and English.
+const BOOKING_DATE_LABELS = ['reskontradatum', 'ledger date']
+const TRANSACTION_DATE_LABELS = ['transaktionsdatum', 'transaction date']
+const AMOUNT_LABELS = ['belopp', 'amount']
+const BALANCE_LABELS = ['saldo', 'balance']
+
+function mentions(text: string, labels: string[]): boolean {
+  return labels.some((label) => text.includes(label))
+}
 
 /**
  * Check if a line is the Handelsbanken transaction header: semicolon-delimited
@@ -36,26 +59,27 @@ const HEADER_SCAN_LIMIT = 15
  * enough not to steal SEB / Nordea Företag / ICA / Skandia files, which use
  * different date labels (bokföringsdag, valutadag, datum).
  *
- * Handelsbanken names its booking date Reskontradatum. A header with a
- * Bokföringsdag/Bokföringsdatum column beside Transaktionsdatum and no
- * Reskontradatum is Länsförsäkringar's (crm#1236): read as Handelsbanken it
- * would be dated on the transaction date and lose its Meddelande text.
+ * Handelsbanken names its booking date Reskontradatum, in English Ledger date.
+ * A header with a Bokföringsdag/Bokföringsdatum column beside
+ * Transaktionsdatum and no Reskontradatum is Länsförsäkringar's (crm#1236):
+ * read as Handelsbanken it would be dated on the transaction date and lose
+ * its Meddelande text. An English header needs Ledger date: Transaction date
+ * and Amount alone are any bank's.
  */
 function isHandelsbankenHeader(line: string): boolean {
   const lower = line.toLowerCase()
   if (!lower.includes(';')) return false
-  const hasReskontra = lower.includes('reskontradatum')
+  const hasReskontra = mentions(lower, BOOKING_DATE_LABELS)
   if (!hasReskontra && /bokf(ö|o)ringsda(g|tum)/.test(lower)) return false
   const hasDate = hasReskontra || lower.includes('transaktionsdatum')
-  const hasAmount = lower.includes('belopp')
-  return hasDate && hasAmount
+  return hasDate && mentions(lower, AMOUNT_LABELS)
 }
 
 export const handelsbankenFormat: BankFileFormat = {
   id: 'handelsbanken',
   name: 'Handelsbanken',
-  description: 'Handelsbanken CSV (semicolon-delimited)',
-  fileExtensions: ['.csv', '.txt'],
+  description: 'Handelsbanken CSV or Excel export (Swedish or English headers)',
+  fileExtensions: ['.csv', '.txt', '.xlsx'],
 
   detect(content: string, _filename: string): boolean {
     const prepared = prepareContent(content)
@@ -71,13 +95,17 @@ export const handelsbankenFormat: BankFileFormat = {
     const issues: BankFileParseIssue[] = []
     let skippedRows = 0
 
-    const emptyResult = (issue: BankFileParseIssue): BankFileParseResult => ({
+    const emptyResult = (
+      issue: BankFileParseIssue,
+      columns?: BankFileParseResult['unrecognized_columns'],
+    ): BankFileParseResult => ({
       format: 'handelsbanken',
       format_name: 'Handelsbanken',
       transactions: [],
       date_from: null,
       date_to: null,
       issues: [issue],
+      ...(columns ? { unrecognized_columns: columns } : {}),
       stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },
     })
 
@@ -91,22 +119,23 @@ export const handelsbankenFormat: BankFileFormat = {
     }
 
     if (headerLineIdx === -1) {
-      return emptyResult({
-        row: 1,
-        message: 'Kunde inte hitta rubrikraden (Transaktionsdatum/Reskontradatum, Belopp).',
-        severity: 'error',
-      })
+      // Say which columns the file has, as BANK_FILE_COLUMNS_UNRECOGNIZED.
+      const columns = { found: headerLikeCells(prepared), expected: HANDELSBANKEN_EXPECTED_COLUMNS }
+      return emptyResult(
+        { row: 0, message: unrecognizedColumnsMessages('Handelsbanken', columns).sv, severity: 'error' },
+        columns,
+      )
     }
 
     const headers = parseCSVLine(lines[headerLineIdx], ';').map((h) =>
       h.trim().toLowerCase().replace(/"/g, '')
     )
 
-    const reskontraIdx = headers.findIndex((h) => h.includes('reskontradatum'))
-    const txDateIdx = headers.findIndex((h) => h.includes('transaktionsdatum'))
-    const descIdx = headers.findIndex((h) => h === 'text' || h.includes('beskrivning'))
-    const amountIdx = headers.findIndex((h) => h.includes('belopp'))
-    const balanceIdx = headers.findIndex((h) => h.includes('saldo'))
+    const reskontraIdx = headers.findIndex((h) => mentions(h, BOOKING_DATE_LABELS))
+    const txDateIdx = headers.findIndex((h) => mentions(h, TRANSACTION_DATE_LABELS))
+    const descIdx = headers.findIndex((h) => h === 'text' || h.includes('beskrivning') || h === 'description')
+    const amountIdx = headers.findIndex((h) => mentions(h, AMOUNT_LABELS))
+    const balanceIdx = headers.findIndex((h) => mentions(h, BALANCE_LABELS))
 
     // Prefer reskontradatum (the bank's booking date) over transaktionsdatum
     // (the card-swipe date), falling back to whichever column exists.

@@ -5289,6 +5289,18 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte tolka bankfilen.',
     message_en: 'Failed to parse the bank file.',
   },
+  // The Excel reader could not open the file: broken, password-protected or
+  // a zip it cannot follow. The file's problem, so a refusal, not a 500.
+  BANK_FILE_WORKBOOK_UNREADABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Excelfilen kunde inte läsas. Öppna den i Excel, spara den som Excel-arbetsbok (.xlsx) och ladda upp den igen, eller exportera kontoutdraget som CSV från banken.',
+    message_en:
+      'The Excel file could not be read. Open it in Excel, save it as an Excel workbook (.xlsx) and upload it again, or export the statement from the bank as CSV.',
+    remediation: {
+      description: 'Re-save the workbook as .xlsx, or send the bank export as CSV or camt.053 instead.',
+    },
+  },
   BANK_FILE_NO_TRANSACTIONS: {
     httpStatus: 400,
     message_sv: 'Bankfilen innehåller inga transaktioner att importera.',

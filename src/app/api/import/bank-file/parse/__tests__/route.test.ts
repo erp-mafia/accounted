@@ -5,12 +5,30 @@
  * a bank account), while an explicit format override still forces a bank
  * parse as the escape hatch.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as XLSX from 'xlsx'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { HANDELSBANKEN_XLSX_ROWS, streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 import { septemberFile } from '@/lib/import/bgmax/__tests__/bgmax-fixture'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
+
+// A parser that throws, for the 500 a real fault still answers. Off again
+// after every test, so no later test inherits it.
+const parserFault = vi.hoisted(() => ({ throwOnParse: false }))
+afterEach(() => {
+  parserFault.throwOnParse = false
+})
+vi.mock('@/lib/import/bank-file/parser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/import/bank-file/parser')>()
+  return {
+    ...actual,
+    parseBankFile: (...args: Parameters<typeof actual.parseBankFile>) => {
+      if (parserFault.throwOnParse) throw new TypeError('a parser bug')
+      return actual.parseBankFile(...args)
+    },
+  }
+})
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -51,6 +69,12 @@ function makeFileRequest(content: string, filename: string, format?: string) {
     method: 'POST',
     body: formData,
   })
+}
+
+function makeBytesRequest(bytes: ArrayBuffer, filename: string) {
+  const formData = new FormData()
+  formData.append('file', new File([bytes], filename))
+  return new Request('http://localhost:3000/api/import/bank-file/parse', { method: 'POST', body: formData })
 }
 
 describe('POST /api/import/bank-file/parse (skattekonto redirect)', () => {
@@ -244,12 +268,6 @@ describe('POST /api/import/bank-file/parse (Excel files and unrecognized columns
     return XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
   }
 
-  function makeBytesRequest(bytes: ArrayBuffer, filename: string) {
-    const formData = new FormData()
-    formData.append('file', new File([bytes], filename))
-    return new Request('http://localhost:3000/api/import/bank-file/parse', { method: 'POST', body: formData })
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
@@ -290,5 +308,68 @@ describe('POST /api/import/bank-file/parse (Excel files and unrecognized columns
     expect(body.error.message).toContain('Kolumner i filen: Dag, Vad, Summa kronor.')
     expect(body.error.message).toContain('Filen behöver en datumkolumn (Bokföringsdag, Bokföringsdatum, Transaktionsdatum eller Datum)')
     expect(body.error.details.found_columns).toEqual(['Dag', 'Vad', 'Summa kronor'])
+  })
+})
+
+// Handelsbanken's Excel export answered 500 BANK_FILE_PARSE_FAILED: the xlsx
+// reader could not open its streamed zip (2026-11-16 and 11-17).
+describe('POST /api/import/bank-file/parse (Handelsbanken Excel export, unreadable workbooks)', () => {
+  const bucket = supabase.storage.from('documents') as unknown as { upload: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+  })
+
+  it("parses Handelsbanken's export as Handelsbanken and keeps the file", async () => {
+    const { getActiveCompanyId } = await import('@/lib/company/context')
+    vi.mocked(getActiveCompanyId).mockResolvedValueOnce('11111111-1111-4111-8111-111111111111')
+    enqueue({ data: null }) // no prior bank_file_imports row
+    enqueue({ data: [] }) // cash_accounts for the statement's own account
+    const response = await POST(
+      makeBytesRequest(streamedXlsx({ rows: HANDELSBANKEN_XLSX_ROWS }), 'Handelsbanken_Account_Transactions_2026-11-16.xlsx'),
+      emptyParams,
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.detected_format).toBe('handelsbanken')
+    expect(body.data.parse_result.transactions.map((t: { date: string; amount: number }) => [t.date, t.amount])).toEqual([
+      ['2026-11-16', -199.5],
+      ['2026-11-12', 12500],
+      ['2026-11-03', -2065.75],
+    ])
+    expect(bucket.upload).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a workbook the reader cannot open, saying what to do, not a 500', async () => {
+    const whole = new Uint8Array(streamedXlsx({ rows: HANDELSBANKEN_XLSX_ROWS }))
+    const response = await POST(makeBytesRequest(whole.slice(0, 900).buffer, 'Handelsbanken 2026-11-17.xlsx'), emptyParams)
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_WORKBOOK_UNREADABLE')
+    expect(body.error.message).toContain('Excelfilen kunde inte läsas')
+    expect(bucket.upload).not.toHaveBeenCalled()
+  })
+
+  it('still answers a real fault with a 500 and logs the step and the error class', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      parserFault.throwOnParse = true
+      enqueue({ data: null })
+      const response = await POST(makeFileRequest(SEB_BANK_CSV, 'kontoutdrag.csv'), emptyParams)
+      const body = await response.json()
+
+      expect(response.status).toBe(500)
+      expect(body.error.code).toBe('BANK_FILE_PARSE_FAILED')
+      // The log line, then its serialized error on the next call (dev format).
+      const at = errorLog.mock.calls.findIndex((call) => String(call[0]).includes('bank file parse failed'))
+      expect(String(errorLog.mock.calls[at][0])).toContain('stage="parse"')
+      expect(errorLog.mock.calls[at + 1][1]).toEqual(expect.objectContaining({ name: 'TypeError' }))
+    } finally {
+      errorLog.mockRestore()
+    }
   })
 })

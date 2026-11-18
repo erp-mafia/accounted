@@ -3,6 +3,7 @@ import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/
 import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
 import { detectBgMax } from '@/lib/import/bgmax/parser'
 import { decodeBankFile } from '@/lib/import/bank-file/workbook'
+import { UnreadableWorkbookError } from '@/lib/import/shared/workbook-reader'
 import { unrecognizedColumnsMessages } from '@/lib/import/bank-file/columns'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -13,12 +14,21 @@ import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
 import { archiveBankFileOriginal } from '@/lib/import/bank-file/arrival'
 
 /**
+ * The step a parse was on when it threw. The error's own message can come out
+ * of the log redaction whole ("Bad compressed size: 693 != 1702240364" reads
+ * like a personnummer), so the step and the error's name are what point to it.
+ */
+type ParseStage = 'decode' | 'detect' | 'parse' | 'preview'
+
+/**
  * POST /api/import/bank-file/parse
  *
  * Accepts a bank file (CSV/XML, or an Excel workbook: .xls/.xlsx) via
  * FormData, auto-detects format, and returns a parsed transactions preview
  * with duplicate detection. A workbook is converted to semicolon text first
  * and returned as `file_content`, the text the manual column mapping reads.
+ * A workbook the reader cannot open is refused (BANK_FILE_WORKBOOK_UNREADABLE);
+ * a 500 is left for a fault on our side.
  * The file itself is archived here as the import's original
  * (lib/import/bank-file/arrival.ts).
  */
@@ -44,9 +54,11 @@ export const POST = withRouteContext(
 
     const opLog = log.child({ filename: file.name, sizeBytes: file.size })
 
+    let stage: ParseStage = 'decode'
     try {
       const arrayBuffer = await file.arrayBuffer()
       const { content, workbook } = await decodeBankFile(arrayBuffer, file.name)
+      stage = 'detect'
 
       // Bankgirot's deposit specification (BG Max) is not a statement: its
       // deposits are bank rows that already exist, so it never creates rows.
@@ -90,7 +102,9 @@ export const POST = withRouteContext(
         ? null
         : detectFileFormat(content, file.name)
 
+      stage = 'parse'
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
+      stage = 'preview'
 
       // The bank's parser found none of its columns (crm#1236): say which
       // columns the file has and which it needs, not an empty preview.
@@ -156,7 +170,16 @@ export const POST = withRouteContext(
         },
       })
     } catch (err) {
-      opLog.error('bank file parse failed', err as Error)
+      // A workbook the reader cannot open is the file's problem: a refusal
+      // that says what to do, not a server fault.
+      if (err instanceof UnreadableWorkbookError) {
+        // Its message is the reader's reason with the numbers masked.
+        const errorClass = err.cause instanceof Error ? err.cause.name : typeof err.cause
+        opLog.warn('bank file workbook unreadable', err, { errorClass })
+        return errorResponseFromCode('BANK_FILE_WORKBOOK_UNREADABLE', opLog, { requestId })
+      }
+      // The serialized error keeps its name (the class) through the redaction.
+      opLog.error('bank file parse failed', err as Error, { stage })
       return errorResponseFromCode('BANK_FILE_PARSE_FAILED', opLog, {
         requestId,
         details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
