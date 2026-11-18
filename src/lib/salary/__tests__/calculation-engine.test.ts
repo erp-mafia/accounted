@@ -2097,7 +2097,7 @@ describe('calculation policy: partial_month = annual_calendar_days', () => {
 })
 
 describe('förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
-  // Table 33 column 1 around Do the North's gross; the bottom bracket is
+  // Table 33 column 1 around the reported payslip's gross; the bottom bracket is
   // zero tax so a benefit-only payslip has no statutory tax.
   const rates: TaxTableRate[] = [
     { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 5000, kind: 'amount', taxAmount: 0 },
@@ -2109,7 +2109,7 @@ describe('förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
     makeBasicInput({ taxTableNumber: 33, taxColumn: 1, monthlySalary: 26161.27, ...overrides })
   const extraStep = (steps: Array<{ label: string }>) => steps.find((s) => s.label === 'Extra skatteavdrag (begärt)')
 
-  it("withholds 45 % in total on Do the North's figures: 11 772 kr, 6 555 kr of it extra", () => {
+  it("withholds 45 % in total on the reported payslip's figures: 11 772 kr, 6 555 kr of it extra", () => {
     const r = calculateSalary(doTheNorth({ extraTaxPercentage: 45 }), config2026, rates)
     expect(r.grossSalary).toBe(26161.27)
     expect(r.taxWithheld).toBe(11772)

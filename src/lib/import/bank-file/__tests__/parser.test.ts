@@ -111,7 +111,7 @@ const HANDELSBANKEN_CSV_WITH_PREL = [
 // (and a blank line) before the actual column header.
 const HANDELSBANKEN_CSV_WITH_PREAMBLE = [
   'Kontonummer;6789 123 456 789',
-  'Kontohavare;Wiklund, Cristel',
+  'Kontohavare;Andersson, Anna',
   'Period;2024-01-01 - 2024-01-31',
   '',
   'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',

@@ -82,7 +82,7 @@ describe('computeExtraTax', () => {
     expect(computeExtraTax(input())).toEqual({ extra: 0, step: null })
   })
 
-  it("withholds 45 % in total on Do the North's figures: 11 772 kr, of which 6 555 kr extra", () => {
+  it("withholds 45 % in total on the reported payslip's figures: 11 772 kr, of which 6 555 kr extra", () => {
     const result = computeExtraTax(input({ percentage: 45 }))
     expect(result.extra).toBe(6555)
     expect(result.step).toMatchObject({
